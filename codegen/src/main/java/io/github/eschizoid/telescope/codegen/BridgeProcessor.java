@@ -5947,7 +5947,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return null;
           }
-          sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
+          // A value of the field's own type is assigned to a local of the chosen setter's parameter
+          // type, so javac binds the overload the runtime writer calls; a cast would type a
+          // conditional on its own and unbox a null. A transformed value binds by its own type.
+          final var argumentType = transformed.contains(f.name()) ? null : setterChoice(to, f.name()).argumentType();
+          final var value = read.apply(f.name());
+          if (argumentType == null) {
+            sb.append("out.").append(setter).append("(").append(value).append("); ");
+          } else {
+            sb
+              .append("{ final ")
+              .append(argumentType)
+              .append(" __arg = ")
+              .append(value)
+              .append("; out.")
+              .append(setter)
+              .append("(__arg); } ");
+          }
         }
         return sb.append("return out; }").toString();
       }

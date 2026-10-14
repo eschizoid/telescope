@@ -233,10 +233,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
             if (skipsNull[i] != null) {
               final var local = "__set_" + props.get(i).name();
               out.println("    final " + skipsNull[i] + " " + local + " = " + value + ";");
-              out.println("    if (" + local + " != null) bean." + members[i] + "(" + local + ");");
+              out.println("    if (" + local + " != null) " + rebuild.setterCall(i, "bean", members[i], local));
               continue;
             }
-            out.println("    bean." + members[i] + "(" + value + ");");
+            out.println("    " + rebuild.setterCall(i, "bean", members[i], value));
           }
           out.println("    return bean;");
         }

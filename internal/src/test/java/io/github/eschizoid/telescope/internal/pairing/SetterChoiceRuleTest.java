@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
@@ -55,6 +56,10 @@ class SetterChoiceRuleTest {
       new Object[] { int.class, List.of(String.class, int.class), int.class },
       new Object[] { int.class, List.of(double.class, long.class), long.class },
       new Object[] { int.class, List.of(Integer.class, long.class), long.class },
+      new Object[] { int.class, List.of(Object.class, long.class), long.class },
+      new Object[] { Integer.class, List.of(int.class, Object.class), Object.class },
+      new Object[] { short.class, List.of(long.class, int.class), int.class },
+      new Object[] { Number.class, List.of(Integer.class, Long.class), null },
       new Object[] { Integer.class, List.of(long.class, int.class), int.class },
       new Object[] { int.class, List.of(Object.class, Number.class), Number.class },
       new Object[] { int.class, List.of(String.class, Date.class), null },
@@ -69,6 +74,25 @@ class SetterChoiceRuleTest {
         final var chosen = index < 0 ? null : order.get(index);
         if (chosen != c[2]) failures.add(c[0] + " over " + order + ": " + chosen + ", owed " + c[2]);
       }
+    }
+    assertEquals(List.of(), failures, () -> String.join("\n", failures));
+  }
+
+  @Test
+  @DisplayName("a variable-arity setter takes one value of its component type when nothing else binds it")
+  void aVariableAritySetterTakesOneValueOfItsComponent() {
+    final var failures = new ArrayList<String>();
+    if (RULES.setterFit(int.class, int[].class, int.class) != SetterFit.SAME) failures.add("int over int...");
+    if (!RULES.spreads(int.class, int[].class, int.class)) failures.add("int over int... does not spread");
+    if (RULES.spreads(int[].class, int[].class, int.class)) failures.add("int[] over int... spreads");
+    if (RULES.setterFit(int.class, int[].class, null) != SetterFit.DISJOINT) failures.add("int over int[]");
+    final List<Type> parameters = List.of(int[].class, long.class);
+    if (RULES.chooseSetter(int.class, parameters, Arrays.asList(int.class, null)) != 1) {
+      failures.add("long before int...");
+    }
+    final List<Type> varargsOnly = List.of(int[].class, String.class);
+    if (RULES.chooseSetter(int.class, varargsOnly, Arrays.asList(int.class, null)) != 0) {
+      failures.add("int... over String");
     }
     assertEquals(List.of(), failures, () -> String.join("\n", failures));
   }

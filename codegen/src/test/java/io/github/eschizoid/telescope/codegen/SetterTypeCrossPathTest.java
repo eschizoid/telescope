@@ -126,6 +126,63 @@ class SetterTypeCrossPathTest {
       "public void setCount(final String c) { this.count = -1; }\n" +
         "  public void setCount(final java.util.Date c) { this.count = -3; }",
       Writes.AMBIGUOUS
+    ),
+    new Case(
+      "an Integer and a Long overload behind a Number getter",
+      "Number",
+      "public void setCount(final Integer c) { this.count = c; }\n" +
+        "  public void setCount(final Long c) { this.count = c; }",
+      Writes.AMBIGUOUS
+    ),
+    // Overloads that javac binds to the chosen setter only when the argument is typed as its
+    // parameter. A setter not chosen writes -1, so a call that reaches it shows.
+    new Case(
+      "an int and an Integer overload behind an int getter",
+      "int",
+      "public void setCount(final int c) { this.count = c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a long overload declared before an Integer one behind an int getter",
+      "int",
+      "public void setCount(final long c) { this.count = (int) c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Integer overload declared before a long one behind an int getter",
+      "int",
+      "public void setCount(final Integer c) { this.count = -1; }\n" +
+        "  public void setCount(final long c) { this.count = (int) c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Object and a long overload behind an int getter",
+      "int",
+      "public void setCount(final Object c) { this.count = -1; }\n" +
+        "  public void setCount(final long c) { this.count = (int) c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an int overload declared before an Object one behind an Integer getter",
+      "Integer",
+      "public void setCount(final int c) { this.count = -1; }\n" +
+        "  public void setCount(final Object c) { this.count = (Integer) c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Object overload declared before an int one behind an Integer getter",
+      "Integer",
+      "public void setCount(final Object c) { this.count = (Integer) c; }\n" +
+        "  public void setCount(final int c) { this.count = -1; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a variable-arity int setter behind an int getter",
+      "int",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      Writes.BOTH
     )
   );
 

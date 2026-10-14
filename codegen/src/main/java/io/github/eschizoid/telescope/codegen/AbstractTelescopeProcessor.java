@@ -32,6 +32,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
@@ -215,14 +216,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Which method writes a bean property, as {@link PairingRules#chooseSetter} picks it among {@code
    * candidates}, every public instance method of one parameter named after the property's setter,
    * inherited ones included. {@code member} is null when there are none or no single one is chosen;
-   * {@code writeType} is its parameter type as a member of the bean, and {@code fit} how the
-   * property's read type reaches it.
+   * {@code writeType} is its parameter type as a member of the bean, {@code fit} how the property's
+   * read type reaches it, and {@code spreads} whether the value reaches it only as the one element
+   * of its variable-arity array. {@code argumentType} is the type a generated call casts its
+   * argument to so javac binds the chosen method among its overloads, or null where there are no
+   * overloads or the type names a variable only the method declares.
    */
   record SetterChoice(
     ExecutableElement member,
     TypeMirror writeType,
     SetterFit fit,
-    List<ExecutableElement> candidates
+    List<ExecutableElement> candidates,
+    boolean spreads,
+    String argumentType
   ) {}
 
   /**
@@ -238,29 +244,37 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         candidates.add(m);
       }
     }
-    if (candidates.isEmpty()) return new SetterChoice(null, null, null, List.of());
+    if (candidates.isEmpty()) return new SetterChoice(null, null, null, List.of(), false, null);
     final var writeTypes = new ArrayList<TypeMirror>(candidates.size());
     final var erased = new ArrayList<TypeMirror>(candidates.size());
+    final var components = new ArrayList<TypeMirror>(candidates.size());
     for (final var m : candidates) {
       final var member = (
         (ExecutableType) types.asMemberOf((DeclaredType) type.asType(), m)
       ).getParameterTypes().getFirst();
+      final var erasure = types.erasure(member);
       writeTypes.add(member);
-      erased.add(types.erasure(member));
+      erased.add(erasure);
+      components.add(m.isVarArgs() && erasure instanceof ArrayType array ? array.getComponentType() : null);
     }
     final var read = getterType(type, property);
     if (read == null) {
       return candidates.size() == 1
-        ? new SetterChoice(candidates.getFirst(), writeTypes.getFirst(), SetterFit.SAME, candidates)
-        : new SetterChoice(null, null, null, candidates);
+        ? new SetterChoice(candidates.getFirst(), writeTypes.getFirst(), SetterFit.SAME, candidates, false, null)
+        : new SetterChoice(null, null, null, candidates, false, null);
     }
-    final var index = setterRules().chooseSetter(types.erasure(read), erased);
-    if (index < 0) return new SetterChoice(null, null, null, candidates);
+    final var readErasure = types.erasure(read);
+    final var index = setterRules().chooseSetter(readErasure, erased, components);
+    if (index < 0) return new SetterChoice(null, null, null, candidates, false, null);
+    final var spreads = setterRules().spreads(readErasure, erased.get(index), components.get(index));
+    final var argument = spreads ? ((ArrayType) writeTypes.get(index)).getComponentType() : writeTypes.get(index);
     return new SetterChoice(
       candidates.get(index),
       writeTypes.get(index),
-      setterRules().setterFit(types.erasure(read), erased.get(index)),
-      candidates
+      setterRules().setterFit(readErasure, erased.get(index), components.get(index)),
+      candidates,
+      spreads,
+      candidates.size() > 1 && !mirrorProps().mentionsTypeVariable(argument) ? argument.toString() : null
     );
   }
 
@@ -307,10 +321,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   private PairingRules<TypeMirror> setterRules() {
-    if (setterRules == null) {
-      setterRules = new PairingRules<>(new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils()));
-    }
+    if (setterRules == null) setterRules = new PairingRules<>(mirrorProps());
     return setterRules;
+  }
+
+  private MirrorProps mirrorProps() {
+    if (mirrorProps == null) {
+      mirrorProps = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
+    }
+    return mirrorProps;
   }
 
   // A public single-argument builder method named property / setX / withX, or null.
@@ -717,6 +736,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private boolean inFinalRound;
 
   private PairingRules<TypeMirror> setterRules;
+
+  private MirrorProps mirrorProps;
 
   /**
    * Records whether {@code roundEnv} is the final round. A processor that writes bean navigators
@@ -1389,15 +1410,32 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * through. {@code members[i]} is the builder method or setter for {@code props[i]}, unused by a
    * constructor rebuild. {@code ctorOrder[j]} is the index of the property passed as the
    * constructor's {@code j}th argument, unused by the other two. {@code nullGuarded[i]} marks a
-   * setter call that must skip a null.
+   * setter call that must skip a null. {@code argumentTypes[i]} is the type a setter call's
+   * argument is declared as, as {@link SetterChoice#argumentType} gives it, or null.
    */
   record BeanRebuild(
     BeanWriteStrategy strategy,
     String[] members,
     int[] ctorOrder,
     boolean[] nullGuarded,
-    String[] nullDefaults
-  ) {}
+    String[] nullDefaults,
+    String[] argumentTypes
+  ) {
+    /**
+     * The statement calling property {@code i}'s setter {@code member} on {@code receiver} with
+     * {@code value}, a value of the property's type. Where overloads would otherwise let javac bind
+     * another method or find none most specific, the value is first assigned to a local of the
+     * chosen setter's parameter type, which binds that method; assignment is a boxing, an unboxing,
+     * a widening or the identity, all of which keep the value. A cast would not do: it types a
+     * conditional expression on its own, so one whose branches mix a primitive and a null unboxes
+     * the null.
+     */
+    String setterCall(final int i, final String receiver, final String member, final String value) {
+      final var type = argumentTypes.length == 0 ? null : argumentTypes[i];
+      if (type == null) return receiver + "." + member + "(" + value + ");";
+      return "{ final " + type + " __arg = " + value + "; " + receiver + "." + member + "(__arg); }";
+    }
+  }
 
   /**
    * The rebuild a generated navigator, holder or binder uses for {@code pojo}, or {@code null}
@@ -1451,7 +1489,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ctorOrder[j] = index;
         guardPrimitiveMember(params.get(j).asType(), props.get(index), index, nullGuarded, nullDefaults);
       }
-      return new BeanRebuild(strategy, members, ctorOrder, nullGuarded, nullDefaults);
+      return new BeanRebuild(strategy, members, ctorOrder, nullGuarded, nullDefaults, new String[0]);
     }
     final var useBuilder = strategy == BeanWriteStrategy.BUILDER;
     for (var i = 0; i < props.size(); i++) {
@@ -1493,7 +1531,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         guardPrimitiveMember(setterParameter(pojo, props.get(i).name()), props.get(i), i, nullGuarded, nullDefaults);
       }
     }
-    return new BeanRebuild(strategy, members, new int[0], nullGuarded, nullDefaults);
+    final var argumentTypes = new String[props.size()];
+    if (!useBuilder) {
+      for (var i = 0; i < props.size(); i++) {
+        if (members[i] != null) argumentTypes[i] = setterChoice(pojo, props.get(i).name()).argumentType();
+      }
+    }
+    return new BeanRebuild(strategy, members, new int[0], nullGuarded, nullDefaults, argumentTypes);
   }
 
   /**
@@ -1713,9 +1757,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
             // way the lens skips it and the same way the reflective writer does.
             final var local = "__s_" + p.name();
             out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
-            out.println("    if (" + local + " != null) c." + members[i] + "(" + local + ");");
+            out.println("    if (" + local + " != null) " + rebuild.setterCall(i, "c", members[i], local));
           } else {
-            out.println("    c." + members[i] + "(" + valueExprForProp(p) + ");");
+            out.println("    " + rebuild.setterCall(i, "c", members[i], valueExprForProp(p)));
           }
         }
         out.println("    return c;");
@@ -2063,13 +2107,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
               .append(arg)
               .append("; if (")
               .append(local)
-              .append(" != null) c.")
-              .append(members[i])
-              .append("(")
-              .append(local)
-              .append("); ");
+              .append(" != null) ")
+              .append(rebuild.setterCall(i, "c", members[i], local))
+              .append(" ");
           } else {
-            sb.append("c.").append(members[i]).append("(").append(arg).append("); ");
+            sb.append(rebuild.setterCall(i, "c", members[i], arg)).append(" ");
           }
         }
         yield sb.append("return c; }").toString();

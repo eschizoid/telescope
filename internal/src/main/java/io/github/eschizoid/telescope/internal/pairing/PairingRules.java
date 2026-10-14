@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -537,34 +538,77 @@ public final class PairingRules<T> {
   }
 
   /**
-   * Which of the methods named after a property's setter is its setter, by its index in {@code
-   * parameters}, the parameter type of each; {@code -1} when none can be chosen. A sole method is
-   * the setter whatever it takes. Among several, the choice is the overload Java binds a value of
-   * {@code property} to, so a generated call and a reflective one reach the same method: the
-   * methods that take the value without boxing or unboxing are asked first, then those that take it
-   * with either, and among those asked the one whose parameter every other one's accepts. A
-   * parameter equal to the property's type is that one whenever it is present. None taking the
-   * value, or no single most specific one, is {@code -1}, and the paths refuse the property by
-   * name. The answer does not depend on the order the methods are listed in.
+   * How a value of {@code property} reaches a setter taking {@code parameter} that is variable
+   * arity over {@code component}, or not when {@code component} is null. A variable-arity setter
+   * Java binds a single value to by its component, wrapping the value in a one-element array, takes
+   * that value as its component's fit; otherwise the fit is the parameter's own.
    */
+  public SetterFit setterFit(final T property, final T parameter, final T component) {
+    final var direct = setterFit(property, parameter);
+    if (component == null || direct.compiles()) return direct;
+    final var spread = setterFit(property, component);
+    return spread.compiles() ? spread : direct;
+  }
+
+  /**
+   * Whether a value of {@code property} reaches a setter taking {@code parameter} only as the one
+   * element of its variable-arity {@code component} array, so a reflective call wraps the value in
+   * a one-element array and a generated call passes it as it is.
+   */
+  public boolean spreads(final T property, final T parameter, final T component) {
+    return (
+      component != null && !setterFit(property, parameter).compiles() && setterFit(property, component).compiles()
+    );
+  }
+
+  /** {@link #chooseSetter(Object, List, List)} over methods none of which is variable arity. */
   public int chooseSetter(final T property, final List<T> parameters) {
+    return chooseSetter(property, parameters, Collections.nCopies(parameters.size(), null));
+  }
+
+  /**
+   * Which of the methods named after a property's setter is its setter, by its index in {@code
+   * parameters}, the parameter type of each; {@code -1} when none can be chosen. {@code components}
+   * holds, at the same index, the component type of a variable-arity method's array parameter, and
+   * null for any other method. A sole method is the setter whatever it takes. Among several, the
+   * choice is the overload Java binds a value of {@code property} to, so a generated call and a
+   * reflective one reach the same method: the methods that take the value without boxing or
+   * unboxing are asked first, then those that take it with either, then variable-arity methods
+   * whose component takes it, and among those asked the one whose parameter every other one's
+   * accepts. A parameter equal to the property's type is that one whenever it is present. None
+   * taking the value, or no single most specific one, is {@code -1}, and the paths refuse the
+   * property by name. The answer does not depend on the order the methods are listed in.
+   */
+  public int chooseSetter(final T property, final List<T> parameters, final List<T> components) {
     if (parameters.size() == 1) return 0;
     final var read = props.rawType(property);
     final var strict = new ArrayList<Integer>();
     final var loose = new ArrayList<Integer>();
+    final var variable = new ArrayList<Integer>();
     for (var i = 0; i < parameters.size(); i++) {
       final var write = props.rawType(parameters.get(i));
       if (passesStrictly(read, write)) strict.add(i);
       if (setterFit(read, write).compiles()) loose.add(i);
+      final var component = components.get(i);
+      if (component != null && setterFit(read, props.rawType(component)).compiles()) variable.add(i);
     }
-    final var applicable = strict.isEmpty() ? loose : strict;
+    if (!strict.isEmpty()) return mostSpecific(strict, parameters);
+    if (!loose.isEmpty()) return mostSpecific(loose, parameters);
+    return variable.isEmpty() ? -1 : mostSpecific(variable, components);
+  }
+
+  /**
+   * The one index in {@code applicable} whose type in {@code types} every other one's accepts
+   * without boxing, or {@code -1} when there is no single one.
+   */
+  private int mostSpecific(final List<Integer> applicable, final List<T> types) {
     var chosen = -1;
     for (final var i : applicable) {
-      final var mine = props.rawType(parameters.get(i));
-      final var mostSpecific = applicable
+      final var mine = props.rawType(types.get(i));
+      final var most = applicable
         .stream()
-        .allMatch(j -> j.equals(i) || passesStrictly(mine, props.rawType(parameters.get(j))));
-      if (!mostSpecific) continue;
+        .allMatch(j -> j.equals(i) || passesStrictly(mine, props.rawType(types.get(j))));
+      if (!most) continue;
       if (chosen >= 0) return -1;
       chosen = i;
     }
