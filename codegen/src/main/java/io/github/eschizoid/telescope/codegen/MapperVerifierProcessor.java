@@ -79,7 +79,9 @@ import javax.tools.Diagnostic;
  * runtime into its permissive mode, so completeness checking is disabled for that site too. Nested
  * auto-recursed pairs are lenient about unmatched fields (as at runtime) but still shape-checked.
  * {@code toOrElse} / {@code toOrElseGet} are claims only: the runtime constructs them without a
- * shape gate, and this verifier never fires where construction succeeds.
+ * shape gate, and this verifier never fires where construction succeeds. A row keyed to a type pair
+ * the mapper never visits is reported with construction's refusal, but only when every row of the
+ * call and every property on the walk can be read; otherwise construction decides alone.
  */
 @SupportedAnnotationTypes("*")
 @SupportedOptions({ "telescope.verify", "telescope.verify.verbose" })
@@ -223,9 +225,43 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * member of the accessor's own class), and that owning class. The owner matters because rows may
    * be keyed to NESTED pairs — {@code to(UserEntity::name, UserDto::fullName)} inside {@code
    * map(CompanyEntity, CompanyDto, ...)} — which the runtime groups by the accessors' classes; such
-   * rows claim nothing at the call's top-level pair.
+   * rows claim nothing at the call's top-level pair. {@code method} is the accessor's own name, as
+   * written, before any {@code get} or {@code is} is stripped.
    */
-  private record Prop(String name, TypeMirror type, TypeElement owner) {}
+  private record Prop(String name, TypeMirror type, TypeElement owner, String method) {}
+
+  /** What a row does at the pair it is keyed to, as far as which pairs construction visits. */
+  private enum RowKind {
+    /** {@code to(src, tgt)}: claims the target property and converts it as an unclaimed one is. */
+    PASS_THROUGH,
+    /** A row carrying its own conversion: claims the target property, and reaches no pair. */
+    CONVERTING,
+    /** A row through a telescope path, or {@code constant} / {@code compute} / {@code when}. */
+    PATH,
+    /** {@code drop}, which construction never refuses as unvisited. */
+    DROP,
+  }
+
+  /**
+   * A row and the pair construction keys it to. The methods are the accessors' own names, null for
+   * a side given as a telescope path.
+   */
+  private record KeyedRow(
+    Tree at,
+    TypeElement source,
+    TypeElement target,
+    RowKind kind,
+    String sourceMethod,
+    String targetMethod
+  ) {}
+
+  /** A pair's properties on each side, as members of the pair's classes and as declared. */
+  private record PairSides(
+    Map<String, TypeMirror> source,
+    Map<String, TypeMirror> target,
+    Map<String, TypeMirror> declaredSource,
+    Map<String, TypeMirror> declaredTarget
+  ) {}
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
@@ -358,6 +394,247 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           verifyDeep(srcProps.get(name), tgtProps.get(name), name, node, seen, false);
         }
       }
+      verifyRowsVisited(args, srcType, tgtType, srcEl, tgtEl, strict);
+    }
+
+    /**
+     * Reports the rows keyed to a type pair the mapper never visits, with the message construction
+     * refuses them with. Construction keys each row to the classes its accessors are applied to,
+     * and to the call's own pair for a side given as a telescope path, for a {@code when}, {@code
+     * constant}, {@code compute} or {@code zip} row, and for a target accessor applied to a type
+     * the call's target extends. It then visits the call's pair and every pair reached from it, and
+     * refuses the rows of any other pair, {@code drop} rows aside.
+     *
+     * <p>Nothing is reported unless every row can be keyed and the whole walk can be followed: a
+     * row this cannot read could claim a property or reach a pair, and a property typed by a type
+     * variable, a pair the shared decision refuses, or a forward-only row on a strict factory each
+     * make construction answer before it gets here or differently from this walk.
+     */
+    private void verifyRowsVisited(
+      final List<? extends ExpressionTree> args,
+      final TypeMirror srcType,
+      final TypeMirror tgtType,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final boolean strict
+    ) {
+      final var table = new LinkedHashMap<String, List<KeyedRow>>();
+      for (var i = 2; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) return;
+        if (
+          !(elementAt(row.getMethodSelect()) instanceof ExecutableElement rowExec) ||
+          !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner)
+        ) {
+          return;
+        }
+        final var ownerFqn = rowOwner.getQualifiedName().toString();
+        if (WRITE_HINT_FQN.equals(ownerFqn) || NULL_HINT_FQN.equals(ownerFqn)) continue;
+        if (!MAPPING_FQN.equals(ownerFqn)) return;
+        final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
+        if (keyed == null) return;
+        table.computeIfAbsent(pairKey(keyed.source(), keyed.target()), __ -> new ArrayList<>()).add(keyed);
+      }
+      final var visited = new HashSet<String>();
+      if (!visit(srcType, tgtType, table, visited, !strict)) return;
+      final var dead = new ArrayList<String>();
+      Tree at = null;
+      for (final var bucket : table.entrySet()) {
+        if (visited.contains(bucket.getKey())) continue;
+        final var rows = new ArrayList<String>();
+        for (final var row : bucket.getValue()) {
+          if (row.kind() == RowKind.DROP) continue;
+          rows.add(PairingMessages.unvisitedRow(row.sourceMethod(), row.targetMethod()));
+          if (at == null) at = row.at();
+        }
+        if (rows.isEmpty()) continue;
+        final var first = bucket.getValue().getFirst();
+        dead.add(PairingMessages.unvisitedPair(binaryName(first.source()), binaryName(first.target()), rows));
+      }
+      if (dead.isEmpty()) return;
+      report(at, PairingMessages.rowsNeverVisited(binaryName(srcEl), binaryName(tgtEl), dead));
+    }
+
+    /**
+     * The pair construction keys {@code row} to and what the row does there, or null when that
+     * cannot be read from the call: an accessor that is no method reference, a factory this does
+     * not know, or a forward-only row on a strict factory, which construction refuses first.
+     */
+    private KeyedRow keyedRow(
+      final MethodInvocationTree row,
+      final ExecutableElement rowExec,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final boolean strict
+    ) {
+      final var rowArgs = row.getArguments();
+      switch (rowExec.getSimpleName().toString()) {
+        case "to" -> {
+          if (rowArgs.size() == 4) return accessorRow(row, RowKind.CONVERTING);
+          if (rowArgs.size() != 2) return null;
+          final var srcPath = isTelescopeParameter(rowExec, 0);
+          final var tgtPath = isTelescopeParameter(rowExec, 1);
+          if (!srcPath && !tgtPath) return accessorRow(row, RowKind.PASS_THROUGH);
+          if (srcPath && tgtPath) return new KeyedRow(row, srcEl, tgtEl, RowKind.PATH, null, null);
+          if (!srcPath) {
+            final var src = accessorProp(rowArgs.get(0));
+            return src == null ? null : new KeyedRow(row, src.owner(), tgtEl, RowKind.PATH, src.method(), null);
+          }
+          final var tgt = accessorProp(rowArgs.get(1));
+          if (tgt == null) return null;
+          final var onTarget = types.isSubtype(types.erasure(tgtEl.asType()), types.erasure(tgt.owner().asType()));
+          return new KeyedRow(row, srcEl, onTarget ? tgtEl : tgt.owner(), RowKind.PATH, null, tgt.method());
+        }
+        case "toOneWay" -> {
+          return strict ? null : accessorRow(row, RowKind.CONVERTING);
+        }
+        case "enumTo", "toOrElse", "toOrElseGet", "via" -> {
+          return accessorRow(row, RowKind.CONVERTING);
+        }
+        case "drop" -> {
+          final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
+          if (src == null) return null;
+          if (rowArgs.size() == 1) return new KeyedRow(row, src.owner(), tgtEl, RowKind.DROP, src.method(), null);
+          final var explicit = rowArgs.size() == 2 ? classLiteral(rowArgs.get(1)) : null;
+          final var explicitEl = explicit == null ? null : props.elementOf(explicit);
+          return explicitEl == null
+            ? null
+            : new KeyedRow(row, src.owner(), explicitEl, RowKind.DROP, src.method(), null);
+        }
+        case "when", "constant", "compute", "zip" -> {
+          return new KeyedRow(row, srcEl, tgtEl, RowKind.PATH, null, null);
+        }
+        default -> {
+          return null;
+        }
+      }
+    }
+
+    /** A row given two accessors, keyed to the classes they are applied to, or null. */
+    private KeyedRow accessorRow(final MethodInvocationTree row, final RowKind kind) {
+      final var rowArgs = row.getArguments();
+      final var src = accessorProp(rowArgs.get(0));
+      final var tgt = accessorProp(rowArgs.get(1));
+      if (src == null || tgt == null) return null;
+      return new KeyedRow(row, src.owner(), tgt.owner(), kind, src.method(), tgt.method());
+    }
+
+    /**
+     * Whether the factory's parameter at {@code index} is a telescope path rather than an accessor.
+     */
+    private boolean isTelescopeParameter(final ExecutableElement factory, final int index) {
+      final var parameter = types.erasure(factory.getParameters().get(index).asType());
+      return (
+        types.asElement(parameter) instanceof TypeElement type && type.getQualifiedName().contentEquals(TELESCOPE_FQN)
+      );
+    }
+
+    /**
+     * Adds to {@code visited} the pair {@code (src, tgt)} and every pair construction reaches from
+     * it: through each property the pair's own rows pass through unchanged, and through each
+     * same-named property no row of the pair converts, along the shared pair decision's descent
+     * into nested pairs, {@code Optional} bridges and container elements. False when the walk
+     * cannot be followed as construction follows it.
+     */
+    private boolean visit(
+      final TypeMirror src,
+      final TypeMirror tgt,
+      final Map<String, List<KeyedRow>> table,
+      final Set<String> visited,
+      final boolean forwardOnly
+    ) {
+      final var srcEl = props.elementOf(src);
+      final var tgtEl = props.elementOf(tgt);
+      if (srcEl == null || tgtEl == null) return false;
+      final var key = pairKey(srcEl, tgtEl);
+      if (!visited.add(key)) return true;
+      final var sides = new PairSides(
+        propertiesOf(src, srcEl),
+        propertiesOf(tgt, tgtEl),
+        declaredPropertiesOf(srcEl),
+        declaredPropertiesOf(tgtEl)
+      );
+      final var converted = new HashSet<String>();
+      for (final var row : table.getOrDefault(key, List.of())) {
+        if (row.kind() != RowKind.PASS_THROUGH && row.kind() != RowKind.CONVERTING) continue;
+        final var tgtName = propertyName(row.targetMethod(), tgtEl);
+        converted.add(tgtName);
+        if (row.kind() == RowKind.CONVERTING) continue;
+        final var srcName = propertyName(row.sourceMethod(), srcEl);
+        if (!visitProperty(sides, srcName, tgtName, table, visited, forwardOnly)) return false;
+      }
+      for (final var name : sides.target().keySet()) {
+        if (converted.contains(name) || !sides.source().containsKey(name)) continue;
+        if (!visitProperty(sides, name, name, table, visited, forwardOnly)) return false;
+      }
+      return true;
+    }
+
+    private boolean visitProperty(
+      final PairSides sides,
+      final String srcName,
+      final String tgtName,
+      final Map<String, List<KeyedRow>> table,
+      final Set<String> visited,
+      final boolean forwardOnly
+    ) {
+      final var srcType = sides.source().get(srcName);
+      final var tgtType = sides.target().get(tgtName);
+      if (srcType == null || tgtType == null) return false;
+      // Construction reads such a property as declared or as a member depending on the pair, and
+      // recurses on the raw class; a property typed by a variable is left to it.
+      if (
+        Stream.of(srcType, tgtType, sides.declaredSource().get(srcName), sides.declaredTarget().get(tgtName)).anyMatch(
+          props::mentionsTypeVariable
+        )
+      ) {
+        return false;
+      }
+      return visitTypes(srcType, tgtType, srcName, table, visited, forwardOnly);
+    }
+
+    /**
+     * Follows the shared decision for one pair of types that name no type variable. The element
+     * types a decision descends to are type arguments of those types, or of the supertypes they
+     * parameterize, so they name none either.
+     */
+    private boolean visitTypes(
+      final TypeMirror srcType,
+      final TypeMirror tgtType,
+      final String componentName,
+      final Map<String, List<KeyedRow>> table,
+      final Set<String> visited,
+      final boolean forwardOnly
+    ) {
+      final var decision = rules.decidePair(srcType, tgtType, componentName, forwardOnly);
+      return switch (decision) {
+        case PairDecision.RecursePair<TypeMirror> __ -> visit(srcType, tgtType, table, visited, forwardOnly);
+        case PairDecision.OptionalToNullable<TypeMirror> d -> visitTypes(
+          d.elementSrc(),
+          d.elementTgt(),
+          componentName,
+          table,
+          visited,
+          forwardOnly
+        );
+        case PairDecision.NullableToOptional<TypeMirror> d -> visitTypes(
+          d.elementSrc(),
+          d.elementTgt(),
+          componentName,
+          table,
+          visited,
+          forwardOnly
+        );
+        case PairDecision.LiftContainer<TypeMirror> d -> visitTypes(
+          d.src().elementType(),
+          d.tgt().elementType(),
+          componentName,
+          table,
+          visited,
+          forwardOnly
+        );
+        case PairDecision.Incompatible<TypeMirror> __ -> false;
+        default -> true;
+      };
     }
 
     /** Returns false when the row's accessors defeat static analysis (kills completeness only). */
@@ -763,13 +1040,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (path == null) return null;
       if (!(trees.getElement(path) instanceof ExecutableElement accessor)) return null;
       if (!(accessor.getEnclosingElement() instanceof TypeElement declaring)) return null;
-      final var name = normalize(accessor.getSimpleName().toString());
+      final var method = accessor.getSimpleName().toString();
+      final var name = normalize(method);
       // Resolve the return type against the accessor's OWN receiver — a row may be keyed to a
       // nested pair, so the call's top-level types are the wrong receiver for asMemberOf.
       final var receiver = receiverOf(path, declaring);
-      if (receiver == null) return new Prop(name, accessor.getReturnType(), declaring);
+      if (receiver == null) return new Prop(name, accessor.getReturnType(), declaring, method);
       final var type = ((ExecutableType) types.asMemberOf(receiver, accessor)).getReturnType();
-      return new Prop(name, type, (TypeElement) receiver.asElement());
+      return new Prop(name, type, (TypeElement) receiver.asElement(), method);
     }
 
     /**
@@ -810,6 +1088,24 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     return src.toString() + "→" + tgt.toString();
   }
 
+  /** A pair of classes as construction keys it: by class, whatever type arguments either names. */
+  private String pairKey(final TypeElement src, final TypeElement tgt) {
+    return binaryName(src) + "→" + binaryName(tgt);
+  }
+
+  /** The name construction gives a class in a refusal, {@code Class#getName}. */
+  private String binaryName(final TypeElement element) {
+    return elements.getBinaryName(element).toString();
+  }
+
+  /**
+   * The property an accessor named {@code method} names on {@code owner}: a record component by its
+   * own name, a bean property with {@code get} or {@code is} stripped.
+   */
+  private static String propertyName(final String method, final TypeElement owner) {
+    return owner.getKind() == ElementKind.RECORD ? method : PropertyNames.property(method);
+  }
+
   /**
    * Enumerate the pairing-relevant properties of a record (components, declaration order) or a bean
    * (public zero-arg {@code getX} / {@code isX} getters — skipping {@code Object}, platform ({@code
@@ -817,8 +1113,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * runtime's getter scan).
    */
   private Map<String, TypeMirror> propertiesOf(final TypeMirror type, final TypeElement element) {
+    return properties(type instanceof DeclaredType dt ? dt : null, element);
+  }
+
+  /**
+   * The same properties as {@link #propertiesOf}, each typed as its accessor declares it rather
+   * than as a member of the class, so a type a generic superclass leaves to a variable stays that
+   * variable.
+   */
+  private Map<String, TypeMirror> declaredPropertiesOf(final TypeElement element) {
+    return properties(null, element);
+  }
+
+  private Map<String, TypeMirror> properties(final DeclaredType declared, final TypeElement element) {
     final var result = new LinkedHashMap<String, TypeMirror>();
-    final var declared = type instanceof DeclaredType dt ? dt : null;
     if (element.getKind() == ElementKind.RECORD) {
       for (final var component : element.getRecordComponents()) {
         final var accessor = component.getAccessor();
