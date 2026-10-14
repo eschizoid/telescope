@@ -22,6 +22,23 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A constructor whose known parameter names are partly properties: binding by name would leave
+   * the others without a value, and binding by position could hand one property's value to a
+   * parameter named after another.
+   */
+  public static String constructorParametersNotProperties(final String binaryName, final List<String> unmatched) {
+    return (
+      "Cannot write " +
+      binaryName +
+      " through its constructor: the parameters " +
+      unmatched +
+      " are named after no property, while the others are. Telescope matches a constructor's" +
+      " arguments by parameter name when every name is a property, and by position when none is." +
+      " Name every parameter after a property, or write the class through setters or a builder."
+    );
+  }
+
   /** Two {@code writeBean} hints for the same target class. */
   public static String duplicateWriteBeanHint(final String binaryName) {
     return (

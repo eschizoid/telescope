@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.LambdaMetafactory;
@@ -920,9 +921,11 @@ public final class Beans {
 
   /**
    * Strategy: locate the single {@code arity}-parameter constructor and supply its arguments. When
-   * the POJO was compiled with {@code -parameters}, arguments are matched by constructor parameter
-   * <em>name</em> (order-independent); otherwise they fall back to positional ({@code names[i]} for
-   * argument {@code i}). See {@link ConstructorWriter}.
+   * its parameter names are known, from {@code -parameters} or from the local variable table a
+   * {@code -g} build keeps, and every one is a property of the class, arguments are matched by name
+   * (order-independent). When the names are unknown, or none is a property, they fall back to
+   * positional ({@code names[i]} for argument {@code i}). Known names only some of which are
+   * properties are refused here, when the writer is built. See {@link ConstructorWriter}.
    */
   public static <P> BeanWriter<P> constructorWriter(final Class<P> pojoClass, final int arity) {
     return new ConstructorWriter<>(pojoClass, arity);
@@ -1001,10 +1004,11 @@ public final class Beans {
   /**
    * Pick a <em>name-based</em> write strategy for {@code cls}, in the order {@link
    * BeanWriteStrategy#AUTO_ORDER} gives: a static {@code builder()}, then a single public all-args
-   * constructor (compiled with {@code -parameters} so its arguments can be matched by name without
-   * positional ambiguity), then a no-arg constructor with setters. The generated bridges and
-   * navigators take the same order, so a bean offering several of these is built the same way on
-   * both paths. The result is cached per class.
+   * constructor whose parameter names are known, so its arguments can be matched by name without
+   * positional ambiguity, then a no-arg constructor with setters. The names come from {@code
+   * -parameters}, or from the constructor's local variable table in a class compiled with {@code
+   * -g}. The generated bridges and navigators take the same order, so a bean offering several of
+   * these is built the same way on both paths. The result is cached per class.
    *
    * <p>A builder is passed over when it has no member for a property the next available strategy
    * writes — every property when there is a name-matched constructor, else every property a public
@@ -1018,8 +1022,9 @@ public final class Beans {
    * none of the strategies applies. A class whose only write path is its private fields — a no-arg
    * constructor and nothing else — is refused, exactly as the {@code @Bridge} processor refuses it:
    * a private field is not part of the class's write contract. An immutable all-args-only POJO
-   * compiled without {@code -parameters} is refused too; its escape is a {@code writeBean(target,
-   * CONSTRUCTOR)} hint at the {@code Telescope.map(...)} call site.
+   * compiled with neither {@code -parameters} nor {@code -g}, or running in a native image without
+   * {@code -parameters}, is refused too; its escape is a {@code writeBean(target, CONSTRUCTOR)}
+   * hint at the {@code Telescope.map(...)} call site.
    */
   @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
@@ -1069,11 +1074,12 @@ public final class Beans {
     final var props = propertyNames(cls);
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
-    // constructor parameter order. Requiring -parameters yields named matching and eliminates the
-    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also require every ctor
-    // parameter name to appear in the getter-derived property set — otherwise `getURL()` → property
-    // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
-    // constructor under the lookup `valueByName("url")`.
+    // constructor parameter order. Requiring known parameter names yields named matching and
+    // eliminates the silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also
+    // require every ctor parameter name to appear in the getter-derived property set — otherwise
+    // `getURL()` → property `"URL"` mismatched against a ctor parameter named `"url"` would
+    // silently
+    // pass null into the constructor under the lookup `valueByName("url")`.
     final var nameMatchedConstructor = sole != null && allParameterNamesMatchProperties(sole, props);
     final var builderType = builderTypeOf(cls);
     final var chosen = BeanWriteStrategy.auto(
@@ -1140,14 +1146,16 @@ public final class Beans {
         " constructor whose arity matches the" +
         " property count (" +
         props.length +
-        "), was compiled with -parameters, and whose parameter names line up with the" +
-        " getter-derived properties. Primary fix: recompile the target class with javac" +
-        " -parameters so its constructor arguments can be matched by name. The" +
+        "), whose parameter names are known, and whose parameter names line up with the" +
+        " getter-derived properties. Primary fix: compile the target class with javac" +
+        " -parameters or -g so its constructor arguments can be matched by name; inside a" +
+        " native image only -parameters keeps them. The" +
         " writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is an" +
-        " escape hatch, but note it falls back to POSITIONAL argument matching when" +
-        " -parameters is absent — argument order is then the getter-discovery order (not a" +
-        " stable, user-defined canonical order), so the hint should still be paired with" +
-        " -parameters to be safe."
+        " escape hatch. It matches arguments by name when -parameters or -g keeps the names" +
+        " and every one names a property, refuses a constructor only some of whose names are" +
+        " properties, and otherwise falls back to POSITIONAL argument matching, in" +
+        " getter-discovery order (not a stable, user-defined canonical order), so the hint" +
+        " should still be paired with -parameters or -g to be safe."
     );
   }
 
@@ -1190,7 +1198,7 @@ public final class Beans {
       missing +
       ", and the class offers no constructor or setters to write them instead. Building through" +
       " the builder would drop those values. Add a builder member for each, a public all-args" +
-      " constructor (compiled with -parameters), or setters; or supply an explicit Mapping row" +
+      " constructor (compiled with -parameters or -g), or setters; or supply an explicit Mapping row" +
       " that produces " +
       cls.getSimpleName() +
       "."
@@ -1227,7 +1235,7 @@ public final class Beans {
       cls.getName() +
       ": it has a no-arg constructor but no public setters, no static builder(), and no all-args" +
       " constructor, and telescope does not write private fields. Add public setters, an" +
-      " all-args constructor (compiled with -parameters), or a static builder() to " +
+      " all-args constructor (compiled with -parameters or -g), or a static builder() to " +
       cls.getSimpleName() +
       ", or supply an explicit Mapping row that produces it."
     );
@@ -1256,12 +1264,8 @@ public final class Beans {
   }
 
   private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {
-    final var props = new HashSet<>(Arrays.asList(propertyNames));
-    for (final var p : ctor.getParameters()) {
-      if (!p.isNamePresent()) return false;
-      if (!props.contains(p.getName())) return false;
-    }
-    return true;
+    final var names = ParameterNames.of(ctor);
+    return names != null && new HashSet<>(Arrays.asList(propertyNames)).containsAll(Arrays.asList(names));
   }
 
   /**
@@ -1548,19 +1552,25 @@ public final class Beans {
    * {@link Constructor#newInstance} pays, and {@code invokeExact} through a {@code final} field
    * inlines under the JIT. The hot path never reaches {@code Constructor.newInstance}.
    *
-   * <p>If the POJO was compiled with {@code -parameters}, {@code construct} matches each argument
-   * to its source value by the constructor parameter's <em>name</em> — so a reordered constructor
-   * is safe; otherwise it falls back to positional, assembling arguments in {@code names} order and
-   * relying on the constructor parameters lining up with the components.
+   * <p>When the constructor's parameter names are known, from {@code -parameters} or from the local
+   * variable table a {@code -g} build keeps, and every one names a property of the class, {@code
+   * construct} matches each argument to its source value by the parameter's <em>name</em>, so a
+   * reordered constructor is safe. When the names are unknown, or none names a property, it falls
+   * back to positional, assembling arguments in {@code names} order and relying on the constructor
+   * parameters lining up with the components. A constructor only some of whose known names are
+   * properties is refused when the writer is built: by name, a parameter named after no property
+   * would have no value, and by position, one property's value could land in a parameter named
+   * after another. The rule is the same whether the automatic writer chose the constructor or a
+   * {@code writeBean(target, CONSTRUCTOR)} hint pinned it, so pinning the strategy the automatic
+   * writer already picks binds the class the same way, under either compile option.
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
     private final Class<P> beanClass;
     private final Constructor<P> constructor;
     private final Function<Object, Object> ctorFn;
-    // Constructor parameter names when the POJO was compiled with -parameters (enables
-    // order-independent name matching); null when names are synthetic, so we fall back to
-    // positional.
+    // The constructor's parameter names, which match arguments by name in any order; null when
+    // they are not known, which falls back to positional.
     private final String[] paramNames;
     // What each argument takes in place of null: the JLS default for a primitive parameter, which
     // cannot hold null, and null itself for a reference one.
@@ -1585,15 +1595,15 @@ public final class Beans {
           cls.getName() +
           ", CONSTRUCTOR) requires a constructor with " +
           arity +
-          " parameters (parameters are matched by name when compiled with -parameters," +
-          " otherwise positionally)."
+          " parameters (parameters are matched by name when -parameters or -g keeps the names" +
+          " and every one names a property, otherwise positionally)."
       );
       // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
       // which routes JPMS failures through the opens-pointing message every writer shares instead
       // of a low-context InaccessibleObjectException.
       this.beanClass = cls;
       this.constructor = found;
-      this.paramNames = resolveParamNames(found);
+      this.paramNames = namesMatchingProperties(cls, found);
       this.nullArguments = nullArguments(found.getParameterTypes());
       this.ctorFn = buildCtorFn(cls, found, arity);
     }
@@ -1625,14 +1635,24 @@ public final class Beans {
       return MethodHandles.catchException(raw, Throwable.class, handler);
     }
 
-    private static String[] resolveParamNames(final Constructor<?> ctor) {
-      final var params = ctor.getParameters();
-      final var names = new String[params.length];
-      for (var i = 0; i < params.length; i++) {
-        if (!params[i].isNamePresent()) return null;
-        names[i] = params[i].getName();
+    /**
+     * The names {@link #construct} reads its arguments by, or {@code null} to read them by
+     * position. Known names that are all properties of {@code cls} read by name. Unknown names, or
+     * known names none of which is a property, read by position. Known names only some of which are
+     * properties are refused: by name, a parameter named after no property would have no value, and
+     * by position, one property's value could land in a parameter named after another.
+     */
+    private static String[] namesMatchingProperties(final Class<?> cls, final Constructor<?> ctor) {
+      final var names = ParameterNames.of(ctor);
+      if (names == null) return null;
+      final var properties = Arrays.asList(propertyNames(cls));
+      final var unmatched = new ArrayList<String>();
+      for (final var name : names) {
+        if (!properties.contains(name)) unmatched.add(name);
       }
-      return names;
+      if (unmatched.isEmpty()) return names;
+      if (unmatched.size() == names.length) return null;
+      throw new IllegalStateException(PairingMessages.constructorParametersNotProperties(cls.getName(), unmatched));
     }
 
     private static <P> Function<Object, Object> buildCtorFn(

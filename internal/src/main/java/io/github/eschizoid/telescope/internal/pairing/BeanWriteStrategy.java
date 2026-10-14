@@ -13,9 +13,9 @@ import java.util.Optional;
  * constructor that trims, validates or derives a value does so whichever path converts it.
  *
  * <p>The facts are the world's to answer, because each sees the bean differently: the runtime
- * matches constructor arguments by the parameter names javac keeps only under {@code -parameters},
- * and a processor reads them from the compilation unit. The decision made from those facts is this
- * class's alone.
+ * matches constructor arguments by the parameter names javac keeps under {@code -parameters} or, in
+ * the local variable table, under {@code -g}, and a processor reads them from the compilation unit.
+ * The decision made from those facts is this class's alone.
  */
 public enum BeanWriteStrategy {
   /** A static {@code builder()} whose builder has a {@code build()}. */

@@ -42,29 +42,36 @@ defaults (`Mapping.toOrElse` / `toOrElseGet`), by-name enum mapping (`Mapping.en
 [Type conversion](type-conversion.md).
 
 **`writeBean` — pin a POJO write strategy.** With no hint, a POJO is built through the first of these it offers: a
-static `builder()`, then a single public all-args constructor (when compiled with `-parameters` and the constructor's
-parameter names match the property names), then a no-arg constructor with setters. The builder is skipped in two cases.
-First, when it has no member named for a property that the next strategy in the order would write: every property, if
-the class has a name-matched all-args constructor, and otherwise every property a public setter writes. A builder
-silently drops a property it has no member for, so taking it would lose a value the other strategy keeps. Second, when a
-member named for any property cannot take a value of that property's type (a varargs `p(String...)` behind a `String`
-property, a `long` member behind a `Long` getter), since every write through the builder would then fail. A null bound
-to a primitive property ends at the type's default (`0`, `false`) whichever strategy builds the bean. The generated
-`@Bridge`, `@BeanFocus` and `@FromMap` code takes the same order, so a POJO offering several of these is built the same
-way on both paths. Pass an explicit `WriteHint.writeBean(target, strategy)` row to force one of `BUILDER` / `SETTERS` /
-`CONSTRUCTOR`, either to keep a different strategy than the order picks or for a class the auto path refuses because it
-offers a write path it will not guess at (immutable all-args-only POJOs without `-parameters`, ambiguous multi-ctor
-classes). A class whose only write path is its private fields — a no-arg constructor and no other constructor, no public
-setters and no static `builder()` — is refused outright: add public setters, an all-args constructor or a static
-`builder()`, or supply an explicit mapping row that produces it. Package-private setters do not count; neither path
-calls them.
+static `builder()`, then a single public all-args constructor (when its parameter names are known, from `-parameters` or
+from the debug information `-g` keeps, and match the property names), then a no-arg constructor with setters. The
+builder is skipped in two cases. First, when it has no member named for a property that the next strategy in the order
+would write: every property, if the class has a name-matched all-args constructor, and otherwise every property a public
+setter writes. A builder silently drops a property it has no member for, so taking it would lose a value the other
+strategy keeps. Second, when a member named for any property cannot take a value of that property's type (a varargs
+`p(String...)` behind a `String` property, a `long` member behind a `Long` getter), since every write through the
+builder would then fail. A null bound to a primitive property ends at the type's default (`0`, `false`) whichever
+strategy builds the bean. The generated `@Bridge`, `@BeanFocus` and `@FromMap` code takes the same order, so a POJO
+offering several of these is built the same way on both paths. Pass an explicit `WriteHint.writeBean(target, strategy)`
+row to force one of `BUILDER` / `SETTERS` / `CONSTRUCTOR`, either to keep a different strategy than the order picks or
+for a class the auto path refuses because it offers a write path it will not guess at (immutable all-args-only POJOs
+compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by
+parameter name when the names are known, from `-parameters` or `-g`, and every one names a property. With no names, or
+with names none of which is a property, it binds by position. A constructor only some of whose known names are
+properties is refused when the mapper is built, or on first conversion under a `writeBeans(...)` default, since by name
+the other parameters would have no value and by position one property's value could land in a parameter named after
+another: name every parameter after a property, or write the class through setters or a builder. Inside a native image
+the names `-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the constructor the
+order would pick anyway binds it the same way. A class whose only write path is its private fields — a no-arg
+constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add public
+setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
+Package-private setters do not count; neither path calls them.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
 // OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
-// refuse without -parameters. The hint forces the CONSTRUCTOR strategy explicitly.
+// refuse without -parameters or -g. The hint forces the CONSTRUCTOR strategy explicitly.
 final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
   OrderRecord.class,
   OrderPojo.class,

@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -55,7 +56,7 @@ class MhIsoComposedBuildTest {
     }
   }
 
-  /** A constructor whose parameters are not named after the properties. */
+  /** A constructor whose parameter names are not properties, so the writer binds it by position. */
   public static final class UnnamedCtorBean {
 
     private final String name;
@@ -240,11 +241,15 @@ class MhIsoComposedBuildTest {
     }
 
     @Test
-    @DisplayName("a constructor writer reading an argument by a name that is no property does not")
-    void unnamedConstructorDoesNot() {
-      assertFalse(
-        MhIso.composesBuild(Src.class, UnnamedCtorBean.class, Beans.constructorWriter(UnnamedCtorBean.class, 2))
-      );
+    @DisplayName("a constructor writer binding by position composes, and builds what the writer builds")
+    void positionalConstructorComposes() {
+      final var writer = Beans.constructorWriter(UnnamedCtorBean.class, 2);
+      assertTrue(MhIso.composesBuild(Src.class, UnnamedCtorBean.class, writer));
+
+      final var props = Beans.propertyNames(UnnamedCtorBean.class);
+      final var built = outcome(() -> forward(UnnamedCtorBean.class, writer).to(new Src("a", 3)));
+      final var direct = outcome(() -> writer.construct(props, n -> n.equals("age") ? 3 : "a"));
+      assertEquals(direct, built);
     }
 
     @Test
@@ -401,6 +406,16 @@ class MhIsoComposedBuildTest {
       assertTrue(MhIso.isComposedLeaf(iso));
       assertEquals("x", iso.to(new ReadOnly(" x ", 1)).getName(), "forward composed through the constructor");
       assertSame(sentinel, iso.from(new CtorBean(1, "x")), "backward ran through the given iso");
+    }
+  }
+
+  /** What a build produced, as name and age, or the class of what it threw. */
+  private static String outcome(final Supplier<UnnamedCtorBean> build) {
+    try {
+      final var bean = build.get();
+      return bean.getName() + "/" + bean.getAge();
+    } catch (final RuntimeException e) {
+      return e.getClass().getName();
     }
   }
 }

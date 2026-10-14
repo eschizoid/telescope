@@ -127,13 +127,15 @@ list stays accurate.
   refuses it when the bridge is generated into a different package from the class, because generated code there can't
   call that constructor.
 - A bean whose builder has no method for a `final` field with no initializer is built at run time, and the value is
-  lost. The processor refuses it.
+  lost. The processor refuses it. The runtime can't do the same: in the class file, such a field looks the same as a
+  `final` field given a non-constant value where it is declared.
 
 ### Built by the generated path, refused at run time
 
 - A bean built through a constructor whose parameters are named after its properties converts on the generated path. The
-  runtime mapper refuses it unless the bean was compiled with `-parameters`, because it matches the arguments by
-  parameter name.
+  runtime mapper matches the arguments by parameter name, which it reads from a class compiled with `-parameters` or
+  with `-g`, the debug level Gradle and Maven compile with by default. It refuses the bean compiled with neither, and
+  inside a native image it refuses it without `-parameters`.
 - `patch` on two sealed roots returns a new object from a generated bridge, which dispatches on the case. The runtime
   mapper refuses it with an `UnsupportedOperationException` that names the root.
 - A nested pair can carry its own `@Bridge` with a `@Transform` or with `lenient = true`. An enum pair below it compiles
