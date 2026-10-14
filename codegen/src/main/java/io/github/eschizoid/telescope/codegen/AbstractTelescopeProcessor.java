@@ -218,9 +218,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * inherited ones included. {@code member} is null when there are none or no single one is chosen;
    * {@code writeType} is its parameter type as a member of the bean, {@code fit} how the property's
    * read type reaches it, and {@code spreads} whether the value reaches it only as the one element
-   * of its variable-arity array. {@code argumentType} is the type a generated call casts its
-   * argument to so javac binds the chosen method among its overloads, or null where there are no
-   * overloads or the type names a variable only the method declares.
+   * of its variable-arity array. {@code argument} is the type a single value is passed to it as:
+   * the parameter, or its component where the value spreads. {@code argumentText} is that type as a
+   * generated local declares it, its erasure where it names a type variable only the method
+   * declares. {@code argumentType} is {@code argumentText} where the setter has overloads, the case
+   * in which a generated call assigns its value to such a local so javac binds the chosen method,
+   * and null otherwise.
    */
   record SetterChoice(
     ExecutableElement member,
@@ -228,6 +231,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     SetterFit fit,
     List<ExecutableElement> candidates,
     boolean spreads,
+    TypeMirror argument,
+    String argumentText,
     String argumentType
   ) {}
 
@@ -244,7 +249,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         candidates.add(m);
       }
     }
-    if (candidates.isEmpty()) return new SetterChoice(null, null, null, List.of(), false, null);
+    if (candidates.isEmpty()) return new SetterChoice(null, null, null, List.of(), false, null, null, null);
     final var writeTypes = new ArrayList<TypeMirror>(candidates.size());
     final var erased = new ArrayList<TypeMirror>(candidates.size());
     final var components = new ArrayList<TypeMirror>(candidates.size());
@@ -260,21 +265,35 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var read = getterType(type, property);
     if (read == null) {
       return candidates.size() == 1
-        ? new SetterChoice(candidates.getFirst(), writeTypes.getFirst(), SetterFit.SAME, candidates, false, null)
-        : new SetterChoice(null, null, null, candidates, false, null);
+        ? new SetterChoice(
+            candidates.getFirst(),
+            writeTypes.getFirst(),
+            SetterFit.SAME,
+            candidates,
+            false,
+            writeTypes.getFirst(),
+            null,
+            null
+          )
+        : new SetterChoice(null, null, null, candidates, false, null, null, null);
     }
     final var readErasure = types.erasure(read);
     final var index = setterRules().chooseSetter(readErasure, erased, components);
-    if (index < 0) return new SetterChoice(null, null, null, candidates, false, null);
+    if (index < 0) return new SetterChoice(null, null, null, candidates, false, null, null, null);
     final var spreads = setterRules().spreads(readErasure, erased.get(index), components.get(index));
     final var argument = spreads ? ((ArrayType) writeTypes.get(index)).getComponentType() : writeTypes.get(index);
+    final var argumentText = mirrorProps().mentionsTypeVariable(argument)
+      ? types.erasure(argument).toString()
+      : argument.toString();
     return new SetterChoice(
       candidates.get(index),
       writeTypes.get(index),
       setterRules().setterFit(readErasure, erased.get(index), components.get(index)),
       candidates,
       spreads,
-      candidates.size() > 1 && !mirrorProps().mentionsTypeVariable(argument) ? argument.toString() : null
+      argument,
+      argumentText,
+      candidates.size() > 1 ? argumentText : null
     );
   }
 
@@ -325,7 +344,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return setterRules;
   }
 
-  private MirrorProps mirrorProps() {
+  MirrorProps mirrorProps() {
     if (mirrorProps == null) {
       mirrorProps = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
     }
@@ -1528,7 +1547,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     if (!useBuilder) {
       for (var i = 0; i < props.size(); i++) {
         if (members[i] == null) continue;
-        guardPrimitiveMember(setterParameter(pojo, props.get(i).name()), props.get(i), i, nullGuarded, nullDefaults);
+        // A variable-arity setter a single value spreads into takes it as its component, so the
+        // component is what decides whether a null has to be skipped.
+        guardPrimitiveMember(
+          setterChoice(pojo, props.get(i).name()).argument(),
+          props.get(i),
+          i,
+          nullGuarded,
+          nullDefaults
+        );
       }
     }
     final var argumentTypes = new String[props.size()];

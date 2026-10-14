@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -183,6 +184,33 @@ class SetterTypeCrossPathTest {
       "int",
       "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
       Writes.BOTH
+    ),
+    new Case(
+      "a variable-arity int setter behind an Integer getter",
+      "Integer",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a variable-arity int overload beside a String one behind an int getter",
+      "int",
+      "public void setCount(final String c) { this.count = -1; }\n" +
+        "  public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a generic overload declared before an int one behind an Integer getter",
+      "Integer",
+      "public <T> void setCount(final T c) { this.count = (Integer) c; }\n" +
+        "  public void setCount(final int c) { this.count = -1; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a generic overload declared after an int one behind an Integer getter",
+      "Integer",
+      "public void setCount(final int c) { this.count = -1; }\n" +
+        "  public <T> void setCount(final T c) { this.count = (Integer) c; }",
+      Writes.BOTH
     )
   );
 
@@ -265,6 +293,19 @@ class SetterTypeCrossPathTest {
       final var count = outcome(() -> describe(bean, beanSet(bean, "count", 5)));
       final var countOwed = c.reflects() ? "null/5" : "throws java.lang.IllegalArgumentException";
       if (!count.equals(countOwed)) failures.add(c.name() + ": writing count built " + count + ", owed " + countOwed);
+      if (!c.compiles() || !compilation.success()) continue;
+      final var classes = compilation.define(MethodHandles.lookup());
+      final var generatedBean = classes.get(PACKAGE + "." + prefix + "Bean");
+      final var navigator = classes.get(PACKAGE + "." + prefix + "BeanTelescope");
+      for (final var value : Arrays.asList(5, null)) {
+        final var generated = outcome(() -> describe(generatedBean, navigatorSet(navigator, generatedBean, value)));
+        final var reflective = outcome(() -> describe(bean, beanSet(bean, "count", value)));
+        if (!generated.equals(reflective)) {
+          failures.add(
+            c.name() + ": the navigator wrote " + value + " as " + generated + " but the lens as " + reflective
+          );
+        }
+      }
     }
     assertEquals(List.of(), failures, () -> String.join("\n", failures));
   }
@@ -403,6 +444,159 @@ class SetterTypeCrossPathTest {
   @SuppressWarnings("unchecked")
   private static ForwardMapper<Object, Object> mapperForward(final Class<?> from, final Class<?> to) {
     return Telescope.mapperForward((Class<Object>) from, (Class<Object>) to);
+  }
+
+  /** A new bean with {@code count} set to {@code value} through the generated navigator. */
+  @SuppressWarnings("unchecked")
+  private static Object navigatorSet(final Class<?> navigator, final Class<?> bean, final Object value)
+    throws ReflectiveOperationException {
+    final var path = navigator.getMethod("of").invoke(null);
+    final var count = (Telescope<Object, Object>) path.getClass().getMethod("count").invoke(path);
+    return count.set(bean.getConstructor().newInstance(), value);
+  }
+
+  /**
+   * A bridge from a record whose {@code count} is {@code sourceType} into a bean whose {@code
+   * count} getter returns {@code type}, through {@code setters}; with {@code transformed}, the
+   * record's {@code count} is a {@code String} read through a transform into an {@code Integer}.
+   * What the bean holds after the bridge writes {@code "5"} or {@code 5}, and after it writes a
+   * null.
+   */
+  private record BridgeCell(
+    String name,
+    String type,
+    String setters,
+    String sourceType,
+    boolean transformed,
+    String owed,
+    String owedNull
+  ) {}
+
+  private static final List<BridgeCell> BRIDGE_CELLS = List.of(
+    new BridgeCell(
+      "an int source into an Integer getter with int and Object setters",
+      "Integer",
+      "public void setCount(final int c) { this.count = -1; }\n" +
+        "  public void setCount(final Object c) { this.count = (Integer) c; }",
+      "int",
+      false,
+      "Ada/5",
+      null
+    ),
+    new BridgeCell(
+      "a transformed Integer into an int getter with int and Integer setters",
+      "int",
+      "public void setCount(final int c) { this.count = c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      "String",
+      true,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a transformed Integer into an int getter with long and Integer setters",
+      "int",
+      "public void setCount(final long c) { this.count = (int) c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      "String",
+      true,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a transformed Integer into an int getter with Object and long setters",
+      "int",
+      "public void setCount(final Object c) { this.count = -1; }\n" +
+        "  public void setCount(final long c) { this.count = (int) c; }",
+      "String",
+      true,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a transformed Integer into an int getter with one int setter",
+      "int",
+      "public void setCount(final int c) { this.count = c; }",
+      "String",
+      true,
+      "Ada/5",
+      "Ada/0"
+    )
+  );
+
+  @Test
+  @DisplayName("a bridge writes a converted or transformed value through the setter the runtime chooses")
+  void aBridgeWritesThroughTheSetterTheRuntimeChooses() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var b : BRIDGE_CELLS) {
+      final var prefix = "Stx" + index++;
+      final var c = new Case(b.name(), b.type(), b.setters(), Writes.BOTH);
+      final var annotation = b.transformed()
+        ? "@io.github.eschizoid.telescope.annotations.Bridge(value = " +
+          prefix +
+          "Bean.class, transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
+          prefix +
+          "Conv.class, method = \"parse\"))"
+        : "@io.github.eschizoid.telescope.annotations.Bridge(" + prefix + "Bean.class)";
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        bean(prefix, "", c),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Conv",
+          "package " +
+            PACKAGE +
+            ";\npublic final class " +
+            prefix +
+            "Conv {\n  public static Integer parse(final String s) { return s == null ? null : Integer.valueOf(s); }\n}\n"
+        ),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Src",
+          "package " +
+            PACKAGE +
+            ";\n" +
+            annotation +
+            "\npublic record " +
+            prefix +
+            "Src(" +
+            b.sourceType() +
+            " count, String name) {}\n"
+        )
+      );
+      if (!compilation.success()) {
+        failures.add(b.name() + ": the bridge does not compile: " + compilation.errorMessages().strip());
+        continue;
+      }
+      final var classes = compilation.define(MethodHandles.lookup());
+      final var bean = classes.get(PACKAGE + "." + prefix + "Bean");
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var forward = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src);
+      final Object five = b.transformed() ? "5" : (Object) 5;
+      final var written = outcome(() ->
+        describe(bean, forward.invoke(null, src.getConstructors()[0].newInstance(five, "Ada")))
+      );
+      if (!written.equals(b.owed())) failures.add(b.name() + ": the bridge built " + written + ", owed " + b.owed());
+      // The runtime chooses the setter from the getter's type; fromMap writes a value of it.
+      final var reflective = outcome(() ->
+        describe(bean, Telescope.fromMap(bean).forward(Map.of("name", "Ada", "count", 5)))
+      );
+      if (!reflective.equals(b.owed())) failures.add(
+        b.name() + ": the runtime built " + reflective + ", owed " + b.owed()
+      );
+      if (!b.transformed()) {
+        final var mapped = outcome(() ->
+          describe(bean, mapper(src, bean).forward(src.getConstructors()[0].newInstance(5, "Ada")))
+        );
+        if (!mapped.equals(b.owed())) failures.add(b.name() + ": the mapper built " + mapped + ", owed " + b.owed());
+      }
+      if (b.owedNull() == null) continue;
+      final var nulled = outcome(() ->
+        describe(bean, forward.invoke(null, src.getConstructors()[0].newInstance(null, "Ada")))
+      );
+      if (!nulled.equals(b.owedNull())) failures.add(b.name() + ": a null built " + nulled + ", owed " + b.owedNull());
+    }
+    assertEquals(List.of(), failures, () -> String.join("\n", failures));
   }
 
   /** A new bean with {@code property} set to {@code value} through the runtime bean path. */

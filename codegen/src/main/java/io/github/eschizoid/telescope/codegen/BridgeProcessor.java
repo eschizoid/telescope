@@ -2132,6 +2132,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var t : transforms.keySet()) transformedTargets.add(renames.getOrDefault(t, t));
     final var transformedSources = new HashSet<>(transforms.keySet());
     transformedSources.removeAll(forwardOnlyTransforms);
+    // What each transform hands the setter it writes through, by the field written: the target's
+    // field forward, the source's backward. A transform whose result type this cannot read is left
+    // out, and its call binds by that result as it is.
+    final var forwardGives = new HashMap<String, TypeMirror>();
+    final var backwardGives = new HashMap<String, TypeMirror>();
+    for (final var t : transforms.keySet()) {
+      final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
+      if (usingEl == null) continue;
+      final var targetName = renames.getOrDefault(t, t);
+      final var sf = fieldByName(sourceFields, t);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      final var method = cfg.transformMethods().get(t);
+      final var qualified = method != null && !method.isEmpty();
+      final var forward = transformGives(
+        usingEl,
+        qualified ? method : "forward",
+        sf.type(),
+        bridgePackage,
+        !qualified,
+        1
+      );
+      if (forward != null) forwardGives.put(targetName, forward);
+      if (qualified || forwardOnlyTransforms.contains(t) || tf == null) continue;
+      final var backward = transformGives(usingEl, "backward", tf.type(), bridgePackage, true, 0);
+      if (backward != null) backwardGives.put(t, backward);
+    }
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -2140,7 +2170,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       targetRebuild,
       pkg,
-      transformedTargets
+      transformedTargets,
+      forwardGives
     );
     if (builtForward == null) return;
     final var builtBackward = buildExpr(
@@ -2151,7 +2182,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       sourceRebuild,
       pkg,
-      transformedSources
+      transformedSources,
+      backwardGives
     );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
@@ -2212,7 +2244,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       sourceRebuild,
       null,
-      Set.of()
+      Set.of(),
+      Map.of()
     );
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
@@ -4042,6 +4075,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return new Resolution.Bound(raw ? (ExecutableType) types.erasure(best) : best);
+  }
+
+  /**
+   * The type a transform's call returns for an argument of {@code argument}: the bound overload's
+   * return type, or, for a {@code BridgeFn} with none bound, its type argument at {@code
+   * fnArgument}. Null where neither says.
+   */
+  private TypeMirror transformGives(
+    final TypeElement usingEl,
+    final String name,
+    final TypeMirror argument,
+    final PackageElement callerPackage,
+    final boolean bridgeFn,
+    final int fnArgument
+  ) {
+    if (resolvedFn(usingEl, name, argument, callerPackage) instanceof Resolution.Bound bound) {
+      return bound.member().getReturnType();
+    }
+    if (!bridgeFn) return null;
+    final var fn = bridgeFnInstantiation(usingEl.asType());
+    if (fn == null || fn.getTypeArguments().size() != 2) return null;
+    return erasedBound(fn.getTypeArguments().get(fnArgument));
   }
 
   private TypeMirror paramOf(final ExecutableType m, final boolean raw) {
@@ -5883,7 +5938,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement annotationSite,
     final Rebuild rebuild,
     final String hoistInto,
-    final Set<String> transformed
+    final Set<String> transformed,
+    final Map<String, TypeMirror> transformGives
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
@@ -5947,22 +6003,48 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return null;
           }
-          // A value of the field's own type is assigned to a local of the chosen setter's parameter
-          // type, so javac binds the overload the runtime writer calls; a cast would type a
-          // conditional on its own and unbox a null. A transformed value binds by its own type.
-          final var argumentType = transformed.contains(f.name()) ? null : setterChoice(to, f.name()).argumentType();
+          // Every value is written through the setter chosen from the field's own type, as the
+          // runtime writer chooses it. Where that setter has overloads, or the value is a
+          // transform's result, it is first assigned to a local of the chosen parameter's type,
+          // which binds that method; a cast would type a conditional on its own and unbox a null.
+          // A transform's reference result bound for a primitive parameter is skipped when null,
+          // as the runtime writer skips a null there. A transform result the chosen parameter
+          // cannot take is passed as it is, and javac binds the overload that takes it.
+          final var choice = setterChoice(to, f.name());
           final var value = read.apply(f.name());
-          if (argumentType == null) {
-            sb.append("out.").append(setter).append("(").append(value).append("); ");
-          } else {
+          final var gives = transformed.contains(f.name()) ? transformGives.get(f.name()) : null;
+          final var types = processingEnv.getTypeUtils();
+          if (
+            gives != null &&
+            !mirrorProps().mentionsTypeVariable(gives) &&
+            choice.argument() != null &&
+            types.isAssignable(gives, choice.argument())
+          ) {
+            final var call = "{ final " + choice.argumentText() + " __arg = __tv; out." + setter + "(__arg); }";
+            if (choice.argument().getKind().isPrimitive() && !gives.getKind().isPrimitive()) {
+              sb.append("{ final ").append(gives).append(" __tv = ").append(value).append("; ");
+              sb.append("if (__tv != null) ").append(call).append(" } ");
+            } else {
+              sb
+                .append("{ final ")
+                .append(gives)
+                .append(" __tv = ")
+                .append(value)
+                .append("; ")
+                .append(call)
+                .append(" } ");
+            }
+          } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
             sb
               .append("{ final ")
-              .append(argumentType)
+              .append(choice.argumentType())
               .append(" __arg = ")
               .append(value)
               .append("; out.")
               .append(setter)
               .append("(__arg); } ");
+          } else {
+            sb.append("out.").append(setter).append("(").append(value).append("); ");
           }
         }
         return sb.append("return out; }").toString();
