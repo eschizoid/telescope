@@ -31,6 +31,40 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * One row in a {@link #rowsNeverVisited} refusal, by the raw method names of its accessors. A
+   * side given as a telescope path has no accessor and is written {@code <path>}.
+   */
+  public static String unvisitedRow(final String sourceMethod, final String targetMethod) {
+    return (sourceMethod == null ? "<path>" : sourceMethod) + " -> " + (targetMethod == null ? "<path>" : targetMethod);
+  }
+
+  /**
+   * The rows keyed to one type pair the mapper never visits, as one entry of a {@link
+   * #rowsNeverVisited} refusal. Classes are named by binary name; {@code rows} come from {@link
+   * #unvisitedRow}.
+   */
+  public static String unvisitedPair(final String source, final String target, final List<String> rows) {
+    return "(" + source + " -> " + target + "): [" + String.join(", ", rows) + "]";
+  }
+
+  /**
+   * Rows keyed to type pairs the mapper's recursion never reaches, which would otherwise be ignored
+   * without a trace. Classes are named by binary name; {@code pairs} come from {@link
+   * #unvisitedPair}, in the order the first row of each was given.
+   */
+  public static String rowsNeverVisited(final String topSource, final String topTarget, final List<String> pairs) {
+    return (
+      "Mapping rows bound to a type pair the mapper (" +
+      topSource +
+      " -> " +
+      topTarget +
+      ") never visits — they would be silently ignored: " +
+      String.join("; ", pairs) +
+      ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove them."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed source field. */
   public static String duplicateSourceRow(final String source, final String target, final String srcField) {
     return (

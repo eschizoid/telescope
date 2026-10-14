@@ -346,20 +346,13 @@ public final class DeepMap {
       // target. Only rows that promise a mapping effect can be silently lost.
       final var rows = new ArrayList<String>();
       for (final var r : entry.getValue()) {
-        if (!(r instanceof Drop)) rows.add(r.sourceField() + " -> " + r.targetField());
+        if (!(r instanceof Drop)) rows.add(PairingMessages.unvisitedRow(r.sourceField(), r.targetField()));
       }
       if (rows.isEmpty()) continue;
-      dead.add("(" + pair.source.getName() + " -> " + pair.target.getName() + "): [" + String.join(", ", rows) + "]");
+      dead.add(PairingMessages.unvisitedPair(pair.source.getName(), pair.target.getName(), rows));
     }
     if (!dead.isEmpty()) throw new IllegalArgumentException(
-      "Mapping rows bound to a type pair the mapper (" +
-        topSource.getName() +
-        " -> " +
-        topTarget.getName() +
-        ") never visits — they would be silently ignored: " +
-        String.join("; ", dead) +
-        ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove" +
-        " them."
+      PairingMessages.rowsNeverVisited(topSource.getName(), topTarget.getName(), dead)
     );
   }
 
@@ -370,7 +363,8 @@ public final class DeepMap {
     final Class<?> topSource,
     final Class<?> topTarget
   ) {
-    final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
+    // In the order each pair's first row was given, which is the order a refusal names them in.
+    final var grouped = new LinkedHashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
       // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
       // Telescope.mapper(...). Two reasons a class field comes back null:
