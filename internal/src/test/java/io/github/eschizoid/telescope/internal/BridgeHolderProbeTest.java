@@ -22,29 +22,6 @@ class BridgeHolderProbeTest {
   @DisplayName("Malformed-holder diagnostics — codegen drift surfaces a precise message")
   class MalformedHolders {
 
-    /** Source class whose sibling probe finds a holder missing the BRIDGE field entirely. */
-    public static final class MissingBridgeFieldSrc {}
-
-    public static final class MissingBridgeFieldSrcBridge {
-      // No BRIDGE field at all — pins the NoSuchFieldException branch.
-    }
-
-    @Test
-    @DisplayName("holder exists but has no BRIDGE field → IllegalStateException naming the offending class")
-    void missingBridgeFieldThrows() {
-      final var ex = assertThrows(IllegalStateException.class, () ->
-        BridgeHolderProbe.probeFor(MissingBridgeFieldSrc.class, String.class)
-      );
-      assertTrue(
-        ex.getMessage().contains(MissingBridgeFieldSrcBridge.class.getName()),
-        () -> "diagnostic must name the malformed holder; got: " + ex.getMessage()
-      );
-      assertTrue(
-        ex.getMessage().contains("Re-run the @Bridge processor"),
-        () -> "diagnostic must actionably suggest re-running codegen; got: " + ex.getMessage()
-      );
-    }
-
     /** Source whose holder has a BRIDGE field with the wrong modifiers (not final). */
     public static final class NonFinalBridgeFieldSrc {}
 
@@ -130,8 +107,21 @@ class BridgeHolderProbeTest {
   }
 
   @Nested
-  @DisplayName("Lookup order — long-form <Source>To<Target>Bridge is tried before short-form")
-  class LookupOrder {
+  @DisplayName("What reads as no holder")
+  class NotAHolder {
+
+    /**
+     * A source whose same-named class holds no BRIDGE field, as a hand-written mapper class may.
+     */
+    public static final class MissingBridgeFieldSrc {}
+
+    public static final class MissingBridgeFieldSrcBridge {}
+
+    @Test
+    @DisplayName("a class with the holder's name and no BRIDGE field reads as no holder")
+    void aClassWithNoBridgeFieldIsNoHolder() {
+      assertTrue(BridgeHolderProbe.probeFor(MissingBridgeFieldSrc.class, String.class).isEmpty());
+    }
 
     public static final class LongFormSrc {}
 
@@ -140,20 +130,43 @@ class BridgeHolderProbeTest {
       public static final String BRIDGE = "long-form-marker";
     }
 
-    public static final class LongFormSrcBridge {
+    @Test
+    @DisplayName("the short-form lookup does not read a long-form holder, since derived bridges share its name")
+    void theShortFormLookupDoesNotReadALongFormHolder() {
+      assertTrue(BridgeHolderProbe.shortFormFor(LongFormSrc.class, String.class).isEmpty());
+    }
+  }
+
+  @Nested
+  @DisplayName("Lookup order — long-form <Source>To<Target>Bridge is tried before short-form")
+  class LookupOrder {
+
+    public static final class BothFormsSrc {}
+
+    public static final class BothFormsSrcToStringBridge {
+
+      public static final String BRIDGE = "long-form-marker";
+    }
+
+    public static final class BothFormsSrcBridge {
 
       public static final String BRIDGE = "short-form-marker";
     }
 
     @Test
-    @DisplayName("when both long-form and short-form holders exist, the long-form value wins")
+    @DisplayName("when both long-form and short-form holders exist, probeFor takes the long form")
     void longFormTakesPrecedence() {
-      // Pins the lookup-order contract documented on probe(): the long-form FQN is tried first
-      // so a source carrying multiple bridges resolves unambiguously to the one targeting the
-      // requested class.
-      final var probed = BridgeHolderProbe.probeFor(LongFormSrc.class, String.class);
+      final var probed = BridgeHolderProbe.probeFor(BothFormsSrc.class, String.class);
       assertTrue(probed.isPresent(), "long-form holder must be discovered");
       assertEquals("long-form-marker", probed.get().bridge(), "long-form value must win over short-form");
+    }
+
+    @Test
+    @DisplayName("shortFormFor takes the short form when both exist")
+    void shortFormForTakesTheShortForm() {
+      final var probed = BridgeHolderProbe.shortFormFor(BothFormsSrc.class, String.class);
+      assertTrue(probed.isPresent(), "short-form holder must be discovered");
+      assertEquals("short-form-marker", probed.get().bridge());
     }
   }
 }

@@ -42,6 +42,7 @@ import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import javax.tools.Diagnostic;
@@ -413,18 +414,57 @@ class CrossPathCorpusTest {
     final ProcessorHarness.Compilation plain,
     final String prefix
   ) {
+    return emitted(processed, plain, prefix, Set.of());
+  }
+
+  /**
+   * As {@link #emitted(ProcessorHarness.Compilation, ProcessorHarness.Compilation, String)}, past
+   * {@code done}.
+   */
+  private static Class<?> emitted(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix,
+    final Set<String> done
+  ) {
+    final var bridgeName = PACKAGE + "." + prefix + "SrcBridge";
+    final var defined = defineAdded(processed, plain, name -> !done.contains(name));
+    final var bridge = defined.get(bridgeName);
+    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
+    return bridge;
+  }
+
+  /**
+   * Define every class the processor's compile added over the plain one except the cell's own
+   * bridge and the classes nested in it, and hand back the names defined.
+   */
+  private static Set<String> definedExceptOwn(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix
+  ) {
+    final var own = PACKAGE + "." + prefix + "SrcBridge";
+    return defineAdded(processed, plain, name -> !name.equals(own) && !name.startsWith(own + "$")).keySet();
+  }
+
+  /**
+   * Define the classes the processor's compile added over the plain one that {@code wanted} keeps.
+   */
+  private static Map<String, Class<?>> defineAdded(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final Predicate<String> wanted
+  ) {
     final var added = new LinkedHashMap<>(processed.classes());
     plain.classes().keySet().forEach(added::remove);
-    final var defined = new ProcessorHarness.Compilation(
+    added.keySet().removeIf(wanted.negate());
+    return new ProcessorHarness.Compilation(
       processed.success(),
       processed.diagnostics(),
       processed.generated(),
       processed.resources(),
       added
     ).define(MethodHandles.lookup());
-    final var bridge = defined.get(PACKAGE + "." + prefix + "SrcBridge");
-    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
-    return bridge;
   }
 
   /**
@@ -5151,6 +5191,54 @@ class CrossPathCorpusTest {
       "#0(x=#1(i=#2(status=Ea.A)))"
     ),
     new EnumCell(
+      "an enum pair below a sub-pair whose source declares a bridge to two targets, one with a transform",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sInner i", "new %1$sSrc(new %1$sInner(%1$sEa.A))"),
+        sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(%1$sEb.C))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "@io.github.eschizoid.telescope.annotations.Bridge(%1$sOtherDto.class)\n" +
+          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        "public record %1$sOtherDto(%1$sEa status) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(i=#1(status=Eb.A))",
+      "#0(i=#1(status=Ea.A))",
+      "#0(i=#1(status=Ea.A))"
+    ),
+    new EnumCell(
+      "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sMid m", "new %1$sSrc(new %1$sMid(%1$sEa.A, java.util.List.of()))"),
+        sampled("%1$sTgt", "%1$sMidDto m", "new %1$sTgt(new %1$sMidDto(%1$sEb.C, java.util.List.of()))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "public record %1$sMid(%1$sEa status, java.util.List<%1$sSrc> back) {}\n",
+        "public record %1$sMidDto(%1$sEb status, java.util.List<%1$sTgt> back) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(m=#1(status=Eb.A, back=[]))",
+      "#0(m=#1(status=Ea.A, back=[]))",
+      "#0(m=#1(status=Ea.A, back=[]))"
+    ),
+    new EnumCell(
       "a target enum with a constant the source lacks, both ways",
       Directions.BOTH,
       List.of(
@@ -5231,23 +5319,23 @@ class CrossPathCorpusTest {
 
   /**
    * Enum cells where the runtime owes a refusal, by the words it has to contain, while the
-   * generated path owes the cell's shapes. A sub-pair's own {@code @Bridge} decides its fields on
-   * the generated path, through a {@code @Transform} or its own {@code lenient}, and the runtime
-   * mapper has no counterpart for either unless it is given a row naming the nested pair. A cell
-   * cannot write one: a row's accessors are method references to the cell's types, which exist only
-   * once the cell is compiled.
+   * generated path owes the cell's shapes.
    *
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
   private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair below a sub-pair whose own bridge converts it with a transform, under a strict parent",
+    // A defect still to close: the runtime reads only a short-form bridge, and a source
+    // declaring
+    // two targets gets long-form names, which the processor also gives the bridges it
+    // derives.
+    "an enum pair below a sub-pair whose source declares a bridge to two targets, one with a transform",
     "%1$sEa has no constant named C, which the backward direction needs",
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair two levels below a sub-pair a lenient bridge shares, where the lower pair's own bridge converts it",
-    "%1$sEa has no constant named C, which the backward direction needs",
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
+    // A defect still to close: a sub-pair that reaches back to a pair being converted around
+    // it is
+    // walked, because the runtime's guard against an object reaching itself does not pass
+    // through
+    // a generated bridge.
+    "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
     "%1$sEa has no constant named C, which the backward direction needs"
   );
 
@@ -5276,8 +5364,11 @@ class CrossPathCorpusTest {
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
       final var forwardOnly = cell.directions() == Directions.FORWARD;
-      // Built before the bridge is defined: a forward-only mapper given no rows routes through a
-      // bridge it finds beside the source, and would then be the generated path a second time.
+      // Every bridge but the cell's own is defined before the mapper is built, so a nested pair's
+      // own bridge is there for the runtime to find. The cell's own bridge comes after: a
+      // forward-only mapper given no rows routes through a bridge it finds beside the source, and
+      // would then be the generated path a second time.
+      final var subBridges = processed.success() ? definedExceptOwn(processed, plain, prefix) : Set.<String>of();
       final Attempt build = () -> forwardOnly ? Telescope.mapperForward(src, tgt) : Telescope.mapper(src, tgt);
       final var refusal = refusalOf(build);
       final var built = refusal == null;
@@ -5315,7 +5406,7 @@ class CrossPathCorpusTest {
         failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
         continue;
       }
-      final var bridge = emitted(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, subBridges);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = new ArrayList<Map.Entry<String, String>>();
