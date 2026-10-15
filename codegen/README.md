@@ -336,9 +336,11 @@ It never rejects a call that the runtime would build:
   `writeBean` or `writeBeans` hint, and the pair has no `@Bridge` of its own that the verifier can see.
 
 A carrier `@Bridge` declared in a module compiled separately counts as a bridge of the pair's own when that module is on
-the class path: the bridge processor leaves a marker for each carrier pair under `telescope/carriers/default/`, and the
-verifier reads it. A carrier reached only through the module path is not seen, and its pair is checked as if it had no
-bridge.
+the class path or the module path: the bridge processor leaves a marker for each carrier pair under
+`telescope/carriers/default/`, and the verifier reads it. A shaded jar that relocates packages renames the classes but
+not the class names inside the marker files, so the verifier does not see a carrier shaded that way and checks its pair
+as if it had no bridge. Mark such a call, or an element enclosing it, `@UncheckedMapping`, or pass
+`-Atelescope.verify=warn`.
 
 The verifier is on whenever the processor is on the path, and it takes the options below:
 

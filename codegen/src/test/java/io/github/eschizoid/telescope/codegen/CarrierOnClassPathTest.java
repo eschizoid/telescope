@@ -56,6 +56,33 @@ class CarrierOnClassPathTest {
     return List.of("-classpath", String.join(File.pathSeparator, entries));
   }
 
+  /**
+   * The compiling JVM's own class path followed by {@code jar} as the class path, and {@code
+   * modules} as the module path, every module on it resolved.
+   */
+  private static List<String> modulePath(final Path jar, final Path modules) {
+    final var options = new ArrayList<>(classPath(jar));
+    options.addAll(List.of("--module-path", modules.toString(), "--add-modules", "ALL-MODULE-PATH"));
+    return options;
+  }
+
+  /** Every entry of {@code jars}, in order, written into one jar named {@code name}. */
+  private Path merged(final String name, final Path... jars) throws IOException {
+    final var merged = dir.resolve(name + ".jar");
+    try (final var out = new JarOutputStream(Files.newOutputStream(merged))) {
+      for (final var jar : jars) {
+        try (final var in = new JarFile(jar.toFile())) {
+          for (final var entry : Collections.list(in.entries())) {
+            out.putNextEntry(new JarEntry(entry.getName()));
+            out.write(in.getInputStream(entry).readAllBytes());
+            out.closeEntry();
+          }
+        }
+      }
+    }
+    return merged;
+  }
+
   /** {@code compilation}'s classes and resources, written into a jar named {@code name}. */
   private Path jar(final String name, final ProcessorHarness.Compilation compilation) throws IOException {
     assertTrue(compilation.success(), () -> name + " should compile: " + compilation.errorMessages());
@@ -208,6 +235,30 @@ class CarrierOnClassPathTest {
     }
     final var module = ModuleFinder.of(dir.resolve("m-marked.jar")).find("cm612.m").orElseThrow();
     assertEquals(Set.of("cm612.m"), module.descriptor().packages());
+  }
+
+  @Test
+  @DisplayName(
+    "the verifier stays silent for a pair a carrier on the module path converts, in an automatic module and an explicit one"
+  )
+  void aCarrierOnTheModulePathKeepsTheVerifierSilent() throws IOException {
+    final var a = moduleA();
+    final var automatic = moduleB(a);
+    final var descriptor = jar(
+      "descriptor",
+      ProcessorHarness.compileFully(List.of(), List.of(), source("module-info", "module cm612.carriers {}\n"))
+    );
+    final var explicit = merged("carriers", automatic, descriptor);
+    assertTrue(ModuleFinder.of(automatic).find("b").orElseThrow().descriptor().isAutomatic());
+    assertFalse(ModuleFinder.of(explicit).find("cm612.carriers").orElseThrow().descriptor().isAutomatic());
+    final var failures = new ArrayList<String>();
+    for (final var carrier : List.of(automatic, explicit)) {
+      final var compiled = moduleC(modulePath(a, carrier));
+      if (!compiled.success()) {
+        failures.add(carrier.getFileName() + ": the verifier owed silence, saw " + compiled.errorMessages());
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
   }
 
   @Test

@@ -371,10 +371,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * {@code <Source>To<Target>Bridge} in the source's package, or {@code <Source>Bridge} beside the
    * source in its enclosing class, which is where the runtime looks for a nested source's bridge. A
    * carrier compiled apart from this compilation is seen through the marker it left on the class
-   * path ({@link #carrierOnClassPath}); one reached only through the module path is not.
+   * path or the module path ({@link #carrierCompiledApart}).
    */
   private boolean bridgeVisible(final TypeElement source, final TypeElement target) {
-    if (carrierOnClassPath(source, target)) return true;
+    if (carrierCompiledApart(source, target)) return true;
     for (final var side : List.of(source, target)) {
       if (bridgeNamed().contains(binaryName(side))) return true;
       for (final var mirror : side.getAnnotationMirrors()) {
@@ -397,18 +397,32 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether a carrier {@code @Bridge} compiled into something on the class path converts the pair:
-   * its marker resource is there ({@link CarrierMarkers}). A carrier in this compilation leaves its
-   * marker in this compilation's output, which the class path does not read, and is seen through
-   * its source instead.
+   * Whether a carrier {@code @Bridge} compiled apart from this compilation converts the pair: its
+   * marker resource ({@link CarrierMarkers}) is on the class path, or in a named module on the
+   * module path. A module-path location is read one module at a time, so each named module this
+   * compilation can see is asked in turn. A carrier in this compilation leaves its marker in this
+   * compilation's output, which neither path reads, and is seen through its source instead.
    */
-  private boolean carrierOnClassPath(final TypeElement source, final TypeElement target) {
+  private boolean carrierCompiledApart(final TypeElement source, final TypeElement target) {
     final var name = CarrierMarkers.relativeName(binaryName(source), binaryName(target));
+    if (markerAt(StandardLocation.CLASS_PATH, "", name)) return true;
+    for (final var module : elements.getAllModuleElements()) {
+      if (module.isUnnamed()) continue;
+      if (markerAt(StandardLocation.MODULE_PATH, module.getQualifiedName() + "/", name)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether {@code name} can be read at {@code location} under {@code moduleAndPackage}. A file
+   * manager may hand back an object for a name it cannot read, so opening it is the test, and any
+   * failure, a module the location does not hold included, reads as absent.
+   */
+  private boolean markerAt(final StandardLocation location, final String moduleAndPackage, final String name) {
     try {
-      // A file manager may hand back an object for a name it cannot read; opening it is the test.
-      processingEnv.getFiler().getResource(StandardLocation.CLASS_PATH, "", name).openInputStream().close();
+      processingEnv.getFiler().getResource(location, moduleAndPackage, name).openInputStream().close();
       return true;
-    } catch (final IOException | IllegalArgumentException missing) {
+    } catch (final IOException | RuntimeException missing) {
       return false;
     }
   }
