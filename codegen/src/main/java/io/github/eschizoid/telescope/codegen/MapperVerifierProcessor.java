@@ -21,6 +21,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
@@ -58,6 +59,7 @@ import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
+import javax.tools.StandardLocation;
 
 /**
  * Compile-time verification of {@code Telescope.map} / {@code Telescope.mapper} / {@code
@@ -367,9 +369,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * class carries a {@code @Bridge}, a {@code @Bridge} this compilation sees names either one, or a
    * class exists under a name a generated bridge of the source takes, {@code <Source>Bridge} or
    * {@code <Source>To<Target>Bridge} in the source's package, or {@code <Source>Bridge} beside the
-   * source in its enclosing class, which is where the runtime looks for a nested source's bridge.
+   * source in its enclosing class, which is where the runtime looks for a nested source's bridge. A
+   * carrier compiled apart from this compilation is seen through the marker it left on the class
+   * path ({@link #carrierOnClassPath}); one reached only through the module path is not.
    */
   private boolean bridgeVisible(final TypeElement source, final TypeElement target) {
+    if (carrierOnClassPath(source, target)) return true;
     for (final var side : List.of(source, target)) {
       if (bridgeNamed().contains(binaryName(side))) return true;
       for (final var mirror : side.getAnnotationMirrors()) {
@@ -389,6 +394,23 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       names.add(enclosing.getQualifiedName() + "." + simple + "Bridge");
     }
     return names.stream().anyMatch(name -> elements.getTypeElement(name) != null);
+  }
+
+  /**
+   * Whether a carrier {@code @Bridge} compiled into something on the class path converts the pair:
+   * its marker resource is there ({@link CarrierMarkers}). A carrier in this compilation leaves its
+   * marker in this compilation's output, which the class path does not read, and is seen through
+   * its source instead.
+   */
+  private boolean carrierOnClassPath(final TypeElement source, final TypeElement target) {
+    final var name = CarrierMarkers.relativeName(binaryName(source), binaryName(target));
+    try {
+      // A file manager may hand back an object for a name it cannot read; opening it is the test.
+      processingEnv.getFiler().getResource(StandardLocation.CLASS_PATH, "", name).openInputStream().close();
+      return true;
+    } catch (final IOException | IllegalArgumentException missing) {
+      return false;
+    }
   }
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
@@ -737,9 +759,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * none; a generic bean is left to construction. A pair below the call's own is walked only when
      * no bridge of its own can stand in for the walk: a row is keyed to it, or {@link
      * #bridgeVisible} finds none. {@code rootBridgeable} holds for a call whose own pair a bridge
-     * of its own may convert, which the same test then decides. A bridge a carrier declares in a
-     * module compiled apart from this one is registered only as a service, which nothing here can
-     * read.
+     * of its own may convert, which the same test then decides.
      */
     private void verifySetters(
       final MethodInvocationTree node,
