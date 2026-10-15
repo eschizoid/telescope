@@ -8004,9 +8004,9 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A plain write into a generic class the bridge names raw: the declarations, each with {@code
-   * %1$s} as the row's prefix and the last of them the runtime mapper, and what both paths owe
-   * forward, backward and through patch.
+   * A write into a generic class the bridge names raw: the declarations, each with {@code %1$s} as
+   * the row's prefix and the last of them the runtime mapper, and what both paths owe forward,
+   * backward and through patch. A row owing no backward is forward only.
    */
   private record RawWrite(String name, List<String> declarations, String forward, String backward, String patch) {}
 
@@ -8095,6 +8095,28 @@ class CrossPathCorpusTest {
       "#0(child=#1(name=\"a\"))",
       "#0(child=#1(name=\"q\"))",
       "#0(child=#1(name=\"q\"))"
+    ),
+    // The raw record's canonical constructor takes Object, where a CharSequence argument
+    // would bind
+    // the other constructor of one argument; the runtime calls the canonical one.
+    new RawWrite(
+      "a transform result into a generic record with a second constructor of the same arity",
+      List.of(
+        transformedValue(true) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y value) {\n" +
+          "  public %1$sTgt(final CharSequence c) { this((Y) (\"CharSequence:\" + c)); }\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\"); }\n}\n",
+        transformFn("String", "CharSequence", "a", "String.valueOf(b)"),
+        "public class %1$sRuntime {\n" +
+          "  public static Object mapper() {\n" +
+          "    final var fn = new %1$sFn();\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapperForward(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt, String, Object>toOneWay(" +
+          "%1$sSrc::value, %1$sTgt::value, fn::forward));\n  }\n}\n"
+      ),
+      "#0(value=\"x\")",
+      null,
+      null
     )
   );
 
@@ -8129,19 +8151,19 @@ class CrossPathCorpusTest {
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
       final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var forwardOnly = row.backward() == null;
       @SuppressWarnings("unchecked")
-      final var mapper = (Mapper<Object, Object>) classes
-        .get(PACKAGE + "." + prefix + "Runtime")
-        .getMethod("mapper")
-        .invoke(null);
+      final Mapper<Object, Object> mapper = forwardOnly ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = forwardOnly ? (ForwardMapper<Object, Object>) runtime : null;
       final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
-      final var owed = List.of(
-        Map.entry("forward", row.forward()),
-        Map.entry("backward", row.backward()),
-        Map.entry("patch", row.patch())
-      );
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
       for (final var operation : owed) {
         final Attempt generated = switch (operation.getKey()) {
           case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
@@ -8149,7 +8171,9 @@ class CrossPathCorpusTest {
           default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
         };
         final Attempt reflective = switch (operation.getKey()) {
-          case "forward" -> () -> mapper.forward(srcSample.get());
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
           case "backward" -> () -> mapper.backward(tgtSample.get());
           default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
         };
