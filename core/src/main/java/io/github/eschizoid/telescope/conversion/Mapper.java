@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +46,14 @@ public final class Mapper<A, B> {
    */
   public record PatchEntry(String sourceField, Function<Object, Object> backward) {}
 
+  /**
+   * <b>Module-internal seam — NOT public API.</b> One case of a mapper between two sealed
+   * interfaces: a case of the source, the case of the target it converts to, and the mapper between
+   * the two, which {@link #patch} and {@link #into} hand a value of that case to. Declared {@code
+   * public} for the same reason as {@link PatchEntry}.
+   */
+  public record CaseEntry(Class<?> sourceCase, Class<?> targetCase, Mapper<?, ?> mapper) {}
+
   private final Iso<A, B> iso;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
@@ -52,6 +61,11 @@ public final class Mapper<A, B> {
   private final Reflective targetRefl;
   private volatile IntoPlan intoPlan;
   private final Map<String, PatchEntry> patchByTargetField;
+  // Non-null for a mapper between two sealed interfaces, one entry per case of the source: patch
+  // and into hand a value to the mapper of the case it belongs to.
+  private final List<CaseEntry> cases;
+  // Non-null for a pair converted through its generated bridge, whose own patch is the overlay.
+  private final BiFunction<A, B, A> patcher;
   // A null patchByTargetField: the mapper has no per-field table to overlay or write through.
   private static final String UNSUPPORTED =
     "This mapper does not support %s: Telescope.merge produces a forward-only mapper (the " +
@@ -109,7 +123,7 @@ public final class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
-    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of());
+    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of(), null, null);
   }
 
   private Mapper(
@@ -121,9 +135,13 @@ public final class Mapper<A, B> {
     final BiFunction<A, B, B> postForward,
     final Function<B, B> preBackward,
     final BiFunction<B, A, A> postBackward,
-    final List<OpticNode> explainTrail
+    final List<OpticNode> explainTrail,
+    final List<CaseEntry> cases,
+    final BiFunction<A, B, A> patcher
   ) {
     this.iso = iso;
+    this.cases = cases == null ? null : List.copyOf(cases);
+    this.patcher = patcher;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
     this.sourceRefl = Reflective.of(sourceClass);
@@ -188,7 +206,9 @@ public final class Mapper<A, B> {
       null,
       null,
       null,
-      explainTrail
+      explainTrail,
+      null,
+      null
     );
   }
 
@@ -219,7 +239,55 @@ public final class Mapper<A, B> {
     final Map<String, PatchEntry> patchByTargetField,
     final List<OpticNode> explainTrail
   ) {
-    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, explainTrail);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      null,
+      null,
+      null,
+      null,
+      explainTrail,
+      null,
+      null
+    );
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> A mapper between two sealed interfaces: {@code
+   * iso} dispatches on the case, and {@code cases} holds each case's own mapper, which {@link
+   * #patch} and {@link #into} dispatch to the same way. Fenced like {@link #ofIso}.
+   */
+  @SuppressWarnings("exports")
+  public static <A, B> Mapper<A, B> ofCases(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<CaseEntry> cases,
+    final List<OpticNode> explainTrail
+  ) {
+    return new Mapper<>(iso, sourceClass, targetClass, Map.of(), null, null, null, null, explainTrail, cases, null);
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> A mapper whose {@link #patch} is {@code patcher}
+   * whole rather than an overlay field by field: a pair converted through its generated bridge,
+   * whose patch is the bridge's own, or a pair with no fields to overlay, such as two enums. {@code
+   * intoNames} are the target properties {@link #into} writes. Fenced like {@link #ofIso}.
+   */
+  @SuppressWarnings("exports")
+  public static <A, B> Mapper<A, B> ofPatcher(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final BiFunction<A, B, A> patcher,
+    final List<String> intoNames
+  ) {
+    final var table = new LinkedHashMap<String, PatchEntry>();
+    // into reads only the keys; patch goes to the patcher whole and never reads an entry.
+    for (final var name : intoNames) table.put(name, new PatchEntry(name, Function.identity()));
+    return new Mapper<>(iso, sourceClass, targetClass, table, null, null, null, null, List.of(), null, patcher);
   }
 
   /**
@@ -349,11 +417,17 @@ public final class Mapper<A, B> {
    * nested object or a container it holds is the one {@code base} holds, and changing it changes
    * {@code base}.
    *
+   * <p>Between two sealed interfaces, {@code base} is patched by the mapper of its own case. A
+   * {@code partial} of the case {@code base}'s case converts to overlays it there; a partial of any
+   * other case, or null, is ignored and {@code base} is rebuilt as it is, since overlaying one case
+   * onto another would change which case the value is. Call {@link #backward} to change the case. A
+   * case converted through its own {@code @Bridge} is patched by that bridge's {@code patch}.
+   *
    * @return a new {@code A}, or {@code null} when {@code base} is null
    * @throws UnsupportedOperationException if the mapper came from {@code Telescope.merge} or from
    *     one of the {@code lift*} methods, neither of which has fields to overlay, or if {@code A}
-   *     is an enum or a class no write strategy can build, such as a sealed interface or an
-   *     abstract class without a static {@code builder()}
+   *     is an enum or a class no write strategy can build, such as an interface that is not sealed
+   *     or an abstract class without a static {@code builder()}
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
@@ -361,11 +435,16 @@ public final class Mapper<A, B> {
     // means a legitimate mapper with no patchable rows, whose patch is a rebuild of base.
     if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("patch()"));
     if (base == null) return null;
+    if (cases != null) {
+      final var entry = caseOfSource(base);
+      final var sameCase = entry.targetCase().isInstance(partial) ? partial : null;
+      return (A) ((Mapper<Object, Object>) entry.mapper()).patch(base, sameCase);
+    }
+    if (patcher != null) return patcher.apply(base, partial);
     if (!rebuildable()) throw new UnsupportedOperationException(
       "patch() rebuilds base field by field, and " +
         sourceClass.getName() +
-        " is an enum or a class no write strategy can build, so there is nothing to rebuild. A " +
-        "@Bridge on a sealed pair generates a patch that dispatches on the case."
+        " is an enum or a class no write strategy can build, so there is nothing to rebuild."
     );
     // The overlay map exists only once the partial supplies a value, so a partial that overlays
     // nothing rebuilds base without allocating it.
@@ -460,15 +539,25 @@ public final class Mapper<A, B> {
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
    *
+   * <p><b>Sealed interfaces.</b> Between two sealed interfaces, {@code target} is written by the
+   * mapper of its own case, and {@code source} must convert to that case.
+   *
    * @param target the existing instance to mutate; must not be null and must not be a record
    * @param source the source value to map from
    * @return {@code target} (same reference, mutated in place)
    * @throws NullPointerException if {@code target} or {@code source} is null
    * @throws UnsupportedOperationException if {@code target}'s class is a record
+   * @throws IllegalArgumentException between two sealed interfaces, if {@code source} converts to a
+   *     case other than {@code target}'s
    */
   public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
+    if (cases == null) refuseRecordTarget(targetClass);
+    return writeInto(target, forward(source));
+  }
+
+  private static void refuseRecordTarget(final Class<?> targetClass) {
     if (targetClass.isRecord()) {
       throw new UnsupportedOperationException(
         "Mapper.into(target, source) requires a mutable target — records are immutable. Use" +
@@ -476,7 +565,24 @@ public final class Mapper<A, B> {
           " bean with public setters."
       );
     }
-    final B produced = forward(source);
+  }
+
+  /** Write {@code produced}, which this mapper's forward made, onto {@code target} in place. */
+  @SuppressWarnings("unchecked")
+  private B writeInto(final B target, final B produced) {
+    if (cases != null) {
+      final var entry = caseOfTarget(target);
+      if (produced != null && !entry.targetCase().isInstance(produced)) throw new IllegalArgumentException(
+        "Mapper.into(target, source): the source converts to " +
+          produced.getClass().getSimpleName() +
+          ", and the target is a " +
+          target.getClass().getSimpleName() +
+          ". A value is written into a target of the case it converts to; call forward(source) to" +
+          " change the case."
+      );
+      refuseRecordTarget(entry.targetCase());
+      return (B) ((Mapper<Object, Object>) entry.mapper()).writeInto(target, produced);
+    }
     // Two-phase apply for atomicity AND scoping.
     //
     // Atomicity: stage every (name, value) read BEFORE any setter runs on target. If a stage-time
@@ -510,6 +616,22 @@ public final class Mapper<A, B> {
     for (var i = 0; i < slots.length; i++) staged[i] = slots[i].read().apply(produced);
     for (var i = 0; i < slots.length; i++) slots[i].write().accept(target, staged[i]);
     return target;
+  }
+
+  /** The case entry {@code value}, a value of the sealed source, belongs to. */
+  private CaseEntry caseOfSource(final Object value) {
+    for (final var entry : cases) if (entry.sourceCase().isInstance(value)) return entry;
+    throw new IllegalStateException(
+      "Mapper: " + value.getClass().getName() + " is no case of sealed " + sourceClass.getName()
+    );
+  }
+
+  /** The case entry {@code value}, a value of the sealed target, belongs to. */
+  private CaseEntry caseOfTarget(final Object value) {
+    for (final var entry : cases) if (entry.targetCase().isInstance(value)) return entry;
+    throw new IllegalStateException(
+      "Mapper: " + value.getClass().getName() + " is no case of sealed " + targetClass.getName()
+    );
   }
 
   /** One target property's bound accessor pair, resolved once per mapper. */
@@ -594,7 +716,9 @@ public final class Mapper<A, B> {
       postForward,
       preBackward,
       postBackward,
-      explainTrail
+      explainTrail,
+      cases,
+      patcher
     );
   }
 
@@ -648,7 +772,9 @@ public final class Mapper<A, B> {
       next,
       preBackward,
       postBackward,
-      explainTrail
+      explainTrail,
+      cases,
+      patcher
     );
   }
 
@@ -678,7 +804,9 @@ public final class Mapper<A, B> {
       postForward,
       next,
       postBackward,
-      explainTrail
+      explainTrail,
+      cases,
+      patcher
     );
   }
 
@@ -722,7 +850,9 @@ public final class Mapper<A, B> {
       postForward,
       preBackward,
       next,
-      explainTrail
+      explainTrail,
+      cases,
+      patcher
     );
   }
 

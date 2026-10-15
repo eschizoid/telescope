@@ -163,11 +163,12 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
 - **Convert — declarative mapping (recommended):** `Telescope.map(A.class, B.class, MapStep...)`. Source and target
   classes are mandatory head arguments, never inferred. **Same-name backfill is the default, not a row** — passing no
   rows at all recurses the pair and lines every component up by name; rows are overrides layered on top. `MapStep` is
-  the sealed varargs type (`permits Mapping, WriteHint, NullHint`), and the row factories are `to`, `via`, `drop`,
-  `toOneWay`, `constant`, `compute`, `when`, `enumTo`, `toOrElse`, `toOrElseGet`, `zip`. Sibling `Telescope.mapper(...)`
-  returns `Mapper<A, B>` for patch/nestability. The fluent alternative is `Telescope.mapperBuilder(A.class, B.class)`
-  with `.add(...)` / `.inherit(...)` then `.build()` or `.buildTelescope()`. Symmetrical with
-  `Telescope.all(Edit<S>...)`.
+  the sealed varargs type (`permits Mapping, WriteHint, NullHint, Cases`), and the row factories are `to`, `via`,
+  `drop`, `toOneWay`, `constant`, `compute`, `when`, `enumTo`, `toOrElse`, `toOrElseGet`, `zip`, plus `cases`, which
+  pairs a case of a sealed source with a case of a sealed target. Two sealed interfaces convert case by case, each case
+  paired by a `cases` row or by its own `@Bridge`. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>` for
+  patch/nestability. The fluent alternative is `Telescope.mapperBuilder(A.class, B.class)` with `.add(...)` /
+  `.inherit(...)` then `.build()` or `.buildTelescope()`. Symmetrical with `Telescope.all(Edit<S>...)`.
   - **Class inference internals:** `Mapping#sourceClass()` / `targetClass()` use `LambdaIntrospection.receiverClassOf`
     (`:internal`'s `SerializedLambda` helper — the one place for the decode), so a row through an inherited getter keys
     against the subclass it names.
@@ -269,13 +270,17 @@ from "compile-checked" to "runtime-checked" is a regression.
 - **Write — multi-edit**: `.with(Function<A, A>)`, `.apply(S)`. `javac` rejects type-mismatched fn at compile time.
 - **Read**: `read` / `find` / `toList` / `toListIndexed` / `count` / `exists`.
 
-### ⚠️ Runtime-checked (two documented escape hatches)
+### ⚠️ Runtime-checked (two documented escape hatches and one row)
 
 - `.fieldByName(String)` — late-bound field name (config-driven paths). String IS the contract. Wrong name → runtime
   `IllegalArgumentException`. The `ByName` suffix is what signals the runtime nature at the call site.
 - `.fieldByName(String, Class<B>)` — same as above with an inline `Class<B>` for `var`-friendly inference. The
   `Class<B>` is **not validated** against the actual field type at compile OR runtime; it's pure inference sugar, same
   pattern as `Telescope.of(Class<S>)`. Honest javadoc says so.
+- `cases(Class<S>, Class<T>)` — the two classes are unbounded, so `javac` cannot tell whether they are cases of the
+  sealed pair the row is meant for. The row's record refuses a class no sealed interface permits, the mapper refuses a
+  row no sealed pair it converts takes and two rows pairing one case when it is built, and `MapperVerifierProcessor`
+  reports those refusals at compile time where they are certain.
 
 ### Codegen-support seams (public, not for hand-written call sites)
 

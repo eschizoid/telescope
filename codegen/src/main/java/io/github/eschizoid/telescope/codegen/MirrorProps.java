@@ -137,6 +137,12 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public boolean isSealedInterfaceType(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element != null && element.getKind().isInterface() && element.getModifiers().contains(Modifier.SEALED);
+  }
+
+  @Override
   public boolean isAbstractType(final TypeMirror t) {
     final var element = elementOf(types.erasure(t));
     return element != null && (element.getKind().isInterface() || element.getModifiers().contains(Modifier.ABSTRACT));

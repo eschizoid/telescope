@@ -82,6 +82,12 @@ import javax.tools.Diagnostic;
  * shape gate, and this verifier never fires where construction succeeds. A row keyed to a type pair
  * the mapper never visits is reported with construction's refusal, but only when every row of the
  * call and every property on the walk can be read; otherwise construction decides alone.
+ *
+ * <p>A {@code cases} row is reported when a class it names is not a permitted subclass of a sealed
+ * interface, when two rows pair the same case of the two sealed interfaces the call itself maps,
+ * and when the walk from the call's pair reaches no sealed pair at all, so the row is never taken.
+ * Which case a case without a row pairs with depends on bridges construction finds, so the rest is
+ * left to construction.
  */
 @SupportedAnnotationTypes("*")
 @SupportedOptions({ "telescope.verify", "telescope.verify.verbose" })
@@ -103,6 +109,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   );
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String NULL_HINT_FQN = "io.github.eschizoid.telescope.mapping.NullHint";
+  private static final String CASES_FQN = "io.github.eschizoid.telescope.mapping.Cases";
 
   /**
    * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
@@ -321,6 +328,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var srcEl = props.elementOf(srcType);
       final var tgtEl = props.elementOf(tgtType);
+      if (
+        srcEl != null &&
+        tgtEl != null &&
+        rules.decidePair(srcType, tgtType, "", !strict) instanceof PairDecision.DispatchCases
+      ) {
+        verifySealedCall(args, srcEl, tgtEl);
+        return;
+      }
       if (srcEl == null || tgtEl == null || !rules.reflectable(srcType) || !rules.reflectable(tgtType)) {
         note(
           node,
@@ -357,6 +372,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           continue;
         }
         if (NULL_HINT_FQN.equals(ownerFqn)) continue;
+        if (CASES_FQN.equals(ownerFqn)) {
+          caseRow(row);
+          continue;
+        }
         if (!MAPPING_FQN.equals(ownerFqn)) {
           analyzable = false;
           continue;
@@ -398,6 +417,90 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
+     * The two classes a {@code cases} row pairs, after reporting either one that is not a permitted
+     * subclass of a sealed interface, as the row's factory refuses it; null when either is not a
+     * class literal or is refused.
+     */
+    private TypeElement[] caseRow(final MethodInvocationTree row) {
+      final var rowArgs = row.getArguments();
+      if (rowArgs.size() != 2) return null;
+      final var source = classLiteral(rowArgs.get(0));
+      final var target = classLiteral(rowArgs.get(1));
+      final var sourceEl = source == null ? null : props.elementOf(source);
+      final var targetEl = target == null ? null : props.elementOf(target);
+      if (sourceEl == null || targetEl == null) return null;
+      final var rendered = PairingMessages.caseRow(
+        sourceEl.getSimpleName().toString(),
+        targetEl.getSimpleName().toString()
+      );
+      for (final var named : List.of(sourceEl, targetEl)) {
+        if (sealedRootsOf(named).isEmpty()) {
+          report(row, PairingMessages.notACase(rendered, named.getSimpleName().toString()));
+          return null;
+        }
+      }
+      return new TypeElement[] { sourceEl, targetEl };
+    }
+
+    /**
+     * The sealed interfaces {@code type} implements that name it among their permitted subclasses.
+     */
+    private List<TypeElement> sealedRootsOf(final TypeElement type) {
+      final var roots = new ArrayList<TypeElement>();
+      for (final var implemented : type.getInterfaces()) {
+        final var root = props.elementOf(implemented);
+        if (root != null && permits(root, type)) roots.add(root);
+      }
+      return roots;
+    }
+
+    /**
+     * Whether the sealed interface {@code root} names {@code type} among its permitted subclasses.
+     */
+    private boolean permits(final TypeElement root, final TypeElement type) {
+      if (!root.getModifiers().contains(Modifier.SEALED)) return false;
+      for (final var permitted : root.getPermittedSubclasses()) {
+        if (types.isSameType(types.erasure(permitted), types.erasure(type.asType()))) return true;
+      }
+      return false;
+    }
+
+    /**
+     * A call mapping two sealed interfaces: reports the {@code cases} rows construction refuses
+     * whatever bridges it finds, which are a class no sealed interface permits and two rows pairing
+     * the same case of the call's own pair.
+     */
+    private void verifySealedCall(
+      final List<? extends ExpressionTree> args,
+      final TypeElement srcEl,
+      final TypeElement tgtEl
+    ) {
+      final var paired = new HashSet<String>();
+      for (var i = 2; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        if (
+          !(elementAt(row.getMethodSelect()) instanceof ExecutableElement rowExec) ||
+          !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
+          !rowOwner.getQualifiedName().contentEquals(CASES_FQN)
+        ) {
+          continue;
+        }
+        final var cases = caseRow(row);
+        if (cases == null || !permits(srcEl, cases[0]) || !permits(tgtEl, cases[1])) continue;
+        if (!paired.add(binaryName(cases[0]))) {
+          report(
+            row,
+            PairingMessages.caseRowPairedTwice(
+              srcEl.getSimpleName().toString(),
+              tgtEl.getSimpleName().toString(),
+              cases[0].getSimpleName().toString()
+            )
+          );
+        }
+      }
+    }
+
+    /**
      * Reports the rows keyed to a type pair the mapper never visits, with the message construction
      * refuses them with. Construction keys each row to the classes its accessors are applied to,
      * and to the call's own pair for a side given as a telescope path, for a {@code when}, {@code
@@ -419,6 +522,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final boolean strict
     ) {
       final var table = new LinkedHashMap<String, List<KeyedRow>>();
+      final var caseRows = new ArrayList<String>();
+      Tree firstCaseRow = null;
+      var caseRowsNamed = true;
       for (var i = 2; i < args.size(); i++) {
         if (!(args.get(i) instanceof MethodInvocationTree row)) return;
         if (
@@ -429,6 +535,25 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         final var ownerFqn = rowOwner.getQualifiedName().toString();
         if (WRITE_HINT_FQN.equals(ownerFqn) || NULL_HINT_FQN.equals(ownerFqn)) continue;
+        if (CASES_FQN.equals(ownerFqn)) {
+          final var rowArgs = row.getArguments();
+          final var source = rowArgs.size() == 2 ? classLiteral(rowArgs.get(0)) : null;
+          final var target = rowArgs.size() == 2 ? classLiteral(rowArgs.get(1)) : null;
+          final var sourceEl = source == null ? null : props.elementOf(source);
+          final var targetEl = target == null ? null : props.elementOf(target);
+          // A row naming a class no sealed interface permits is refused by its factory, first.
+          if (
+            sourceEl == null ||
+            targetEl == null ||
+            sealedRootsOf(sourceEl).isEmpty() ||
+            sealedRootsOf(targetEl).isEmpty()
+          ) caseRowsNamed = false;
+          else caseRows.add(
+            PairingMessages.caseRow(sourceEl.getSimpleName().toString(), targetEl.getSimpleName().toString())
+          );
+          if (firstCaseRow == null) firstCaseRow = row;
+          continue;
+        }
         if (!MAPPING_FQN.equals(ownerFqn)) return;
         final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
         if (keyed == null) return;
@@ -436,6 +561,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var visited = new HashSet<String>();
       if (!visit(srcType, tgtType, table, visited, !strict)) return;
+      // The whole walk was followed and met no pair of sealed interfaces,
+      // and only such a pair takes a cases row.
+      if (!caseRows.isEmpty() && caseRowsNamed) {
+        report(
+          firstCaseRow,
+          PairingMessages.caseRowsNeverDispatched(
+            srcEl.getSimpleName().toString(),
+            tgtEl.getSimpleName().toString(),
+            caseRows
+          )
+        );
+      }
       final var dead = new ArrayList<String>();
       Tree at = null;
       for (final var bucket : table.entrySet()) {
@@ -632,6 +769,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           visited,
           forwardOnly
         );
+        // Which case pairs with which depends on bridges construction finds, so the pairs the cases
+        // reach are left to it.
+        case PairDecision.DispatchCases<TypeMirror> __ -> false;
         case PairDecision.Incompatible<TypeMirror> __ -> false;
         default -> true;
       };

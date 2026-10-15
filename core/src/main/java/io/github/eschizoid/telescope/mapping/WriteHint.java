@@ -99,6 +99,10 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * reaches that target, so a default strategy incompatible with a particular target (e.g., {@code
    * BUILDER} on a class with no static {@code builder()}) only throws when that target is actually
    * visited.
+   *
+   * <p>The default is a mapper-wide runtime-only setting. A mapper-wide runtime-only setting walks
+   * every pair, sealed cases included, so the settings of a nested pair's or a case's own bridge do
+   * not apply under it.
    */
   static WriteHint<?> writeBeans(final WriteStrategy strategy) {
     return new DefaultWriteHint(strategy);

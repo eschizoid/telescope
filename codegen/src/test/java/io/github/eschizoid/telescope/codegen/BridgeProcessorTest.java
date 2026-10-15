@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -2379,6 +2380,38 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.hasError("must itself be @Bridge-annotated"),
         () -> "expected per-case-required diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("a case missing @Bridge below a sealed field is reported on the bridge that holds the field")
+    void caseMissingBridgeBelowASealedFieldIsReportedOnTheParent() {
+      final var compilation = compile(
+        source(
+          "demo.P",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(PDto.class)
+          public record P(A a) {}
+          """
+        ),
+        source("demo.PDto", "package demo;\npublic record PDto(B a) {}\n"),
+        source("demo.A", "package demo;\npublic sealed interface A permits Aa {}\n"),
+        source("demo.Aa", "package demo;\npublic record Aa(String x) implements A {}\n"),
+        source("demo.B", "package demo;\npublic sealed interface B permits Bb {}\n"),
+        source("demo.Bb", "package demo;\npublic record Bb(String x) implements B {}\n")
+      );
+      final var owed =
+        "Subtype Aa of sealed A, which @Bridge P converts case by case, must itself be @Bridge-annotated.";
+      final var reported = compilation
+        .errors()
+        .stream()
+        .filter(d -> d.getMessage(Locale.ROOT).equals(owed))
+        .toList();
+      assertEquals(1, reported.size(), compilation::errorMessages);
+      assertTrue(reported.getFirst().getSource().getName().endsWith("P.java"), () ->
+        reported.getFirst().getSource().getName()
       );
     }
 

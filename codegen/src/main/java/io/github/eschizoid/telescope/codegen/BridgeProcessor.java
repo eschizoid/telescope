@@ -276,6 +276,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> threadedRefs = new HashSet<>();
 
   /**
+   * For a pair of sealed interfaces the processor plans a bridge for because a field or element of
+   * another bridge holds it, the source of the first such bridge, which a refusal is reported on.
+   */
+  private final Map<TypePair, TypeElement> sealedSubPairParents = new HashMap<>();
+
+  /**
    * The expression passed as the active path to a call that takes one, or {@code null} while
    * emitting code that passes none. A guarded bridge's {@code forward} and {@code backward} pass
    * their own path; its {@code patch} passes a fresh one per call.
@@ -1427,6 +1433,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy, bridgePackage);
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
+    // The properties the bridge converts by a conversion of its own, drops, or fills without
+    // reading the source: a runtime mapper looks below the rest only, when it decides whether the
+    // bridge may convert this pair for it.
+    final var unwalkedSource = new TreeSet<String>(drops);
+    unwalkedSource.addAll(transforms.keySet());
+    unwalkedSource.addAll(viaMappers.keySet());
+    final var unwalkedTarget = new TreeSet<String>(rawConstants.keySet());
+    unwalkedTarget.addAll(computes.keySet());
+    for (final var converted : List.of(transforms.keySet(), viaMappers.keySet())) {
+      for (final var field : converted) unwalkedTarget.add(renames.getOrDefault(field, field));
+    }
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
@@ -2384,7 +2401,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
-        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq);
+        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, unwalkedSource, unwalkedTarget);
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
       }
@@ -2416,6 +2433,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(source, "@Bridge on a sealed interface requires an explicit permits clause.");
       return;
     }
+    // A sealed pair with no @Bridge of its own is planned for the bridge whose
+    // field holds it, so a refusal is reported there.
+    final var ownPair = new TypePair(source.getQualifiedName().toString(), target.getQualifiedName().toString());
+    final var heldBy = configsByPair.containsKey(ownPair) ? null : sealedSubPairParents.get(ownPair);
+    final Element reportOn = heldBy == null ? source : heldBy;
+    final var sealedName =
+      heldBy == null
+        ? "@Bridge sealed " + source.getSimpleName()
+        : "sealed " + source.getSimpleName() + ", which @Bridge " + heldBy.getSimpleName() + " converts case by case,";
     final var targetPermitsFq = new HashSet<String>();
     for (final var tp : target.getPermittedSubclasses()) {
       if (tp.getKind() == TypeKind.DECLARED) {
@@ -2445,12 +2471,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (caseTarget == null) {
         if (caseBridges.isEmpty()) {
           error(
-            source,
-            "Subtype " +
-              sourceCaseEl.getSimpleName() +
-              " of @Bridge sealed " +
-              source.getSimpleName() +
-              " must itself be @Bridge-annotated."
+            reportOn,
+            "Subtype " + sourceCaseEl.getSimpleName() + " of " + sealedName + " must itself be @Bridge-annotated."
           );
         } else if (caseBridges.size() == 1) {
           // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
@@ -2458,7 +2480,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (!(only instanceof DeclaredType decl)) continue;
           final var onlyEl = (TypeElement) decl.asElement();
           error(
-            source,
+            reportOn,
             "Subtype " +
               sourceCaseEl.getSimpleName() +
               "'s @Bridge target " +
@@ -2470,7 +2492,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         } else {
           // Multi-target — none of the @Bridge targets matched the sealed-target permits.
           error(
-            source,
+            reportOn,
             "Subtype " +
               sourceCaseEl.getSimpleName() +
               " has multiple @Bridge targets, none of which is a permits of sealed target " +
@@ -2563,6 +2585,40 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    return BACKWARD.apply(t);");
         out.println("  }");
         out.println();
+        // A sealed pair on a cycle passes the active path a parent hands it on to each case's own
+        // bridge that takes one, so a reference that closes the cycle through a case converts to
+        // null, as it does through any other bridge on the cycle.
+        if (guardsCycles(source, target)) {
+          final var access = pathOverloadAccess(source, bridge.pkg());
+          for (final var direction : List.of("forward", "backward")) {
+            final var forward = direction.equals("forward");
+            final var inFq = forward ? sourceFq : targetFq;
+            out.println(
+              "  " +
+                access +
+                "static " +
+                (forward ? targetFq : sourceFq) +
+                " " +
+                direction +
+                "(final " +
+                inFq +
+                " v, final " +
+                PATH_TYPE +
+                " __path) {"
+            );
+            out.println("    if (v == null) return null;");
+            for (final var e : entries) {
+              final var inCase = (forward ? e.sourceCase() : e.targetCase()).getQualifiedName();
+              final var path = guardsCycles(e.sourceCase(), e.targetCase()) ? ", __path" : "";
+              out.println(
+                "    if (v instanceof " + inCase + " c) return " + e.bridgeFq() + "." + direction + "(c" + path + ");"
+              );
+            }
+            out.println("    return " + (forward ? "FORWARD" : "BACKWARD") + ".apply(v);");
+            out.println("  }");
+            out.println();
+          }
+        }
         // Sealed-umbrella patch: when base and partial land on matching cases, the per-case
         // bridge's patch overlays one onto the other.
         //
@@ -2600,7 +2656,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    };");
         out.println("  }");
         out.println();
-        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq);
+        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, Set.of(), Set.of());
       }
     );
   }
@@ -2608,14 +2664,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The {@code Fn} class, {@code BRIDGE_FN} and {@code BRIDGE}, each typed over the two classes as
    * {@code forward} and {@code backward} name them. {@code suppression} is the line each carries,
-   * or empty.
+   * or empty. The two sets are the properties of each side the bridge does not walk.
    */
   private static void emitBridgeHandles(
     final PrintWriter out,
     final String suppression,
     final String bridgeName,
     final String sourceFq,
-    final String targetFq
+    final String targetFq,
+    final Set<String> unwalkedSource,
+    final Set<String> unwalkedTarget
   ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
@@ -2629,6 +2687,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    public " + sourceFq + " backward(final " + targetFq + " t) {");
     out.println("      return " + bridgeName + ".backward(t);");
     out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {");
+    out.println("      return " + bridgeName + ".patch(base, partial);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public boolean declaresUnwalkedProperties() {");
+    out.println("      return true;");
+    out.println("    }");
+    emitPropertySet(out, "unwalkedSourceProperties", unwalkedSource);
+    emitPropertySet(out, "unwalkedTargetProperties", unwalkedTarget);
     out.println("  }");
     out.println();
     emitBridgeFnJavadoc(out);
@@ -2638,6 +2708,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(
       "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
     );
+  }
+
+  /**
+   * An override of the {@code BridgeFn} method {@code name} answering {@code properties}, if any.
+   */
+  private static void emitPropertySet(final PrintWriter out, final String name, final Set<String> properties) {
+    if (properties.isEmpty()) return;
+    final var listed = properties
+      .stream()
+      .map(p -> "\"" + p + "\"")
+      .collect(Collectors.joining(", "));
+    out.println();
+    out.println("    @Override");
+    out.println("    public java.util.Set<String> " + name + "() {");
+    out.println("      return java.util.Set.of(" + listed + ");");
+    out.println("    }");
   }
 
   /**
@@ -3415,12 +3501,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), subPlan);
         continue;
       }
-      // (4) Both sides are scalar reflectable declared types → sub-bridge.
+      // (4) Both sides are scalar reflectable declared types, or two sealed interfaces whose
+      //     bridge dispatches on the case → sub-bridge.
       if (
         sf.type() instanceof DeclaredType st &&
         tf.type() instanceof DeclaredType tt &&
-        isReflectableDeclared(st) &&
-        isReflectableDeclared(tt)
+        ((isReflectableDeclared(st) && isReflectableDeclared(tt)) || dispatchesCases(st, tt, sf.name()))
       ) {
         final var subSourceEl = (TypeElement) st.asElement();
         final var subTargetEl = (TypeElement) tt.asElement();
@@ -3428,7 +3514,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           subSourceEl.getQualifiedName().toString(),
           subTargetEl.getQualifiedName().toString()
         );
-        final var abstractSub = firstAbstractSide(subSourceEl, subTargetEl);
+        final var sealedSub = dispatchesCases(st, tt, sf.name());
+        if (sealedSub) sealedSubPairParents.putIfAbsent(subPair, source);
+        final var abstractSub = sealedSub ? null : firstAbstractSide(subSourceEl, subTargetEl);
         if (abstractSub != null) {
           error(
             source,
@@ -3559,8 +3647,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (
       srcElement instanceof DeclaredType sd &&
       tgtElement instanceof DeclaredType td &&
-      isReflectableDeclared(sd) &&
-      isReflectableDeclared(td)
+      ((isReflectableDeclared(sd) && isReflectableDeclared(td)) || dispatchesCases(sd, td, fieldName))
     ) {
       final var subSourceEl = (TypeElement) sd.asElement();
       final var subTargetEl = (TypeElement) td.asElement();
@@ -3568,6 +3655,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         subSourceEl.getQualifiedName().toString(),
         subTargetEl.getQualifiedName().toString()
       );
+      if (dispatchesCases(sd, td, fieldName)) sealedSubPairParents.putIfAbsent(subPair, parentSource);
       if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
@@ -5539,6 +5627,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return types.isSameType(types.boxedClass((PrimitiveType) prim).asType(), boxed);
   }
 
+  /**
+   * Whether the shared decision pairs the two types case by case, as two sealed interfaces: their
+   * bridge is the sealed one, dispatching each value to its case's own bridge.
+   */
+  private boolean dispatchesCases(final DeclaredType source, final DeclaredType target, final String name) {
+    return rules.decidePair(source, target, name) instanceof PairDecision.DispatchCases;
+  }
+
+  private static boolean sealedInterface(final DeclaredType type) {
+    final var element = type.asElement();
+    return element.getKind() == ElementKind.INTERFACE && element.getModifiers().contains(Modifier.SEALED);
+  }
+
   /** Whether the declared type is a record/class telescope can recurse into. */
   private boolean isReflectableDeclared(final DeclaredType dt) {
     final var el = dt.asElement();
@@ -5593,8 +5694,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return found;
   }
 
-  /** The record and class types {@code type}'s properties and instance fields mention. */
+  /**
+   * The record and class types {@code type}'s properties and instance fields mention, and the
+   * sealed interfaces, each of which mentions its cases.
+   */
   private List<TypeElement> mentionedTypes(final TypeElement type) {
+    // A sealed interface holds one of its cases, and has no properties of its own.
+    if (type.getKind() == ElementKind.INTERFACE && type.getModifiers().contains(Modifier.SEALED)) {
+      final var cases = new ArrayList<TypeElement>();
+      for (final var permitted : type.getPermittedSubclasses()) {
+        if (permitted instanceof DeclaredType declared) cases.add((TypeElement) declared.asElement());
+      }
+      return cases;
+    }
     final Deque<TypeMirror> pending = new ArrayDeque<>();
     for (final var field : fieldsOf(type)) pending.add(field.type());
     for (var owner = type; owner != null; owner = userSuperclass(owner)) {
@@ -5614,7 +5726,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (wildcard.getSuperBound() != null) pending.add(wildcard.getSuperBound());
       } else if (mirror instanceof DeclaredType declared) {
         pending.addAll(declared.getTypeArguments());
-        if (isReflectableDeclared(declared)) {
+        if (isReflectableDeclared(declared) || sealedInterface(declared)) {
           mentioned.add((TypeElement) declared.asElement());
         } else if (!isJdkType(declared)) {
           // A container the adopter wrote, such as a class extending ArrayList<Item>, carries its

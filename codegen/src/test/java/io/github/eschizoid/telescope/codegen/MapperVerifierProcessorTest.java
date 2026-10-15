@@ -1090,4 +1090,128 @@ class MapperVerifierProcessorTest {
       .count();
     assertEquals(1, errors, () -> compilation.errorMessages());
   }
+
+  @Nested
+  @DisplayName("Sealed interfaces and cases rows")
+  class SealedCases {
+
+    private static final String SHAPES = """
+      sealed interface Shape permits Circle, Square {}
+      record Circle(double radius) implements Shape {}
+      record Square(double side) implements Shape {}
+      sealed interface ShapeDto permits CircleDto, SquareDto {}
+      record CircleDto(double radius) implements ShapeDto {}
+      record SquareDto(double side) implements ShapeDto {}
+      record Plain(double radius) {}
+      """;
+
+    private ProcessorHarness.Compilation verifyWithShapes(final String rest) {
+      return verify(
+        """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import io.github.eschizoid.telescope.Telescope;
+          """ +
+          SHAPES +
+          rest
+      );
+    }
+
+    @Test
+    @DisplayName("a sealed value in a field pairs case by case, so the pair is not reported as incompatible")
+    void aSealedFieldIsNotReported() {
+      final var compilation = verifyWithShapes(
+        """
+        record Holder(Shape main) {}
+        record HolderDto(ShapeDto main) {}
+        class Calls { static final Object M = Telescope.mapper(Holder.class, HolderDto.class); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("rows pairing each case of the call's own sealed pair compile clean")
+    void rowsPairingEachCaseCompile() {
+      final var compilation = verifyWithShapes(
+        """
+        class Calls {
+          static final Object M = Telescope.mapper(
+            Shape.class, ShapeDto.class, cases(Circle.class, CircleDto.class), cases(Square.class, SquareDto.class));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a row naming a class no sealed interface permits is reported in construction's words")
+    void aRowNamingNoCaseIsReported() {
+      final var compilation = verifyWithShapes(
+        """
+        class Calls {
+          static final Object M = Telescope.mapper(Shape.class, ShapeDto.class, cases(Plain.class, CircleDto.class));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      final var owed = PairingMessages.notACase(PairingMessages.caseRow("Plain", "CircleDto"), "Plain");
+      assertTrue(compilation.hasError(owed), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("two rows pairing one case of the call's own sealed pair are reported in construction's words")
+    void twoRowsPairingOneCaseAreReported() {
+      final var compilation = verifyWithShapes(
+        """
+        class Calls {
+          static final Object M = Telescope.mapper(
+            Shape.class, ShapeDto.class, cases(Circle.class, CircleDto.class), cases(Circle.class, SquareDto.class));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.caseRowPairedTwice("Shape", "ShapeDto", "Circle")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a row on a mapper whose walk meets no sealed pair is reported in construction's words")
+    void aRowNoSealedPairTakesIsReported() {
+      final var compilation = verifyWithShapes(
+        """
+        record Src(String name) {}
+        record Tgt(String name) {}
+        class Calls {
+          static final Object M = Telescope.mapper(Src.class, Tgt.class, cases(Circle.class, CircleDto.class));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      final var owed = PairingMessages.caseRowsNeverDispatched(
+        "Src",
+        "Tgt",
+        List.of(PairingMessages.caseRow("Circle", "CircleDto"))
+      );
+      assertTrue(compilation.hasError(owed), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a row a nested sealed pair may take is left to construction")
+    void aRowANestedSealedPairMayTakeIsNotReported() {
+      final var compilation = verifyWithShapes(
+        """
+        record Holder(Shape main) {}
+        record HolderDto(ShapeDto main) {}
+        class Calls {
+          static final Object M = Telescope.mapper(
+            Holder.class, HolderDto.class, cases(Circle.class, CircleDto.class), cases(Square.class, SquareDto.class));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+  }
 }

@@ -51,6 +51,8 @@
  *       reconstruction ({@code SETTERS} / {@code BUILDER} / {@code CONSTRUCTOR}).
  *   <li>{@link io.github.eschizoid.telescope.mapping.NullHint} — null-handling strategy ({@code
  *       DEFAULT} substitutes JLS defaults via {@code NullDefaults}; otherwise null propagates).
+ *   <li>{@link io.github.eschizoid.telescope.mapping.Cases#cases(Class, Class) Cases.cases(src,
+ *       tgt)} — which case of a sealed target a case of a sealed source converts to.
  * </ul>
  *
  * <p>{@link io.github.eschizoid.telescope.mapping.Mapping} and {@link
@@ -62,8 +64,8 @@
  * {@code TelescopeTo}, {@code FromTelescopeTo}, {@code TelescopeToTelescope}, {@link
  * io.github.eschizoid.telescope.mapping.Constant}, {@link
  * io.github.eschizoid.telescope.mapping.Compute}, {@code Conditional}); {@code MapStep} also
- * permits {@code WriteHint} and {@code NullHint}. Users never name those directly — the static
- * factories above return the sealed interface type.
+ * permits {@code WriteHint}, {@code NullHint} and {@code Cases}. Users never name those directly —
+ * the static factories above return the sealed interface type.
  *
  * <p>For untyped sources, {@link io.github.eschizoid.telescope.mapping.MapExtractStep} is the
  * sibling sealed interface backing {@link io.github.eschizoid.telescope.Telescope#fromMap} — {@code

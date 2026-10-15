@@ -80,7 +80,13 @@ public sealed interface NullHint extends MapStep permits NullHint.NullSourceValu
     DEFAULT,
   }
 
-  /** Declare a per-mapper null-source-value strategy. */
+  /**
+   * Declare a per-mapper null-source-value strategy.
+   *
+   * <p>{@link NullStrategy#DEFAULT} is a mapper-wide runtime-only setting. A mapper-wide
+   * runtime-only setting walks every pair, sealed cases included, so the settings of a nested
+   * pair's or a case's own bridge do not apply under it.
+   */
   static NullHint nullSourceValues(final NullStrategy strategy) {
     return new NullSourceValuesHint(Objects.requireNonNull(strategy, "strategy"));
   }

@@ -43,13 +43,13 @@ import java.util.stream.Collectors;
  *
  * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: same type
  * (identity, or a copy for a container) → primitive/wrapper → enum by constant name → same-kind
- * subtype copy → reflectable recursion → cross-{@code Optional} bridge → same-kind container lift →
- * incompatible. Subtype copy must precede reflectable recursion: a container subclass that declares
- * no type parameters of its own ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts as
- * reflectable, and bean-decomposing it would fail at the JDK boundary (private lookup into {@code
- * java.base} is rejected) — the copy branch intercepts those pairs first, and a pair of containers
- * it does not take never reaches recursion: it goes to the container lift, which converts each
- * element or refuses the pair by name.
+ * subtype copy → reflectable recursion → sealed-case dispatch → cross-{@code Optional} bridge →
+ * same-kind container lift → incompatible. Subtype copy must precede reflectable recursion: a
+ * container subclass that declares no type parameters of its own ({@code class ImageUrls extends
+ * ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail at the JDK
+ * boundary (private lookup into {@code java.base} is rejected) — the copy branch intercepts those
+ * pairs first, and a pair of containers it does not take never reaches recursion: it goes to the
+ * container lift, which converts each element or refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -168,6 +168,13 @@ public final class PairingRules<T> {
         // container views, which convert each element or refuse the pair by name.
         if (!bothContainers(srcType, tgtType) && reflectable(srcType) && reflectable(tgtType)) {
           return new PairDecision.RecursePair<>();
+        }
+
+        // (b.1) Two sealed interfaces → dispatch on the case. Neither has properties of its own to
+        // walk, and its permitted subclasses are every value it can hold, so a value converts
+        // through the pair its case belongs to.
+        if (props.isSealedInterfaceType(srcType) && props.isSealedInterfaceType(tgtType)) {
+          return new PairDecision.DispatchCases<>();
         }
       }
     }

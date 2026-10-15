@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.introspection;
 
 import static java.util.stream.Collectors.joining;
 
+import io.github.eschizoid.telescope.introspection.OpticNode.Dispatched;
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
 import io.github.eschizoid.telescope.introspection.OpticNode.Hop;
 import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
@@ -18,7 +19,7 @@ import java.util.stream.Stream;
  * does, data first. The {@link #toString()} render is a <em>view</em>; the API is the structure:
  * iterate {@link #nodes()} or pull a typed slice with {@link #mapped()} / {@link
  * #transformations()} / {@link #extractions()} / {@link #skipped()} / {@link #unusedSources()} /
- * {@link #hops()} and assert on it.
+ * {@link #dispatched()} / {@link #hops()} and assert on it.
  *
  * <pre>{@code
  * // completeness test — a strict mapper skips nothing by construction
@@ -74,6 +75,11 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(UnusedSource.class::isInstance).map(UnusedSource.class::cast).toList();
   }
 
+  /** The case pairings of the sealed values a conversion dispatches on, in trail order. */
+  public List<Dispatched> dispatched() {
+    return nodes.stream().filter(Dispatched.class::isInstance).map(Dispatched.class::cast).toList();
+  }
+
   /** The navigation steps of a path, in trail order. */
   public List<Hop> hops() {
     return nodes.stream().filter(Hop.class::isInstance).map(Hop.class::cast).toList();
@@ -87,6 +93,7 @@ public record OpticReport(List<OpticNode> nodes) {
     final var transformed = transformations();
     final var extracted = extractions();
     final var unused = unusedSources();
+    final var dispatched = dispatched();
     // One left-column width shared across every mapping row (not per-section), so the marker,
     // field, and the → / ( that follows all land in the same column — the whole report reads as a
     // single aligned table rather than four independently-padded sections. The left cell is the
@@ -96,7 +103,8 @@ public record OpticReport(List<OpticNode> nodes) {
       skipped.stream().map(Skipped::field),
       transformed.stream().map(t -> t.from() + "(" + t.fromType() + ")"),
       extracted.stream().map(Extracted::key),
-      unused.stream().map(UnusedSource::field)
+      unused.stream().map(UnusedSource::field),
+      dispatched.stream().map(OpticReport::caseCell)
     )
       .flatMap(Function.identity())
       .mapToInt(String::length)
@@ -123,6 +131,7 @@ public record OpticReport(List<OpticNode> nodes) {
       row("•", e.key(), leftWidth, "→ " + e.field() + " " + e.fieldType() + " (" + label(e.whenAbsent()) + ")")
     );
     section(blocks, "Unused sources", unused, u -> row("•", u.field(), leftWidth, ""));
+    section(blocks, "Cases", dispatched, d -> row("•", caseCell(d), leftWidth, "→ " + d.targetCase().getSimpleName()));
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
     final var hops = hops();
     if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));
@@ -144,6 +153,12 @@ public record OpticReport(List<OpticNode> nodes) {
   ) {
     if (rows.isEmpty()) return;
     blocks.add(heading + ":\n" + rows.stream().map(render).collect(joining("\n")));
+  }
+
+  // A case row's left cell: the source case, behind the field it sits in when that is not the root.
+  private static String caseCell(final Dispatched node) {
+    final var sourceCase = node.sourceCase().getSimpleName();
+    return node.path().isEmpty() ? sourceCase : node.path() + ": " + sourceCase;
   }
 
   private static String label(final OpticNode.Reason reason) {
