@@ -312,18 +312,28 @@ class SealedRootsTest {
   }
 
   @Test
-  @DisplayName("a case whose @Bridge names several targets is refused with a message saying so")
-  void aCaseBridgingSeveralTargetsIsRefusedSayingSo() {
+  @DisplayName("a case whose @Bridge names several targets pairs through the bridge it declares to a case")
+  void aCaseBridgingSeveralTargetsPairsThroughItsDeclaredBridge() {
+    final var mapper = Telescope.mapper(SfShape.class, SfShapeDto.class);
+    assertEquals(new SfADto(3), mapper.forward(new SfA(3)));
+    assertEquals(new SfA(4), mapper.backward(new SfADto(4)));
+    final var holder = new SfHolder(new SfA(3));
+    assertEquals(SfHolderBridge.forward(holder), Telescope.mapper(SfHolder.class, SfHolderDto.class).forward(holder));
+  }
+
+  @Test
+  @DisplayName("a case whose only bridge the processor derived for it is refused, naming that bridge")
+  void aCaseWithOnlyADerivedBridgeIsRefused() {
     final var refused = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(SfShape.class, SfShapeDto.class)
+      Telescope.mapper(ShShape.class, ShShapeDto.class)
     );
     assertEquals(
-      PairingMessages.longFormCaseBridge("SfShape", "SfShapeDto", "SfA", "SfADto", "SfAToSfADtoBridge"),
+      PairingMessages.undeclaredCaseBridge("ShShape", "ShShapeDto", "ShC", "ShCDto", "ShCToShCDtoBridge"),
       refused.getMessage()
     );
     assertEquals(
-      new SfADto(3),
-      Telescope.mapper(SfShape.class, SfShapeDto.class, cases(SfA.class, SfADto.class)).forward(new SfA(3))
+      new ShCDto(3),
+      Telescope.mapper(ShShape.class, ShShapeDto.class, cases(ShC.class, ShCDto.class)).forward(new ShC(3))
     );
   }
 

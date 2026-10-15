@@ -273,6 +273,35 @@ class NestedOwnBridgeTest {
   }
 
   @Test
+  @DisplayName("a nested pair whose source declares several targets converts through the bridge it declares")
+  void aNestedPairReadsItsDeclaredLongFormBridge() {
+    final var mapper = Telescope.mapper(ObMultiBox.class, ObMultiBoxDto.class);
+    final var box = new ObMultiBox(new ObMulti("x"));
+    assertEquals(new ObMultiBoxDto(new ObMultiDto("X")), mapper.forward(box));
+    assertEquals(ObMultiBoxBridge.forward(box), mapper.forward(box));
+    final var dto = new ObMultiBoxDto(new ObMultiDto("Y"));
+    assertEquals(new ObMultiBox(new ObMulti("y")), mapper.backward(dto));
+    assertEquals(ObMultiBoxBridge.backward(dto), mapper.backward(dto));
+  }
+
+  @Test
+  @DisplayName("a class under a nested pair's long-form name with no BRIDGE field is no bridge, and the pair is walked")
+  void aLongFormClassWithNoBridgeFieldIsNoBridge() {
+    final var mapper = Telescope.mapper(ObHandBox.class, ObHandBoxDto.class);
+    assertEquals(new ObHandBoxDto(new ObHandDto("q")), mapper.forward(new ObHandBox(new ObHand("q"))));
+    assertEquals(new ObHandBox(new ObHand("Q")), mapper.backward(new ObHandBoxDto(new ObHandDto("Q"))));
+  }
+
+  @Test
+  @DisplayName("a mapper with no steps reads a long-form bridge whose target a class elsewhere shares a name with")
+  void aLongFormBridgeIsReadForItsOwnTarget() {
+    assertEquals(
+      new ObTwinDto("BOB"),
+      Telescope.mapperForward(ObTwin.class, ObTwinDto.class).forward(new ObTwin("bob"))
+    );
+  }
+
+  @Test
   @DisplayName("a nested pair converts through a carrier bridge registered for it")
   void aNestedPairConvertsThroughItsCarrierBridge() {
     final var mapper = Telescope.mapper(ObBoard.class, ObBoardDto.class);

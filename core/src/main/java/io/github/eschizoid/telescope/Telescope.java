@@ -1068,9 +1068,9 @@ public sealed class Telescope<
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
     if (steps.length == 0) {
-      // The lookup a nested pair uses, with the long-form holder read first: the holder beside the
-      // source, then a carrier registered by (source, target), since a carrier lives in its own
-      // package.
+      // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
+      // declares the pair: the holder beside the source, then a carrier registered by (source,
+      // target), since a carrier lives in its own package.
       final var own = DeepMap.ownBridge(source, target, true);
       if (own.isPresent()) {
         @SuppressWarnings("unchecked")

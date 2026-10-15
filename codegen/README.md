@@ -284,6 +284,11 @@ A source that declares more than one target, with repeated `@Bridge` or `@Bridge
 per target, because the short name can belong to only one pair. A sealed source and target are bridged case by case, and
 the bridge for the sealed root is named by the same rules.
 
+A runtime mapper converts a nested pair, or pairs a case of a sealed interface, through the bridge the pair's own
+`@Bridge` generated, under either name. A sub-bridge the processor derived for a pair with no `@Bridge` of its own
+shares the long name but carries the configuration of the bridges that reached it, so the runtime does not use it. Each
+generated bridge says which kind it is through `BridgeFn.declaresPair()`.
+
 ## Binders: `@FromMap`
 
 `@FromMap` on a record or POJO generates a `<X>FromMap` class that builds the type from a `Map<String, Object>` without

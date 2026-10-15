@@ -20,9 +20,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * probe checks the {@code BRIDGE} field's target type against the requested class. The long form
  * {@code <Source>To<Target>Bridge} goes both to a source declaring several targets and to a pair
  * the processor derives for a nested component with no {@code @Bridge} of its own. A derived bridge
- * takes its configuration from whichever bridges reached it, and nothing in the class says which
- * kind it is. {@link #probeFor} reads the long form first and then the short form; {@link
- * #shortFormFor} reads only the short form, for a caller that must not take a derived bridge.
+ * takes its configuration from whichever bridges reached it. The name does not say which kind a
+ * long-form holder is; its bridge does, through the {@code declaresPair()} method of the {@code
+ * BridgeFn} it is built from, which a caller in {@code :core} reads. {@link #probeFor} reads the
+ * long form first and then the short form. {@link #longFormFor} and {@link #shortFormFor} each read
+ * one name, for a caller that checks a long-form holder's bridge before falling back to the short
+ * form.
  *
  * <p>The {@code bridge} field on {@link BridgeRef} is typed as {@link Object} because the optic /
  * Telescope types live in {@code :core}; consumers in {@code :core} cast it back to {@code
@@ -56,38 +59,68 @@ public final class BridgeHolderProbe {
       }
     };
 
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<BridgeRef>>> LONG_FORM_CACHE =
+    new ClassValue<>() {
+      @Override
+      protected ConcurrentHashMap<Class<?>, Optional<BridgeRef>> computeValue(final Class<?> type) {
+        return new ConcurrentHashMap<>();
+      }
+    };
+
+  /** Which names a lookup reads, and whether a class under the long name must be a holder. */
+  private enum Lookup {
+    /** The long form, which must be a holder, then the short form. */
+    LONG_THEN_SHORT,
+    /** The short form only. */
+    SHORT,
+    /** The long form only, read as absent when the class has no {@code BRIDGE} field. */
+    LONG,
+  }
+
   /**
    * The {@code <Source>To<Target>Bridge} holder for {@code (sourceClass, targetClass)}, else the
    * {@code <Source>Bridge} holder, or {@link Optional#empty()} when there is neither. A long-form
-   * holder may be one the processor derived, so read this only where a derived bridge is wanted.
+   * holder may be one the processor derived, so a caller that must not take a derived bridge asks
+   * the bridge whether it declares its pair.
    *
    * <p>A short-form class with no {@code BRIDGE} field is not a holder, such as a hand-written
-   * {@code @ViaMapper} class, and reads as absent, as does a holder converting to another target. A
-   * {@code BRIDGE} field with the wrong modifiers or a null value, and a long-form class with no
-   * {@code BRIDGE} field, throw on every call rather than being memoised, so a malformed generated
-   * class surfaces each time it is reached.
+   * {@code @ViaMapper} class, and reads as absent. A holder under either name whose {@code BRIDGE}
+   * field is typed to another target reads as absent too: the long name carries only the target's
+   * simple name, which a class in another package can share. A {@code BRIDGE} field with the wrong
+   * modifiers or a null value, and a long-form class with no {@code BRIDGE} field, throw on every
+   * call rather than being memoised, so a malformed generated class surfaces each time it is
+   * reached.
    */
   public static Optional<BridgeRef> probeFor(final Class<?> sourceClass, final Class<?> targetClass) {
-    return memoised(CACHE, sourceClass, targetClass, true);
+    return memoised(CACHE, sourceClass, targetClass, Lookup.LONG_THEN_SHORT);
   }
 
   /** As {@link #probeFor}, reading only the short form {@code <Source>Bridge}. */
   public static Optional<BridgeRef> shortFormFor(final Class<?> sourceClass, final Class<?> targetClass) {
-    return memoised(SHORT_FORM_CACHE, sourceClass, targetClass, false);
+    return memoised(SHORT_FORM_CACHE, sourceClass, targetClass, Lookup.SHORT);
+  }
+
+  /**
+   * As {@link #probeFor}, reading only the long form {@code <Source>To<Target>Bridge}. A class
+   * under that name with no {@code BRIDGE} field is not a holder, such as a hand-written
+   * {@code @ViaMapper} class, and reads as absent, as a short-form one does.
+   */
+  public static Optional<BridgeRef> longFormFor(final Class<?> sourceClass, final Class<?> targetClass) {
+    return memoised(LONG_FORM_CACHE, sourceClass, targetClass, Lookup.LONG);
   }
 
   private static Optional<BridgeRef> memoised(
     final ClassValue<ConcurrentHashMap<Class<?>, Optional<BridgeRef>>> cache,
     final Class<?> sourceClass,
     final Class<?> targetClass,
-    final boolean longForm
+    final Lookup lookup
   ) {
     final var known = cache.get(sourceClass);
     final var cached = known.get(targetClass);
     if (cached != null) return cached;
     // Read outside the table's update: reading the constant initialises the holder, and that can
     // build a mapper which probes this table.
-    final var found = probe(sourceClass, targetClass, longForm);
+    final var found = probe(sourceClass, targetClass, lookup);
     final var raced = known.putIfAbsent(targetClass, found);
     return raced == null ? found : raced;
   }
@@ -95,18 +128,34 @@ public final class BridgeHolderProbe {
   private static Optional<BridgeRef> probe(
     final Class<?> sourceClass,
     final Class<?> targetClass,
-    final boolean longForm
+    final Lookup lookup
   ) {
-    if (longForm) {
+    if (lookup != Lookup.SHORT) {
       final var named = sourceClass.getName() + "To" + targetClass.getSimpleName() + "Bridge";
-      final var holder = loadBridgeClass(named, sourceClass.getClassLoader());
+      // The long name carries only the target's simple name, so a holder converting to a class of
+      // that name in another package is not the requested pair's.
+      final var holder = loadBridgeClass(named, sourceClass.getClassLoader()).filter(found ->
+        !convertsToAnother(found, targetClass)
+      );
+      if (lookup == Lookup.LONG) {
+        return holder.filter(BridgeHolderProbe::hasBridgeField).map(BridgeHolderProbe::readBridgeConstant);
+      }
       if (holder.isPresent()) return Optional.of(readBridgeConstant(holder.get()));
     }
     final var holder = loadBridgeClass(sourceClass.getName() + "Bridge", sourceClass.getClassLoader());
     if (holder.isEmpty() || !hasBridgeField(holder.get())) return Optional.empty();
-    final var match = bridgeTargetMatches(holder.get(), targetClass);
-    if (match.isPresent() && !match.get()) return Optional.empty();
+    if (convertsToAnother(holder.get(), targetClass)) return Optional.empty();
     return Optional.of(readBridgeConstant(holder.get()));
+  }
+
+  /**
+   * Whether {@code holder}'s {@code BRIDGE} field is typed to convert to a class other than {@code
+   * target}.
+   */
+  private static boolean convertsToAnother(final Class<?> holder, final Class<?> target) {
+    return bridgeTargetMatches(holder, target)
+      .filter(matches -> !matches)
+      .isPresent();
   }
 
   private static boolean hasBridgeField(final Class<?> holder) {

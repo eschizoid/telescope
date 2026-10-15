@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
@@ -2111,16 +2112,17 @@ public final class DeepMap {
             if (ownBridge(sourceCase, candidate, false).isPresent()) bridged.add(candidate);
           }
           if (bridged.isEmpty()) {
-            // A bridge under the long-form name is one the runtime does not pair cases through.
+            // A holder the lookup above passed over is a long-form one whose bridge does not
+            // declare its pair, which the runtime does not pair cases through.
             for (final var candidate : targetCases) {
-              final var longForm = BridgeHolderProbe.probeFor(sourceCase, candidate);
-              if (longForm.isPresent()) throw new IllegalStateException(
-                PairingMessages.longFormCaseBridge(
+              final var undeclared = BridgeHolderProbe.longFormFor(sourceCase, candidate);
+              if (undeclared.isPresent()) throw new IllegalStateException(
+                PairingMessages.undeclaredCaseBridge(
                   source,
                   target,
                   sourceCase.getSimpleName(),
                   candidate.getSimpleName(),
-                  longForm.get().bridgeClass().getSimpleName()
+                  undeclared.get().bridgeClass().getSimpleName()
                 )
               );
             }
@@ -2419,12 +2421,14 @@ public final class DeepMap {
    * mapper with no steps and a nested pair share: a holder beside the source, then a carrier
    * registered as a {@link BridgeProvider}.
    *
-   * <p>With {@code longForm}, for the pair a mapper with no steps is built for, the {@code
-   * <Source>To<Target>Bridge} holder comes first, then {@code <Source>Bridge}. That reaches a
-   * source declaring several targets, and also a bridge the processor derived for a pair with no
-   * {@code @Bridge} of its own. Without it, for a nested pair, only {@code <Source>Bridge} is read:
-   * a derived bridge carries the configuration of whichever bridges reached it, not the pair's own,
-   * and nothing in the class tells it from a declared long-form one.
+   * <p>Beside the source, the {@code <Source>To<Target>Bridge} holder comes first, then {@code
+   * <Source>Bridge}. The long name goes both to the bridges of a source declaring several targets
+   * and to a bridge the processor derived for a pair with no {@code @Bridge} of its own, which
+   * carries the configuration of whichever bridges reached that pair rather than the pair's own.
+   * With {@code longForm}, for the pair a mapper with no steps is built for, either is read.
+   * Without it, for a nested pair or a case of a sealed interface, a long-form holder is read only
+   * when its bridge {@linkplain BridgeFn#declaresPair() declares the pair}, and a class under the
+   * long name with no {@code BRIDGE} field reads as absent, as one under the short name does.
    */
   static Optional<Object> ownBridge(final Class<?> source, final Class<?> target, final boolean longForm) {
     final var known = (longForm ? ROOT_BRIDGES : NESTED_BRIDGES).get(source);
@@ -2434,12 +2438,20 @@ public final class DeepMap {
     // mapper which looks a bridge up in this table.
     final var holder = longForm
       ? BridgeHolderProbe.probeFor(source, target)
-      : BridgeHolderProbe.shortFormFor(source, target);
+      : BridgeHolderProbe.longFormFor(source, target)
+          .filter(DeepMap::declaresPair)
+          .or(() -> BridgeHolderProbe.shortFormFor(source, target));
     final Optional<Object> found = holder
       .map(BridgeHolderProbe.BridgeRef::bridge)
       .or(() -> BridgeRegistry.find(source, target, source.getClassLoader()));
     final var raced = known.putIfAbsent(target, found);
     return raced == null ? found : raced;
+  }
+
+  /** Whether the bridge {@code holder} holds declares its pair. */
+  private static boolean declaresPair(final BridgeHolderProbe.BridgeRef holder) {
+    final var fn = Telescope.bridgeFnOf(holder.bridge());
+    return fn != null && fn.declaresPair();
   }
 
   /**
