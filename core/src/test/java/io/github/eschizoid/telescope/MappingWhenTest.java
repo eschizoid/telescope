@@ -340,7 +340,7 @@ class MappingWhenTest {
     record NodeDto(String value, NodeDto child, String flag) {}
 
     @Test
-    @DisplayName("Conditional row on top-level pair fires once; nested Node→NodeDto recursion uses base Iso")
+    @DisplayName("Conditional row on a recursive pair is gated at every level by that level's source")
     void conditionalAtRootOnly() {
       final java.util.function.Predicate<Node> isRoot = n -> n.value().equals("root");
       final var mapper = Telescope.mapper(Node.class, NodeDto.class, when(isRoot, constant(NodeDto::flag, "ROOT")));
@@ -353,11 +353,11 @@ class MappingWhenTest {
 
       // Top-level: predicate accepts root → flag stamped
       assertEquals("ROOT", dto.flag());
-      // Nested recursion populated value + child chain; nested NodeDto.flag stays at default (null)
-      // because the Conditional row pins to the top-level (Node, NodeDto) pair only.
+      // The row is keyed to (Node, NodeDto), which the recursion converts at every level; the
+      // predicate receives each level's Node and rejects the nested ones, whose flag stays null.
       assertEquals("root", dto.value());
       assertEquals("mid", dto.child().value());
-      assertNull(dto.child().flag(), "nested NodeDto.flag stays at recursive default — predicate didn't fire here");
+      assertNull(dto.child().flag(), "nested NodeDto.flag stays at recursive default — predicate rejected this level");
       assertEquals("leaf", dto.child().child().value());
       assertNull(dto.child().child().flag());
     }
@@ -396,31 +396,26 @@ class MappingWhenTest {
   }
 
   @Nested
-  @DisplayName("Pinning contract — Conditional metadata always returns null (top-level pinning)")
-  class PinningContract {
+  @DisplayName("Keying contract — Conditional reports its inner row's metadata")
+  class KeyingContract {
 
     record Src(String name) {}
 
     record Dst(String name) {}
 
     @Test
-    @DisplayName("Conditional.sourceClass / targetClass / sourceField / targetField all null")
-    void pinsTopLevelOnly() {
+    @DisplayName("Conditional.sourceClass / targetClass / sourceField / targetField are the inner row's")
+    void reportsTheInnerRow() {
       final var nameTel = Telescope.of(Dst.class).field(Dst::name);
-      final var conditional = when(s -> true, to(Src::name, nameTel));
+      final var inner = to(Src::name, nameTel);
+      final var conditional = when(s -> true, inner);
 
-      // Pin the documented contract — every supported inner row is telescope-based, so the
-      // Conditional always pins to the outer (topSource, topTarget) pair via null-class routing.
-      assertNull(conditional.sourceClass(), "Conditional.sourceClass MUST be null — pins top-level");
-      assertNull(conditional.targetClass(), "Conditional.targetClass MUST be null — pins top-level");
-      assertNull(
-        conditional.sourceField(),
-        "Conditional.sourceField MUST be null — wrapper contributes no field claim"
-      );
-      assertNull(
-        conditional.targetField(),
-        "Conditional.targetField MUST be null — wrapper contributes no field claim"
-      );
+      assertEquals(Src.class, inner.sourceClass());
+      assertEquals(inner.sourceClass(), conditional.sourceClass());
+      assertEquals(inner.targetClass(), conditional.targetClass());
+      assertEquals("name", inner.sourceField());
+      assertEquals(inner.sourceField(), conditional.sourceField());
+      assertEquals(inner.targetField(), conditional.targetField());
     }
   }
 

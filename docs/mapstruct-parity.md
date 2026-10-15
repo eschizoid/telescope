@@ -958,8 +958,8 @@ additionally null-short-circuit before the predicate) and whole-source predicate
 @Condition. What's missing is MapStruct's blanket application: one @Condition method automatically gates EVERY property
 of the matching type across the mapper, while telescope requires one row per gated field — real repetition on wide DTOs.
 Also: when(...) wraps only telescope-based rows (plain to(srcAcc, tgtAcc)/via/drop rejected at construction with a
-pointer to toOrElse), when(...) pins its predicate to the top-level source pair (not nested pairs), and there is no
-conditional analog on the patch/update path.
+pointer to toOrElse), when(...) is keyed to the type pair its inner row is keyed to, so its predicate receives the
+source converted at that pair, and there is no conditional analog on the patch/update path.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
 javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the

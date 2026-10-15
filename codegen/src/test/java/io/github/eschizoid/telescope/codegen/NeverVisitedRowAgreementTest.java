@@ -479,7 +479,7 @@ class NeverVisitedRowAgreementTest {
     }
 
     @Test
-    @DisplayName("when(predicate, row), which is always applied at the mapper's own pair")
+    @DisplayName("when(predicate, row) whose row is keyed to the mapper's own pair")
     void conditionalRow() {
       assertBothAccept(
         outcome(
@@ -491,6 +491,140 @@ class NeverVisitedRowAgreementTest {
             )
         )
       );
+    }
+  }
+
+  @Nested
+  @DisplayName("A when(predicate, row) is keyed as the row it wraps, on both paths")
+  class UnderWhen {
+
+    /**
+     * A record that nests itself into a different target class, so a row whose target accessor
+     * reads {@code Leaf} is keyed to the nested pair {@code (Node, Leaf)}.
+     */
+    private static final String NODES = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      record @@Node(String n, @@Node inner) {}
+      record @@Leaf(String m) {}
+      record @@NodeDto(String n, @@Leaf inner) {}
+      """;
+
+    /**
+     * Asserts that {@code wrapped} is refused by both paths with the message construction refuses
+     * {@code unwrapped} with, each compiled under its own prefix.
+     */
+    private static void assertRefusedAsUnwrapped(
+      final String wrappedPrefix,
+      final String wrapped,
+      final String unwrappedPrefix,
+      final String unwrapped
+    ) {
+      final var wrappedOutcome = outcome(wrappedPrefix, wrapped);
+      final var unwrappedOutcome = outcome(unwrappedPrefix, unwrapped);
+      assertBothRefuse(wrappedOutcome);
+      assertNotNull(unwrappedOutcome.construction(), "construction built the unwrapped mapper");
+      assertEquals(
+        unwrappedOutcome.construction().replace(unwrappedPrefix, wrappedPrefix),
+        wrappedOutcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("to(src, targetPath) whose source accessor reads a class other than the mapper's source")
+    void accessorOntoTargetPath() {
+      final var row = "to(@@Inner::label, Telescope.of(@@OuterDto.class).field(@@OuterDto::note))";
+      assertRefusedAsUnwrapped(
+        "NwA",
+        SHAPES + holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, when(o -> true, " + row + "))"),
+        "NwB",
+        SHAPES + holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, " + row + ")")
+      );
+    }
+
+    @Test
+    @DisplayName("to(sourcePath, tgt) whose target accessor reads a class the mapper's target does not extend")
+    void sourcePathOntoAccessor() {
+      final var row = "to(Telescope.of(@@Outer.class).field(@@Outer::note), @@Sub::getLabel)";
+      assertRefusedAsUnwrapped(
+        "NwC",
+        SHAPES + holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, when(o -> true, " + row + "))"),
+        "NwD",
+        SHAPES + holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, " + row + ")")
+      );
+    }
+
+    @Test
+    @DisplayName("to(sourcePath, tgt) whose target accessor reads a nested pair the mapper visits")
+    void sourcePathOntoANestedPair() {
+      assertBothAccept(
+        outcome(
+          "NwE",
+          NODES +
+            holder(
+              "Telescope.mapperForward(@@Node.class, @@NodeDto.class," +
+                " when(o -> true, to(Telescope.of(@@Node.class).field(@@Node::n), @@Leaf::m)))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("to(sourcePath, tgt) whose target accessor reads a class the mapper's target extends")
+    void sourcePathOntoATargetSuperclass() {
+      assertBothAccept(
+        outcome(
+          "NwI",
+          """
+            package io.github.eschizoid.telescope.codegen;
+            import static io.github.eschizoid.telescope.mapping.Mapping.*;
+            import io.github.eschizoid.telescope.Telescope;
+            record @@Src(String note) {}
+            class @@Base {
+              private String name;
+              public String getName() { return name; }
+              public void setName(String name) { this.name = name; }
+            }
+            class @@Sub extends @@Base { public @@Sub() {} }
+            """ +
+            holder(
+              "Telescope.mapperForward(@@Src.class, @@Sub.class," +
+                " when(s -> true, to(Telescope.of(@@Src.class).field(@@Src::note), @@Base::getName)))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a row when refuses to wrap is left to the refusal construction raises first")
+    void rowWhenRefusesToWrap() {
+      final var outcome = outcome(
+        "NwG",
+        SHAPES +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, when(o -> true, to(@@Inner::label, @@Sub::getName)))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("wraps only telescope-based rows"), outcome.construction());
+      assertEquals(List.of(), outcome.verifier());
+    }
+
+    @Test
+    @DisplayName("a when nested in a when is left to the refusal construction raises first")
+    void nestedWhen() {
+      final var outcome = outcome(
+        "NwH",
+        SHAPES +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class," +
+              " when(o -> true, when(o -> true, to(@@Inner::label, Telescope.of(@@OuterDto.class).field(@@OuterDto::note)))))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("does not nest"), outcome.construction());
+      assertEquals(List.of(), outcome.verifier());
     }
   }
 
