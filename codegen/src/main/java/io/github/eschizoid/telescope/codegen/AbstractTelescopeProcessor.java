@@ -26,6 +26,7 @@ import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
 import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -58,6 +59,24 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   /** For subclasses; this type is not instantiated directly. */
   protected AbstractTelescopeProcessor() {
     super();
+  }
+
+  /**
+   * The newest source level the running compiler supports. javac warns, with no source file, about
+   * a processor that claims an older level than the compilation's, which fails a {@code -Werror}
+   * build.
+   *
+   * <p>No processor walks elements or types with a version-specific visitor, and each one admits
+   * only the element kinds it names, so an element of a kind a newer level adds is refused. Two
+   * paths also refuse a component or property type of a kind they do not model: a navigator is
+   * written only after {@link #isEmittableAsTypedConstant} accepts every component or property
+   * type, and the map binder refuses a type the shared value classification calls unsupported. The
+   * bridge and mapper processors run neither check, so a type kind they do not model takes
+   * whichever branch their code has for an unrecognised shape.
+   */
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
   }
 
   /**
@@ -1253,8 +1272,35 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         }
         yield true;
       }
-      case ARRAY -> isEmittableAsTypedConstant(((javax.lang.model.type.ArrayType) type).getComponentType());
-      default -> true; // primitives are valid (boxed at the call site)
+      case ARRAY -> isEmittableAsTypedConstant(((ArrayType) type).getComponentType());
+      // A primitive is boxed at the call site. Any other kind, including one a newer language
+      // level adds, has no typed constant form the holder could name.
+      default -> type.getKind().isPrimitive();
+    };
+  }
+
+  /**
+   * Why {@link #isEmittableAsTypedConstant} refused {@code type}, as a clause to follow the quoted
+   * type in a diagnostic. A wildcard or type variable anywhere in the type is the generic case; any
+   * other refusal is a kind the holder has no constant form for.
+   */
+  protected static String unemittableReason(final TypeMirror type) {
+    return mentionsWildcardOrVariable(type)
+      ? " — generics with wildcard or self-referential bounds are not supported"
+      : ", which has no constant form";
+  }
+
+  private static boolean mentionsWildcardOrVariable(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case WILDCARD, TYPEVAR -> true;
+      case DECLARED -> {
+        for (final var arg : ((DeclaredType) type).getTypeArguments()) {
+          if (mentionsWildcardOrVariable(arg)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> mentionsWildcardOrVariable(((ArrayType) type).getComponentType());
+      default -> false;
     };
   }
 
@@ -1383,7 +1429,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
             p.name() +
             "' of type '" +
             p.type() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "'" +
+            unemittableReason(p.type()) +
+            ". Remove " +
             triggerLabel +
             " from this class to use the runtime path."
         );
@@ -1636,26 +1684,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   ) {
     final var holderName = pojoBaseName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
-
-    // The caller has already rejected any POJO carrying an un-emittable property, before either
-    // artifact was written. This loop is the holder's own guard for callers that reach it by
-    // another route.
-    for (final var p : props) {
-      if (!isEmittableAsTypedConstant(p.type())) {
-        error(
-          pojo,
-          triggerLabel +
-            ": cannot emit metadata constant for property '" +
-            p.name() +
-            "' of type '" +
-            p.type() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
-            triggerLabel +
-            " from this class to use the runtime path."
-        );
-        return;
-      }
-    }
 
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var p : props) collectStdImports(p.type(), extraImports);

@@ -31,7 +31,6 @@ import java.util.stream.Stream;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
@@ -83,7 +82,6 @@ import javax.tools.StandardLocation;
 @SupportedAnnotationTypes(
   { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
 )
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /** The shared pairing spec, over the mirror world, consulted for container classification. */

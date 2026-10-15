@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
-import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.RecordComponentElement;
@@ -44,7 +42,6 @@ import javax.lang.model.element.TypeElement;
  * </ul>
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.Focus")
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class FocusProcessor extends AbstractTelescopeProcessor {
 
   /**
@@ -122,7 +119,9 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
             comp.getSimpleName() +
             "' of type '" +
             comp.asType() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "'" +
+            unemittableReason(comp.asType()) +
+            ". Remove " +
             "@Focus from this record to use the runtime path."
         );
         return;

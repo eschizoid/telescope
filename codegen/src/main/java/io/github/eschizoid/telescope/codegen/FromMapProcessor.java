@@ -19,8 +19,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
-import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -42,7 +40,6 @@ import javax.tools.StandardLocation;
  * GraalVM native-image clean.
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.FromMap")
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
