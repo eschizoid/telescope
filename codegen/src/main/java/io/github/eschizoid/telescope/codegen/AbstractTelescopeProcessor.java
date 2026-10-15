@@ -26,6 +26,7 @@ import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
 import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -58,6 +59,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   /** For subclasses; this type is not instantiated directly. */
   protected AbstractTelescopeProcessor() {
     super();
+  }
+
+  /**
+   * The newest source level the running compiler supports. javac warns, with no source file, about
+   * a processor that claims an older level than the compilation's, which fails a {@code -Werror}
+   * build. Claiming the compiler's own level is safe because no processor walks elements or types
+   * with a version-specific visitor. Each one admits only the element kinds it names, and a type
+   * kind it does not model takes the branch for a shape it cannot emit, so a construct a newer
+   * level adds reaches a refusal rather than generated code.
+   */
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
   }
 
   /**
@@ -1253,8 +1267,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         }
         yield true;
       }
-      case ARRAY -> isEmittableAsTypedConstant(((javax.lang.model.type.ArrayType) type).getComponentType());
-      default -> true; // primitives are valid (boxed at the call site)
+      case ARRAY -> isEmittableAsTypedConstant(((ArrayType) type).getComponentType());
+      // A primitive is boxed at the call site. Any other kind, including one a newer language
+      // level adds, has no typed constant form the holder could name.
+      default -> type.getKind().isPrimitive();
     };
   }
 
