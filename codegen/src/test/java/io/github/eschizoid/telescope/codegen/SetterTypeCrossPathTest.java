@@ -467,10 +467,25 @@ class SetterTypeCrossPathTest {
     String type,
     String setters,
     String sourceType,
-    boolean transformed,
+    Conversion conversion,
     String owed,
     String owedNull
-  ) {}
+  ) {
+    boolean converted() {
+      return conversion != Conversion.NONE;
+    }
+  }
+
+  /** How a bridge cell's record value becomes the bean's: as it is, or through user code. */
+  private enum Conversion {
+    NONE,
+    /** A {@code @Transform} naming a static method. */
+    TRANSFORM_METHOD,
+    /** A {@code @Transform} through a {@code BridgeFn}. */
+    TRANSFORM_FN,
+    /** A {@code @ViaMapper}, whose read is gated on a null source. */
+    VIA_MAPPER,
+  }
 
   private static final List<BridgeCell> BRIDGE_CELLS = List.of(
     new BridgeCell(
@@ -479,7 +494,7 @@ class SetterTypeCrossPathTest {
       "public void setCount(final int c) { this.count = -1; }\n" +
         "  public void setCount(final Object c) { this.count = (Integer) c; }",
       "int",
-      false,
+      Conversion.NONE,
       "Ada/5",
       null
     ),
@@ -489,7 +504,7 @@ class SetterTypeCrossPathTest {
       "public void setCount(final int c) { this.count = c; }\n" +
         "  public void setCount(final Integer c) { this.count = -1; }",
       "String",
-      true,
+      Conversion.TRANSFORM_METHOD,
       "Ada/5",
       "Ada/0"
     ),
@@ -499,7 +514,7 @@ class SetterTypeCrossPathTest {
       "public void setCount(final long c) { this.count = (int) c; }\n" +
         "  public void setCount(final Integer c) { this.count = -1; }",
       "String",
-      true,
+      Conversion.TRANSFORM_METHOD,
       "Ada/5",
       "Ada/0"
     ),
@@ -509,7 +524,7 @@ class SetterTypeCrossPathTest {
       "public void setCount(final Object c) { this.count = -1; }\n" +
         "  public void setCount(final long c) { this.count = (int) c; }",
       "String",
-      true,
+      Conversion.TRANSFORM_METHOD,
       "Ada/5",
       "Ada/0"
     ),
@@ -518,7 +533,64 @@ class SetterTypeCrossPathTest {
       "int",
       "public void setCount(final int c) { this.count = c; }",
       "String",
-      true,
+      Conversion.TRANSFORM_METHOD,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a @ViaMapper Integer into an int getter with int and Integer setters",
+      "int",
+      "public void setCount(final int c) { this.count = c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      "String",
+      Conversion.VIA_MAPPER,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a @ViaMapper Integer into an int getter with long and Integer setters",
+      "int",
+      "public void setCount(final long c) { this.count = (int) c; }\n" +
+        "  public void setCount(final Integer c) { this.count = -1; }",
+      "String",
+      Conversion.VIA_MAPPER,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a @ViaMapper Integer into an Integer getter with one int varargs setter",
+      "Integer",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      "String",
+      Conversion.VIA_MAPPER,
+      "Ada/5",
+      "Ada/null"
+    ),
+    new BridgeCell(
+      "a BridgeFn Integer into an Integer getter with one int varargs setter",
+      "Integer",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      "String",
+      Conversion.TRANSFORM_FN,
+      "Ada/5",
+      "Ada/null"
+    ),
+    new BridgeCell(
+      "a BridgeFn Integer into an int getter with one int varargs setter",
+      "int",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      "String",
+      Conversion.TRANSFORM_FN,
+      "Ada/5",
+      "Ada/0"
+    ),
+    new BridgeCell(
+      "a BridgeFn Integer into an int getter with int varargs and String setters",
+      "int",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }\n" +
+        "  public void setCount(final String c) { this.count = -1; }",
+      "String",
+      Conversion.TRANSFORM_FN,
       "Ada/5",
       "Ada/0"
     )
@@ -532,13 +604,22 @@ class SetterTypeCrossPathTest {
     for (final var b : BRIDGE_CELLS) {
       final var prefix = "Stx" + index++;
       final var c = new Case(b.name(), b.type(), b.setters(), Writes.BOTH);
-      final var annotation = b.transformed()
-        ? "@io.github.eschizoid.telescope.annotations.Bridge(value = " +
-          prefix +
-          "Bean.class, transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
-          prefix +
-          "Conv.class, method = \"parse\"))"
-        : "@io.github.eschizoid.telescope.annotations.Bridge(" + prefix + "Bean.class)";
+      final var head = "@io.github.eschizoid.telescope.annotations.Bridge(value = " + prefix + "Bean.class";
+      final var annotation = switch (b.conversion()) {
+        case NONE -> head + ")";
+        case TRANSFORM_METHOD -> head +
+        ", transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
+        prefix +
+        "Conv.class, method = \"parse\"))";
+        case TRANSFORM_FN -> head +
+        ", transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
+        prefix +
+        "Fn.class))";
+        case VIA_MAPPER -> head +
+        ", viaMappers = @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"count\", using = " +
+        prefix +
+        "Via.class))";
+      };
       final var compilation = ProcessorHarness.compileFully(
         List.of(new BridgeProcessor()),
         List.of(),
@@ -550,6 +631,26 @@ class SetterTypeCrossPathTest {
             ";\npublic final class " +
             prefix +
             "Conv {\n  public static Integer parse(final String s) { return s == null ? null : Integer.valueOf(s); }\n}\n"
+        ),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Fn",
+          "package " +
+            PACKAGE +
+            ";\npublic final class " +
+            prefix +
+            "Fn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, Integer> {\n" +
+            "  @Override public Integer forward(final String s) { return s == null ? null : Integer.valueOf(s); }\n" +
+            "  @Override public String backward(final Integer i) { return String.valueOf(i); }\n}\n"
+        ),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Via",
+          "package " +
+            PACKAGE +
+            ";\npublic final class " +
+            prefix +
+            "Via {\n" +
+            "  public static Integer forward(final String s) { return s == null ? null : Integer.valueOf(s); }\n" +
+            "  public static String backward(final Integer i) { return String.valueOf(i); }\n}\n"
         ),
         ProcessorHarness.source(
           PACKAGE + "." + prefix + "Src",
@@ -572,7 +673,7 @@ class SetterTypeCrossPathTest {
       final var bean = classes.get(PACKAGE + "." + prefix + "Bean");
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var forward = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src);
-      final Object five = b.transformed() ? "5" : (Object) 5;
+      final Object five = b.converted() ? "5" : (Object) 5;
       final var written = outcome(() ->
         describe(bean, forward.invoke(null, src.getConstructors()[0].newInstance(five, "Ada")))
       );
@@ -584,7 +685,7 @@ class SetterTypeCrossPathTest {
       if (!reflective.equals(b.owed())) failures.add(
         b.name() + ": the runtime built " + reflective + ", owed " + b.owed()
       );
-      if (!b.transformed()) {
+      if (!b.converted()) {
         final var mapped = outcome(() ->
           describe(bean, mapper(src, bean).forward(src.getConstructors()[0].newInstance(5, "Ada")))
         );

@@ -2137,6 +2137,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // out, and its call binds by that result as it is.
     final var forwardGives = new HashMap<String, TypeMirror>();
     final var backwardGives = new HashMap<String, TypeMirror>();
+    // Fields whose value reaches the setter as a reference that may be null although the field's
+    // own type is primitive: a @ViaMapper result, which the read gates on a null source.
+    final var referenceTargets = new HashSet<String>();
+    final var referenceSources = new HashSet<String>();
+    for (final var entry : fieldPlans.entrySet()) {
+      if (!entry.getValue().userSuppliedBridge()) continue;
+      final var sourceName = entry.getKey();
+      final var targetName = renames.getOrDefault(sourceName, sourceName);
+      if (!fieldByName(sourceFields, sourceName).type().getKind().isPrimitive()) referenceTargets.add(targetName);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      if (tf != null && !tf.type().getKind().isPrimitive()) referenceSources.add(sourceName);
+    }
     for (final var t : transforms.keySet()) {
       final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
       if (usingEl == null) continue;
@@ -2171,7 +2187,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetRebuild,
       pkg,
       transformedTargets,
-      forwardGives
+      forwardGives,
+      referenceTargets
     );
     if (builtForward == null) return;
     final var builtBackward = buildExpr(
@@ -2183,7 +2200,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceRebuild,
       pkg,
       transformedSources,
-      backwardGives
+      backwardGives,
+      referenceSources
     );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
@@ -2245,7 +2263,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceRebuild,
       null,
       Set.of(),
-      Map.of()
+      Map.of(),
+      Set.of()
     );
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
@@ -5909,11 +5928,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // whichever
       // one it names, it does not take the value, so the answer is refuse either way. Handing that
       // back to the declared type gives up the refusal in the one case the member is what refuses.
-      case SETTERS -> switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
-        case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
-        case Resolution.Ambiguous ignored -> null;
-        case Resolution.None ignored -> setterParameter(to, field);
-      };
+      // A variable-arity setter the property's value spreads into takes one value as its
+      // component, which is what the emitted call passes, so the component is the slot.
+      case SETTERS -> {
+        final var choice = setterChoice(to, field);
+        if (choice.spreads()) yield choice.argument();
+        yield switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
+          case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
+          case Resolution.Ambiguous ignored -> null;
+          case Resolution.None ignored -> setterParameter(to, field);
+        };
+      }
       case NONE -> null;
     };
   }
@@ -5939,7 +5964,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Rebuild rebuild,
     final String hoistInto,
     final Set<String> transformed,
-    final Map<String, TypeMirror> transformGives
+    final Map<String, TypeMirror> transformGives,
+    final Set<String> referenceValued
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
@@ -6034,6 +6060,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 .append(call)
                 .append(" } ");
             }
+          } else if (
+            !transformed.contains(f.name()) &&
+            choice.argument() != null &&
+            choice.argument().getKind().isPrimitive() &&
+            (!f.type().getKind().isPrimitive() || referenceValued.contains(f.name())) &&
+            !mirrorProps().mentionsTypeVariable(f.type())
+          ) {
+            // A reference value bound for a primitive parameter is skipped when null, as the
+            // runtime writer skips it, and otherwise unboxed into the chosen parameter's type.
+            sb
+              .append("{ final ")
+              .append(boxedType(f.type()))
+              .append(" __tv = ")
+              .append(value)
+              .append("; if (__tv != null) { final ")
+              .append(choice.argumentText())
+              .append(" __arg = __tv; out.")
+              .append(setter)
+              .append("(__arg); } } ");
           } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
             sb
               .append("{ final ")

@@ -4402,6 +4402,76 @@ class CrossPathCorpusTest {
     );
   }
 
+  /**
+   * Shapes only the generated path can express, each with what the generated bridge writes. Each is
+   * a capability rather than a divergence: no runtime mapper can be written for it, so there is
+   * nothing for the generated result to agree with.
+   *
+   * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
+   */
+  private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
+    // Generated-only, not a defect: a runtime row's forward function returns the property's
+    // own
+    // type, so no runtime mapper hands the setter a value of any other type. A @Transform can
+    // return a type the setter chosen from the property's type cannot take; the bridge then
+    // passes it as it is, and javac binds the overload that takes it.
+    "a transform result the setter chosen from the property's type cannot take",
+    "Object:x"
+  );
+
+  @Test
+  @DisplayName("a generated-only capability gives what its register records")
+  void aGeneratedOnlyCapabilityGivesWhatItsRegisterRecords() throws ReflectiveOperationException {
+    final var name = "a transform result the setter chosen from the property's type cannot take";
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      ProcessorHarness.source(
+        PACKAGE + ".GocFn",
+        "package " +
+          PACKAGE +
+          ";\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" +
+          "public final class GocFn implements BridgeFn<String, Object> {\n" +
+          "  @Override public Object forward(final String s) { return s; }\n" +
+          "  @Override public String backward(final Object o) { return String.valueOf(o); }\n}\n"
+      ),
+      ProcessorHarness.source(
+        PACKAGE + ".GocSrc",
+        "package " +
+          PACKAGE +
+          ";\n@io.github.eschizoid.telescope.annotations.Bridge(value = GocTgt.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"v\", using = GocFn.class," +
+          " forwardOnly = true))\npublic record GocSrc(String v) {}\n"
+      ),
+      ProcessorHarness.source(
+        PACKAGE + ".GocTgt",
+        "package " +
+          PACKAGE +
+          ";\npublic class GocTgt {\n  private String v;\n  public GocTgt() {}\n" +
+          "  public String getV() { return v; }\n" +
+          "  public void setV(final String v) { this.v = \"String:\" + v; }\n" +
+          "  public void setV(final Object v) { this.v = \"Object:\" + v; }\n}\n"
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    final var source = classes.get(PACKAGE + ".GocSrc");
+    final var target = classes.get(PACKAGE + ".GocTgt");
+    final var built = classes
+      .get(PACKAGE + ".GocSrcBridge")
+      .getMethod("forward", source)
+      .invoke(null, source.getConstructors()[0].newInstance("x"));
+    final var written = String.valueOf(target.getMethod("getV").invoke(built));
+    assertTrue(
+      GENERATED_ONLY_CAPABILITIES.keySet().equals(Set.of(name)),
+      () -> "registered capabilities with no row: " + GENERATED_ONLY_CAPABILITIES.keySet()
+    );
+    assertTrue(
+      written.equals(GENERATED_ONLY_CAPABILITIES.get(name)),
+      () -> name + ": the bridge wrote " + written + ", registered " + GENERATED_ONLY_CAPABILITIES.get(name)
+    );
+  }
+
   /** What {@code attempt}'s result holds as first, with that value's class, or the refusal. */
   private static String firstHeld(final Attempt attempt) {
     try {
