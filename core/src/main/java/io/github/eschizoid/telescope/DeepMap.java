@@ -42,6 +42,7 @@ import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
@@ -515,34 +516,28 @@ public final class DeepMap {
   private record SourceRoot(Telescope<Object, Object> path, Function<Object, Object> given) {}
 
   /**
-   * Whether an instance of {@code source} can also be an instance of {@code root}, a class that is
-   * not a supertype of the source: {@code root} extends the source, or one of the two is an
-   * interface and the other is a class a subclass can still extend to implement it.
+   * Whether one object can be an instance of both {@code a} and {@code b}: one extends the other;
+   * one is sealed and one of its permitted cases can be such an instance, since every instance of a
+   * sealed type is an instance of one of its cases; or one is an interface and the other is a type
+   * a subclass can still extend to implement it.
    */
-  private static boolean mayBeInstance(final Class<?> source, final Class<?> root) {
-    if (source.isAssignableFrom(root)) return true;
-    final Class<?> other = root.isInterface() ? source : source.isInterface() ? root : null;
-    return other != null && extendable(other);
+  private static boolean mayBeInstance(final Class<?> a, final Class<?> b) {
+    if (a.isAssignableFrom(b) || b.isAssignableFrom(a)) return true;
+    if (a.isSealed()) return Arrays.stream(a.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(c, b));
+    if (b.isSealed()) return Arrays.stream(b.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(a, c));
+    if (a.isInterface()) return extendable(b);
+    return b.isInterface() && extendable(a);
   }
 
   /**
-   * Whether a class can gain a subclass that implements another interface. A final class cannot,
-   * and a record is final, as is the anonymous class of an enum constant's body. Neither can an
-   * enum: one whose constants declare bodies is not marked final, but its only subclasses are those
-   * bodies, and a body cannot implement an interface its enum does not.
+   * Whether a type that is not sealed can gain a subclass that implements another interface. An
+   * interface or a non-final class can. A final class cannot, and a record is final, as is the
+   * anonymous class of an enum constant's body. Neither can an enum: one whose constants declare
+   * bodies is not marked final, but its only subclasses are those bodies, and a body cannot
+   * implement an interface its enum does not.
    */
   private static boolean extendable(final Class<?> type) {
     return !Modifier.isFinal(type.getModifiers()) && !type.isEnum();
-  }
-
-  /**
-   * The name a source-path message gives a class: its enum's for an enum constant's body, which is
-   * anonymous, and the binary name for any other class whose simple name is empty.
-   */
-  private static String className(final Class<?> type) {
-    final var parent = type.getSuperclass();
-    if (parent != null && parent.isEnum()) return parent.getSimpleName();
-    return type.getSimpleName().isEmpty() ? type.getName() : type.getSimpleName();
   }
 
   /**
@@ -612,14 +607,14 @@ public final class DeepMap {
     if (focus == topSource) return new SourceRoot(kept, null);
     if (focus != null && !focus.isAssignableFrom(topSource)) {
       if (!mayBeInstance(topSource, focus)) throw new IllegalArgumentException(
-        PairingMessages.sourcePathNotOnSource(source, target, row, className(focus))
+        PairingMessages.sourcePathNotOnSource(source, target, row, PairingMessages.className(focus))
       );
       return givenOnly(kept, focus, row, source, target);
     }
     final Function<Object, Object> checked = written -> {
       if (written == null || topSource.isInstance(written)) return written;
       throw new IllegalStateException(
-        PairingMessages.sourcePathWroteOffSource(source, target, row, className(written.getClass()))
+        PairingMessages.sourcePathWroteOffSource(source, target, row, PairingMessages.className(written.getClass()))
       );
     };
     return new SourceRoot(Telescope.<Object, Object>iso(Function.identity(), checked).then(kept), null);
@@ -639,7 +634,13 @@ public final class DeepMap {
     final Function<Object, Object> given = value -> {
       if (root.isInstance(value)) return value;
       throw new IllegalStateException(
-        PairingMessages.sourcePathGivenOffRoot(source, target, row, className(root), className(value.getClass()))
+        PairingMessages.sourcePathGivenOffRoot(
+          source,
+          target,
+          row,
+          PairingMessages.className(root),
+          PairingMessages.className(value.getClass())
+        )
       );
     };
     return new SourceRoot(Telescope.<Object, Object>iso(given, Function.identity()).then(path), given);
@@ -718,7 +719,7 @@ public final class DeepMap {
       );
       if (hops != null && step < 0 && constantRow) {
         if (constantValue != null && !topTarget.isInstance(constantValue)) throw new IllegalArgumentException(
-          PairingMessages.targetValueOffTarget(source, target, row, constantValue.getClass().getSimpleName())
+          PairingMessages.targetValueOffTarget(source, target, row, PairingMessages.className(constantValue.getClass()))
         );
         return (Telescope<Object, Object>) path;
       }
@@ -726,7 +727,7 @@ public final class DeepMap {
     final Function<Object, Object> checked = written -> {
       if (written == null || topTarget.isInstance(written)) return written;
       throw new IllegalStateException(
-        PairingMessages.targetPathWroteOffTarget(source, target, row, written.getClass().getSimpleName())
+        PairingMessages.targetPathWroteOffTarget(source, target, row, PairingMessages.className(written.getClass()))
       );
     };
     return Telescope.<Object, Object>iso(Function.identity(), checked).then((Telescope<Object, Object>) path);

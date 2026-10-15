@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
@@ -119,7 +120,7 @@ final class TelescopeFixups {
           // navigation, where getMessage() returns null and "Predicate failure: null" tells the
           // user nothing. The class name (NullPointerException, ClassCastException, etc.) carries
           // the actionable signal even when the message is null.
-          final var failureType = predicateFailure.getClass().getSimpleName();
+          final var failureType = PairingMessages.className(predicateFailure.getClass());
           final var failureMsg = predicateFailure.getMessage();
           throw new IllegalStateException(
             "Mapping.when(...) predicate threw — inner=" +

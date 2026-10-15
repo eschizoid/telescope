@@ -82,6 +82,17 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * The name a message gives the class of a value it was handed: the enum's for an enum constant's
+   * body, which is anonymous, the binary name for any other class whose simple name is empty, such
+   * as an anonymous or a hidden class, and the simple name otherwise.
+   */
+  public static String className(final Class<?> type) {
+    final var parent = type.getSuperclass();
+    if (parent != null && parent.isEnum()) return parent.getSimpleName();
+    return type.getSimpleName().isEmpty() ? type.getName() : type.getSimpleName();
+  }
+
   /** Duplicate override row claiming an already-claimed source field. */
   public static String duplicateSourceRow(final String source, final String target, final String srcField) {
     return (
