@@ -23,7 +23,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -45,6 +44,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -319,7 +319,7 @@ class CrossPathCorpusTest {
         // links against the classes the first one already defined.
         final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
         assertTrue(plain.success(), () -> cell + " should compile without the processor: " + plain.errorMessages());
-        final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+        final var processed = bridged(sources);
 
         final Outcome generated;
         final Outcome reflective;
@@ -398,6 +398,36 @@ class CrossPathCorpusTest {
       staleRefusals.isEmpty(),
       () -> "recorded as refused, but not observed to be — no longer in the grid:\n  " + staleRefusals
     );
+  }
+
+  /**
+   * {@code sources} compiled with the bridge processor, failing the calling test on any warning
+   * javac reports in a file the processor wrote. The harness compiles with {@code -Xlint:all}, and
+   * a generated file is code its adopter cannot edit, so a build compiling it with {@code -Werror}
+   * passes only when the file raises nothing.
+   */
+  private static ProcessorHarness.Compilation bridged(final JavaFileObject... sources) {
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var warnings = warningsInGenerated(processed);
+    assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    return processed;
+  }
+
+  /** Every warning {@code compilation} reports in a source file a processor generated. */
+  private static List<String> warningsInGenerated(final ProcessorHarness.Compilation compilation) {
+    final var generatedFiles = compilation
+      .generated()
+      .keySet()
+      .stream()
+      .map(name -> "/" + name.replace('.', '/') + ".java")
+      .collect(Collectors.toSet());
+    final var warnings = new ArrayList<String>();
+    for (final var d : compilation.diagnostics()) {
+      if (d.getKind() != Diagnostic.Kind.WARNING && d.getKind() != Diagnostic.Kind.MANDATORY_WARNING) continue;
+      if (d.getSource() == null || !generatedFiles.contains(d.getSource().getName())) continue;
+      warnings.add(d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT));
+    }
+    return warnings;
   }
 
   /**
@@ -665,7 +695,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> shape.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -788,7 +818,7 @@ class CrossPathCorpusTest {
       // processor had thrown is how a broken fixture reads as a product defect.
       final ProcessorHarness.Compilation processed;
       try {
-        processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+        processed = bridged(sources);
       } catch (final RuntimeException e) {
         failures.add(pairing.name() + ": the processor threw " + e.getCause());
         continue;
@@ -1132,7 +1162,7 @@ class CrossPathCorpusTest {
       final var compiled = sources.toArray(JavaFileObject[]::new);
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), compiled);
       assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), compiled);
+      final var processed = bridged(compiled);
       assertTrue(processed.success(), () -> shape.name() + " should bridge: " + processed.errorMessages());
       // The refusal is built in generated code, which a consumer may compile with every lint on and
       // warnings as errors, so it has to raise none of its own.
@@ -1428,7 +1458,7 @@ class CrossPathCorpusTest {
       };
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -1807,7 +1837,7 @@ class CrossPathCorpusTest {
       final var sources = files.toArray(JavaFileObject[]::new);
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), () -> row.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -1907,11 +1937,7 @@ class CrossPathCorpusTest {
         final var code = Files.readString(fixtures.resolve(fixture + ".java"));
         sources.add(ProcessorHarness.source(PACKAGE + "." + fixture.replace('/', '.'), code));
       }
-      final var generated = ProcessorHarness.compileFully(
-        List.of(new BridgeProcessor()),
-        List.of(),
-        sources.toArray(JavaFileObject[]::new)
-      );
+      final var generated = bridged(sources.toArray(JavaFileObject[]::new));
       final var refusal = GENERATED_PATH_LIMITS.get(limit.name());
       assertTrue(
         !generated.success() && generated.hasError(refusal),
@@ -2025,7 +2051,7 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), () -> "the pair should bridge: " + processed.errorMessages());
     final var classes = plain.define(MethodHandles.lookup());
     final var src = classes.get(PACKAGE + ".SsSrc");
@@ -2702,7 +2728,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> pairing.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(qualified + "Src");
@@ -3021,7 +3047,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> construction.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(qualified + "Src"));
@@ -3472,7 +3498,7 @@ class CrossPathCorpusTest {
       };
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), plain::errorMessages);
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), processed::errorMessages);
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -3938,7 +3964,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cycle.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), () -> cycle.name() + " should compile: " + processed.errorMessages());
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
@@ -3993,9 +4019,7 @@ class CrossPathCorpusTest {
     // The @ViaMapper names a bridge the processor writes in the same compilation, so the source
     // cannot compile without the processor and every class comes from the processed compilation.
     final var head = "package " + PACKAGE + ";\n";
-    final var processed = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
+    final var processed = bridged(
       source(
         "VmAddress",
         head +
@@ -4083,7 +4107,7 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> "the pair should compile without the processor: " + plain.errorMessages());
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), () -> "the pair should compile: " + processed.errorMessages());
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".TvSrc"));
@@ -4158,12 +4182,12 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> prefix + ": the pair should compile: " + plain.errorMessages());
-    return List.of(plain, ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources));
+    return List.of(plain, bridged(sources));
   }
 
   @Test
   @DisplayName(
-    "a property a generic subclass passes through to its superclass converts the same way on both paths, with no unchecked warning"
+    "a property a generic subclass passes through to its superclass converts the same way on both paths, with no warning"
   )
   void aPropertyASubclassPassesThroughConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
     // Seen from a subclass that passes its own variable through, first and items are typed by that
@@ -4204,7 +4228,6 @@ class CrossPathCorpusTest {
         failures.add(prefix + ": the generated bridge should compile: " + processed.errorMessages());
         continue;
       }
-      failures.addAll(warningsInBridgeMethods(prefix, processed));
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
@@ -4236,14 +4259,12 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a dropped property a generic subclass passes through compiles with no unchecked warning")
-  void aDroppedPassedThroughPropertyCompilesWithNoUncheckedWarning() {
+  @DisplayName("a dropped property a generic subclass passes through compiles with no warning")
+  void aDroppedPassedThroughPropertyCompilesWithNoWarning() {
     final var head = "package " + PACKAGE + ";\n";
     // Backward fills the dropped property with a default and patch copies it from base, both
     // through the raw source, whose setter takes the erasure of List<T>.
-    final var processed = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
+    final var processed = bridged(
       source(
         "PtdBase",
         head +
@@ -4273,48 +4294,129 @@ class CrossPathCorpusTest {
       )
     );
     assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
-    final var warnings = warningsInBridgeMethods("Ptd", processed);
-    assertTrue(warnings.isEmpty(), () -> String.join("\n  ", warnings));
   }
 
-  /**
-   * The warnings a build compiling {@code processed} would show for the bridge: any unchecked or
-   * redundant-cast warning, and a raw-type warning on a line of the bridge's {@code forward},
-   * {@code backward} or {@code patch}, which name both classes raw.
-   */
-  private static List<String> warningsInBridgeMethods(
-    final String prefix,
-    final ProcessorHarness.Compilation processed
-  ) {
-    final var bridge = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
-    if (bridge == null) return List.of(prefix + ": no bridge was generated");
-    final var methodLines = new HashSet<Long>();
-    final var lines = bridge.split("\n", -1);
-    var inMethod = false;
-    for (int i = 0; i < lines.length; i++) {
-      final var line = lines[i];
-      if (
-        line.startsWith("  public static ") &&
-        (line.contains(" forward(") || line.contains(" backward(") || line.contains(" patch("))
-      ) {
-        inMethod = true;
+  /** A bean declaring {@code %s}, with one {@code String} property. */
+  private static final String NAMED_BEAN =
+    "public class %s {\n" +
+    "  private String name;\n" +
+    "  public String getName() { return name; }\n" +
+    "  public void setName(final String name) { this.name = name; }\n" +
+    "}\n";
+
+  @Test
+  @DisplayName(
+    "a bridge over a generic class compiles with no warning and converts as the runtime does, in every form a bridge takes"
+  )
+  void aBridgeOverAGenericClassCompilesWithNoWarning() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
+    final var pairs = List.of(
+      List.of("GwsSrc<X>", "GwsTgt"),
+      List.of("GwtSrc", "GwtTgt<Y>"),
+      List.of("GwbSrc<X>", "GwbTgt<Y>")
+    );
+    final var failures = new ArrayList<String>();
+    for (final var pair : pairs) {
+      final var src = pair.get(0).replaceAll("<.*", "");
+      final var tgt = pair.get(1).replaceAll("<.*", "");
+      final var sources = new JavaFileObject[] {
+        source(src, head + bridge + tgt + ".class)\n" + NAMED_BEAN.formatted(pair.get(0))),
+        source(tgt, head + NAMED_BEAN.formatted(pair.get(1))),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> src + ": the pair should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      assertTrue(processed.success(), () -> src + ": the bridge should compile: " + processed.errorMessages());
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + src));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + tgt));
+      final var sample = source.getConstructor().newInstance();
+      source.getMethod("setName", String.class).invoke(sample, "a");
+      final var generated = emitted(processed, plain, src.replace("Src", "")).getMethod("forward", source);
+      final var getName = target.getMethod("getName");
+      final var viaBridge = getName.invoke(generated.invoke(null, sample));
+      final var viaRuntime = getName.invoke(Telescope.mapper(source, target).forward(sample));
+      if (!"a".equals(viaBridge) || !"a".equals(viaRuntime)) {
+        failures.add(src + ": the bridge gave " + viaBridge + ", the runtime " + viaRuntime);
       }
-      if (inMethod) methodLines.add((long) i + 1);
-      if (inMethod && line.equals("  }")) inMethod = false;
     }
-    final var warnings = new ArrayList<String>();
-    for (final var d : processed.diagnostics()) {
-      final var message = d.getMessage(Locale.ROOT);
-      final var inBridge = d.getSource() != null && d.getSource().getName().contains(prefix + "SrcBridge");
-      if (
-        message.contains("unchecked") ||
-        message.contains("redundant cast") ||
-        (message.contains("raw type") && inBridge && methodLines.contains(d.getLineNumber()))
-      ) {
-        warnings.add(prefix + ": the bridge warns at line " + d.getLineNumber() + ": " + message);
-      }
-    }
-    return warnings;
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+
+    // The carrier form and a sealed root reach the same emission through their own paths.
+    final var carried = bridged(
+      source("GwcSrc", head + NAMED_BEAN.formatted("GwcSrc<X>")),
+      source("GwcTgt", head + NAMED_BEAN.formatted("GwcTgt<Y>")),
+      source(
+        "GwcCarrier",
+        head + bridge + "source = GwcSrc.class, target = GwcTgt.class)\npublic final class GwcCarrier {}\n"
+      )
+    );
+    assertTrue(carried.success(), () -> "the carrier bridge should compile: " + carried.errorMessages());
+    final var sealed = bridged(
+      source(
+        "GwrSrc",
+        head + bridge + "GwrTgt.class)\npublic sealed interface GwrSrc<T> permits GwrCase, GwrFixed {}\n"
+      ),
+      source(
+        "GwrCase",
+        head + bridge + "GwrCaseDto.class)\npublic record GwrCase<T>(String name) implements GwrSrc<T> {}\n"
+      ),
+      source(
+        "GwrFixed",
+        head + bridge + "GwrFixedDto.class)\npublic record GwrFixed(String name) implements GwrSrc<String> {}\n"
+      ),
+      source("GwrTgt", head + "public sealed interface GwrTgt<U> permits GwrCaseDto, GwrFixedDto {}\n"),
+      source("GwrCaseDto", head + "public record GwrCaseDto<U>(String name) implements GwrTgt<U> {}\n"),
+      source("GwrFixedDto", head + "public record GwrFixedDto(String name) implements GwrTgt<String> {}\n")
+    );
+    assertTrue(sealed.success(), () -> "the sealed bridge should compile: " + sealed.errorMessages());
+    // A root declaring no type parameters can still permit a generic case, which its patch names.
+    final var genericCase = bridged(
+      source("GwkSrc", head + bridge + "GwkTgt.class)\npublic sealed interface GwkSrc permits GwkCase {}\n"),
+      source(
+        "GwkCase",
+        head + bridge + "GwkCaseDto.class)\npublic record GwkCase<T>(String name) implements GwkSrc {}\n"
+      ),
+      source("GwkTgt", head + "public sealed interface GwkTgt permits GwkCaseDto {}\n"),
+      source("GwkCaseDto", head + "public record GwkCaseDto<U>(String name) implements GwkTgt {}\n")
+    );
+    assertTrue(genericCase.success(), () -> "the sealed bridge should compile: " + genericCase.errorMessages());
+  }
+
+  @Test
+  @DisplayName("a caller holding a generic class with or without arguments uses each member of its bridge")
+  void aCallerUsesEveryMemberOfABridgeOverAGenericClass() {
+    final var head = "package " + PACKAGE + ";\n";
+    // Each member names both classes raw, which a caller can assign from and pass a value of either
+    // form to. A wildcard in a field's type or a method's return type would refuse a line below.
+    final var caller =
+      head +
+      "import io.github.eschizoid.telescope.Telescope;\n" +
+      "import io.github.eschizoid.telescope.conversion.BridgeFn;\n" +
+      "@SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "public class GwuCaller {\n" +
+      "  static void use(final GwuSrc<String> typed, final GwuSrc raw, final GwuTgt<Integer> dto) {\n" +
+      "    final BridgeFn<GwuSrc, GwuTgt> fn = GwuSrcBridge.BRIDGE_FN;\n" +
+      "    final Telescope<GwuSrc, GwuTgt> path = GwuSrcBridge.BRIDGE;\n" +
+      "    final GwuTgt<Integer> forward = GwuSrcBridge.forward(typed);\n" +
+      "    final GwuTgt rawForward = GwuSrcBridge.forward(raw);\n" +
+      "    final GwuSrc<String> backward = GwuSrcBridge.backward(dto);\n" +
+      "    final GwuSrc<String> patched = GwuSrcBridge.patch(typed, dto);\n" +
+      "    final java.util.function.Function<GwuSrc<String>, GwuTgt<Integer>> ref = GwuSrcBridge::forward;\n" +
+      "    final GwuTgt<Integer> read = path.read(typed);\n" +
+      "    final GwuTgt<Integer> applied = fn.forward(typed);\n" +
+      "  }\n" +
+      "}\n";
+    final var compilation = bridged(
+      source(
+        "GwuSrc",
+        head + "@io.github.eschizoid.telescope.annotations.Bridge(GwuTgt.class)\n" + NAMED_BEAN.formatted("GwuSrc<X>")
+      ),
+      source("GwuTgt", head + NAMED_BEAN.formatted("GwuTgt<Y>")),
+      source("GwuCaller", caller)
+    );
+    assertTrue(compilation.success(), () -> "the caller should compile: " + compilation.errorMessages());
   }
 
   /**
@@ -4422,9 +4524,7 @@ class CrossPathCorpusTest {
   @DisplayName("a generated-only capability gives what its register records")
   void aGeneratedOnlyCapabilityGivesWhatItsRegisterRecords() throws ReflectiveOperationException {
     final var name = "a transform result the setter chosen from the property's type cannot take";
-    final var compilation = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
+    final var compilation = bridged(
       ProcessorHarness.source(
         PACKAGE + ".GocFn",
         "package " +
@@ -4764,7 +4864,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), () -> cell.name() + " should compile: " + processed.errorMessages());
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
@@ -4807,7 +4907,7 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), plain::errorMessages);
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), processed::errorMessages);
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".SpSrc"));
@@ -5428,7 +5528,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
