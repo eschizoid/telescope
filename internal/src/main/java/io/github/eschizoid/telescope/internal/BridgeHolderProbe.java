@@ -8,30 +8,21 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Runtime probe for a sibling {@code <Source>Bridge} class emitted by the {@code @Bridge}
- * annotation processor. When present, exposes the static {@code BRIDGE} constant ({@code
- * Telescope<Source, Target>}) so the public {@code mapperForward(Class, Class, …)} factory can
- * route through it directly instead of building a fresh mapper from {@code to(…)} rows.
+ * Runtime probe for the {@code <Source>Bridge} class the {@code @Bridge} annotation processor emits
+ * beside a source that declares one target. When present, exposes its static {@code BRIDGE}
+ * constant ({@code Telescope<Source, Target>}) so a runtime mapper can convert the pair through it.
  *
- * <p>Sibling of {@link MetadataHolderProbe} — same {@link ClassValue} caching strategy, same
- * "presence and absence both memoised" semantics. The probe runs at most once per {@code
- * (sourceClass, targetClass)} pair per classloader; subsequent {@code probeFor} calls return the
- * cached result.
+ * <p>Sibling of {@link MetadataHolderProbe}: the same {@link ClassValue} caching, with presence and
+ * absence both memoised, so the probe runs at most once per {@code (sourceClass, targetClass)} pair
+ * per classloader.
  *
- * <p><b>Lookup order.</b> The probe checks two fully-qualified names against the source's
- * classloader:
- *
- * <ul>
- *   <li>{@code <Source>To<Target>Bridge} (long form, target-disambiguated) — tried first so a
- *       source carrying multiple bridges resolves unambiguously to the one targeting the requested
- *       class.
- *   <li>{@code <Source>Bridge} (short form) — accepted only when its {@code BRIDGE} field's
- *       parameterised target type matches the requested target class. The short-form name doesn't
- *       carry the target identity, so the probe verifies it reflectively before accepting.
- * </ul>
- *
- * The codegen-side contract for which shape gets emitted lives with the {@code @Bridge} annotation
- * processor; this probe describes only the runtime lookup contract.
+ * <p><b>Two names.</b> The short form {@code <Source>Bridge} does not carry the target, so the
+ * probe checks the {@code BRIDGE} field's target type against the requested class. The long form
+ * {@code <Source>To<Target>Bridge} goes both to a source declaring several targets and to a pair
+ * the processor derives for a nested component with no {@code @Bridge} of its own. A derived bridge
+ * takes its configuration from whichever bridges reached it, and nothing in the class says which
+ * kind it is. {@link #probeFor} reads the long form first and then the short form; {@link
+ * #shortFormFor} reads only the short form, for a caller that must not take a derived bridge.
  *
  * <p>The {@code bridge} field on {@link BridgeRef} is typed as {@link Object} because the optic /
  * Telescope types live in {@code :core}; consumers in {@code :core} cast it back to {@code
@@ -57,44 +48,74 @@ public final class BridgeHolderProbe {
     }
   };
 
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<BridgeRef>>> SHORT_FORM_CACHE =
+    new ClassValue<>() {
+      @Override
+      protected ConcurrentHashMap<Class<?>, Optional<BridgeRef>> computeValue(final Class<?> type) {
+        return new ConcurrentHashMap<>();
+      }
+    };
+
   /**
-   * The {@code <Source>Bridge} (or {@code <Source>To<Target>Bridge}) sibling holder for the given
-   * {@code (sourceClass, targetClass)} pair, or {@link Optional#empty()} if no such holder is on
-   * the classpath.
+   * The {@code <Source>To<Target>Bridge} holder for {@code (sourceClass, targetClass)}, else the
+   * {@code <Source>Bridge} holder, or {@link Optional#empty()} when there is neither. A long-form
+   * holder may be one the processor derived, so read this only where a derived bridge is wanted.
    *
-   * <p>Presence and {@link Optional#empty()} are memoised so repeated lookups don't repeat the
-   * {@link Class#forName} call. Malformed-holder exceptions (missing {@code BRIDGE} field, wrong
-   * modifiers, inaccessible field) are NOT memoised — they re-throw on every call so codegen drift
-   * surfaces consistently rather than hiding behind a cached failure.
-   *
-   * <p>The target-mismatch silent-skip (short-form holder present, wrong target) is also cached
-   * under the specific {@code (source, target)} pair — different target classes use independent
-   * cache entries, so memoising the wrong-target empty for one pair doesn't shadow a correct lookup
-   * for {@code (source, otherTarget)}.
+   * <p>A short-form class with no {@code BRIDGE} field is not a holder, such as a hand-written
+   * {@code @ViaMapper} class, and reads as absent, as does a holder converting to another target. A
+   * {@code BRIDGE} field with the wrong modifiers or a null value, and a long-form class with no
+   * {@code BRIDGE} field, throw on every call rather than being memoised, so a malformed generated
+   * class surfaces each time it is reached.
    */
   public static Optional<BridgeRef> probeFor(final Class<?> sourceClass, final Class<?> targetClass) {
-    return CACHE.get(sourceClass).computeIfAbsent(targetClass, t -> probe(sourceClass, t));
+    return memoised(CACHE, sourceClass, targetClass, true);
   }
 
-  private static Optional<BridgeRef> probe(final Class<?> sourceClass, final Class<?> targetClass) {
-    // Long-form name is target-disambiguated; try it first so multi-bridge sources resolve cleanly.
-    final var longForm = sourceClass.getName() + "To" + targetClass.getSimpleName() + "Bridge";
-    final var longProbe = loadBridgeClass(longForm, sourceClass.getClassLoader());
-    if (longProbe.isPresent()) return Optional.of(readBridgeConstant(longProbe.get()));
+  /** As {@link #probeFor}, reading only the short form {@code <Source>Bridge}. */
+  public static Optional<BridgeRef> shortFormFor(final Class<?> sourceClass, final Class<?> targetClass) {
+    return memoised(SHORT_FORM_CACHE, sourceClass, targetClass, false);
+  }
 
-    // Short-form name has no target identity baked into the FQN; verify the BRIDGE field's
-    // parameterised target type matches the requested target class to avoid mis-routing
-    // mapperForward(A, OtherTarget) through an A->B bridge. The target-match check returns
-    // false (silent skip) only when the BRIDGE field is structurally present with a wrong
-    // target — a missing or malformed field is left for readBridgeConstant to surface as a
-    // precise IllegalStateException.
-    final var shortForm = sourceClass.getName() + "Bridge";
-    final var shortProbe = loadBridgeClass(shortForm, sourceClass.getClassLoader());
-    if (shortProbe.isEmpty()) return Optional.empty();
-    final var bridgeClass = shortProbe.get();
-    final var match = bridgeTargetMatches(bridgeClass, targetClass);
+  private static Optional<BridgeRef> memoised(
+    final ClassValue<ConcurrentHashMap<Class<?>, Optional<BridgeRef>>> cache,
+    final Class<?> sourceClass,
+    final Class<?> targetClass,
+    final boolean longForm
+  ) {
+    final var known = cache.get(sourceClass);
+    final var cached = known.get(targetClass);
+    if (cached != null) return cached;
+    // Read outside the table's update: reading the constant initialises the holder, and that can
+    // build a mapper which probes this table.
+    final var found = probe(sourceClass, targetClass, longForm);
+    final var raced = known.putIfAbsent(targetClass, found);
+    return raced == null ? found : raced;
+  }
+
+  private static Optional<BridgeRef> probe(
+    final Class<?> sourceClass,
+    final Class<?> targetClass,
+    final boolean longForm
+  ) {
+    if (longForm) {
+      final var named = sourceClass.getName() + "To" + targetClass.getSimpleName() + "Bridge";
+      final var holder = loadBridgeClass(named, sourceClass.getClassLoader());
+      if (holder.isPresent()) return Optional.of(readBridgeConstant(holder.get()));
+    }
+    final var holder = loadBridgeClass(sourceClass.getName() + "Bridge", sourceClass.getClassLoader());
+    if (holder.isEmpty() || !hasBridgeField(holder.get())) return Optional.empty();
+    final var match = bridgeTargetMatches(holder.get(), targetClass);
     if (match.isPresent() && !match.get()) return Optional.empty();
-    return Optional.of(readBridgeConstant(bridgeClass));
+    return Optional.of(readBridgeConstant(holder.get()));
+  }
+
+  private static boolean hasBridgeField(final Class<?> holder) {
+    try {
+      holder.getDeclaredField("BRIDGE");
+      return true;
+    } catch (final NoSuchFieldException e) {
+      return false;
+    }
   }
 
   private static Optional<Class<?>> loadBridgeClass(final String fqn, final ClassLoader loader) {
@@ -118,8 +139,7 @@ public final class BridgeHolderProbe {
    *   <li>{@code Optional.of(false)} when the field is structurally present but the second argument
    *       is some other class or type form — the bridge is real but its target doesn't match.
    *   <li>{@link Optional#empty()} when the field is absent or its generic type isn't a {@link
-   *       ParameterizedType} — the holder is malformed and the caller should let {@link
-   *       #readBridgeConstant} surface the precise diagnostic rather than silently skip.
+   *       ParameterizedType}, which leaves {@link #readBridgeConstant} to judge the field.
    * </ul>
    */
   private static Optional<Boolean> bridgeTargetMatches(final Class<?> bridgeClass, final Class<?> expectedTarget) {

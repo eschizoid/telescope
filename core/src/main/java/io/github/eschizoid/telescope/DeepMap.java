@@ -1,8 +1,11 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.BridgeProvider;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
@@ -28,10 +31,14 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -40,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -174,6 +182,10 @@ public final class DeepMap {
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
     final var trail = new ArrayList<OpticNode>();
+    final var ownBridges =
+      nullStrategy == NullHint.NullStrategy.PROPAGATE && defaultStrategy == null
+        ? new OwnBridges(overrideTable, hintMap.keySet(), beanRefl)
+        : OwnBridges.NONE;
     populateIso(
       source,
       target,
@@ -184,6 +196,7 @@ public final class DeepMap {
       nullStrategy,
       cyclicPairs,
       inProgress,
+      ownBridges,
       lenient,
       lenient,
       trail
@@ -552,15 +565,18 @@ public final class DeepMap {
    * True when {@code (srcType, tgtType)} recurses into a nested record/bean pair AND carries no
    * explicit override rows — the pure-auto nesting the introspection trail can safely descend into
    * with dotted paths. A nested pair WITH rows is left as a single node (conservative): its rows
-   * are resolved by {@code populateIso}, not re-walked here.
+   * are resolved by {@code populateIso}, not re-walked here. A pair converted by its own bridge is
+   * a single node too, because the bridge decides its fields and the walk would describe others.
    */
   private static boolean isNestedAutoPair(
     final Type srcType,
     final Type tgtType,
-    final Map<TypePair, List<Mapping<?, ?>>> overrides
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final OwnBridges ownBridges
   ) {
     if (!(PAIRING.decidePair(srcType, tgtType, "") instanceof PairDecision.RecursePair)) return false;
-    return overrides.getOrDefault(new TypePair((Class<?>) srcType, (Class<?>) tgtType), List.of()).isEmpty();
+    final var pair = new TypePair((Class<?>) srcType, (Class<?>) tgtType);
+    return overrides.getOrDefault(pair, List.of()).isEmpty() && !ownBridges.converts(pair);
   }
 
   /**
@@ -575,6 +591,7 @@ public final class DeepMap {
     final Class<?> tgtCls,
     final String prefix,
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final OwnBridges ownBridges,
     final Reflective beanRefl,
     final List<OpticNode> out,
     final Set<TypePair> seen
@@ -597,10 +614,10 @@ public final class DeepMap {
       if (
         st instanceof Class<?> sc &&
         tt instanceof Class<?> tc &&
-        isNestedAutoPair(st, tt, overrides) &&
+        isNestedAutoPair(st, tt, overrides, ownBridges) &&
         seen.add(new TypePair(sc, tc))
       ) {
-        collectNested(sc, tc, prefix + name + ".", overrides, beanRefl, out, seen);
+        collectNested(sc, tc, prefix + name + ".", overrides, ownBridges, beanRefl, out, seen);
         seen.remove(new TypePair(sc, tc));
       } else out.add(fieldNode(prefix + name, prefix + name, st, tt));
     }
@@ -624,6 +641,7 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
     final boolean lenient,
     // True for a mapper with no backward direction, at every depth: it decides which enum pairs
     // convert. `lenient` differs because it applies to the pair the user named and nowhere below.
@@ -823,6 +841,7 @@ public final class DeepMap {
                 nullStrategy,
                 cyclicPairs,
                 inProgress,
+                ownBridges,
                 forwardOnly
               )
             : fieldIsoOf(row, srcType, tgtType);
@@ -915,13 +934,14 @@ public final class DeepMap {
             nullStrategy,
             cyclicPairs,
             inProgress,
+            ownBridges,
             forwardOnly
           )
         );
         byTargetName.put(name, step);
         bySourceName.put(name, step);
         claimedSrc.add(name);
-        if (trailOut != null && isNestedAutoPair(autoSrcType, autoTgtType, overrides)) {
+        if (trailOut != null && isNestedAutoPair(autoSrcType, autoTgtType, overrides, ownBridges)) {
           final var seen = new HashSet<TypePair>();
           seen.add(new TypePair((Class<?>) autoSrcType, (Class<?>) autoTgtType));
           collectNested(
@@ -929,6 +949,7 @@ public final class DeepMap {
             (Class<?>) autoTgtType,
             name + ".",
             overrides,
+            ownBridges,
             beanRefl,
             trailOut,
             seen
@@ -987,6 +1008,7 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
     final boolean forwardOnly
   ) {
     final var raw = computeAutoIso(
@@ -999,6 +1021,7 @@ public final class DeepMap {
       nullStrategy,
       cyclicPairs,
       inProgress,
+      ownBridges,
       forwardOnly
     );
     // DEFAULT strategy wraps EVERY auto-recursed per-component Iso uniformly: scalar identity,
@@ -1019,6 +1042,7 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
     final boolean forwardOnly
   ) {
     // Every branch DECISION routes through the shared pairing spec — this method only maps each
@@ -1066,6 +1090,12 @@ public final class DeepMap {
     if (decision instanceof PairDecision.RecursePair) {
       final var srcCls = (Class<?>) srcType;
       final var tgtCls = (Class<?>) tgtType;
+      final var subKey = new TypePair(srcCls, tgtCls);
+      // A bridge is decided where the pair is met, from the pairs being converted around it, and is
+      // never stored in the cache: a walked pair on a cycle reads the cache when it runs, so a
+      // bridge stored there would stand in for the walk on the cycle too.
+      final var own = ownBridges.isoFor(subKey, inProgress);
+      if (own != null) return own;
       // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
       // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
       // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
@@ -1079,11 +1109,11 @@ public final class DeepMap {
         nullStrategy,
         cyclicPairs,
         inProgress,
+        ownBridges,
         false,
         forwardOnly,
         null
       );
-      final var subKey = new TypePair(srcCls, tgtCls);
       return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
     }
 
@@ -1109,6 +1139,7 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
         forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
@@ -1124,6 +1155,7 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
         forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
@@ -1144,6 +1176,7 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
         forwardOnly
       );
       // The lifts consult MhIso.liftCollection/liftMap, which sharpen to a MethodHandle loop when
@@ -1682,6 +1715,193 @@ public final class DeepMap {
   // ---------- Inner types ----------
 
   private record TypePair(Class<?> source, Class<?> target) {}
+
+  /**
+   * The generated bridge each nested pair converts through, for one walk.
+   *
+   * <p>A nested pair converts through the bridge its own {@code @Bridge} generated, found by {@link
+   * #ownBridge}, so that bridge's transforms, leniency, renames and write strategy decide the
+   * pair's fields on this path as they do on the generated one. The walk converts the pair itself
+   * instead when the bridge would pass over something the mapper says:
+   *
+   * <ul>
+   *   <li>a row keyed to the pair, or to a pair its classes reach;
+   *   <li>a write hint naming one of its classes, or a class they reach;
+   *   <li>a type the pair reaches that is an ancestor on the walk's path, because the walk's guard
+   *       against an object reaching itself does not pass through a bridge.
+   * </ul>
+   *
+   * <p>A mapper-wide {@code nullSourceValues(DEFAULT)} or {@code writeBeans(...)} default reaches
+   * every pair, and a bridge has no counterpart for either, so such a mapper walks every pair.
+   */
+  private static final class OwnBridges {
+
+    /** A walk that converts every nested pair itself. */
+    static final OwnBridges NONE = new OwnBridges(Map.of(), Set.of(), Reflective.BEANS);
+
+    private final Map<TypePair, List<Mapping<?, ?>>> rows;
+    private final Set<Class<?>> hinted;
+    private final Reflective beanRefl;
+    private final Map<Class<?>, Set<Class<?>>> reached = new HashMap<>();
+    private final Set<TypePair> converted = new HashSet<>();
+
+    OwnBridges(final Map<TypePair, List<Mapping<?, ?>>> rows, final Set<Class<?>> hinted, final Reflective beanRefl) {
+      this.rows = rows;
+      this.hinted = hinted;
+      this.beanRefl = beanRefl;
+    }
+
+    /**
+     * The pair's own bridge as an {@link Iso}, or null when the walk converts it. {@code ancestors}
+     * are the pairs being converted around it.
+     */
+    Iso<?, ?> isoFor(final TypePair pair, final Collection<TypePair> ancestors) {
+      if (this == NONE) return null;
+      if (!rows.getOrDefault(pair, List.of()).isEmpty()) return null;
+      if (hinted.contains(pair.source) || hinted.contains(pair.target)) return null;
+      // A pair met again inside itself, such as the mapper's own pair, keeps the walk it is in.
+      if (ancestors.contains(pair)) return null;
+      final var found = ownBridge(pair.source, pair.target, false);
+      if (found.isEmpty()) return null;
+      final var fromSource = reachedFrom(pair.source);
+      final var fromTarget = reachedFrom(pair.target);
+      for (final var configured : rows.keySet()) {
+        if (fromSource.contains(configured.source) && fromTarget.contains(configured.target)) return null;
+      }
+      for (final var hint : hinted) if (fromSource.contains(hint) || fromTarget.contains(hint)) return null;
+      for (final var ancestor : ancestors) {
+        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) return null;
+      }
+      converted.add(pair);
+      return isoOf(pair, found.get());
+    }
+
+    boolean converts(final TypePair pair) {
+      return converted.contains(pair);
+    }
+
+    /**
+     * Every class a value of {@code start} can hold at any depth: the classes and type arguments of
+     * its properties' types, and the type arguments its class passes to the classes it extends,
+     * which is where a container class of its own names its elements. Read through each record or
+     * bean on the way.
+     */
+    private Set<Class<?>> reachedFrom(final Class<?> start) {
+      final var known = reached.get(start);
+      if (known != null) return known;
+      final var seen = new HashSet<Class<?>>();
+      final var pending = new ArrayDeque<Class<?>>();
+      pending.add(start);
+      while (!pending.isEmpty()) {
+        final var cls = pending.poll();
+        final var mentioned = new ArrayList<Class<?>>();
+        final var visited = new HashSet<Type>();
+        classesIn(cls.getGenericSuperclass(), mentioned, visited);
+        for (final var implemented : cls.getGenericInterfaces()) classesIn(implemented, mentioned, visited);
+        final var refl = pickReflective(cls, beanRefl);
+        for (final var name : refl.names(cls)) {
+          // Both types the walk can read a property as: as a member of this class, which resolves a
+          // type variable a bean inherits, and as declared.
+          classesIn(Reflective.pairedTypes(refl, cls, name, refl, cls, name).source(), mentioned, visited);
+          classesIn(refl.genericType(cls, name), mentioned, visited);
+        }
+        for (final var next : mentioned) if (seen.add(next) && readable(next)) pending.add(next);
+      }
+      reached.put(start, seen);
+      return seen;
+    }
+
+    /** A record or bean whose properties the walk reads, which no JDK class is. */
+    private static boolean readable(final Class<?> cls) {
+      return PAIRING.reflectable(cls) && !cls.getName().startsWith("java.");
+    }
+
+    /**
+     * The classes {@code type} names, at any depth of its arguments and bounds. {@code visited}
+     * stops a type variable bounded by itself, such as {@code T extends Comparable<T>}.
+     */
+    private static void classesIn(final Type type, final List<Class<?>> out, final Set<Type> visited) {
+      if (type == null || !visited.add(type)) return;
+      switch (type) {
+        case Class<?> cls -> out.add(cls.isArray() ? cls.getComponentType() : cls);
+        case ParameterizedType parameterized -> {
+          classesIn(parameterized.getRawType(), out, visited);
+          for (final var argument : parameterized.getActualTypeArguments()) classesIn(argument, out, visited);
+        }
+        case GenericArrayType array -> classesIn(array.getGenericComponentType(), out, visited);
+        case WildcardType wildcard -> {
+          for (final var bound : wildcard.getUpperBounds()) classesIn(bound, out, visited);
+          for (final var bound : wildcard.getLowerBounds()) classesIn(bound, out, visited);
+        }
+        case TypeVariable<?> variable -> {
+          for (final var bound : variable.getBounds()) classesIn(bound, out, visited);
+        }
+        default -> {
+        }
+      }
+    }
+  }
+
+  /** Each pair's bridge, or its absence, by source class. A malformed bridge is not kept. */
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> NESTED_BRIDGES = cacheBySource();
+
+  /** The same, for a mapper's own pair, where a long-form holder is read too. */
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> ROOT_BRIDGES = cacheBySource();
+
+  private static ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> cacheBySource() {
+    return new ClassValue<>() {
+      @Override
+      protected ConcurrentHashMap<Class<?>, Optional<Object>> computeValue(final Class<?> type) {
+        return new ConcurrentHashMap<>();
+      }
+    };
+  }
+
+  /**
+   * The bridge {@code @Bridge} generated for {@code (source, target)}, found by the one lookup a
+   * mapper with no steps and a nested pair share: a holder beside the source, then a carrier
+   * registered as a {@link BridgeProvider}.
+   *
+   * <p>With {@code longForm}, for the pair a mapper with no steps is built for, the {@code
+   * <Source>To<Target>Bridge} holder comes first, then {@code <Source>Bridge}. That reaches a
+   * source declaring several targets, and also a bridge the processor derived for a pair with no
+   * {@code @Bridge} of its own. Without it, for a nested pair, only {@code <Source>Bridge} is read:
+   * a derived bridge carries the configuration of whichever bridges reached it, not the pair's own,
+   * and nothing in the class tells it from a declared long-form one.
+   */
+  static Optional<Object> ownBridge(final Class<?> source, final Class<?> target, final boolean longForm) {
+    final var known = (longForm ? ROOT_BRIDGES : NESTED_BRIDGES).get(source);
+    final var cached = known.get(target);
+    if (cached != null) return cached;
+    // Read outside the table's update: reading a bridge initialises its class, and that can build a
+    // mapper which looks a bridge up in this table.
+    final var holder = longForm
+      ? BridgeHolderProbe.probeFor(source, target)
+      : BridgeHolderProbe.shortFormFor(source, target);
+    final Optional<Object> found = holder
+      .map(BridgeHolderProbe.BridgeRef::bridge)
+      .or(() -> BridgeRegistry.find(source, target, source.getClassLoader()));
+    final var raced = known.putIfAbsent(target, found);
+    return raced == null ? found : raced;
+  }
+
+  /**
+   * A nested pair's own bridge as the pair's leaf, as it is: a generated bridge converts null to
+   * null in both directions.
+   *
+   * @throws IllegalStateException when the bridge is not a two-way conversion
+   */
+  private static Iso<?, ?> isoOf(final TypePair pair, final Object bridge) {
+    if (bridge instanceof Telescope<?, ?> telescope && telescope.optic instanceof Iso<?, ?> iso) return iso;
+    throw new IllegalStateException(
+      "The bridge generated for (" +
+        pair.source.getName() +
+        ", " +
+        pair.target.getName() +
+        ") is not a two-way conversion, so a mapper reaching that pair cannot convert it through" +
+        " the bridge. Re-run the @Bridge processor."
+    );
+  }
 
   /**
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.

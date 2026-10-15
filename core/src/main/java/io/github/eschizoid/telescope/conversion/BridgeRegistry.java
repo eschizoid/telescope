@@ -9,7 +9,8 @@ import java.util.ServiceLoader;
  * io.github.eschizoid.telescope.Telescope#mapperForward(Class, Class,
  * io.github.eschizoid.telescope.mapping.MapStep...)} as the discovery path for carrier-form
  * bridges, which the name-derived sibling probe can't reach (they live in the carrier's package,
- * not the source's).
+ * not the source's), and by every runtime mapper to find the bridge a nested pair's carrier
+ * declared.
  *
  * <p>Discovery is loud on malformed input, never silent: a provider whose {@code bridge()} is null,
  * or two providers claiming the same pair, throw {@link IllegalStateException} rather than

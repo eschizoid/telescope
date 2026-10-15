@@ -137,6 +137,18 @@ through rather than converting it into its own refusal that the class has no con
 refusal's advice — declare a constructor, or supply an explicit conversion row — is wrong here: the type is fine and the
 program works on the JVM. Only the image is missing something, and only the registration error says so.
 
+## A nested pair's own bridge
+
+A runtime mapper converts a nested pair that has its own `@Bridge` through the bridge that annotation generated, and a
+`mapperForward` with no steps does the same for its own pair. It finds the bridge by name: it loads `<Source>Bridge`
+from the source's package with `Class.forName` and reads its `BRIDGE` field. A carrier bridge is found through
+`ServiceLoader` instead.
+
+In an image, a holder class that is not registered reads as absent. The mapper then walks the pair by name, so the
+bridge's transforms, renames and other settings are not applied, and the result differs from the JVM's without an error.
+Register each `<Source>Bridge` a runtime mapper can reach: the class, and its `BRIDGE` field for reading. Keep the
+`META-INF/services` entries the processor writes for carrier bridges, as for any other service.
+
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's

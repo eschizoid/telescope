@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
-import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
@@ -10,7 +9,6 @@ import io.github.eschizoid.telescope.conversion.MappingTraces;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
-import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
@@ -883,6 +881,14 @@ public sealed class Telescope<
    * Optional<User>}) terminate naturally — the recursion caches the in-progress type pair and
    * re-uses it instead of descending infinitely.
    *
+   * <p><b>A nested pair's own bridge.</b> A nested pair that carries its own {@code @Bridge},
+   * beside its source or on a carrier, converts through the bridge that annotation generated, so
+   * its transforms, leniency and renames apply here as they do inside a generated parent. The
+   * mapper walks the pair itself instead when a row is keyed to it or to a pair below it, when a
+   * {@code writeBean} hint names one of its classes or a class below it, or when it reaches back to
+   * a type being converted around it. A mapper given {@code nullSourceValues(DEFAULT)} or a {@code
+   * writeBeans(...)} default walks every pair. The pair the mapper is built for is always walked.
+   *
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
@@ -1023,12 +1029,13 @@ public sealed class Telescope<
    * silently losing data).
    *
    * <p><b>Auto-discovery from {@code @Bridge}.</b> When {@code steps} is empty AND the {@code
-   * source} class has a sibling {@code <Source>Bridge.BRIDGE} (or {@code <Source>To<Target>Bridge.
-   * BRIDGE}) constant emitted by the {@code @Bridge} annotation processor, the forward direction
-   * routes through that bridge directly. The bridge's full configuration is surfaced in the result
-   * — {@code @Rename} (including {@code forwardOnly} fan-out), {@code @Transform},
-   * {@code @Constant}, {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the
-   * {@code writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
+   * source} class has a sibling {@code <Source>To<Target>Bridge.BRIDGE} or {@code
+   * <Source>Bridge.BRIDGE} constant emitted by the {@code @Bridge} annotation processor, tried in
+   * that order, or a carrier registered for the pair, the forward direction routes through that
+   * bridge directly. The bridge's full configuration is surfaced in the result — {@code @Rename}
+   * (including {@code forwardOnly} fan-out), {@code @Transform}, {@code @Constant},
+   * {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the {@code
+   * writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
    * encoded inside the bridge and apply to every {@code mapperForward(source, target)} call. The
    * annotation's defaults are NOT the same as this method's lenient-by-default —
    * {@code @Bridge(lenient = false)} (the annotation's default) produces a strict bijection bridge,
@@ -1052,21 +1059,13 @@ public sealed class Telescope<
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
     if (steps.length == 0) {
-      final var probed = BridgeHolderProbe.probeFor(source, target);
-      if (probed.isPresent()) {
+      // The lookup a nested pair uses, with the long-form holder read first: the holder beside the
+      // source, then a carrier registered by (source, target), since a carrier lives in its own
+      // package.
+      final var own = DeepMap.ownBridge(source, target, true);
+      if (own.isPresent()) {
         @SuppressWarnings("unchecked")
-        final var bridge = (Telescope<A, B>) probed.get().bridge();
-        return ForwardMapper.create(bridge::read, source, target);
-      }
-      // The name-derived probe above only reaches a sibling <Source>Bridge in the source's package.
-      // A carrier-form @Bridge lives in the carrier's package, so fall back to the package-agnostic
-      // registry before the lenient same-name default — otherwise a declared carrier bridge (and
-      // its
-      // renames) would be silently dropped.
-      final var registered = BridgeRegistry.find(source, target, source.getClassLoader());
-      if (registered.isPresent()) {
-        @SuppressWarnings("unchecked")
-        final var bridge = (Telescope<A, B>) registered.get();
+        final var bridge = (Telescope<A, B>) own.get();
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
