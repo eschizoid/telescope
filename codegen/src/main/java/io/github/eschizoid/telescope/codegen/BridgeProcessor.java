@@ -4423,12 +4423,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * How a call to {@code mapper}'s static {@code name} binds a value of {@code own} type the bridge
-   * holds as {@code held}, or null where it binds none. Where the two are the same, javac's choice
-   * among the overloads is the one a non-generic bridge makes. Where the bridge holds the value as
-   * a wider erasure, the overload javac would pick for the erasure need not be the one the value's
-   * own class calls for, so the call binds only when the mapper declares one method of that name:
-   * as it is where that method takes {@code held}, and otherwise through a cast to its parameter's
-   * erasure where that narrows {@code held}.
+   * holds as {@code held}, or null where it binds none. javac chooses among the overloads by the
+   * held type, which for a variable with a bound is that bound: the overload a method reference
+   * typed by the bound binds as well. A variable with no bound is held as {@code Object}, and the
+   * overload for {@code Object} need not be the one the value's own class calls for, so there the
+   * call binds only when the mapper declares one method of that name. A sole method binds as it is
+   * where it takes {@code held}, and otherwise through a cast to its parameter's erasure where that
+   * narrows {@code held}.
    */
   private ViaCall viaCall(
     final TypeElement mapper,
@@ -4439,7 +4440,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var types = processingEnv.getTypeUtils();
     final var candidates = viaCandidates(mapper, name, bridgePackage);
-    if (types.isSameType(own, held) || candidates.size() == 1) {
+    if (!choosesBlind(own, held, candidates.size())) {
       if (resolvedFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound bound) {
         return new ViaCall(null, bound.member().getReturnType());
       }
@@ -4471,6 +4472,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .toList();
   }
 
+  /**
+   * Whether javac would choose among {@code candidates} overloads for a value of the variable
+   * {@code own} by nothing but {@code Object}, its erasure where it has no bound.
+   */
+  private boolean choosesBlind(final TypeMirror own, final TypeMirror held, final int candidates) {
+    return (
+      candidates > 1 &&
+      own.getKind() == TypeKind.TYPEVAR &&
+      processingEnv
+        .getTypeUtils()
+        .isSameType(held, processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType())
+    );
+  }
+
   /** Why {@link #viaCall} bound no method, for the refusal. */
   private String viaUnbound(
     final TypeElement mapper,
@@ -4479,7 +4494,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror held,
     final PackageElement bridgePackage
   ) {
-    if (viaCandidates(mapper, name, bridgePackage).size() > 1 && !processingEnv.getTypeUtils().isSameType(own, held)) {
+    if (choosesBlind(own, held, viaCandidates(mapper, name, bridgePackage).size())) {
       return (
         "has several overloads, and the bridge holds the value as " +
         heldPhrase(own, held) +

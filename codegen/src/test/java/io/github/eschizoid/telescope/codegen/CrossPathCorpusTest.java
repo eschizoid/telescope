@@ -7003,9 +7003,64 @@ class CrossPathCorpusTest {
       "child=Ch:q",
       "child=Ch:q"
     ),
-    // A mapper parameter typed by the method's own variable erases to the type the bridge
-    // holds
-    // the value as, which it takes as it is.
+    // A variable with a bound is held as the bound, and javac picks among the
+    // mapper's overloads by it, as a method reference typed by the bound does.
+    new ViaVariable(
+      "a source record typed by a variable bounded by the child, to a mapper overloaded for Object",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a source record typed by a variable bounded by the child, to a mapper overloaded for String",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property read through a generic method bounded by the child, to a mapper overloaded for Object",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD +
+          "public class %1$sSrc {\n" +
+          "  private %1$sCh child;\n" +
+          "  @SuppressWarnings(\"unchecked\") public <T extends %1$sCh> T getChild() { return (T) child; }\n" +
+          "  public <T extends %1$sCh> void setChild(final T child) { this.child = child; }\n" +
+          "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.setChild(new %1$sCh(\"a\")); return s; }\n}\n",
+        "public class %1$sTgt {\n" +
+          "  private %1$sChDto child;\n" +
+          "  public %1$sChDto getChild() { return child; }\n" +
+          "  public void setChild(final %1$sChDto child) { this.child = child; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setChild(new %1$sChDto(\"Q\")); return t; }\n}\n",
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    // A mapper parameter typed by the method's own variable erases to the type the
+    // bridge holds the value as, and takes it as it is.
     new ViaVariable(
       "a property both sides pass through, to a mapper whose forward takes its own variable",
       List.of(
