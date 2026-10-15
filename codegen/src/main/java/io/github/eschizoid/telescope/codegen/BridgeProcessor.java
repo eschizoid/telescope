@@ -288,6 +288,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private String pathArg;
 
+  /**
+   * The bridge being emitted, which a constructor argument names to reach its {@code __erased}
+   * helper, and whether one did; reset for each bridge.
+   */
+  private String erasingBridge;
+
+  private boolean erasedArgumentUsed;
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -2098,6 +2106,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // the sub-bridges on the same cycle; every other pair is emitted with no trace of it.
     final var guarded = guardsCycles(source, target);
     pathArg = guarded ? "__path" : null;
+    erasingBridge = bridgeName;
+    erasedArgumentUsed = false;
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -2407,6 +2417,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Per-field @Compute: one static instance of each user-declared Supplier implementation,
         // named `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward
         // slot.
+        // A constructor argument typed by the target's type variable is passed through this
+        // identity, which hands javac the erasure the raw class's constructor takes.
+        if (erasedArgumentUsed) {
+          out.println("  private static <V> V __erased(final V value) {");
+          out.println("    return value;");
+          out.println("  }");
+          out.println();
+        }
         if (!computes.isEmpty()) {
           for (final var e : computes.entrySet()) {
             out.println(
@@ -6821,7 +6839,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var name = c.getSimpleName().toString();
           slots.add(new CtorSlot(name, c.asType(), read.apply(name)));
         }
-        return construct(toFq, slots, hoistInto);
+        return construct(to, slots, hoistInto);
       }
       case CONSTRUCTOR -> {
         final var slots = new ArrayList<CtorSlot>();
@@ -6829,7 +6847,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var name = pa.getSimpleName().toString();
           slots.add(new CtorSlot(name, pa.asType(), read.apply(name)));
         }
-        return construct(toFq, slots, hoistInto);
+        return construct(to, slots, hoistInto);
       }
       case BUILDER -> {
         final var builderType = rebuild.builderType();
@@ -6955,7 +6973,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
             sb
               .append("{ final ")
-              .append(choice.argumentType())
+              .append(boundArgumentText(to, choice))
               .append(" __arg = ")
               .append(value)
               .append("; out.")
@@ -6996,23 +7014,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The type a generated call hands the chosen setter of {@code to} its value as, so that javac
-   * binds that setter and no other overload. The bridge names a generic class raw, and a raw
-   * class's members take the erasure of their declared parameters, so there it is the erasure of
-   * the chosen setter's declared parameter: an inherited {@code setV(T)} that {@code Tgt extends
-   * Base<String>} reads as {@code setV(String)} is {@code setV(Object)} on the raw {@code Tgt}, and
-   * a {@code String} argument would bind an overload such as {@code setV(CharSequence)} instead.
-   * Elsewhere it is the parameter as a member of {@code to}. Where the value spreads into a
-   * variable-arity setter, it is the array's component.
+   * binds that setter and no other overload. The bridge names a generic class raw, and every member
+   * of a raw class takes the erasure of its declared parameter, so there it is that erasure: an
+   * inherited {@code setV(T)} that {@code Tgt extends Base<String>} reads as {@code setV(String)}
+   * is {@code setV(Object)} on the raw {@code Tgt}, and a {@code String} argument would bind an
+   * overload such as {@code setV(CharSequence)} instead. On a class with no type parameters it is
+   * the parameter as a member of {@code to}. Where the value spreads into a variable-arity setter,
+   * it is the array's component.
    */
   private TypeMirror boundArgument(final TypeElement to, final MirrorSetters.SetterChoice choice) {
-    if (to.getTypeParameters().isEmpty()) return choice.argument();
+    if (to.getTypeParameters().isEmpty() || choice.member() == null) return choice.argument();
     final var declared = processingEnv.getTypeUtils().erasure(choice.member().getParameters().getFirst().asType());
     return choice.spreads() && declared instanceof ArrayType array ? array.getComponentType() : declared;
   }
 
   /** {@link #boundArgument} as a generated local declares it. */
   private String boundArgumentText(final TypeElement to, final MirrorSetters.SetterChoice choice) {
-    return to.getTypeParameters().isEmpty() ? choice.argumentText() : boundArgument(to, choice).toString();
+    return to.getTypeParameters().isEmpty() || choice.member() == null
+      ? choice.argumentText()
+      : boundArgument(to, choice).toString();
   }
 
   /** One constructor argument: the parameter it fills, its declared type, and its expression. */
@@ -7037,7 +7057,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * observable moves. A slot stays inline when its type cannot be written from the bridge's
    * package: a type variable the static method does not declare, or a class it cannot name.
    */
-  private String construct(final String toFq, final List<CtorSlot> slots, final String hoistInto) {
+  private String construct(final TypeElement to, final List<CtorSlot> slots, final String hoistInto) {
+    final var toFq = to.getQualifiedName().toString();
+    final var types = processingEnv.getTypeUtils();
+    final var erased = erasedArguments(to, slots);
     final var hoisted =
       hoistInto == null
         ? Set.<String>of()
@@ -7048,8 +7071,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             .collect(Collectors.toUnmodifiableSet());
     final var args = slots
       .stream()
-      .map(slot -> hoisted.contains(slot.name()) ? "__cv_" + slot.name() : slot.expr())
+      .map(slot ->
+        hoisted.contains(slot.name())
+          ? "__cv_" + slot.name()
+          : erased.contains(slot.name())
+            ? erasingBridge + ".<" + types.erasure(slot.type()) + ">__erased(" + slot.expr() + ")"
+            : slot.expr()
+      )
       .collect(Collectors.joining(", "));
+    if (!erased.isEmpty()) erasedArgumentUsed = true;
     final var call = "new " + toFq + "(" + args + ")";
     if (hoisted.isEmpty()) return call;
     final var sb = new StringBuilder("{ ");
@@ -7059,6 +7089,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sb.append(slot.expr()).append("; ");
     }
     return sb.append("return ").append(call).append("; }").toString();
+  }
+
+  /**
+   * The slots of a call to a generic record's canonical constructor whose argument is passed as the
+   * erasure of its declared type. The bridge names the record raw, so a component typed by its
+   * variable takes the erasure, and an argument of a narrower type binds another constructor of the
+   * same arity that takes that type, where the runtime calls the canonical one. Passed as the
+   * erasure, the argument binds the canonical constructor alone. Empty where the record has no
+   * other constructor of the call's arity. A generic bean with a second constructor of its
+   * name-matched constructor's arity is refused before its rebuild is emitted, so a bean has no
+   * such call.
+   */
+  private Set<String> erasedArguments(final TypeElement to, final List<CtorSlot> slots) {
+    if (to.getKind() != ElementKind.RECORD || to.getTypeParameters().isEmpty()) return Set.of();
+    final var sameArity = ElementFilter.constructorsIn(to.getEnclosedElements())
+      .stream()
+      .filter(c -> c.getParameters().size() == slots.size())
+      .count();
+    if (sameArity < 2) return Set.of();
+    return slots
+      .stream()
+      .filter(slot -> mirrorProps().mentionsTypeVariable(slot.type()))
+      .map(CtorSlot::name)
+      .collect(Collectors.toUnmodifiableSet());
   }
 
   /**

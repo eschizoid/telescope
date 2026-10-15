@@ -7930,6 +7930,274 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} is the two-way runtime mapper the pair has no rows
+   * for.
+   */
+  private static final String PLAIN_RUNTIME =
+    "public class %1$sRuntime {\n" +
+    "  public static Object mapper() {\n" +
+    "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class);\n" +
+    "  }\n}\n";
+
+  /**
+   * A generic bean {@code %1$s<name><Y>} extending {@code %1$sBase<fixed>}, which declares {@code
+   * set<Cap>(T)}, recording {@code T:} and the value, and an empty {@code Marker} interface. The
+   * bean reads the property as {@code fixed} and adds its own {@code set<Cap>(other)}, which writes
+   * {@code otherWrites} instead. Its {@code sample()} holds {@code held}.
+   */
+  private static List<String> inheritedSetter(
+    final String name,
+    final String property,
+    final String fixed,
+    final String other,
+    final String otherWrites,
+    final String held,
+    final String header
+  ) {
+    final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
+    return List.of(
+      "public class %1$sBase<T> {\n" +
+        "  public interface Marker {}\n" +
+        "  protected Object " +
+        property +
+        ";\n" +
+        "  public void set" +
+        cap +
+        "(final T v) { this." +
+        property +
+        " = v instanceof String text ? \"T:\" + text : v; }\n}\n",
+      header +
+        "public class %1$s" +
+        name +
+        "<Y> extends %1$sBase<" +
+        fixed +
+        "> {\n" +
+        "  public " +
+        fixed +
+        " get" +
+        cap +
+        "() { return (" +
+        fixed +
+        ") " +
+        property +
+        "; }\n" +
+        "  public void set" +
+        cap +
+        "(final " +
+        other +
+        " v) { this." +
+        property +
+        " = " +
+        otherWrites +
+        "; }\n" +
+        "  public static %1$s" +
+        name +
+        "<Object> sample() { final var b = new %1$s" +
+        name +
+        "<Object>(); b." +
+        property +
+        " = " +
+        held +
+        "; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A write into a generic class the bridge names raw: the declarations, each with {@code %1$s} as
+   * the row's prefix and the last of them the runtime mapper, and what both paths owe forward,
+   * backward and through patch. A row owing no backward is forward only.
+   */
+  private record RawWrite(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  private static final List<RawWrite> RAW_WRITES = List.of(
+    // The inherited setValue(T) takes Object on the raw class, where a String argument would
+    // bind
+    // setValue(CharSequence); the runtime writes through setValue(T), chosen from the String
+    // the
+    // property is read as.
+    new RawWrite(
+      "a plain write into a generic target whose setter is inherited",
+      concat(
+        List.of(BRIDGE_TO_TGT + valueBean("%1$sSrc", "String", "\"x\"")),
+        concat(
+          inheritedSetter("Tgt", "value", "String", "CharSequence", "\"CharSequence:\" + v", "\"q\"", ""),
+          PLAIN_RUNTIME
+        ).toArray(String[]::new)
+      ),
+      "#0(value=\"T:x\")",
+      "#0(value=\"q\")",
+      "#0(value=\"q\")"
+    ),
+    new RawWrite(
+      "a plain write backward and through patch into a generic source whose setter is inherited",
+      concat(
+        inheritedSetter("Src", "value", "String", "CharSequence", "\"CharSequence:\" + v", "\"x\"", BRIDGE_TO_TGT),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        PLAIN_RUNTIME
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"T:q\")",
+      "#0(value=\"T:q\")"
+    ),
+    // A nested pair's own bridge converts the child; its result is written through the setter
+    // the
+    // child's type chooses, setChild(T), rather than setChild(Marker), which writes nothing.
+    new RawWrite(
+      "a nested bridge's result into a generic target whose setter is inherited",
+      concat(
+        List.of(
+          "@io.github.eschizoid.telescope.annotations.Bridge(%1$sChDto.class)\npublic record %1$sCh(String name) {}\n",
+          "public record %1$sChDto(String name) implements %1$sBase.Marker {}\n",
+          BRIDGE_TO_TGT +
+            "public class %1$sSrc {\n" +
+            "  private %1$sCh child;\n" +
+            "  public %1$sCh getChild() { return child; }\n" +
+            "  public void setChild(final %1$sCh child) { this.child = child; }\n" +
+            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n"
+        ),
+        concat(
+          inheritedSetter("Tgt", "child", "%1$sChDto", "%1$sBase.Marker", "null", "new %1$sChDto(\"q\")", ""),
+          PLAIN_RUNTIME
+        ).toArray(String[]::new)
+      ),
+      "#0(child=#1(name=\"a\"))",
+      "#0(child=#1(name=\"q\"))",
+      "#0(child=#1(name=\"q\"))"
+    ),
+    new RawWrite(
+      "a @ViaMapper result into a generic target whose setter is inherited",
+      concat(
+        List.of(
+          "public record %1$sCh(String name) {}\n",
+          "public record %1$sChDto(String name) implements %1$sBase.Marker {}\n",
+          "public class %1$sChMap {\n" +
+            "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+            "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+          VIA_CHILD +
+            "public class %1$sSrc {\n" +
+            "  private %1$sCh child;\n" +
+            "  public %1$sCh getChild() { return child; }\n" +
+            "  public void setChild(final %1$sCh child) { this.child = child; }\n" +
+            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n"
+        ),
+        concat(
+          inheritedSetter("Tgt", "child", "%1$sChDto", "%1$sBase.Marker", "null", "new %1$sChDto(\"q\")", ""),
+          "public class %1$sRuntime {\n" +
+            "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+            "  public static Object mapper() {\n" +
+            "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class);\n" +
+            "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+            "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+            " child));\n  }\n}\n"
+        ).toArray(String[]::new)
+      ),
+      "#0(child=#1(name=\"a\"))",
+      "#0(child=#1(name=\"q\"))",
+      "#0(child=#1(name=\"q\"))"
+    ),
+    // The raw record's canonical constructor takes Object, where a CharSequence argument
+    // would bind
+    // the other constructor of one argument; the runtime calls the canonical one.
+    new RawWrite(
+      "a transform result into a generic record with a second constructor of the same arity",
+      List.of(
+        transformedValue(true) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y value) {\n" +
+          "  public %1$sTgt(final CharSequence c) { this((Y) (\"CharSequence:\" + c)); }\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\"); }\n}\n",
+        transformFn("String", "CharSequence", "a", "String.valueOf(b)"),
+        "public class %1$sRuntime {\n" +
+          "  public static Object mapper() {\n" +
+          "    final var fn = new %1$sFn();\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapperForward(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt, String, Object>toOneWay(" +
+          "%1$sSrc::value, %1$sTgt::value, fn::forward));\n  }\n}\n"
+      ),
+      "#0(value=\"x\")",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName("a write into a generic class the bridge names raw goes through the setter the property's type chooses")
+  void aWriteIntoARawGenericClassBindsTheSetterThePropertysTypeChooses() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : RAW_WRITES) {
+      final var prefix = "Pw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var forwardOnly = row.backward() == null;
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = forwardOnly ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = forwardOnly ? (ForwardMapper<Object, Object>) runtime : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
   /** Whether a compilation succeeded, or the errors it reported. */
   private static String describe(final ProcessorHarness.Compilation compilation) {
     return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();
