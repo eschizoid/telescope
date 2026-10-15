@@ -119,7 +119,9 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
             comp.getSimpleName() +
             "' of type '" +
             comp.asType() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "'" +
+            unemittableReason(comp.asType()) +
+            ". Remove " +
             "@Focus from this record to use the runtime path."
         );
         return;

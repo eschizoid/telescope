@@ -144,6 +144,7 @@ class ProcessorSourceVersionTest {
   private static final class Asking extends AbstractProcessor {
 
     private final Map<String, Boolean> answers = new LinkedHashMap<>();
+    private final Map<String, String> reasons = new LinkedHashMap<>();
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
@@ -168,6 +169,10 @@ class ProcessorSourceVersionTest {
       answers.put("intersection", AbstractTelescopeProcessor.isEmittableAsTypedConstant(variable.getUpperBound()));
       answers.put("void", AbstractTelescopeProcessor.isEmittableAsTypedConstant(types.getNoType(TypeKind.VOID)));
       answers.put("executable", AbstractTelescopeProcessor.isEmittableAsTypedConstant(method.asType()));
+      reasons.put("intersection", AbstractTelescopeProcessor.unemittableReason(variable.getUpperBound()));
+      reasons.put("void", AbstractTelescopeProcessor.unemittableReason(types.getNoType(TypeKind.VOID)));
+      reasons.put("variable", AbstractTelescopeProcessor.unemittableReason(variable));
+      reasons.put("array of variable", AbstractTelescopeProcessor.unemittableReason(types.getArrayType(variable)));
       return false;
     }
   }
@@ -196,5 +201,14 @@ class ProcessorSourceVersionTest {
     expected.put("void", false);
     expected.put("executable", false);
     assertEquals(expected, asking.answers);
+
+    final var generic = " — generics with wildcard or self-referential bounds are not supported";
+    final var noForm = ", which has no constant form";
+    final var expectedReasons = new LinkedHashMap<String, String>();
+    expectedReasons.put("intersection", noForm);
+    expectedReasons.put("void", noForm);
+    expectedReasons.put("variable", generic);
+    expectedReasons.put("array of variable", generic);
+    assertEquals(expectedReasons, asking.reasons);
   }
 }

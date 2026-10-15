@@ -64,10 +64,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   /**
    * The newest source level the running compiler supports. javac warns, with no source file, about
    * a processor that claims an older level than the compilation's, which fails a {@code -Werror}
-   * build. Claiming the compiler's own level is safe because no processor walks elements or types
-   * with a version-specific visitor. Each one admits only the element kinds it names, and a type
-   * kind it does not model takes the branch for a shape it cannot emit, so a construct a newer
-   * level adds reaches a refusal rather than generated code.
+   * build.
+   *
+   * <p>No processor walks elements or types with a version-specific visitor, and each one admits
+   * only the element kinds it names, so an element of a kind a newer level adds is refused. Two
+   * paths also refuse a component or property type of a kind they do not model: a navigator is
+   * written only after {@link #isEmittableAsTypedConstant} accepts every component or property
+   * type, and the map binder refuses a type the shared value classification calls unsupported. The
+   * bridge and mapper processors run neither check, so a type kind they do not model takes
+   * whichever branch their code has for an unrecognised shape.
    */
   @Override
   public SourceVersion getSupportedSourceVersion() {
@@ -1275,6 +1280,31 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * Why {@link #isEmittableAsTypedConstant} refused {@code type}, as a clause to follow the quoted
+   * type in a diagnostic. A wildcard or type variable anywhere in the type is the generic case; any
+   * other refusal is a kind the holder has no constant form for.
+   */
+  protected static String unemittableReason(final TypeMirror type) {
+    return mentionsWildcardOrVariable(type)
+      ? " — generics with wildcard or self-referential bounds are not supported"
+      : ", which has no constant form";
+  }
+
+  private static boolean mentionsWildcardOrVariable(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case WILDCARD, TYPEVAR -> true;
+      case DECLARED -> {
+        for (final var arg : ((DeclaredType) type).getTypeArguments()) {
+          if (mentionsWildcardOrVariable(arg)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> mentionsWildcardOrVariable(((ArrayType) type).getComponentType());
+      default -> false;
+    };
+  }
+
+  /**
    * Emit a non-utility generated class — i.e., one with instance state and a non-{@code private}
    * constructor. Header (package, single {@code io.github.eschizoid.telescope.Telescope} import,
    * javadoc, class declaration with {@code typeParams}) is written before {@code body}, then the
@@ -1399,7 +1429,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
             p.name() +
             "' of type '" +
             p.type() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "'" +
+            unemittableReason(p.type()) +
+            ". Remove " +
             triggerLabel +
             " from this class to use the runtime path."
         );
@@ -1665,7 +1697,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
             p.name() +
             "' of type '" +
             p.type() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "'" +
+            unemittableReason(p.type()) +
+            ". Remove " +
             triggerLabel +
             " from this class to use the runtime path."
         );
