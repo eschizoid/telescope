@@ -49,22 +49,24 @@ it into a hands-on lab.
 ## Speaker bio (2000 characters)
 
 Mariano Gonzalez is a Distinguished Engineer at Capital One, where he leads the design and development of the company's
-internal Java libraries and frameworks, and of its wider JVM ecosystem. His team builds the shared pieces that every
-Java service needs, so that product teams can rely on one well-maintained version instead of each writing their own.
+internal Java libraries and frameworks, and its wider JVM ecosystem. His team builds the shared pieces that every Java
+service needs, so that product teams can rely on one well-maintained version instead of each writing their own.
 
 Before Capital One, he worked at several startups in the Chicago area, building backend systems in small teams where the
 same engineer designs a service, ships it and keeps it running.
 
 Originally from Mexico, he has lived in Chicago for the last 15 years.
 
-Outside work, he maintains telescope, an open source library that brings optics and typed object mapping to modern Java,
-and writes about its design at mariano-gonzalez.com.
+Outside work, he maintains two open source Java libraries: telescope, which brings optics and typed object mapping to
+modern Java, and kpipe, a composable Kafka consumer library for building modular, testable data pipelines on the JVM. He
+writes about their design at mariano-gonzalez.com.
 
 A shorter version, where a form asks for one:
 
 Mariano Gonzalez is a Distinguished Engineer at Capital One, where he leads the company's internal Java libraries,
 frameworks and JVM ecosystem. Before that he worked at several Chicago startups. Originally from Mexico, he has lived in
-Chicago for 15 years. He maintains telescope, an open source optics and mapping library for Java.
+Chicago for 15 years. He maintains two open source Java libraries, telescope (optics and object mapping) and kpipe
+(Kafka consumer pipelines).
 
 ## Session outline
 
