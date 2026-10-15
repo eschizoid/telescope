@@ -1,8 +1,11 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -51,17 +54,15 @@ class SortedMapKeyParityTest {
 
   private static final String NOT_COMPARABLE = "public record %sK(String v) {}";
 
-  /** The refusal a sorted map gives a key it cannot order, with the cast underneath. */
-  private static String unorderable(final String container, final String implementing, final String castTo) {
+  /** The refusal a sorted map gives a key it cannot order, with the cast as its cause. */
+  private static String unorderable(final String container, final String implementing) {
     return (
       "IllegalStateException: Deep map: " +
       container +
       " keeps its keys in order, and %sK could not be ordered there, " +
       implementing +
       ". Supply an ordering these keys accept through a Mapping.via(...) row, or declare the" +
-      " target as a map that keeps no order. The cause is the cast itself. <- ClassCastException:" +
-      " class %sK cannot be cast to class " +
-      castTo
+      " target as a map that keeps no order. The cause is the cast itself. <- ClassCastException"
     );
   }
 
@@ -74,7 +75,7 @@ class SortedMapKeyParityTest {
       "java.util.Map<%sK, String>",
       "java.util.TreeMap<%sK, String>",
       false,
-      unorderable("java.util.TreeMap", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.TreeMap", "and its type does not implement Comparable")
     ),
     new Row(
       "values converted into a SortedMap",
@@ -82,7 +83,7 @@ class SortedMapKeyParityTest {
       "java.util.Map<%sK, %sA>",
       "java.util.SortedMap<%sK, %sB>",
       true,
-      unorderable("java.util.SortedMap", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedMap", "and its type does not implement Comparable")
     ),
     new Row(
       "a key ordered against another type",
@@ -93,7 +94,7 @@ class SortedMapKeyParityTest {
       "java.util.Map<%sK, String>",
       "java.util.TreeMap<%sK, String>",
       false,
-      unorderable("java.util.TreeMap", "though its type implements Comparable", "java.lang.String")
+      unorderable("java.util.TreeMap", "though its type implements Comparable")
     ),
     // A key ordered against its own kind has said it can be ordered,
     // so a cast escaping its compareTo is its own and propagates as it is.
@@ -143,7 +144,7 @@ class SortedMapKeyParityTest {
       "java.util.Map<%sK, String>",
       "%sTold<%sK, String>",
       false,
-      unorderable("%sTold", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("%sTold", "and its type does not implement Comparable")
     )
   );
 
@@ -233,7 +234,7 @@ class SortedMapKeyParityTest {
     assertTrue(cell.processed().success(), () -> "should bridge: " + cell.processed().errorMessages());
     final var key = cell.classes().get(PACKAGE + ".SmksK").getConstructor(String.class);
     final var refusal = "IllegalStateException: Deep map: java.util.TreeMap keeps its keys in order, and ";
-    final var cause = " <- ClassCastException: ";
+    final var cause = " <- ClassCastException";
     final var failures = new ArrayList<String>();
     for (final var path : List.of("generated", "reflective")) {
       final Map<Object, Object> first = new LinkedHashMap<>();
@@ -245,6 +246,77 @@ class SortedMapKeyParityTest {
       if (!thrown.startsWith(refusal) || !thrown.contains(cause)) failures.add(path + " gave " + thrown);
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * How many refusals the reflective path is driven through before the test gives up on the JIT
+   * replacing the cast with a preallocated one. HotSpot does so once the code holding the cast has
+   * been compiled and has thrown there often enough, which takes some thousands of throws.
+   */
+  private static final int WARMING_LIMIT = 200_000;
+
+  /**
+   * The key's cast sits in the bridge method its own {@code compareTo} gets, so it lives in a class
+   * this test defines and is cold when the test starts, whatever ran before it. A refusal taken
+   * before the cast is hot carries the cast's message; one taken after carries a cast with none.
+   */
+  @Test
+  @DisplayName("a refusal reads the same on both paths before and after the JIT drops the cast's message")
+  void aRefusalReadsTheSameOnBothPathsBeforeAndAfterTheCastIsHot() throws ReflectiveOperationException {
+    final var cell = compile(
+      "Smkh",
+      List.of(
+        "public record %sK(String v) implements Comparable<String> {\n" +
+          "  public int compareTo(final String o) { return v.compareTo(o); }\n}"
+      ),
+      "java.util.Map<%sK, String>",
+      "java.util.TreeMap<%sK, String>"
+    );
+    assertTrue(cell.processed().success(), () -> "should bridge: " + cell.processed().errorMessages());
+    final var key = cell.classes().get(PACKAGE + ".SmkhK").getConstructor(String.class);
+    final Map<Object, Object> entries = new LinkedHashMap<>();
+    entries.put(key.newInstance("a"), "1");
+    final var source = cell.src().getConstructors()[0].newInstance(entries);
+    final var mapper = Telescope.mapper(cast(cell.src()), cast(cell.tgt()));
+    final Attempt generatedPath = () -> cell.forward().invoke(null, source);
+    final Attempt reflectivePath = () -> mapper.forward(source);
+
+    final var cold = List.of(outcome(generatedPath), outcome(reflectivePath));
+    final var first = castOf(mapper, source);
+    var last = first;
+    for (var i = 0; i < WARMING_LIMIT && last != null && last.getMessage() != null; i++) {
+      last = castOf(mapper, source);
+    }
+    final var hottest = last;
+    assertTrue(
+      first instanceof ClassCastException && first.getMessage() != null,
+      () -> "the first cast should carry its message: " + first
+    );
+    // A JVM that keeps every implicit exception's message never reaches the state this test is
+    // about, and is skipped rather than failed.
+    assumeTrue(
+      hottest instanceof ClassCastException && hottest.getMessage() == null,
+      () -> "the cast kept its message through " + WARMING_LIMIT + " refusals: " + hottest
+    );
+    final var hot = List.of(outcome(generatedPath), outcome(reflectivePath));
+
+    final var owed = unorderable("java.util.TreeMap", "though its type implements Comparable").replace(
+      "%s",
+      PACKAGE + ".Smkh"
+    );
+    assertEquals(List.of(owed, owed, owed, owed), List.of(cold.get(0), cold.get(1), hot.get(0), hot.get(1)));
+  }
+
+  /**
+   * The cause of the refusal {@code mapper} gives {@code source}, or null when it does not refuse.
+   */
+  private static Throwable castOf(final Mapper<Object, Object> mapper, final Object source) {
+    try {
+      mapper.forward(source);
+      return null;
+    } catch (final IllegalStateException e) {
+      return e.getCause();
+    }
   }
 
   /** The two compilations of a cell and what the tests need from them. */
@@ -317,9 +389,10 @@ class SortedMapKeyParityTest {
 
   /**
    * What an attempt gives: "nothing thrown", or the thrown exception as its simple class name and
-   * message followed by its cause's after {@code <-}. A JDK cast's message ends with a
-   * parenthesised account of the class loaders involved, which differ between the two paths, so it
-   * is cut there.
+   * message followed by the class of each cause after {@code <-}. A cause's message is left out:
+   * HotSpot replaces an implicit exception that compiled code throws often with a preallocated one
+   * whose message is null, so the same cast reads differently from one call to the next, and the
+   * class is what both paths are held to.
    */
   private static String outcome(final Attempt attempt) {
     try {
@@ -333,13 +406,11 @@ class SortedMapKeyParityTest {
   }
 
   private static String rendered(final Throwable thrown) {
-    final var message = String.valueOf(thrown.getMessage());
-    final var loaders = message.indexOf(" (");
-    final var own =
-      thrown.getClass().getSimpleName() +
-      ": " +
-      (thrown instanceof ClassCastException && loaders >= 0 ? message.substring(0, loaders) : message);
-    return thrown.getCause() == null ? own : own + " <- " + rendered(thrown.getCause());
+    final var out = new StringBuilder(thrown.getClass().getSimpleName()).append(": ").append(thrown.getMessage());
+    for (var cause = thrown.getCause(); cause != null; cause = cause.getCause()) {
+      out.append(" <- ").append(cause.getClass().getSimpleName());
+    }
+    return out.toString();
   }
 
   @SuppressWarnings("unchecked")
