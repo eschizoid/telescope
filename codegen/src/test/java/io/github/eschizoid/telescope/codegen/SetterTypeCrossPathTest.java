@@ -9,6 +9,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -444,6 +445,83 @@ class SetterTypeCrossPathTest {
   @SuppressWarnings("unchecked")
   private static ForwardMapper<Object, Object> mapperForward(final Class<?> from, final Class<?> to) {
     return Telescope.mapperForward((Class<Object>) from, (Class<Object>) to);
+  }
+
+  /** Boxed properties whose chosen setter takes a primitive, directly or as a varargs component. */
+  private static final List<Case> NULL_CASES = List.of(
+    new Case(
+      "an Integer getter with setX(int)",
+      "Integer",
+      "public void setCount(final int c) { this.count = c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Integer getter with setX(long)",
+      "Integer",
+      "public void setCount(final long c) { this.count = (int) c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Integer getter with setX(int...)",
+      "Integer",
+      "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "an Integer getter with setX(int...) and setX(long)",
+      "Integer",
+      "public void setCount(final int... c) { this.count = -4; }\n" +
+        "  public void setCount(final long c) { this.count = (int) c; }",
+      Writes.BOTH
+    ),
+    new Case(
+      "a Long getter with setX(long)",
+      "Long",
+      "public void setCount(final long c) { this.count = c; }",
+      Writes.BOTH
+    )
+  );
+
+  @Test
+  @DisplayName("a null bound for a primitive setter is skipped by the bridge, the mapper, into and the lens alike")
+  void aNullBoundForAPrimitiveSetterIsSkippedOnEveryPath() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var c : NULL_CASES) {
+      final var prefix = "Stz" + index++;
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        bean(prefix, "", c),
+        source(prefix + "Src", "@io.github.eschizoid.telescope.annotations.Bridge(" + prefix + "Bean.class)", c)
+      );
+      if (!compilation.success()) {
+        failures.add(c.name() + ": the bridge does not compile: " + compilation.errorMessages().strip());
+        continue;
+      }
+      final var classes = compilation.define(MethodHandles.lookup());
+      final var bean = classes.get(PACKAGE + "." + prefix + "Bean");
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var forward = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src);
+      final var empty = src.getConstructors()[0].newInstance(null, "Ada");
+      final var outcomes = new LinkedHashMap<String, String>();
+      outcomes.put("bridge", outcome(() -> describe(bean, forward.invoke(null, empty))));
+      outcomes.put("mapper", outcome(() -> describe(bean, mapper(src, bean).forward(empty))));
+      outcomes.put(
+        "into",
+        outcome(() -> describe(bean, mapper(src, bean).into(bean.getConstructor().newInstance(), empty)))
+      );
+      outcomes.put("lens", outcome(() -> describe(bean, beanSet(bean, "count", null))));
+      final var owed = Map.of("bridge", "Ada/null", "mapper", "Ada/null", "into", "Ada/null", "lens", "null/null");
+      for (final var entry : outcomes.entrySet()) {
+        if (!entry.getValue().equals(owed.get(entry.getKey()))) {
+          failures.add(
+            c.name() + ": the " + entry.getKey() + " built " + entry.getValue() + ", owed " + owed.get(entry.getKey())
+          );
+        }
+      }
+    }
+    assertEquals(List.of(), failures, () -> String.join("\n", failures));
   }
 
   /** A new bean with {@code count} set to {@code value} through the generated navigator. */

@@ -4410,11 +4410,10 @@ class CrossPathCorpusTest {
    * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
    */
   private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
-    // Generated-only, not a defect: a runtime row's forward function returns the property's
-    // own
-    // type, so no runtime mapper hands the setter a value of any other type. A @Transform can
-    // return a type the setter chosen from the property's type cannot take; the bridge then
-    // passes it as it is, and javac binds the overload that takes it.
+    // Generated-only, not a defect. A runtime row's forward function returns the property's
+    // own type, so no runtime mapper hands a setter a value of any other type. A @Transform
+    // can return a type the setter chosen from the property's type cannot take; the bridge
+    // then passes the value as it is, and javac binds the overload that takes it.
     "a transform result the setter chosen from the property's type cannot take",
     "Object:x"
   );
