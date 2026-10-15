@@ -3,10 +3,7 @@ package io.github.eschizoid.telescope.codegen;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
-import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
-import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
-import io.github.eschizoid.telescope.internal.pairing.SetterFit;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -317,121 +314,26 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Which method writes a bean property, as {@link PairingRules#chooseSetter} picks it among {@code
-   * candidates}, every public instance method of one parameter named after the property's setter,
-   * inherited ones included. {@code member} is null when there are none or no single one is chosen;
-   * {@code writeType} is its parameter type as a member of the bean, {@code fit} how the property's
-   * read type reaches it, and {@code spreads} whether the value reaches it only as the one element
-   * of its variable-arity array. {@code argument} is the type a single value is passed to it as:
-   * the parameter, or its component where the value spreads. {@code argumentText} is that type as a
-   * generated local declares it, its erasure where it names a type variable only the method
-   * declares. {@code argumentType} is {@code argumentText} where the setter has overloads, the case
-   * in which a generated call assigns its value to such a local so javac binds the chosen method,
-   * and null otherwise.
-   */
-  record SetterChoice(
-    ExecutableElement member,
-    TypeMirror writeType,
-    SetterFit fit,
-    List<ExecutableElement> candidates,
-    boolean spreads,
-    TypeMirror argument,
-    String argumentText,
-    String argumentType
-  ) {}
-
-  /**
    * The setter choice for {@code property} of {@code type}, made by the rule the runtime writers
    * apply, so a generated call and a reflective one write through the same method.
    */
-  SetterChoice setterChoice(final TypeElement type, final String property) {
-    final var setter = "set" + capitalize(property);
-    final var types = processingEnv.getTypeUtils();
-    final var candidates = new ArrayList<ExecutableElement>();
-    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))) {
-      if (isPublicInstance(m) && m.getParameters().size() == 1 && m.getSimpleName().contentEquals(setter)) {
-        candidates.add(m);
-      }
-    }
-    if (candidates.isEmpty()) return new SetterChoice(null, null, null, List.of(), false, null, null, null);
-    final var writeTypes = new ArrayList<TypeMirror>(candidates.size());
-    final var erased = new ArrayList<TypeMirror>(candidates.size());
-    final var components = new ArrayList<TypeMirror>(candidates.size());
-    for (final var m : candidates) {
-      final var member = (
-        (ExecutableType) types.asMemberOf((DeclaredType) type.asType(), m)
-      ).getParameterTypes().getFirst();
-      final var erasure = types.erasure(member);
-      writeTypes.add(member);
-      erased.add(erasure);
-      components.add(m.isVarArgs() && erasure instanceof ArrayType array ? array.getComponentType() : null);
-    }
-    final var read = getterType(type, property);
-    if (read == null) {
-      return candidates.size() == 1
-        ? new SetterChoice(
-            candidates.getFirst(),
-            writeTypes.getFirst(),
-            SetterFit.SAME,
-            candidates,
-            false,
-            writeTypes.getFirst(),
-            null,
-            null
-          )
-        : new SetterChoice(null, null, null, candidates, false, null, null, null);
-    }
-    final var readErasure = types.erasure(read);
-    final var index = setterRules().chooseSetter(readErasure, erased, components);
-    if (index < 0) return new SetterChoice(null, null, null, candidates, false, null, null, null);
-    final var spreads = setterRules().spreads(readErasure, erased.get(index), components.get(index));
-    final var argument = spreads ? ((ArrayType) writeTypes.get(index)).getComponentType() : writeTypes.get(index);
-    final var argumentText = mirrorProps().mentionsTypeVariable(argument)
-      ? types.erasure(argument).toString()
-      : argument.toString();
-    return new SetterChoice(
-      candidates.get(index),
-      writeTypes.get(index),
-      setterRules().setterFit(readErasure, erased.get(index), components.get(index)),
-      candidates,
-      spreads,
-      argument,
-      argumentText,
-      candidates.size() > 1 ? argumentText : null
-    );
+  MirrorSetters.SetterChoice setterChoice(final TypeElement type, final String property) {
+    return mirrorSetters().choose(type, property, getterType(type, property));
   }
 
   /**
    * Why {@code property} of {@code type} cannot be written through its setter, or null: several
    * setters bind its value equally, or, unless {@code writeOnly}, the setter takes a type a value
-   * of the property's own type cannot be passed to. A write-only caller converts its value to the
-   * setter's own type, so only an ambiguous choice refuses it. The messages are the ones the
-   * runtime writers refuse with.
+   * of the property's own type cannot be passed to without a cast. A write-only caller converts its
+   * value to the setter's own type, so only an ambiguous choice refuses it. The messages are the
+   * ones the runtime writers refuse with.
    */
   protected String setterRefusal(final TypeElement type, final String property, final boolean writeOnly) {
-    final var choice = setterChoice(type, property);
-    final var read = getterType(type, property);
-    if (choice.candidates().isEmpty() || read == null) return null;
-    if (choice.member() == null) {
-      return PairingMessages.ambiguousSetters(
-        type.getSimpleName().toString(),
-        property,
-        read.toString(),
-        choice
-          .candidates()
-          .stream()
-          .map(m -> m.getSimpleName() + "(" + m.getParameters().getFirst().asType() + ")")
-          .sorted()
-          .toList()
-      );
-    }
-    if (writeOnly || choice.fit().compiles()) return null;
-    return PairingMessages.setterCannotTake(
-      type.getSimpleName().toString(),
+    return mirrorSetters().refusal(
+      type,
       property,
-      choice.member().getSimpleName() + "(" + choice.member().getParameters().getFirst().asType() + ")",
-      read.toString(),
-      choice.writeType().toString()
+      getterType(type, property),
+      writeOnly ? MirrorSetters.Write.CONVERTED : MirrorSetters.Write.GENERATED
     );
   }
 
@@ -443,9 +345,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return null;
   }
 
-  private PairingRules<TypeMirror> setterRules() {
-    if (setterRules == null) setterRules = new PairingRules<>(mirrorProps());
-    return setterRules;
+  private MirrorSetters mirrorSetters() {
+    if (mirrorSetters == null) {
+      mirrorSetters = new MirrorSetters(processingEnv.getTypeUtils(), processingEnv.getElementUtils(), mirrorProps());
+    }
+    return mirrorSetters;
   }
 
   MirrorProps mirrorProps() {
@@ -858,7 +762,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   // child whose navigator is written at all.
   private boolean inFinalRound;
 
-  private PairingRules<TypeMirror> setterRules;
+  private MirrorSetters mirrorSetters;
 
   private MirrorProps mirrorProps;
 

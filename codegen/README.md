@@ -326,6 +326,11 @@ It never rejects a call that the runtime would build:
 - A `constant` or `compute` row turns off the completeness check, because the runtime also skips the completeness check
   for such a mapper.
 - `mapperForward` checks the rows it is given and does not require every field to be covered.
+- A bean property whose setter cannot take its getter's type is reported only where the runtime is certain to write it
+  through that setter: the bean has no static `builder()` and no public constructor taking every property, the call has
+  no `writeBean` or `writeBeans` hint, and a nested pair has no `@Bridge` of its own in sight. A bridge that a carrier
+  declares in a module compiled separately is registered only as a service, which the verifier cannot read, so a call
+  relying on one for such a pair needs `@UncheckedMapping` or `-Atelescope.verify=warn`.
 
 The verifier is on whenever the processor is on the path, and it takes the options below:
 
