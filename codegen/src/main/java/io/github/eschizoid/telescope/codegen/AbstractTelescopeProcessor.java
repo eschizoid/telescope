@@ -1685,28 +1685,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var holderName = pojoBaseName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
-    // The caller has already rejected any POJO carrying an un-emittable property, before either
-    // artifact was written. This loop is the holder's own guard for callers that reach it by
-    // another route.
-    for (final var p : props) {
-      if (!isEmittableAsTypedConstant(p.type())) {
-        error(
-          pojo,
-          triggerLabel +
-            ": cannot emit metadata constant for property '" +
-            p.name() +
-            "' of type '" +
-            p.type() +
-            "'" +
-            unemittableReason(p.type()) +
-            ". Remove " +
-            triggerLabel +
-            " from this class to use the runtime path."
-        );
-        return;
-      }
-    }
-
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var p : props) collectStdImports(p.type(), extraImports);
     // The holder also exposes a static construct(Function<String, Object>) so the runtime forward
