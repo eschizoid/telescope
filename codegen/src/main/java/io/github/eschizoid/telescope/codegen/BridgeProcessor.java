@@ -7042,33 +7042,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private static final Pattern CALL_OR_NEW = Pattern.compile("[\\w$]\\s*\\(|\\bnew\\b");
 
   /**
-   * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package,
-   * every argument that calls a method or creates an instance is first evaluated into a {@code
-   * final} local, and the call names the locals. Null {@code hoistInto} emits every argument
-   * inline.
+   * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package, an
+   * argument that calls a method or creates an instance is first evaluated into a {@code final}
+   * local, and the call names the local. Null {@code hoistInto} emits every argument inline.
    *
    * <p>javac emits the {@code new} of a constructor call before the code of its arguments, so an
    * argument that allocates, such as a nested bridge's {@code forward}, allocates after the outer
    * object. Evaluating the arguments first puts the outer allocation last, directly ahead of the
    * constructor that writes its fields.
    *
-   * <p>The locals are evaluated in parameter order, which is the order the call evaluated its
-   * arguments in, and an argument left inline neither calls nor creates anything, so nothing
-   * observable moves. A slot stays inline when its type cannot be written from the bridge's
-   * package: a type variable the static method does not declare, or a class it cannot name.
+   * <p>Arguments are evaluated in parameter order either way, which is the order the runtime
+   * converts the components in. The locals come first, in parameter order, and then the call, whose
+   * remaining arguments run in parameter order after them. So a local is declared only for an
+   * argument ahead of every inline one that calls or creates something: once an argument that does
+   * has to stay inline, every argument after it stays inline too. A local is declared with the
+   * argument's type, or with its erasure where the type names a type variable the static method
+   * does not declare; an argument stays inline when the bridge's package cannot name that.
    */
   private String construct(final TypeElement to, final List<CtorSlot> slots, final String hoistInto) {
     final var toFq = to.getQualifiedName().toString();
     final var types = processingEnv.getTypeUtils();
     final var erased = erasedArguments(to, slots);
-    final var hoisted =
-      hoistInto == null
-        ? Set.<String>of()
-        : slots
-            .stream()
-            .filter(slot -> CALL_OR_NEW.matcher(slot.expr()).find() && writableFrom(slot.type(), hoistInto))
-            .map(CtorSlot::name)
-            .collect(Collectors.toUnmodifiableSet());
+    final var localTypes = new LinkedHashMap<String, TypeMirror>();
+    if (hoistInto != null) {
+      for (final var slot : slots) {
+        if (!CALL_OR_NEW.matcher(slot.expr()).find()) continue;
+        final var local = mirrorProps().mentionsTypeVariable(slot.type()) ? types.erasure(slot.type()) : slot.type();
+        if (!writableFrom(local, hoistInto)) break;
+        localTypes.put(slot.name(), local);
+      }
+    }
+    final var hoisted = localTypes.keySet();
     final var args = slots
       .stream()
       .map(slot ->
@@ -7085,7 +7089,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sb = new StringBuilder("{ ");
     for (final var slot : slots) {
       if (!hoisted.contains(slot.name())) continue;
-      sb.append("final ").append(slot.type()).append(" __cv_").append(slot.name()).append(" = ");
+      sb.append("final ").append(localTypes.get(slot.name())).append(" __cv_").append(slot.name()).append(" = ");
       sb.append(slot.expr()).append("; ");
     }
     return sb.append("return ").append(call).append("; }").toString();
