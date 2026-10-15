@@ -376,7 +376,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return member == null ? null : member.getParameters().getFirst().asType();
   }
 
-  private ExecutableElement builderSetterMember(final TypeElement builderType, final String property) {
+  protected ExecutableElement builderSetterMember(final TypeElement builderType, final String property) {
     final var set = "set" + capitalize(property);
     final var with = "with" + capitalize(property);
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
