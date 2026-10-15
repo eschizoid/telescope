@@ -2347,7 +2347,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
-    if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
+    if (carrierEl != null) {
+      emitBridgeProvider(source, target, bridgeName, pkg);
+      emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
+    }
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.Telescope");
@@ -5844,6 +5847,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       bridgeProviders.add(qualifiedProvider);
     } catch (final IOException e) {
       error(source, "Failed to write " + qualifiedProvider + ": " + e.getMessage());
+    }
+  }
+
+  /**
+   * Write the marker that tells a compilation with the carrier only on its class path that the pair
+   * of {@code source} and {@code target} has a bridge of its own ({@link CarrierMarkers}). It holds
+   * the bridge's name, which nothing reads; the marker's presence is the answer.
+   */
+  private void emitCarrierMarker(
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement carrier,
+    final String qualifiedBridge
+  ) {
+    final var elements = processingEnv.getElementUtils();
+    final var name = CarrierMarkers.relativeName(
+      elements.getBinaryName(source).toString(),
+      elements.getBinaryName(target).toString()
+    );
+    try {
+      final var file = processingEnv.getFiler().createResource(StandardLocation.CLASS_OUTPUT, "", name, carrier);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        out.println(qualifiedBridge);
+      }
+    } catch (final IOException e) {
+      error(carrier, "Failed to write " + name + ": " + e.getMessage());
     }
   }
 
