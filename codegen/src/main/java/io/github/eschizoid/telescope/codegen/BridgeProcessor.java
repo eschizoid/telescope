@@ -7014,37 +7014,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The type a generated call hands the chosen setter of {@code to} its value as, so that javac
-   * binds that setter and no other overload. The bridge names a generic class raw, and a raw
-   * class's members take the erasure of their declared parameters, so there it is the erasure of
-   * the chosen setter's declared parameter: an inherited {@code setV(T)} that {@code Tgt extends
-   * Base<String>} reads as {@code setV(String)} is {@code setV(Object)} on the raw {@code Tgt}, and
-   * a {@code String} argument would bind an overload such as {@code setV(CharSequence)} instead.
-   * Elsewhere it is the parameter as a member of {@code to}. Where the value spreads into a
-   * variable-arity setter, it is the array's component.
+   * binds that setter and no other overload. The bridge names a generic class raw, and every member
+   * of a raw class takes the erasure of its declared parameter, so there it is that erasure: an
+   * inherited {@code setV(T)} that {@code Tgt extends Base<String>} reads as {@code setV(String)}
+   * is {@code setV(Object)} on the raw {@code Tgt}, and a {@code String} argument would bind an
+   * overload such as {@code setV(CharSequence)} instead. On a class with no type parameters it is
+   * the parameter as a member of {@code to}. Where the value spreads into a variable-arity setter,
+   * it is the array's component.
    */
   private TypeMirror boundArgument(final TypeElement to, final MirrorSetters.SetterChoice choice) {
-    if (!erasedOnRawCall(to, choice)) return choice.argument();
+    if (to.getTypeParameters().isEmpty() || choice.member() == null) return choice.argument();
     final var declared = processingEnv.getTypeUtils().erasure(choice.member().getParameters().getFirst().asType());
     return choice.spreads() && declared instanceof ArrayType array ? array.getComponentType() : declared;
   }
 
   /** {@link #boundArgument} as a generated local declares it. */
   private String boundArgumentText(final TypeElement to, final MirrorSetters.SetterChoice choice) {
-    return erasedOnRawCall(to, choice) ? boundArgument(to, choice).toString() : choice.argumentText();
-  }
-
-  /**
-   * Whether the chosen setter of {@code to} takes a different type through the raw class than as a
-   * member of it: {@code to} is generic and the setter's declared parameter names a type variable.
-   * A parameter naming none erases to the erasure of the type it has as a member, so a value of
-   * that type binds the same setter either way.
-   */
-  private boolean erasedOnRawCall(final TypeElement to, final MirrorSetters.SetterChoice choice) {
-    return (
-      !to.getTypeParameters().isEmpty() &&
-      choice.member() != null &&
-      mirrorProps().mentionsTypeVariable(choice.member().getParameters().getFirst().asType())
-    );
+    return to.getTypeParameters().isEmpty() || choice.member() == null
+      ? choice.argumentText()
+      : boundArgument(to, choice).toString();
   }
 
   /** One constructor argument: the parameter it fills, its declared type, and its expression. */
@@ -7104,15 +7092,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The slots of a constructor call into {@code to} whose argument is passed as the erasure of its
-   * declared type. The bridge names a generic class raw, so a constructor parameter typed by its
+   * The slots of a call to a generic record's canonical constructor whose argument is passed as the
+   * erasure of its declared type. The bridge names the record raw, so a component typed by its
    * variable takes the erasure, and an argument of a narrower type binds another constructor of the
-   * same arity that takes that type, where the runtime calls the one the rebuild chose. Passed as
-   * the erasure, the argument binds that constructor alone. Empty where {@code to} has no other
-   * constructor of the call's arity.
+   * same arity that takes that type, where the runtime calls the canonical one. Passed as the
+   * erasure, the argument binds the canonical constructor alone. Empty where the record has no
+   * other constructor of the call's arity. A generic bean with a second constructor of its
+   * name-matched constructor's arity is refused before its rebuild is emitted, so a bean has no
+   * such call.
    */
   private Set<String> erasedArguments(final TypeElement to, final List<CtorSlot> slots) {
-    if (to.getTypeParameters().isEmpty()) return Set.of();
+    if (to.getKind() != ElementKind.RECORD || to.getTypeParameters().isEmpty()) return Set.of();
     final var sameArity = ElementFilter.constructorsIn(to.getEnclosedElements())
       .stream()
       .filter(c -> c.getParameters().size() == slots.size())
