@@ -61,6 +61,18 @@ public interface BridgeFn<A, B> {
   }
 
   /**
+   * Whether a {@code @Bridge} names this bridge's pair. A bridge {@code @Bridge} generates for the
+   * pair it names does. One the processor derives for a nested pair with no {@code @Bridge} of its
+   * own does not: it carries the configuration of whichever bridges reached that pair, not the
+   * pair's. A runtime mapper converts a nested pair through a bridge named {@code
+   * <Source>To<Target>Bridge} only when this is true. False by default, so a bridge written by hand
+   * or generated without this method is not read under that name.
+   */
+  default boolean declaresPair() {
+    return false;
+  }
+
+  /**
    * Whether this bridge lists the properties it does not walk in {@link
    * #unwalkedSourceProperties()} and {@link #unwalkedTargetProperties()}. A bridge {@code @Bridge}
    * generates does, even when both lists are empty. False by default: a runtime mapper then reads

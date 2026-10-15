@@ -5064,6 +5064,34 @@ class CrossPathCorpusTest {
       "#0(iban=\"NL02\", rank=7)"
     ),
     new SealedCell(
+      "two sealed roots, one case renaming a property through the bridge it declares beside one to another target",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sBankDto(\"NL01\", 1); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n",
+          "public record %1$sBankView(String iban, int rank) {}\n"
+        ),
+        sealedCases(
+          "%1$sSrc",
+          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
+            "source = \"iban\", target = \"account\"))\n" +
+            SEALED_HEAD +
+            "%1$sBankView.class",
+          "String account"
+        )
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      "#0(account=\"DE89\", rank=2)",
+      "#0(iban=\"NL01\", rank=1)",
+      "#0(iban=\"NL02\", rank=7)"
+    ),
+    new SealedCell(
       "a sealed root in a field",
       concat(
         concat(
@@ -5813,17 +5841,10 @@ class CrossPathCorpusTest {
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
   private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
-    // A defect still to close: the runtime reads only a short-form bridge, and a source
-    // declaring
-    // two targets gets long-form names, which the processor also gives the bridges it
-    // derives.
-    "an enum pair below a sub-pair whose source declares a bridge to two targets, one with a transform",
-    "%1$sEa has no constant named C, which the backward direction needs",
     // A defect still to close: a sub-pair that reaches back to a pair being converted around
-    // it is
-    // walked, because the runtime's guard against an object reaching itself does not pass
-    // through
-    // a generated bridge.
+    // it
+    // is walked, because the runtime's guard against an object reaching itself does not pass
+    // through a generated bridge.
     "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
     "%1$sEa has no constant named C, which the backward direction needs"
   );

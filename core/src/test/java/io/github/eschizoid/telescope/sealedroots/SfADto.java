@@ -1,3 +1,3 @@
 package io.github.eschizoid.telescope.sealedroots;
 
-public record SfADto(int x) implements SfShapeDto {}
+public record SfADto(int width) implements SfShapeDto {}

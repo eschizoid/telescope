@@ -646,9 +646,9 @@ public final class PairingMessages {
 
   /**
    * A case with a generated bridge to a case of the sealed target only under the long-form name,
-   * which the runtime does not pair cases through.
+   * whose bridge does not declare its pair, which the runtime does not pair cases through.
    */
-  public static String longFormCaseBridge(
+  public static String undeclaredCaseBridge(
     final String source,
     final String target,
     final String sourceCase,
@@ -668,8 +668,13 @@ public final class PairingMessages {
       targetCase +
       " only as " +
       bridgeName +
-      ", the name the processor gives the bridges of a @Bridge naming several targets, and the" +
-      " runtime does not yet pair cases by a @Bridge naming several targets. Add a cases(" +
+      ", which does not declare its pair: the processor derives a bridge under that name for a pair" +
+      " another bridge reaches, with that bridge's configuration rather than the case's, and a" +
+      " bridge an older processor generated does not say whether it declares one. Give " +
+      sourceCase +
+      " a @Bridge to " +
+      targetCase +
+      " or re-run the @Bridge processor, or add a cases(" +
       sourceCase +
       ".class, " +
       targetCase +

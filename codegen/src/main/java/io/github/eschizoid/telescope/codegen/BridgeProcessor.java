@@ -2401,7 +2401,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
-        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, unwalkedSource, unwalkedTarget);
+        emitBridgeHandles(
+          out,
+          namesRaw,
+          bridgeName,
+          sourceFq,
+          targetFq,
+          declares(thisPair),
+          unwalkedSource,
+          unwalkedTarget
+        );
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
       }
@@ -2656,7 +2665,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    };");
         out.println("  }");
         out.println();
-        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, Set.of(), Set.of());
+        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, declares(ownPair), Set.of(), Set.of());
       }
     );
   }
@@ -2664,7 +2673,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The {@code Fn} class, {@code BRIDGE_FN} and {@code BRIDGE}, each typed over the two classes as
    * {@code forward} and {@code backward} name them. {@code suppression} is the line each carries,
-   * or empty. The two sets are the properties of each side the bridge does not walk.
+   * or empty. {@code declared} says a {@code @Bridge} names the pair. The two sets are the
+   * properties of each side the bridge does not walk.
    */
   private static void emitBridgeHandles(
     final PrintWriter out,
@@ -2672,6 +2682,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgeName,
     final String sourceFq,
     final String targetFq,
+    final boolean declared,
     final Set<String> unwalkedSource,
     final Set<String> unwalkedTarget
   ) {
@@ -2693,6 +2704,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".patch(base, partial);");
     out.println("    }");
     out.println();
+    if (declared) {
+      out.println("    @Override");
+      out.println("    public boolean declaresPair() {");
+      out.println("      return true;");
+      out.println("    }");
+      out.println();
+    }
     out.println("    @Override");
     out.println("    public boolean declaresUnwalkedProperties() {");
     out.println("      return true;");
@@ -5407,6 +5425,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * The configuration a {@code @Bridge} declares for {@code pair}, held back or not, or null when
+   * no {@code @Bridge} names it. See {@link #bridgeNameOf}.
+   */
+  private BridgeConfig configOf(final TypePair pair) {
+    return configsByPair.containsKey(pair) ? configsByPair.get(pair) : deferredConfigs.get(pair);
+  }
+
+  /**
+   * Whether a {@code @Bridge} names {@code pair}, which its bridge says through {@code
+   * declaresPair()} so a runtime mapper can tell it from a bridge derived under the same long name.
+   */
+  private boolean declares(final TypePair pair) {
+    return configOf(pair) != null;
+  }
+
+  /**
    * The name and package of a pair's bridge. This is the only place either is decided: the bridge
    * is written under it and every other bridge refers to it through it, so a reference cannot name
    * a class nothing writes.
@@ -5430,7 +5464,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var elements = processingEnv.getElementUtils();
     final var sourceFq = source.getQualifiedName().toString();
     final var pair = new TypePair(sourceFq, target.getQualifiedName().toString());
-    final var cfg = configsByPair.containsKey(pair) ? configsByPair.get(pair) : deferredConfigs.get(pair);
+    final var cfg = configOf(pair);
     final var carrierEl = cfg == null || cfg.carrierFq() == null ? null : elements.getTypeElement(cfg.carrierFq());
     if (carrierEl != null) {
       return new BridgeName(
