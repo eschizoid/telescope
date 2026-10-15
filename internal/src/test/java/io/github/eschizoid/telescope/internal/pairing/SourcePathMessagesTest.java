@@ -63,4 +63,15 @@ class SourcePathMessagesTest {
       PairingMessages.sourcePathWroteOffSource("Sub", "Dto", "to", "Base")
     );
   }
+
+  @Test
+  @DisplayName("a via mapper handed a property it never takes names the side, the property and the mapper's class")
+  void viaMapperNeverFits() {
+    assertEquals(
+      "Deep map Src → Tgt: via row hands the source's 'children' to a mapper of Ch, but it never holds a Ch, nor" +
+        " is it a List, Set, Optional or map's values of one. Give the row a mapper of the whole property, or" +
+        " of the elements of one of those containers.",
+      PairingMessages.viaMapperNeverFits("Src", "Tgt", "source", "children", "Ch")
+    );
+  }
 }

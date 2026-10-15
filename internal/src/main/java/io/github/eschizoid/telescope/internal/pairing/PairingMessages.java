@@ -93,6 +93,37 @@ public final class PairingMessages {
     return type.getSimpleName().isEmpty() ? type.getName() : type.getSimpleName();
   }
 
+  /**
+   * A {@code via} row, or a {@code @ViaMapper}, whose mapper is handed one side's property as it
+   * is, though no value of that property can be an instance of the class the mapper converts on
+   * that side: the property is not a List, Set, Optional or a map's values the mapper's elements
+   * lift over, so every call would fail.
+   */
+  public static String viaMapperNeverFits(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String mapperClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row hands the " +
+      side +
+      "'s '" +
+      property +
+      "' to a mapper of " +
+      mapperClass +
+      ", but it never holds a " +
+      mapperClass +
+      ", nor is it a List, Set, Optional or map's values of one. Give the row a mapper of the whole" +
+      " property, or of the elements of one of those containers."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed source field. */
   public static String duplicateSourceRow(final String source, final String target, final String srcField) {
     return (

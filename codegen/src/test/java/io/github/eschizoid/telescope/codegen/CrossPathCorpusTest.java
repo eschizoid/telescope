@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
 import java.lang.invoke.MethodHandles;
@@ -4865,7 +4866,9 @@ class CrossPathCorpusTest {
 
   /** The simple name of the one top-level type {@code code} declares. */
   private static String declaredName(final String code) {
-    final var matcher = Pattern.compile("public (?:class|record|enum|@interface) (\\w+)").matcher(code);
+    final var matcher = Pattern.compile(
+      "public (?:sealed interface|interface|class|record|enum|@interface) (\\w+)"
+    ).matcher(code);
     if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
     return matcher.group(1);
   }
@@ -6877,27 +6880,6 @@ class CrossPathCorpusTest {
       )
     ),
     new UncheckedConversion(
-      "a @ViaMapper whose forward takes a class the variable's bound does not reach",
-      "child",
-      List.of(
-        "public record %1$sCh(String name) {}\n",
-        "public record %1$sOther(String name) {}\n",
-        "public record %1$sChDto(String name) {}\n",
-        "public class %1$sChMap {\n" +
-          "  public static %1$sChDto forward(final %1$sOther c) { return new %1$sChDto(c.name()); }\n" +
-          "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
-        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
-        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"q\"))"),
-        "public class %1$sRuntime {\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static Object mapper() {\n" +
-          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sOther.class, %1$sChDto.class);\n" +
-          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
-          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
-          " child));\n  }\n}\n"
-      )
-    ),
-    new UncheckedConversion(
       "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
       "child",
       List.of(
@@ -7059,17 +7041,6 @@ class CrossPathCorpusTest {
       List.of(
         REFUSED + "@ViaMapper forward returns",
         "child=OtherDto[name=a], a OtherDto",
-        REFUSED + "ClassCastException"
-      )
-    ),
-    // A defect still to close: the runtime builds a via row whose mapper cannot take the
-    // property's values and throws a bare ClassCastException on each call, where the
-    // processor refuses the row by name.
-    Map.entry(
-      "a @ViaMapper whose forward takes a class the variable's bound does not reach",
-      List.of(
-        REFUSED + "@ViaMapper forward takes no value",
-        REFUSED + "ClassCastException",
         REFUSED + "ClassCastException"
       )
     ),
@@ -7597,9 +7568,26 @@ class CrossPathCorpusTest {
       );
     }
     // A whole-list overload whose result is the method's own variable gives what the call site
-    // infers, so it counts as converting the whole property. On a source generic over its
-    // element the bridge holds the property raw and refuses such a result by name, before and
-    // after element mappers were lifted; ViaMapperContainerShapeTest pins that.
+    // infers, so it counts as converting the whole property where the bridge reads the property
+    // as declared. On a source generic over its element the bridge holds the property raw, and a
+    // call handed a raw argument erases its result, so nothing is inferred: the element methods
+    // are lifted, as the runtime lifts its mapper.
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class also converts the whole list into an inferred result, a source generic over its element",
+        WHOLE_LIST_INFERRED,
+        containerSource(true, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:A]",
+        "children=[Ch:q]"
+      )
+    );
     rows.add(
       new ViaContainer(
         "a List property whose mapper class also converts the whole list into an inferred result",
@@ -7752,6 +7740,194 @@ class CrossPathCorpusTest {
     return (
       value.getClass().getSimpleName().replace(prefix, "") + ":" + value.getClass().getMethod("name").invoke(value)
     );
+  }
+
+  /**
+   * A {@code @ViaMapper} and the runtime {@code via} row over the same pair, whose mapper is handed
+   * a property no value of which it can take: the declarations other than the child pair, each with
+   * {@code %1$s} as the row's prefix and the last of them the runtime row, and the refusal both
+   * paths owe when the bridge and the mapper are built.
+   */
+  private record ViaNeverFits(String name, List<String> declarations, String refusal) {}
+
+  /** The refusal of a via row over {@code children} whose source holds no child. */
+  private static String childrenNeverChild() {
+    return PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh");
+  }
+
+  private static final List<ViaNeverFits> VIA_NEVER_FITS = List.of(
+    new ViaNeverFits(
+      "a List of a variable bounded by a class the mapper does not take",
+      List.of(
+        "public record %1$sOther(String name) {}\n",
+        VIA_CHILDREN + "public record %1$sSrc<X extends %1$sOther>(java.util.List<X> children) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a Map whose keys are a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.Map<X, String> children) {}\n",
+        "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a Map whose keys are the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(java.util.Map<%1$sCh, String> children) {}\n",
+        "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "an array of a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(X[] children) {}\n",
+        "public record %1$sTgt(%1$sChDto[] children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "an array of the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(%1$sCh[] children) {}\n",
+        "public record %1$sTgt(%1$sChDto[] children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a List of Lists of a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.List<java.util.List<X>> children) {}\n",
+        "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a List of Lists of the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(java.util.List<java.util.List<%1$sCh>> children) {}\n",
+        "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a property typed by a variable bounded by the child, to a mapper of another class",
+      List.of(
+        "public record %1$sOther(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sOther c) { return new %1$sChDto(c.name()); }\n" +
+          "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
+        VIA_CHILD + "public record %1$sSrc<X extends %1$sCh>(X child) {}\n",
+        "public record %1$sTgt(%1$sChDto child) {}\n",
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sOther.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "child", "%1$sOther")
+    ),
+    new ViaNeverFits(
+      "a child source into a List target",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(%1$sCh children) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "target", "children", "%1$sChDto")
+    ),
+    new ViaNeverFits(
+      "an interface the child, a record, does not implement",
+      List.of(
+        "public interface %1$sNamed { String name(); }\n",
+        VIA_CHILDREN + "public record %1$sSrc(%1$sNamed children) {}\n",
+        "public record %1$sTgt(%1$sChDto children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a sealed interface none of whose cases is the mapper's class, which is not final",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sCircle {}\n",
+        "public record %1$sCircle(String name) implements %1$sShape {}\n",
+        "public class %1$sPlain {\n" +
+          "  private String name;\n" +
+          "  public %1$sPlain() {}\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sPlain p) { return new %1$sChDto(p.getName()); }\n" +
+          "  public static %1$sPlain backward(final %1$sChDto d) { final var p = new %1$sPlain(); p.setName(d.name()); return p; }\n}\n",
+        VIA_CHILDREN + "public record %1$sSrc(%1$sShape children) {}\n",
+        "public record %1$sTgt(%1$sChDto children) {}\n",
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sPlain.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::children, %1$sTgt::children," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sPlain")
+    )
+  );
+
+  @Test
+  @DisplayName("a via row whose mapper no value of the property fits is refused by name on both paths")
+  void aViaRowWhoseMapperNoValueFitsIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : VIA_NEVER_FITS) {
+      final var prefix = "Vn" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var ownMapper = row
+        .declarations()
+        .stream()
+        .anyMatch(d -> d.contains("class %1$sChMap "));
+      final var all = concat(
+        ownMapper ? CHILD_PAIR.subList(0, 2) : CHILD_PAIR,
+        row.declarations().toArray(String[]::new)
+      )
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var refusal = row.refusal().formatted(prefix);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (processed.success() || !processed.hasError(refusal)) {
+        failures.add(row.name() + ": the processor owed the refusal, saw " + describe(processed));
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      String built;
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        built = "a mapper";
+      } catch (final InvocationTargetException e) {
+        built = String.valueOf(e.getCause());
+      }
+      if (!("java.lang.IllegalArgumentException: " + refusal).equals(built)) {
+        failures.add(row.name() + ": the runtime owed the refusal, saw " + built);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   /** Whether a compilation succeeded, or the errors it reported. */

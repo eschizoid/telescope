@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.invoke.MethodHandles;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -270,7 +271,7 @@ class ViaMapperContainerShapeTest {
   }
 
   @Test
-  @DisplayName("an element forward with a backward of the whole list is not lifted")
+  @DisplayName("an element forward with a backward of the whole list is not lifted, and is refused by name")
   void backwardOfTheWholeListIsNotLifted() {
     final var compilation = compiled(
       "Wb",
@@ -282,13 +283,13 @@ class ViaMapperContainerShapeTest {
     );
     assertFalse(compilation.success());
     assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WbChMap's forward takes no value of"),
+      compilation.hasError(PairingMessages.viaMapperNeverFits("WbSrc", "WbTgt", "source", "children", "WbCh")),
       compilation::errorMessages
     );
   }
 
   @Test
-  @DisplayName("a list of a variable whose bound excludes the element mapper's parameter is not lifted")
+  @DisplayName("a list of a variable whose bound excludes the element mapper's parameter is refused by name")
   void boundExcludingTheParameterIsNotLifted() {
     final var compilation = compiled(
       "Wn",
@@ -300,7 +301,7 @@ class ViaMapperContainerShapeTest {
     );
     assertFalse(compilation.success());
     assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WnChMap's forward takes no value of"),
+      compilation.hasError(PairingMessages.viaMapperNeverFits("WnSrc", "WnTgt", "source", "children", "WnCh")),
       compilation::errorMessages
     );
   }
@@ -423,30 +424,6 @@ class ViaMapperContainerShapeTest {
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
     assertEquals("whole", children.getFirst().getClass().getMethod("name").invoke(children.getFirst()));
-  }
-
-  @Test
-  @DisplayName(
-    "on a list of a variable, whole-list overloads returning an inferred result are not lifted and stay refused"
-  )
-  void inferredWholeListOverloadsOnAVariableElementStayRefused() {
-    final var compilation = compiled(
-      "Wg",
-      "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
-        "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n" +
-        "  @SuppressWarnings(\"unchecked\") public static <R> R forward(final java.util.List<%1$sCh> l) {" +
-        " return (R) java.util.List.of(); }\n" +
-        "  @SuppressWarnings(\"unchecked\") public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
-        " return (R) java.util.List.of(); }\n",
-      "WgSrc<X>",
-      "java.util.List<X> children",
-      "java.util.List<WgChDto> children"
-    );
-    assertFalse(compilation.success());
-    assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WgChMap's forward returns R"),
-      compilation::errorMessages
-    );
   }
 
   @Test
@@ -610,5 +587,154 @@ class ViaMapperContainerShapeTest {
       bridge.invoke(null, source)
     );
     assertInstanceOf(ClassCastException.class, failure.getCause());
+  }
+
+  /**
+   * Compiles a @ViaMapper whose mapper class {@code %1$sChMap} declares {@code body}, on a source
+   * whose {@code children} is {@code srcType} and a target whose {@code children} is {@code
+   * tgtType}, and returns the refusal the processor reports for a mapper no value fits, or null.
+   */
+  private static String neverFits(final String prefix, final String body, final String srcType, final String tgtType) {
+    final var compilation = compiled(prefix, body, prefix + "Src", srcType + " children", tgtType + " children");
+    return compilation
+      .errors()
+      .stream()
+      .map(d -> d.getMessage(java.util.Locale.ROOT))
+      .filter(m -> m.contains("never holds"))
+      .findFirst()
+      .orElse(null);
+  }
+
+  @Test
+  @DisplayName("a mapper of an array refused against a List names the array")
+  void arrayParameterIsNamed() {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("WaSrc", "WaTgt", "source", "children", PACKAGE + ".WaCh[]"),
+      neverFits(
+        "Wa",
+        "  public static %1$sChDto forward(final %1$sCh[] c) { return null; }\n" +
+          "  public static %1$sCh[] backward(final %1$sChDto d) { return null; }\n",
+        "java.util.List<WaCh>",
+        "WaChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a mapper of a sealed interface none of whose cases a class can be is refused")
+  void sealedParameterIsRefused() {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("WsrSrc", "WsrTgt", "source", "children", "Shape"),
+      neverFits(
+        "Wsr",
+        "  public sealed interface Shape permits Circle {}\n" +
+          "  public record Circle() implements Shape {}\n" +
+          "  public static class Plain { public Plain() {} }\n" +
+          "  public static %1$sChDto forward(final Shape s) { return null; }\n" +
+          "  public static Shape backward(final %1$sChDto d) { return null; }\n",
+        "WsrChMap.Plain",
+        "WsrChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a mapper of an interface a record property does not implement is refused")
+  void interfaceParameterOnARecordIsRefused() {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("WrcSrc", "WrcTgt", "source", "children", "Named"),
+      neverFits(
+        "Wrc",
+        "  public interface Named {}\n" +
+          "  public static %1$sChDto forward(final Named n) { return null; }\n" +
+          "  public static Named backward(final %1$sChDto d) { return null; }\n",
+        "WrcCh",
+        "WrcChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a mapper of an enum whose constant declares a body, handed an interface the enum does not implement, is refused"
+  )
+  void enumParameterOnAnInterfaceIsRefused() {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("WenSrc", "WenTgt", "source", "children", "Kind"),
+      neverFits(
+        "Wen",
+        "  public interface Named {}\n" +
+          "  public enum Kind { A { @Override public String toString() { return \"a\"; } } }\n" +
+          "  public static %1$sChDto forward(final Kind k) { return null; }\n" +
+          "  public static Kind backward(final %1$sChDto d) { return null; }\n",
+        "WenChMap.Named",
+        "WenChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a mapper of one interface handed another is not refused as never fitting, since a class can implement both"
+  )
+  void interfaceParameterOnAnInterfaceIsNotRefused() {
+    assertNull(
+      neverFits(
+        "Wii",
+        "  public interface Named {}\n" +
+          "  public interface Other {}\n" +
+          "  public static %1$sChDto forward(final Other o) { return null; }\n" +
+          "  public static Other backward(final %1$sChDto d) { return null; }\n",
+        "WiiChMap.Named",
+        "WiiChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a mapper class with no forward is left to javac, which rejects the call")
+  void mapperWithNoForwardIsLeftToJavac() {
+    final var compilation = compiled(
+      "Wnf",
+      "  public static %1$sCh backward(final %1$sChDto d) { return null; }\n",
+      "WnfSrc",
+      "java.util.List<WnfCh> children",
+      "WnfChDto children"
+    );
+    assertFalse(compilation.success());
+    assertTrue(compilation.hasError("cannot find symbol"), compilation::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a mapper of an interface handed a class that is not final is not refused as never fitting")
+  void interfaceParameterOnANonFinalClassIsNotRefused() {
+    assertNull(
+      neverFits(
+        "Wnc",
+        "  public interface Named {}\n" +
+          "  public static class Plain { public Plain() {} }\n" +
+          "  public static %1$sChDto forward(final Named n) { return null; }\n" +
+          "  public static Named backward(final %1$sChDto d) { return null; }\n",
+        "WncChMap.Plain",
+        "WncChDto"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a mapper of an interface handed an enum property that does not implement it is refused")
+  void interfaceParameterOnAnEnumIsRefused() {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("WneSrc", "WneTgt", "source", "children", "Named"),
+      neverFits(
+        "Wne",
+        "  public interface Named {}\n" +
+          "  public enum Kind { A }\n" +
+          "  public static %1$sChDto forward(final Named n) { return null; }\n" +
+          "  public static Named backward(final %1$sChDto d) { return null; }\n",
+        "WneChMap.Kind",
+        "WneChDto"
+      )
+    );
   }
 }

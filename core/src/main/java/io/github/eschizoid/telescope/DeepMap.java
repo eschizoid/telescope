@@ -34,6 +34,7 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
@@ -1067,7 +1068,7 @@ public final class DeepMap {
                 sealedCases,
                 forwardOnly
               )
-            : fieldIsoOf(row, srcType, tgtType);
+            : fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
@@ -1731,7 +1732,12 @@ public final class DeepMap {
    * {@code Map} values). Otherwise the element Iso is used as-is.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row, final Type srcType, final Type tgtType) {
+  private static Iso<?, ?> fieldIsoOf(
+    final Mapping<?, ?> row,
+    final Type srcType,
+    final Type tgtType,
+    final RowSides sides
+  ) {
     // Inline the contributed leaf-level Iso for each row variant. Reading the public components
     // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
     // types stay portable across packages without needing @SuppressWarnings("exports").
@@ -1764,7 +1770,7 @@ public final class DeepMap {
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides);
       // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
       // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
       // called. The cases exist only because the sealed switch must stay exhaustive — if a future
@@ -1796,7 +1802,12 @@ public final class DeepMap {
    * element-level Iso flows through unchanged (scalar / record-pair case).
    */
   @SuppressWarnings("unchecked")
-  private static Iso<?, ?> liftViaIfNeeded(final Via<?, ?> row, final Type srcType, final Type tgtType) {
+  private static Iso<?, ?> liftViaIfNeeded(
+    final Via<?, ?> row,
+    final Type srcType,
+    final Type tgtType,
+    final RowSides sides
+  ) {
     // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
     // pull the source/target classes from the same Mapper. Reading the public components inline
     // keeps Iso / Class accessors off Via's public surface.
@@ -1840,7 +1851,53 @@ public final class DeepMap {
         );
       };
     }
+    refuseUnfit(sides, "source", sides.srcField(), srcType, mapperSrc);
+    refuseUnfit(sides, "target", sides.tgtField(), tgtType, mapperTgt);
     return elementIso;
+  }
+
+  /** The pair a row converts at and the two properties it reads and writes, named for a refusal. */
+  private record RowSides(Class<?> source, Class<?> target, String srcField, String tgtField) {}
+
+  /**
+   * Refuses a {@code via} row whose mapper is handed {@code property} as it is when no value of
+   * that property can be an instance of {@code mapperClass}: every call would throw a {@code
+   * ClassCastException}. A primitive on either side counts as its wrapper.
+   */
+  private static void refuseUnfit(
+    final RowSides sides,
+    final String side,
+    final String property,
+    final Type propertyType,
+    final Class<?> mapperClass
+  ) {
+    final var held = heldClassOf(propertyType);
+    if (mayBeInstance(boxed(held), boxed(mapperClass))) return;
+    throw new IllegalArgumentException(
+      PairingMessages.viaMapperNeverFits(
+        sides.source().getSimpleName(),
+        sides.target().getSimpleName(),
+        side,
+        property,
+        mapperClass.getSimpleName()
+      )
+    );
+  }
+
+  /** {@code type}'s wrapper class when it is a primitive, and {@code type} otherwise. */
+  private static Class<?> boxed(final Class<?> type) {
+    return MethodType.methodType(type).wrap().returnType();
+  }
+
+  /**
+   * The class every value of {@code type}, a property's type, is an instance of: a type variable's
+   * bound, followed through any variable that bound names, and an array of the class its component
+   * is held as.
+   */
+  private static Class<?> heldClassOf(final Type type) {
+    if (type instanceof TypeVariable<?> variable) return boundOf(variable);
+    if (type instanceof GenericArrayType array) return heldClassOf(array.getGenericComponentType()).arrayType();
+    return rawClassOf(type);
   }
 
   /**

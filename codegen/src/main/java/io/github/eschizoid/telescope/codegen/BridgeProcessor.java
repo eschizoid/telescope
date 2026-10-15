@@ -4470,8 +4470,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!hasField(sourceFields, field) || !hasField(targetFields, tgtName)) continue;
       final var sourceOwn = fieldByName(sourceFields, field).type();
       final var targetOwn = fieldByName(targetFields, tgtName).type();
-      if (!MirrorProps.typeVariableIn(sourceOwn) && !MirrorProps.typeVariableIn(targetOwn)) continue;
       final var mapper = processingEnv.getElementUtils().getTypeElement(entry.getValue());
+      final var unfit = viaNeverFits(source, target, field, tgtName, mapper, sourceOwn, targetOwn, bridgePackage);
+      if (unfit != null) {
+        error(source, unfit);
+        return null;
+      }
+      if (!MirrorProps.typeVariableIn(sourceOwn) && !MirrorProps.typeVariableIn(targetOwn)) continue;
       if (mapper == null) continue;
       final var sourceHeld = fieldByName(paired.source(), field).type();
       final var targetHeld = fieldByName(paired.target(), tgtName).type();
@@ -4605,6 +4610,111 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * The refusal of a {@code @ViaMapper} not lifted over its property's elements whose mapper is
+   * handed a property no value of which it can take, or null. The source's property is handed to
+   * {@code forward} and the target's to {@code backward}; a side is refused when no method of that
+   * name takes a class a value of the property can be an instance of, as the reflective path
+   * refuses the same row, with the same message, naming the first such method's parameter.
+   */
+  private String viaNeverFits(
+    final TypeElement source,
+    final TypeElement target,
+    final String field,
+    final String tgtName,
+    final TypeElement mapper,
+    final TypeMirror sourceOwn,
+    final TypeMirror targetOwn,
+    final PackageElement bridgePackage
+  ) {
+    final var forward = viaSideNeverFits(mapper, "forward", sourceOwn, bridgePackage);
+    if (forward != null) {
+      return PairingMessages.viaMapperNeverFits(
+        source.getSimpleName().toString(),
+        target.getSimpleName().toString(),
+        "source",
+        field,
+        forward
+      );
+    }
+    final var backward = viaSideNeverFits(mapper, "backward", targetOwn, bridgePackage);
+    return backward == null
+      ? null
+      : PairingMessages.viaMapperNeverFits(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          "target",
+          tgtName,
+          backward
+        );
+  }
+
+  /**
+   * The simple name of the class {@code mapper}'s first {@code name} method takes, when no method
+   * of that name takes a class a value of {@code own} can be an instance of, a primitive on either
+   * side counting as its wrapper; null otherwise, and for a mapper with no such method.
+   */
+  private String viaSideNeverFits(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final PackageElement bridgePackage
+  ) {
+    final var takes = viaCandidates(mapper, name, bridgePackage)
+      .stream()
+      .map(m -> boxedErasure(m.getParameters().getFirst().asType()))
+      .toList();
+    if (takes.isEmpty()) return null;
+    final var held = boxedErasure(own);
+    if (takes.stream().anyMatch(parameter -> mayShareInstance(held, parameter))) return null;
+    final var first = processingEnv.getTypeUtils().asElement(takes.getFirst());
+    return first == null ? takes.getFirst().toString() : first.getSimpleName().toString();
+  }
+
+  /** {@code type}'s wrapper class where it is a primitive, and its erasure otherwise. */
+  private TypeMirror boxedErasure(final TypeMirror type) {
+    final var types = processingEnv.getTypeUtils();
+    return type.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) type).asType() : types.erasure(type);
+  }
+
+  /**
+   * Whether one object can be an instance of both {@code a} and {@code b}, erased types, as the
+   * reflective path decides it: one extends the other; either is sealed and one of its permitted
+   * cases can be such an instance; or one is an interface and the other is an interface or a class
+   * that is not final, which a subclass can extend to implement it. An enum is final, or sealed
+   * when its constants declare bodies, each of which is final. An array or a primitive shares an
+   * instance only with a type it extends or is extended by.
+   */
+  private boolean mayShareInstance(final TypeMirror a, final TypeMirror b) {
+    final var types = processingEnv.getTypeUtils();
+    if (types.isSubtype(a, b) || types.isSubtype(b, a)) return true;
+    if (!(types.asElement(a) instanceof TypeElement aEl) || !(types.asElement(b) instanceof TypeElement bEl)) {
+      return false;
+    }
+    if (aEl.getModifiers().contains(Modifier.SEALED)) {
+      return aEl
+        .getPermittedSubclasses()
+        .stream()
+        .anyMatch(c -> mayShareInstance(types.erasure(c), b));
+    }
+    if (bEl.getModifiers().contains(Modifier.SEALED)) {
+      return bEl
+        .getPermittedSubclasses()
+        .stream()
+        .anyMatch(c -> mayShareInstance(a, types.erasure(c)));
+    }
+    if (aEl.getKind().isInterface()) return extendableByASubclass(bEl);
+    return bEl.getKind().isInterface() && extendableByASubclass(aEl);
+  }
+
+  /**
+   * Whether a subclass of {@code type} can implement another interface: an interface, or a class
+   * that is not final.
+   */
+  private static boolean extendableByASubclass(final TypeElement type) {
+    return !type.getModifiers().contains(Modifier.FINAL);
+  }
+
+  /**
    * Whether {@code mapper} has a method named {@code name} that converts the whole property: one
    * taking the {@code from} side's container and giving what the {@code to} side's property holds,
    * as javac binds a call handed the container and written into that property. A result typed by
@@ -4624,7 +4734,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .anyMatch(
         m ->
           types.isAssignable(types.erasure(from), types.erasure(m.getParameters().getFirst().asType())) &&
-          (types.isAssignable(types.erasure(m.getReturnType()), types.erasure(to)) || inferredResult(m))
+          (types.isAssignable(types.erasure(m.getReturnType()), types.erasure(to)) ||
+            (inferredResult(m) && !MirrorProps.typeVariableIn(from)))
       );
   }
 
