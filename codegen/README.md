@@ -326,6 +326,17 @@ It never rejects a call that the runtime would build:
 - A `constant` or `compute` row turns off the completeness check, because the runtime also skips the completeness check
   for such a mapper.
 - `mapperForward` checks the rows it is given and does not require every field to be covered.
+- A bean property whose setter cannot take its getter's type is reported only where the runtime writes it through that
+  setter: the bean has no static `builder()` and no public constructor taking every property, the call has no
+  `writeBean` or `writeBeans` hint, and the pair has no `@Bridge` of its own that the verifier can see.
+
+One case is reported without being certain. A carrier `@Bridge` declared in a module compiled separately is registered
+only as a service, which the verifier cannot read. When such a carrier converts a property through a conversion of its
+own (`@Transform`, `@Compute`, `@Constant` or `@ViaMapper`), the runtime uses the bridge and never writes that property
+through its setter, but the verifier still reports the setter. This applies to a nested pair, and to the call's own pair
+for a `mapperForward` given no rows, such as `Telescope.mapperForward(Src.class, Bean.class)` whose only bridge is that
+carrier. Mark the call, or an element enclosing it, `@UncheckedMapping`, or pass `-Atelescope.verify=warn` to report it
+as a warning. [#612](https://github.com/eschizoid/telescope/issues/612) tracks letting the verifier see such a carrier.
 
 The verifier is on whenever the processor is on the path, and it takes the options below:
 

@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
@@ -13,6 +14,7 @@ import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.annotations.UncheckedMapping;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
@@ -21,6 +23,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -36,6 +39,8 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedOptions;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -81,7 +86,11 @@ import javax.tools.Diagnostic;
  * {@code toOrElse} / {@code toOrElseGet} are claims only: the runtime constructs them without a
  * shape gate, and this verifier never fires where construction succeeds. A row keyed to a type pair
  * the mapper never visits is reported with construction's refusal, but only when every row of the
- * call and every property on the walk can be read; otherwise construction decides alone.
+ * call and every property on the walk can be read; otherwise construction decides alone. Under the
+ * same condition, a bean property construction fills through a setter that cannot take the
+ * property's own type, or through one of several setters none of which takes it more specifically,
+ * is reported with construction's refusal, on the target and, for a mapper that also runs backward,
+ * on the source.
  *
  * <p>A {@code cases} row is reported when a class it names is not a permitted subclass of a sealed
  * interface, when two rows pair the same case of the two sealed interfaces the call itself maps,
@@ -110,6 +119,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String NULL_HINT_FQN = "io.github.eschizoid.telescope.mapping.NullHint";
   private static final String CASES_FQN = "io.github.eschizoid.telescope.mapping.Cases";
+  private static final Set<String> BRIDGE_FQNS = Set.of(
+    "io.github.eschizoid.telescope.annotations.Bridge",
+    "io.github.eschizoid.telescope.annotations.Bridges"
+  );
 
   /**
    * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
@@ -124,6 +137,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private MirrorProps props;
   private PairingRules<TypeMirror> rules;
   private ContainerAllocation<TypeMirror> allocation;
+  private MirrorSetters setters;
+  // The compilation units entered so far, by source file, each as last entered; every one is
+  // entered before the first call site is scanned.
+  private final Map<URI, CompilationUnitTree> units = new LinkedHashMap<>();
+  // The binary names of the classes a @Bridge in those units is on or names, read once they are all
+  // entered; null until then.
+  private Set<String> bridgeNamed;
   private Diagnostic.Kind reportKind;
   private boolean off;
   private boolean verbose;
@@ -138,6 +158,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     props = new MirrorProps(types, elements);
     rules = new PairingRules<>(props);
     allocation = new ContainerAllocation<>(props);
+    setters = new MirrorSetters(types, elements, props);
     final var mode = processingEnv.getOptions().getOrDefault("telescope.verify", "error");
     if (!"error".equals(mode) && !"warn".equals(mode) && !"off".equals(mode)) {
       processingEnv
@@ -165,6 +186,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         new TaskListener() {
           @Override
           public void finished(final TaskEvent event) {
+            if (event.getKind() == TaskEvent.Kind.ENTER && event.getCompilationUnit() != null) {
+              units.put(event.getCompilationUnit().getSourceFile().toUri(), event.getCompilationUnit());
+              bridgeNamed = null;
+              return;
+            }
             if (event.getKind() != TaskEvent.Kind.ANALYZE) return;
             final var type = event.getTypeElement();
             if (type == null || type.getNestingKind() != NestingKind.TOP_LEVEL) return;
@@ -228,6 +254,60 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   }
 
   /**
+   * The binary names of the classes a {@code @Bridge} in this compilation is on or names, at any
+   * depth of its values. Read from the compilation units rather than from the processing rounds,
+   * because the bridge processor claims the annotation and a round then offers it to no other.
+   */
+  private Set<String> bridgeNamed() {
+    if (bridgeNamed != null) return bridgeNamed;
+    final var named = new HashSet<String>();
+    for (final var unit : units.values()) {
+      for (final var declaration : unit.getTypeDecls()) {
+        if (trees.getElement(TreePath.getPath(unit, declaration)) instanceof TypeElement type) {
+          collectBridges(type, named);
+        }
+      }
+    }
+    bridgeNamed = named;
+    return named;
+  }
+
+  private void collectBridges(final TypeElement type, final Set<String> named) {
+    for (final var mirror : type.getAnnotationMirrors()) {
+      if (
+        mirror.getAnnotationType().asElement() instanceof TypeElement annotation &&
+        BRIDGE_FQNS.contains(annotation.getQualifiedName().toString())
+      ) {
+        named.add(binaryName(type));
+        collectClasses(mirror, named);
+      }
+    }
+    for (final var member : type.getEnclosedElements()) {
+      if (member instanceof TypeElement nested) collectBridges(nested, named);
+    }
+  }
+
+  private void collectClasses(final AnnotationMirror mirror, final Set<String> named) {
+    for (final var value : mirror.getElementValues().values()) collectClasses(value, named);
+  }
+
+  private void collectClasses(final AnnotationValue value, final Set<String> named) {
+    switch (value.getValue()) {
+      case final DeclaredType type when type.asElement() instanceof TypeElement element -> named.add(
+        binaryName(element)
+      );
+      case final AnnotationMirror nested -> collectClasses(nested, named);
+      case final List<?> values -> {
+        for (final var each : values) {
+          if (each instanceof AnnotationValue element) collectClasses(element, named);
+        }
+      }
+      default -> {
+      }
+    }
+  }
+
+  /**
    * One statically-recognized accessor reference: normalized property name, its declared type (as a
    * member of the accessor's own class), and that owning class. The owner matters because rows may
    * be keyed to NESTED pairs — {@code to(UserEntity::name, UserDto::fullName)} inside {@code
@@ -269,6 +349,47 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     Map<String, TypeMirror> declaredSource,
     Map<String, TypeMirror> declaredTarget
   ) {}
+
+  /** What a walk of the pairs construction visits does at each pair, besides following it. */
+  private interface PairVisitor {
+    /**
+     * Whether construction walks the pair rather than converting it some other way. {@code keyed}
+     * holds when a row is keyed to the pair, and {@code root} for the call's own pair.
+     */
+    boolean walks(TypeElement source, TypeElement target, boolean keyed, boolean root);
+
+    /** Construction fills {@code targetName} of the pair's target from {@code sourceName}. */
+    void fills(TypeElement source, TypeElement target, PairSides sides, String sourceName, String targetName);
+  }
+
+  /**
+   * Whether a bridge of its own may convert the pair of {@code source} and {@code target}: either
+   * class carries a {@code @Bridge}, a {@code @Bridge} this compilation sees names either one, or a
+   * class exists under a name a generated bridge of the source takes, {@code <Source>Bridge} or
+   * {@code <Source>To<Target>Bridge} in the source's package, or {@code <Source>Bridge} beside the
+   * source in its enclosing class, which is where the runtime looks for a nested source's bridge.
+   */
+  private boolean bridgeVisible(final TypeElement source, final TypeElement target) {
+    for (final var side : List.of(source, target)) {
+      if (bridgeNamed().contains(binaryName(side))) return true;
+      for (final var mirror : side.getAnnotationMirrors()) {
+        final var annotation = mirror.getAnnotationType().asElement();
+        if (annotation instanceof TypeElement type && BRIDGE_FQNS.contains(type.getQualifiedName().toString())) {
+          return true;
+        }
+      }
+    }
+    final var simple = source.getSimpleName().toString();
+    final var pkg = elements.getPackageOf(source).getQualifiedName().toString();
+    final var prefix = pkg.isEmpty() ? "" : pkg + ".";
+    final var names = new ArrayList<String>();
+    names.add(prefix + simple + "Bridge");
+    names.add(prefix + simple + "To" + target.getSimpleName() + "Bridge");
+    if (source.getEnclosingElement() instanceof TypeElement enclosing) {
+      names.add(enclosing.getQualifiedName() + "." + simple + "Bridge");
+    }
+    return names.stream().anyMatch(name -> elements.getTypeElement(name) != null);
+  }
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
@@ -413,7 +534,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           verifyDeep(srcProps.get(name), tgtProps.get(name), name, node, seen, false);
         }
       }
-      verifyRowsVisited(args, srcType, tgtType, srcEl, tgtEl, strict);
+      verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
     }
 
     /**
@@ -514,6 +635,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * make construction answer before it gets here or differently from this walk.
      */
     private void verifyRowsVisited(
+      final MethodInvocationTree node,
       final List<? extends ExpressionTree> args,
       final TypeMirror srcType,
       final TypeMirror tgtType,
@@ -525,6 +647,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var caseRows = new ArrayList<String>();
       Tree firstCaseRow = null;
       var caseRowsNamed = true;
+      var writeHinted = false;
       for (var i = 2; i < args.size(); i++) {
         if (!(args.get(i) instanceof MethodInvocationTree row)) return;
         if (
@@ -534,7 +657,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           return;
         }
         final var ownerFqn = rowOwner.getQualifiedName().toString();
-        if (WRITE_HINT_FQN.equals(ownerFqn) || NULL_HINT_FQN.equals(ownerFqn)) continue;
+        if (WRITE_HINT_FQN.equals(ownerFqn)) {
+          writeHinted = true;
+          continue;
+        }
+        if (NULL_HINT_FQN.equals(ownerFqn)) continue;
         if (CASES_FQN.equals(ownerFqn)) {
           final var rowArgs = row.getArguments();
           final var source = rowArgs.size() == 2 ? classLiteral(rowArgs.get(0)) : null;
@@ -560,7 +687,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         table.computeIfAbsent(pairKey(keyed.source(), keyed.target()), __ -> new ArrayList<>()).add(keyed);
       }
       final var visited = new HashSet<String>();
-      if (!visit(srcType, tgtType, table, visited, !strict)) return;
+      if (!visit(srcType, tgtType, table, visited, !strict, null)) return;
+      // A write hint picks the writer a bean is built with and keeps its pairs from their own
+      // bridges, so the setters such a call writes through are left to construction. A
+      // mapperForward call given no rows converts through its own pair's bridge where there is one.
+      if (!writeHinted) verifySetters(node, srcType, tgtType, table, !strict, !strict && args.size() == 2);
       // The whole walk was followed and met no pair of sealed interfaces,
       // and only such a pair takes a cases row.
       if (!caseRows.isEmpty() && caseRowsNamed) {
@@ -589,6 +720,143 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       if (dead.isEmpty()) return;
       report(at, PairingMessages.rowsNeverVisited(binaryName(srcEl), binaryName(tgtEl), dead));
+    }
+
+    /**
+     * Reports each bean property construction refuses to fill because its setter cannot take a
+     * value of the property's own type, with the message construction refuses it with. On every
+     * pair construction walks, a property is filled from the other side when a row other than
+     * {@code drop} names it on both sides or when no such row names it and both sides have it, a
+     * row that converts the value or a path row writing the property included. Construction checks
+     * the target's setters for each, and the source's too when the mapper also runs backward.
+     *
+     * <p>A side is checked only when construction is certain to build it through its setters, which
+     * the shared write strategy decides once the bean offers no static {@code builder()}, no public
+     * constructor taking as many arguments as it has properties, and a public constructor taking
+     * none; a generic bean is left to construction. A pair below the call's own is walked only when
+     * no bridge of its own can stand in for the walk: a row is keyed to it, or {@link
+     * #bridgeVisible} finds none. {@code rootBridgeable} holds for a call whose own pair a bridge
+     * of its own may convert, which the same test then decides. A bridge a carrier declares in a
+     * module compiled apart from this one is registered only as a service, which nothing here can
+     * read.
+     */
+    private void verifySetters(
+      final MethodInvocationTree node,
+      final TypeMirror srcType,
+      final TypeMirror tgtType,
+      final Map<String, List<KeyedRow>> table,
+      final boolean forwardOnly,
+      final boolean rootBridgeable
+    ) {
+      final var refusals = new LinkedHashSet<String>();
+      final var visitor = new PairVisitor() {
+        @Override
+        public boolean walks(
+          final TypeElement source,
+          final TypeElement target,
+          final boolean keyed,
+          final boolean root
+        ) {
+          if (root && !rootBridgeable) return true;
+          return keyed || !bridgeVisible(source, target);
+        }
+
+        @Override
+        public void fills(
+          final TypeElement source,
+          final TypeElement target,
+          final PairSides sides,
+          final String sourceName,
+          final String targetName
+        ) {
+          addRefusal(refusals, target, sides.target(), targetName);
+          if (!forwardOnly) addRefusal(refusals, source, sides.source(), sourceName);
+        }
+      };
+      if (!visit(srcType, tgtType, table, new HashSet<>(), forwardOnly, visitor)) return;
+      for (final var refusal : refusals) report(node, refusal);
+    }
+
+    /** Adds construction's refusal of a write of {@code name} on {@code bean}, if it has one. */
+    private void addRefusal(
+      final Set<String> refusals,
+      final TypeElement bean,
+      final Map<String, TypeMirror> properties,
+      final String name
+    ) {
+      final var read = properties.get(name);
+      if (read == null || !builtThroughSetters(bean, properties)) return;
+      if (props.mentionsTypeVariable(read)) return;
+      final var refusal = setters.refusal(bean, name, read, MirrorSetters.Write.REFLECTIVE);
+      if (refusal != null) refusals.add(refusal);
+    }
+
+    /**
+     * Whether construction certainly builds {@code bean}, whose properties are {@code properties},
+     * through a public no-argument constructor and its setters.
+     */
+    private boolean builtThroughSetters(final TypeElement bean, final Map<String, TypeMirror> properties) {
+      if (bean.getKind() != ElementKind.CLASS || bean.getModifiers().contains(Modifier.ABSTRACT)) return false;
+      if (!bean.getTypeParameters().isEmpty()) return false;
+      // An inner class's constructors take the enclosing instance, so none takes no arguments.
+      final var nesting = bean.getNestingKind();
+      if (
+        nesting != NestingKind.TOP_LEVEL &&
+        !(nesting == NestingKind.MEMBER && bean.getModifiers().contains(Modifier.STATIC))
+      ) {
+        return false;
+      }
+      final var mayBuild = ElementFilter.methodsIn(elements.getAllMembers(bean))
+        .stream()
+        .anyMatch(m -> m.getSimpleName().contentEquals("builder") && m.getModifiers().contains(Modifier.STATIC));
+      var noArgs = false;
+      var takesAll = false;
+      for (final var ctor : ElementFilter.constructorsIn(bean.getEnclosedElements())) {
+        if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
+        if (ctor.getParameters().isEmpty()) noArgs = true;
+        if (ctor.getParameters().size() == properties.size()) takesAll = true;
+      }
+      if (mayBuild || takesAll || !noArgs) return false;
+      final var names = List.copyOf(properties.keySet());
+      final var strategy = BeanWriteStrategy.auto(
+        new BeanWriteStrategy.Shape() {
+          @Override
+          public List<String> properties() {
+            return names;
+          }
+
+          @Override
+          public boolean hasBuilder() {
+            return false;
+          }
+
+          @Override
+          public BeanWriteStrategy.Member builderMember(final String property) {
+            return BeanWriteStrategy.Member.ABSENT;
+          }
+
+          @Override
+          public boolean hasConstructor() {
+            return false;
+          }
+
+          @Override
+          public boolean hasSetters() {
+            return true;
+          }
+
+          @Override
+          public boolean setterWrites(final String property) {
+            return true;
+          }
+
+          @Override
+          public boolean stored(final String property) {
+            return true;
+          }
+        }
+      );
+      return strategy.orElse(null) == BeanWriteStrategy.SETTERS;
     }
 
     /**
@@ -670,19 +938,23 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * it: through each property the pair's own rows pass through unchanged, and through each
      * same-named property no row of the pair converts, along the shared pair decision's descent
      * into nested pairs, {@code Optional} bridges and container elements. False when the walk
-     * cannot be followed as construction follows it.
+     * cannot be followed as construction follows it. A non-null {@code visitor} is told of each
+     * property construction fills, and a pair it says construction does not walk is neither added
+     * nor followed.
      */
     private boolean visit(
       final TypeMirror src,
       final TypeMirror tgt,
       final Map<String, List<KeyedRow>> table,
       final Set<String> visited,
-      final boolean forwardOnly
+      final boolean forwardOnly,
+      final PairVisitor visitor
     ) {
       final var srcEl = props.elementOf(src);
       final var tgtEl = props.elementOf(tgt);
       if (srcEl == null || tgtEl == null) return false;
       final var key = pairKey(srcEl, tgtEl);
+      if (visitor != null && !visitor.walks(srcEl, tgtEl, table.containsKey(key), visited.isEmpty())) return true;
       if (!visited.add(key)) return true;
       final var sides = new PairSides(
         propertiesOf(src, srcEl),
@@ -694,14 +966,16 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (final var row : table.getOrDefault(key, List.of())) {
         if (row.kind() != RowKind.PASS_THROUGH && row.kind() != RowKind.CONVERTING) continue;
         final var tgtName = propertyName(row.targetMethod(), tgtEl);
-        converted.add(tgtName);
-        if (row.kind() == RowKind.CONVERTING) continue;
         final var srcName = propertyName(row.sourceMethod(), srcEl);
-        if (!visitProperty(sides, srcName, tgtName, table, visited, forwardOnly)) return false;
+        converted.add(tgtName);
+        if (visitor != null) visitor.fills(srcEl, tgtEl, sides, srcName, tgtName);
+        if (row.kind() == RowKind.CONVERTING) continue;
+        if (!visitProperty(sides, srcName, tgtName, table, visited, forwardOnly, visitor)) return false;
       }
       for (final var name : sides.target().keySet()) {
         if (converted.contains(name) || !sides.source().containsKey(name)) continue;
-        if (!visitProperty(sides, name, name, table, visited, forwardOnly)) return false;
+        if (visitor != null) visitor.fills(srcEl, tgtEl, sides, name, name);
+        if (!visitProperty(sides, name, name, table, visited, forwardOnly, visitor)) return false;
       }
       return true;
     }
@@ -712,7 +986,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String tgtName,
       final Map<String, List<KeyedRow>> table,
       final Set<String> visited,
-      final boolean forwardOnly
+      final boolean forwardOnly,
+      final PairVisitor visitor
     ) {
       final var srcType = sides.source().get(srcName);
       final var tgtType = sides.target().get(tgtName);
@@ -726,7 +1001,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       ) {
         return false;
       }
-      return visitTypes(srcType, tgtType, srcName, table, visited, forwardOnly);
+      return visitTypes(srcType, tgtType, srcName, table, visited, forwardOnly, visitor);
     }
 
     /**
@@ -740,18 +1015,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String componentName,
       final Map<String, List<KeyedRow>> table,
       final Set<String> visited,
-      final boolean forwardOnly
+      final boolean forwardOnly,
+      final PairVisitor visitor
     ) {
       final var decision = rules.decidePair(srcType, tgtType, componentName, forwardOnly);
       return switch (decision) {
-        case PairDecision.RecursePair<TypeMirror> __ -> visit(srcType, tgtType, table, visited, forwardOnly);
+        case PairDecision.RecursePair<TypeMirror> __ -> visit(srcType, tgtType, table, visited, forwardOnly, visitor);
         case PairDecision.OptionalToNullable<TypeMirror> d -> visitTypes(
           d.elementSrc(),
           d.elementTgt(),
           componentName,
           table,
           visited,
-          forwardOnly
+          forwardOnly,
+          visitor
         );
         case PairDecision.NullableToOptional<TypeMirror> d -> visitTypes(
           d.elementSrc(),
@@ -759,7 +1036,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           componentName,
           table,
           visited,
-          forwardOnly
+          forwardOnly,
+          visitor
         );
         case PairDecision.LiftContainer<TypeMirror> d -> visitTypes(
           d.src().elementType(),
@@ -767,7 +1045,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           componentName,
           table,
           visited,
-          forwardOnly
+          forwardOnly,
+          visitor
         );
         // Which case pairs with which depends on bridges construction finds, so the pairs the cases
         // reach are left to it.
