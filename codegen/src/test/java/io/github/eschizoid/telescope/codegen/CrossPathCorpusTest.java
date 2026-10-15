@@ -987,17 +987,17 @@ class CrossPathCorpusTest {
     String owed
   ) {}
 
-  /** The refusal a sorted container gives an element it cannot order, with the cast underneath. */
-  private static String unorderable(final String container, final String implementing, final String castTo) {
+  /**
+   * The refusal a sorted container gives an element it cannot order, with the cast as its cause.
+   */
+  private static String unorderable(final String container, final String implementing) {
     return (
       "IllegalStateException: Deep map: " +
       container +
       " keeps its elements in order, and %sA could not be ordered there, " +
       implementing +
       ". Supply an ordering these elements accept through a Mapping.via(...) row, or declare the" +
-      " target as a set that keeps no order. The cause is the cast itself. <- ClassCastException:" +
-      " class %sA cannot be cast to class " +
-      castTo
+      " target as a set that keeps no order. The cause is the cast itself. <- ClassCastException"
     );
   }
 
@@ -1026,7 +1026,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       false,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element ordered against another type",
@@ -1038,7 +1038,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       false,
-      unorderable("java.util.SortedSet", "though its type implements Comparable", "java.lang.String")
+      unorderable("java.util.SortedSet", "though its type implements Comparable")
     ),
     // An element ordered against its own kind has said it can be ordered,
     // so a cast escaping its compareTo is its own and propagates as it is.
@@ -1070,7 +1070,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sA>",
       "A",
       false,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element copied unchanged whose own compareTo casts",
@@ -1094,7 +1094,7 @@ class CrossPathCorpusTest {
       "%sSortedDto",
       "B",
       false,
-      unorderable("%sSorted", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("%sSorted", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element converted one level down",
@@ -1103,7 +1103,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       true,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element copied unchanged one level down",
@@ -1112,7 +1112,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sA>",
       "A",
       true,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     )
   );
 
@@ -1988,8 +1988,8 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * What an attempt throws, as its simple class name and message followed by its cause's after
-   * {@code <-}, or a note that it threw nothing.
+   * What an attempt throws, as its simple class name and message followed by the class of each
+   * cause after {@code <-}, or a note that it threw nothing.
    */
   private static String thrown(final Attempt attempt) {
     try {
@@ -2062,7 +2062,7 @@ class CrossPathCorpusTest {
     final var mapper = Telescope.mapper(cast(src), cast(tgt));
 
     final var refusal = "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and ";
-    final var cause = " <- ClassCastException: ";
+    final var cause = " <- ClassCastException";
     final var failures = new ArrayList<String>();
     final Map<String, List<List<Object>>> shapes = new LinkedHashMap<>();
     shapes.put("a source whose second pass yields nothing", List.of(List.of(base.newInstance()), List.of()));
@@ -2087,18 +2087,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A throwable and its causes, each as its simple class name and message. A JDK cast's message
-   * ends with a parenthesised account of the class loaders involved, which differ between the two
-   * paths, so it is cut there.
+   * A throwable as its simple class name and message, and each of its causes as its class alone.
+   * HotSpot replaces an implicit exception that compiled code throws often with a preallocated one
+   * whose message is null, so a cause's message can differ from one call to the next while its
+   * class cannot.
    */
   private static String rendered(final Throwable thrown) {
-    final var message = String.valueOf(thrown.getMessage());
-    final var loaders = message.indexOf(" (");
-    final var own =
-      thrown.getClass().getSimpleName() +
-      ": " +
-      (thrown instanceof ClassCastException && loaders >= 0 ? message.substring(0, loaders) : message);
-    return thrown.getCause() == null ? own : own + " <- " + rendered(thrown.getCause());
+    final var out = new StringBuilder(thrown.getClass().getSimpleName()).append(": ").append(thrown.getMessage());
+    for (var cause = thrown.getCause(); cause != null; cause = cause.getCause()) {
+      out.append(" <- ").append(cause.getClass().getSimpleName());
+    }
+    return out.toString();
   }
 
   private static JavaFileObject[] rawSources(final String prefix, final RawPairing pairing) {
