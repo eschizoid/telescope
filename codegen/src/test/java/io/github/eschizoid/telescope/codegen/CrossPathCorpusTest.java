@@ -5966,6 +5966,376 @@ class CrossPathCorpusTest {
     );
   }
 
+  /**
+   * {@code @Bridge} to {@code %1$sTgt} with a transform on {@code value} through {@code %1$sFn}.
+   */
+  private static String transformedValue(final boolean forwardOnly) {
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"value\", using = %1$sFn.class" +
+      (forwardOnly ? ", forwardOnly = true" : "") +
+      "))\n"
+    );
+  }
+
+  /**
+   * {@code %1$sFn}, a {@code BridgeFn<from, to>} whose forward returns the expression {@code
+   * forward} of its argument {@code a}, and whose backward returns {@code backward} of {@code b}.
+   */
+  private static String transformFn(final String from, final String to, final String forward, final String backward) {
+    return (
+      "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<" +
+      from +
+      ", " +
+      to +
+      "> {\n" +
+      "  public " +
+      to +
+      " forward(final " +
+      from +
+      " a) { return " +
+      forward +
+      "; }\n" +
+      "  public " +
+      from +
+      " backward(final " +
+      to +
+      " b) { return " +
+      backward +
+      "; }\n}\n"
+    );
+  }
+
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} builds the runtime mapper for the pair with the
+   * typed-transform row that agrees with the {@code @Transform}, reading {@code value} through
+   * {@code accessor} on both sides. A method reference to a member of a generic class names it raw,
+   * so the row is typed by what the raw members return, {@code srcType} and {@code tgtType}.
+   */
+  private static String runtimeRow(
+    final boolean forwardOnly,
+    final String accessor,
+    final String srcType,
+    final String tgtType
+  ) {
+    final var src = "%1$sSrc::" + accessor;
+    final var tgt = "%1$sTgt::" + accessor;
+    final var witness = "<%1$sSrc, %1$sTgt, " + srcType + ", " + tgtType + ">";
+    final var row = forwardOnly
+      ? witness + "toOneWay(" + src + ", " + tgt + ", fn::forward)"
+      : witness + "to(" + src + ", " + tgt + ", fn::forward, fn::backward)";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      (forwardOnly ? "mapperForward" : "mapper") +
+      "(%1$sSrc.class, %1$sTgt.class, io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      ");\n  }\n}\n"
+    );
+  }
+
+  /**
+   * As {@link #sampled}, for a record declared {@code header} with type parameters, whose static
+   * {@code sample()} cannot name them and returns the record with a wildcard.
+   */
+  private static String sampledGeneric(final String header, final String components, final String sample) {
+    final var name = header.replaceAll("<.*", "");
+    return (
+      "public record " +
+      header +
+      "(" +
+      components +
+      ") {\n  public static " +
+      name +
+      "<?> sample() { return " +
+      sample +
+      "; }\n}\n"
+    );
+  }
+
+  /**
+   * A bean declared {@code header} with one property, {@code value}, of {@code type}, and a static
+   * {@code sample()} holding {@code sample}. A generic bean's sample has the argument {@code
+   * Object}.
+   */
+  private static String valueBean(final String header, final String type, final String sample) {
+    final var name = header.replaceAll("<.*", "");
+    final var held = header.contains("<") ? name + "<Object>" : name;
+    return (
+      "public class " +
+      header +
+      " {\n" +
+      "  private " +
+      type +
+      " value;\n" +
+      "  public " +
+      type +
+      " getValue() { return value; }\n" +
+      "  public void setValue(final " +
+      type +
+      " value) { this.value = value; }\n" +
+      "  public static " +
+      held +
+      " sample() { final " +
+      held +
+      " s = new " +
+      held +
+      "(); s.setValue(" +
+      sample +
+      "); return s; }\n}\n"
+    );
+  }
+
+  /**
+   * A {@code @Transform} on a property typed by its class's own type variable: the declarations,
+   * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
+   * paths owe for {@code Src.sample()} forward and {@code Tgt.sample()} backward and laid over
+   * {@code Src.sample()}. A forward-only row owes no backward or patch.
+   */
+  private record VariableTransform(
+    String name,
+    boolean forwardOnly,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  private static final List<VariableTransform> VARIABLE_TRANSFORMS = List.of(
+    new VariableTransform(
+      "a source property typed by the source's variable, forward only",
+      true,
+      List.of(
+        transformedValue(true) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b"),
+        runtimeRow(true, "value", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a source property typed by the source's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "value", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    ),
+    new VariableTransform(
+      "a target property typed by the target's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"abc\")"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(5)"),
+        transformFn("String", "Object", "a.length()", "\"#\" + b"),
+        runtimeRow(false, "value", "String", "Object")
+      ),
+      "#0(value=3)",
+      "#0(value=\"#5\")",
+      "#0(value=\"#5\")"
+    ),
+    new VariableTransform(
+      "a source property typed by a variable bounded by Number, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"41\")"),
+        transformFn("Number", "String", "String.valueOf(a.intValue() + 1)", "Integer.valueOf(b)"),
+        runtimeRow(false, "value", "Number", "String")
+      ),
+      "#0(value=\"8\")",
+      "#0(value=41)",
+      "#0(value=41)"
+    ),
+    new VariableTransform(
+      "a source list of the source's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) +
+          sampledGeneric("%1$sSrc<X>", "java.util.List<X> value", "new %1$sSrc<>(java.util.List.of(1, 2))"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("java.util.List<Object>", "String", "a.size() + \":\" + a", "java.util.List.of(b, b)"),
+        runtimeRow(false, "value", "java.util.List", "String")
+      ),
+      "#0(value=\"2:[1, 2]\")",
+      "#0(value=[\"q\", \"q\"])",
+      "#0(value=[\"q\", \"q\"])"
+    ),
+    // The list is held raw, which an overload for List<Object> takes by unchecked
+    // conversion and is then the most specific: the call binds that overload, and
+    // the setter is handed what it returns.
+    new VariableTransform(
+      "a source list of the source's variable, through the transform's overload for a list",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc<X>", "java.util.List<X>", "java.util.List.of(1, 2)"),
+        valueBean("%1$sTgt", "Object", "\"q\""),
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<Object, String> {\n" +
+          "  public String forward(final Object a) { return \"any\"; }\n" +
+          "  public Integer forward(final java.util.List<Object> a) { return a.size(); }\n" +
+          "  public Object backward(final String b) { return b; }\n}\n",
+        runtimeRow(true, "getValue", "java.util.List", "Object")
+      ),
+      "#0(value=2)",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a bean property typed by the bean's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + valueBean("%1$sSrc<X>", "X", "7"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    )
+  );
+
+  @Test
+  @DisplayName("a transform on a property typed by its class's own type variable converts the same way on both paths")
+  void aTransformOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : VARIABLE_TRANSFORMS) {
+      final var prefix = "Vt" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      // The runtime row is compiled with the pair but not handed to the processor, so the classes
+      // the processor's compile adds are its bridges alone.
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // Built before the bridge is defined, so the runtime converts through its own row.
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
+        ? (ForwardMapper<Object, Object>) runtime
+        : null;
+      final var bridge = emitted(processed, plain, prefix);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardMapper != null
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a transform that does not fit the erasure of a type-variable property is refused on both paths, by name on the generated one"
+  )
+  void aTransformThatDoesNotFitATypeVariablePropertyIsRefusedOnBothPaths() {
+    // Each row: the prefix, the pair and its transform, the runtime row typed by what the raw
+    // members return, and two fragments the processor's refusal has to contain.
+    final var rows = List.of(
+      List.of(
+        "Vr0",
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("String", "String", "a", "b"),
+        runtimeRow(false, "value", "Object", "String"),
+        "@Transform field=\"value\" does not fit forward",
+        "X (held as its erasure java.lang.Object) -> java.lang.String"
+      ),
+      List.of(
+        "Vr1",
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        runtimeRow(false, "value", "Number", "String"),
+        "@Transform field=\"value\" does not fit backward",
+        "java.lang.String -> T (held as its erasure java.lang.Number)"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var prefix = row.get(0);
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .subList(1, 5)
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var processed = bridged(all.subList(0, 3).toArray(JavaFileObject[]::new));
+      if (processed.success() || !processed.hasError(row.get(5)) || !processed.hasError(row.get(6))) {
+        failures.add(prefix + ": the processor owed a refusal naming the property, saw " + describe(processed));
+      }
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      final var rowRefused = plain
+        .errors()
+        .stream()
+        .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "Runtime.java"));
+      if (plain.success() || !rowRefused) {
+        failures.add(prefix + ": javac owed a refusal of the runtime row alone, saw " + describe(plain));
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
   /** Whether a compilation succeeded, or the errors it reported. */
   private static String describe(final ProcessorHarness.Compilation compilation) {
     return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();

@@ -1522,8 +1522,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          final var fwdRes = resolvedFn(usingEl, "forward", sfType, bridgePackage);
-          final var bwdRes = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          //
+          // A property typed by its class's type variable is read and written through the raw
+          // class, so the call sites see the erasure of its type, and the check compares that.
+          final var sfHeld = heldAs(sfType);
+          final var tfHeld = heldAs(tfType);
+          final var fwdRes = resolvedFn(usingEl, "forward", sfHeld, bridgePackage);
+          final var bwdRes = resolvedFn(usingEl, "backward", tfHeld, bridgePackage);
           // An ambiguous call is one Java refuses outright rather than resolving, so neither a
           // bound member nor the interface's arguments describe what the emitted call site does.
           // Only for a direction that is emitted, though: a forward-only row writes a literal
@@ -1598,14 +1603,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // about does carry. Asking a slot about that hands a null to the resolver, which is a
           // crash inside the processor rather than a refusal from it. Forward has no such arm --
           // past that guard it always has either a bound member or the arguments it required.
-          final var targetSlot = writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
+          final var targetSlot = heldAs(writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage));
           final var sourceSlot =
-            bwdGives == null ? null : writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
-          final var storesInto = targetSlot == null ? tfType : targetSlot;
-          final var storesBack = sourceSlot == null ? sfType : sourceSlot;
-          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
+            bwdGives == null ? null : heldAs(writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
+          final var storesInto = targetSlot == null ? tfHeld : targetSlot;
+          final var storesBack = sourceSlot == null ? sfHeld : sourceSlot;
+          final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
           final var backwardFits =
-            forwardOnly || (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
+            forwardOnly || (types.isAssignable(tfHeld, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message
@@ -1620,7 +1625,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             // String -> String" -- because the type that actually refused is the member's, and it
             // appears nowhere.
             final var slot = forwardFits ? sourceSlot : targetSlot;
-            final var declared = forwardFits ? sfType : tfType;
+            final var declared = forwardFits ? sfHeld : tfHeld;
             // Named only where the store is what refused. A row can fail on the read alone -- the
             // transform will not take what the getter gives -- and a member that accepts the value
             // perfectly well had no part in that, so printing it points at the wrong thing.
@@ -1646,7 +1651,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 ") -> " +
                 gives +
                 ", which does not carry " +
-                (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
+                (forwardFits
+                  ? heldPhrase(tfType, tfHeld) + " -> " + heldPhrase(sfType, sfHeld)
+                  : heldPhrase(sfType, sfHeld) + " -> " + heldPhrase(tfType, tfHeld)) +
                 into +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
@@ -2036,7 +2043,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) return;
     // The types each pair of properties is planned and read as, decided by the rule the runtime
     // pairs them by, and the casts that reading them through raw classes needs.
-    final var paired = pairedFields(source, target, sourceFields, nonDroppedSourceFields, targetFields, renames);
+    final var paired = pairedFields(
+      source,
+      target,
+      sourceFields,
+      nonDroppedSourceFields,
+      targetFields,
+      renames,
+      transforms.keySet()
+    );
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -2183,14 +2198,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var forward = transformGives(
         usingEl,
         qualified ? method : "forward",
-        sf.type(),
+        heldAs(sf.type()),
         bridgePackage,
         !qualified,
         1
       );
       if (forward != null) forwardGives.put(targetName, forward);
       if (qualified || forwardOnlyTransforms.contains(t) || tf == null) continue;
-      final var backward = transformGives(usingEl, "backward", tf.type(), bridgePackage, true, 0);
+      final var backward = transformGives(usingEl, "backward", heldAs(tf.type()), bridgePackage, true, 0);
       if (backward != null) backwardGives.put(t, backward);
     }
     final var builtForward = buildExpr(
@@ -4279,6 +4294,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private TypeMirror erasedBound(final TypeMirror t) {
     if (t.getKind() != TypeKind.TYPEVAR) return t;
     return processingEnv.getTypeUtils().erasure(t);
+  }
+
+  /**
+   * The type the bridge holds a value of {@code type} as: its erasure where it names a type
+   * variable, and {@code type} itself otherwise. Every method of a bridge is static and names a
+   * generic class raw, so a member typed by the class's variable takes and returns the erasure, and
+   * no local can be declared with the variable. Null for null.
+   */
+  private TypeMirror heldAs(final TypeMirror type) {
+    if (type == null || !MirrorProps.typeVariableIn(type)) return type;
+    return processingEnv.getTypeUtils().erasure(type);
+  }
+
+  /** {@code declared}, followed by the type the bridge holds it as where the two differ. */
+  private String heldPhrase(final TypeMirror declared, final TypeMirror held) {
+    if (processingEnv.getTypeUtils().isSameType(declared, held)) return declared.toString();
+    return declared + " (held as its erasure " + held + ")";
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
@@ -6449,6 +6481,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * that fixes the variable a pair reads as declared, such as {@code class Names extends
    * Base<String>}, is written through a cast to its own erasure where that is narrower than the
    * read.
+   *
+   * <p>A pair one of {@code transformed} converts is read as neither of these: the transform takes
+   * what the source gives and returns what the target takes, so each side is held as the bridge
+   * reaches it, which for a type naming a variable is its erasure ({@link #heldAs}).
    */
   private PairedFields pairedFields(
     final TypeElement source,
@@ -6456,7 +6492,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> everySourceField,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames
+    final Map<String, String> renames,
+    final Set<String> transformed
   ) {
     final var types = processingEnv.getTypeUtils();
     final var pairedSource = new ArrayList<>(sourceFields);
@@ -6479,7 +6516,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var targetOwn = asReachedThrough(target, tf);
       var sourceRead = sf.type();
       var targetRead = tf.type();
-      if (rules.readsAsDeclared(sf.type(), tf.type())) {
+      if (transformed.contains(sf.name())) {
+        // A transform converts the pair, so neither side is read as the other's type: each is
+        // held as the bridge reaches it, which is the erasure where the type names a variable.
+        sourceRead = heldAs(sf.type());
+        targetRead = heldAs(tf.type());
+        pairedSource.set(i, new Field(sf.name(), sourceRead));
+        pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
+      } else if (rules.readsAsDeclared(sf.type(), tf.type())) {
         final var sourceDeclared = declaredTypeOf(source, sf);
         final var targetDeclared = declaredTypeOf(target, tf);
         if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
