@@ -1603,9 +1603,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // about does carry. Asking a slot about that hands a null to the resolver, which is a
           // crash inside the processor rather than a refusal from it. Forward has no such arm --
           // past that guard it always has either a bound member or the arguments it required.
-          final var targetSlot = heldAs(writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage));
+          final var targetSlot = reachedSlot(target, writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage));
           final var sourceSlot =
-            bwdGives == null ? null : heldAs(writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
+            bwdGives == null
+              ? null
+              : reachedSlot(source, writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
           final var storesInto = targetSlot == null ? tfHeld : targetSlot;
           final var storesBack = sourceSlot == null ? sfHeld : sourceSlot;
           final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
@@ -4307,6 +4309,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return processingEnv.getTypeUtils().erasure(type);
   }
 
+  /**
+   * The type a write through {@code slot}, a member of {@code owner}, takes from the bridge. The
+   * bridge names a generic class raw, so a slot of one takes {@link #heldAs its erasure}; a class
+   * with no type parameters is not reached raw, and its slot takes its own type, whatever variable
+   * a superclass declared it with.
+   */
+  private TypeMirror reachedSlot(final TypeElement owner, final TypeMirror slot) {
+    return owner.getTypeParameters().isEmpty() ? slot : heldAs(slot);
+  }
+
   /** {@code declared}, followed by the type the bridge holds it as where the two differ. */
   private String heldPhrase(final TypeMirror declared, final TypeMirror held) {
     if (processingEnv.getTypeUtils().isSameType(declared, held)) return declared.toString();
@@ -6141,13 +6153,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // back to the declared type gives up the refusal in the one case the member is what refuses.
       // A variable-arity setter the property's value spreads into takes one value as its
       // component, which is what the emitted call passes, so the component is the slot.
+      //
+      // The named setter is read as a member of `to`, so one a superclass declares takes the type
+      // `to` fixes the superclass's variable to.
       case SETTERS -> {
         final var choice = setterChoice(to, field);
         if (choice.spreads()) yield choice.argument();
         yield switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
           case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
           case Resolution.Ambiguous ignored -> null;
-          case Resolution.None ignored -> setterParameter(to, field);
+          case Resolution.None ignored -> choice.member() == null
+            ? null
+            : (
+                (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) to.asType(), choice.member())
+              ).getParameterTypes().getFirst();
         };
       }
       case NONE -> null;

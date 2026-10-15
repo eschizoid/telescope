@@ -6018,12 +6018,20 @@ class CrossPathCorpusTest {
     final String srcType,
     final String tgtType
   ) {
+    return witnessedRow(forwardOnly, accessor, "%1$sSrc, %1$sTgt, " + srcType + ", " + tgtType);
+  }
+
+  /**
+   * As {@link #runtimeRow}, with the row's four type arguments, {@code witness}, given whole: the
+   * source and target classes, possibly with arguments of their own, then the types the row reads
+   * {@code value} as on each side.
+   */
+  private static String witnessedRow(final boolean forwardOnly, final String accessor, final String witness) {
     final var src = "%1$sSrc::" + accessor;
     final var tgt = "%1$sTgt::" + accessor;
-    final var witness = "<%1$sSrc, %1$sTgt, " + srcType + ", " + tgtType + ">";
     final var row = forwardOnly
-      ? witness + "toOneWay(" + src + ", " + tgt + ", fn::forward)"
-      : witness + "to(" + src + ", " + tgt + ", fn::forward, fn::backward)";
+      ? "<" + witness + ">toOneWay(" + src + ", " + tgt + ", fn::forward)"
+      : "<" + witness + ">to(" + src + ", " + tgt + ", fn::forward, fn::backward)";
     return (
       "public class %1$sRuntime {\n" +
       "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -6285,9 +6293,9 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a transform that does not fit the erasure of a type-variable property is refused on both paths, by name on the generated one"
+    "a transform that does not fit the erasure of a type-variable property is refused by name, and by javac on a row typed as the raw members"
   )
-  void aTransformThatDoesNotFitATypeVariablePropertyIsRefusedOnBothPaths() {
+  void aTransformThatDoesNotFitATypeVariablePropertyIsRefusedByName() {
     // Each row: the prefix, the pair and its transform, the runtime row typed by what the raw
     // members return, and two fragments the processor's refusal has to contain.
     final var rows = List.of(
@@ -6334,6 +6342,292 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * A generic bean {@code %1$sBase<T bound>} whose one property, {@code value}, is declared {@code
+   * declared}, a type naming {@code T}; a source {@code %1$sSrc<X bound>} with a transform on it
+   * that passes its own variable through; and a target {@code %1$sTgt} that fixes the variable to
+   * {@code fixed}. Each side's {@code sample()} holds the given value.
+   */
+  private static List<String> fixedByTarget(
+    final String bound,
+    final String declared,
+    final String fixed,
+    final String srcSample,
+    final String tgtSample
+  ) {
+    return List.of(
+      "public class %1$sBase<T" +
+        bound +
+        "> {\n" +
+        "  private " +
+        declared +
+        " value;\n" +
+        "  public " +
+        declared +
+        " getValue() { return value; }\n" +
+        "  public void setValue(final " +
+        declared +
+        " value) { this.value = value; }\n}\n",
+      transformedValue(false) +
+        "public class %1$sSrc<X" +
+        bound +
+        "> extends %1$sBase<X> {\n" +
+        "  public static %1$sSrc<" +
+        fixed +
+        "> sample() { final %1$sSrc<" +
+        fixed +
+        "> s = new %1$sSrc<>(); s.setValue(" +
+        srcSample +
+        "); return s; }\n}\n",
+      "public class %1$sTgt extends %1$sBase<" +
+        fixed +
+        "> {\n" +
+        "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setValue(" +
+        tgtSample +
+        "); return t; }\n}\n"
+    );
+  }
+
+  /**
+   * A transform the processor refuses by the property's name that a runtime row still runs: the
+   * declarations, each with {@code %1$s} as the row's prefix and the last of them the runtime row.
+   */
+  private record UncheckedTransform(String name, List<String> declarations) {}
+
+  private static final List<UncheckedTransform> UNCHECKED_TRANSFORMS = List.of(
+    new UncheckedTransform(
+      "a target that fixes the variable to String, with a transform returning Object",
+      concat(
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\""),
+        transformFn("Object", "Object", "\"<\" + a + \">\"", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object")
+      )
+    ),
+    new UncheckedTransform(
+      "a target that fixes a variable bounded by Number to Integer, with a transform on Number",
+      concat(
+        fixedByTarget(" extends Number", "T", "Integer", "7", "41"),
+        transformFn("Number", "Number", "a.intValue() + 1", "b.intValue() - 1"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Number, Number")
+      )
+    ),
+    new UncheckedTransform(
+      "a target that fixes the variable in a Map to String, with a transform on any Map",
+      concat(
+        fixedByTarget(
+          "",
+          "java.util.Map<String, T>",
+          "String",
+          "java.util.Map.of(\"k\", \"a\")",
+          "java.util.Map.of(\"k\", \"q\")"
+        ),
+        transformFn(
+          "java.util.Map<?, ?>",
+          "java.util.Map<?, ?>",
+          "java.util.Map.of(\"n\", String.valueOf(a.size()))",
+          "b"
+        ),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.Map, java.util.Map")
+      )
+    ),
+    new UncheckedTransform(
+      "a target that fixes the variable in an Optional to String, with a transform on any Optional",
+      concat(
+        fixedByTarget(
+          "",
+          "java.util.Optional<T>",
+          "String",
+          "java.util.Optional.of(\"a\")",
+          "java.util.Optional.of(\"q\")"
+        ),
+        transformFn("java.util.Optional<?>", "java.util.Optional<?>", "a.map(v -> \"<\" + v + \">\")", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.Optional, java.util.Optional")
+      )
+    ),
+    new UncheckedTransform(
+      "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
+      List.of(
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(0),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(1),
+        "public class %1$sTgt {\n" +
+          "  private final String value;\n" +
+          "  %1$sTgt(final String value) { this.value = value; }\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public static %1$sMaker<String> builder() { return new %1$sMaker<>(); }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"q\"); }\n}\n",
+        "public class %1$sMaker<T> {\n" +
+          "  private T value;\n" +
+          "  public %1$sMaker<T> value(final T value) { this.value = value; return this; }\n" +
+          "  public %1$sTgt build() { return new %1$sTgt((String) value); }\n}\n",
+        transformFn("Object", "Object", "\"<\" + a + \">\"", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object")
+      )
+    ),
+    new UncheckedTransform(
+      "a row typed by both classes' arguments, with a transform on String",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(\"a\")"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(\"q\")"),
+        transformFn("String", "String", "a + \"!\"", "b + \"?\""),
+        witnessedRow(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String")
+      )
+    ),
+    new UncheckedTransform(
+      "a row typed by the source's argument under Number, with a transform on Integer",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "Integer value", "new %1$sTgt(41)"),
+        transformFn("Integer", "Integer", "a + 1", "b - 1"),
+        witnessedRow(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer")
+      )
+    ),
+    new UncheckedTransform(
+      "a row reading a variable bounded by Number as Object, with a backward returning Object",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        witnessedRow(false, "value", "%1$sSrc, %1$sTgt, Object, String")
+      )
+    )
+  );
+
+  /**
+   * What {@code attempt}'s result holds as {@code value}, read through its record accessor or its
+   * getter, inherited or not, with the value's class; or the refusal.
+   */
+  private static String valueHeld(final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var type = out.getClass();
+      final var value = (type.isRecord() ? type.getMethod("value") : type.getMethod("getValue")).invoke(out);
+      return "value=" + value + ", a " + (value == null ? "null" : value.getClass().getSimpleName());
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  /**
+   * The direction a transform on {@code value} was refused in, and the member type the refusal
+   * names where it names one; or the compilation, where nothing refused the transform.
+   */
+  private static String refusalOfTransform(final ProcessorHarness.Compilation processed) {
+    for (final var direction : List.of("forward", "backward")) {
+      if (!processed.hasError("@Transform field=\"value\" does not fit " + direction)) continue;
+      final var member = Pattern.compile("the member it is written through takes (\\S+)").matcher(
+        processed.errorMessages()
+      );
+      return (
+        REFUSED + "does not fit " + direction + (member.find() ? ", through a member taking " + member.group(1) : "")
+      );
+    }
+    return describe(processed);
+  }
+
+  /** {@code head} followed by {@code tail}. */
+  private static List<String> concat(final List<String> head, final String... tail) {
+    final var all = new ArrayList<>(head);
+    all.addAll(List.of(tail));
+    return List.copyOf(all);
+  }
+
+  /**
+   * Shapes the processor refuses by the property's name while a runtime row still runs, each with
+   * the generated path's refusal and then what the runtime gives forward and backward. Neither path
+   * checks a value against the type the receiving side holds it as: the runtime row passes whatever
+   * its functions return to the member that writes it. A value that happens to fit is converted;
+   * one that does not is written as it is, or throws a bare {@code ClassCastException} where the
+   * member it is written through checks its class.
+   *
+   * <p>An entry no row exercises, or whose row either path stops giving, fails the test.
+   */
+  private static final Map<String, List<String>> UNCHECKED_TRANSFORM_DIVERGENCES = Map.ofEntries(
+    // A defect still to close: neither path checks the transformed value against the type the
+    // receiving property holds, so the runtime writes whatever the row's function returns.
+    Map.entry(
+      "a target that fixes the variable to String, with a transform returning Object",
+      List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
+    ),
+    Map.entry(
+      "a target that fixes a variable bounded by Number to Integer, with a transform on Number",
+      List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
+    ),
+    Map.entry(
+      "a target that fixes the variable in a Map to String, with a transform on any Map",
+      List.of(REFUSED + "does not fit forward", "value={n=1}, a Map1", "value={k=q}, a Map1")
+    ),
+    Map.entry(
+      "a target that fixes the variable in an Optional to String, with a transform on any Optional",
+      List.of(REFUSED + "does not fit forward", "value=Optional[<a>], a Optional", "value=Optional[q], a Optional")
+    ),
+    Map.entry(
+      "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
+      List.of(REFUSED + "does not fit forward, through a member taking T", "value=<a>, a String", "value=q, a String")
+    ),
+    Map.entry(
+      "a row typed by both classes' arguments, with a transform on String",
+      List.of(REFUSED + "does not fit forward", "value=a!, a String", "value=q?, a String")
+    ),
+    Map.entry(
+      "a row typed by the source's argument under Number, with a transform on Integer",
+      List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
+    ),
+    Map.entry(
+      "a row reading a variable bounded by Number as Object, with a backward returning Object",
+      List.of(REFUSED + "does not fit backward", "value=7, a String", REFUSED + "ClassCastException")
+    )
+  );
+
+  @Test
+  @DisplayName("a transform the processor refuses by name and a runtime row still runs is a registered divergence")
+  void aTransformOnlyTheRuntimeConvertsIsARegisteredDivergence() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var exercised = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var row : UNCHECKED_TRANSFORMS) {
+      final var prefix = "Ud" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var generated = refusalOfTransform(processed);
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var seen = List.of(
+        generated,
+        valueHeld(() -> mapper.forward(src.getMethod("sample").invoke(null))),
+        valueHeld(() -> mapper.backward(tgt.getMethod("sample").invoke(null)))
+      );
+      final var registered = UNCHECKED_TRANSFORM_DIVERGENCES.get(row.name());
+      if (registered != null) exercised.add(row.name());
+      if (!seen.equals(registered)) {
+        failures.add(row.name() + ": generated and runtime gave " + seen + ", registered " + registered);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+    assertTrue(
+      exercised.equals(UNCHECKED_TRANSFORM_DIVERGENCES.keySet()),
+      () -> "registered divergences with no row: " + UNCHECKED_TRANSFORM_DIVERGENCES.keySet()
+    );
   }
 
   /** Whether a compilation succeeded, or the errors it reported. */
