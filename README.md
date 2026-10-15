@@ -136,8 +136,6 @@ list stays accurate.
   runtime mapper matches the arguments by parameter name, which it reads from a class compiled with `-parameters` or
   with `-g`, the debug level Gradle and Maven compile with by default. It refuses the bean compiled with neither, and
   inside a native image it refuses it without `-parameters`.
-- `patch` on two sealed roots returns a new object from a generated bridge, which dispatches on the case. The runtime
-  mapper refuses it with an `UnsupportedOperationException` that names the root.
 - A nested pair can carry its own `@Bridge` with a `@Transform` or with `lenient = true`. An enum pair below it compiles
   on the generated path. The runtime mapper refuses it unless you give it a row for the nested pair.
 
@@ -363,9 +361,13 @@ null `base` gives `null`. The copy is shallow. A field the partial leaves null h
 so a change to that nested object or container through the copy also shows in `base`. Some mappers refuse `patch` with
 an `UnsupportedOperationException`:
 
-- a mapper whose source is an enum, or a class no write strategy can build, such as a sealed interface
+- a mapper whose source is an enum, or a class no write strategy can build, such as an interface that is not sealed
 - a mapper from `liftList`, `liftSet`, `liftOptional`, or `liftMapValues`, whose source is a container with no fields
 - a mapper from `Telescope.merge`, which only runs forward
+
+Between two sealed interfaces, `patch` patches `base` through the mapper of its own case and ignores a partial of any
+other case. A field typed by a sealed interface is written whole through `backward`, as a nested record is, so a partial
+holding another case in that field switches the field's case. Both paths behave this way.
 
 Rows handle the cases that same-name matching can't. A field with a different name gets a
 `Mapping.to(srcAccessor, tgtAccessor)` row. A class whose write strategy isn't detected gets a
@@ -380,7 +382,9 @@ The rest of this README uses these terms.
   `@FromMap`.
 
 For a sealed root, `Match.of(...)` dispatches over the permitted subtypes. `.exhaustive()` reads the permits and throws
-when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time.
+when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time. A mapper between
+two sealed interfaces dispatches the same way: each case pairs with the case its own `@Bridge` converts to, or with the
+one a `Cases.cases(Source.class, Target.class)` row names, and a case nothing pairs is refused when the mapper is built.
 
 ---
 

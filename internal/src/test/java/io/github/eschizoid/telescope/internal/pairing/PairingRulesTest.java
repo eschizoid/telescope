@@ -291,6 +291,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public boolean isSealedInterfaceType(final Type t) {
+      return delegate.isSealedInterfaceType(t);
+    }
+
+    @Override
     public boolean isAbstractType(final Type t) {
       return delegate.isAbstractType(t);
     }

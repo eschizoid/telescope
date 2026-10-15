@@ -98,6 +98,9 @@ public interface PropertySystem<T> {
 
   boolean isInterfaceType(T t);
 
+  /** Whether {@code t} is a sealed interface, whose permitted subclasses are its only cases. */
+  boolean isSealedInterfaceType(T t);
+
   /** Whether {@code t} is an interface or an abstract class: a type with no instance of its own. */
   boolean isAbstractType(T t);
 

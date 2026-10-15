@@ -598,4 +598,222 @@ public final class PairingMessages {
       "."
     );
   }
+
+  /**
+   * One {@code cases} row in a diagnostic, by the simple names of the two cases it pairs, as the
+   * row is written at its call site.
+   */
+  public static String caseRow(final String sourceCase, final String targetCase) {
+    return "cases(" + sourceCase + ".class, " + targetCase + ".class)";
+  }
+
+  /** A {@code cases} row naming a class no sealed interface permits, so it pairs nothing. */
+  public static String notACase(final String row, final String className) {
+    return (
+      row +
+      ": " +
+      className +
+      " is not a permitted subclass of a sealed interface. A cases row pairs a case of a sealed" +
+      " source with a case of the sealed target it converts to."
+    );
+  }
+
+  /**
+   * A case of a sealed source that nothing pairs with a case of the sealed target: it has no
+   * {@code @Bridge} to one, and no {@code cases} row names it.
+   */
+  public static String unpairedCase(final String source, final String target, final String sourceCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " of " +
+      source +
+      " pairs with no case of " +
+      target +
+      ". Give " +
+      sourceCase +
+      " a @Bridge to a case of " +
+      target +
+      ", or add a cases(" +
+      sourceCase +
+      ".class, ...) row naming the case it converts to."
+    );
+  }
+
+  /**
+   * A case with a generated bridge to a case of the sealed target only under the long-form name,
+   * which the runtime does not pair cases through.
+   */
+  public static String longFormCaseBridge(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String bridgeName
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " of " +
+      source +
+      " has a bridge to " +
+      targetCase +
+      " only as " +
+      bridgeName +
+      ", the name the processor gives the bridges of a @Bridge naming several targets, and the" +
+      " runtime does not yet pair cases by a @Bridge naming several targets. Add a cases(" +
+      sourceCase +
+      ".class, " +
+      targetCase +
+      ".class) row."
+    );
+  }
+
+  /**
+   * A case paired through its own bridge whose conversion the mapper walks instead, for {@code
+   * reason}, and whose walk then failed with {@code refusal}.
+   */
+  public static String caseBridgePassedOver(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String reason,
+    final String refusal
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " pairs with " +
+      targetCase +
+      " through " +
+      sourceCase +
+      "'s own @Bridge, but the mapper passes that bridge over because " +
+      reason +
+      ", and matching " +
+      sourceCase +
+      " to " +
+      targetCase +
+      " property by property instead fails: " +
+      refusal
+    );
+  }
+
+  /** A case whose bridges reach more than one case of the sealed target. */
+  public static String ambiguousCase(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final List<String> targetCases
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " has a bridge to more than one case of " +
+      target +
+      " " +
+      targetCases +
+      ". Add a cases(" +
+      sourceCase +
+      ".class, ...) row naming the one it converts to."
+    );
+  }
+
+  /** Two {@code cases} rows pairing the same case of a sealed source. */
+  public static String caseRowPairedTwice(final String source, final String target, final String sourceCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " is paired by more than one cases(...) row. Each case of " +
+      source +
+      " pairs with one case of " +
+      target +
+      "."
+    );
+  }
+
+  /** A case of the sealed target that no case of the sealed source pairs with. */
+  public static String targetCaseUnpaired(final String source, final String target, final String targetCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": no case of " +
+      source +
+      " pairs with case " +
+      targetCase +
+      " of " +
+      target +
+      ", which the backward direction needs. Pair a case with it through the case's @Bridge or" +
+      " a cases(...) row, or map forward only (Telescope.mapperForward)."
+    );
+  }
+
+  /** A case of the sealed target that more than one case of the sealed source pairs with. */
+  public static String targetCasePairedTwice(
+    final String source,
+    final String target,
+    final String targetCase,
+    final List<String> sourceCases
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": cases " +
+      sourceCases +
+      " of " +
+      source +
+      " all pair with case " +
+      targetCase +
+      " of " +
+      target +
+      ", so the backward direction cannot tell which to build. Pair each with a case of its own," +
+      " or map forward only (Telescope.mapperForward)."
+    );
+  }
+
+  /**
+   * {@code cases} rows no sealed pair the mapper converts takes, because no pair it dispatches on
+   * has a source permitting the row's first class and a target permitting its second. {@code rows}
+   * come from {@link #caseRow}.
+   */
+  public static String caseRowsNeverDispatched(
+    final String topSource,
+    final String topTarget,
+    final List<String> rows
+  ) {
+    return (
+      "cases(...) rows the mapper (" +
+      topSource +
+      " → " +
+      topTarget +
+      ") never dispatches on — they would be silently ignored: " +
+      String.join(", ", rows) +
+      ". Each row names a case of a sealed source and a case of the sealed target the mapper" +
+      " converts it to."
+    );
+  }
 }

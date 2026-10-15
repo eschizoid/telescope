@@ -889,6 +889,15 @@ public sealed class Telescope<
    * a type being converted around it. A mapper given {@code nullSourceValues(DEFAULT)} or a {@code
    * writeBeans(...)} default walks every pair. The pair the mapper is built for is always walked.
    *
+   * <p><b>Two sealed interfaces.</b> Between two sealed interfaces, as the pair the mapper is built
+   * for or anywhere below it, a value converts through the pair its own case belongs to. A case
+   * pairs with the case a {@link io.github.eschizoid.telescope.mapping.Cases#cases cases} row names
+   * for it, and otherwise with the case its own {@code @Bridge} converts to, as the bridge a
+   * {@code @Bridge} on the sealed source generates pairs them. A case nothing pairs is refused by
+   * name when the mapper is built. The mapper's own cases convert through their own bridges, or are
+   * walked strictly, as the pair a mapper is built for is, and {@code patch} and {@code into}
+   * dispatch to them the same way.
+   *
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
@@ -3048,6 +3057,33 @@ public sealed class Telescope<
     public Telescope<S, X> present() {
       return origin.descend(this, Traversals.eachOptional(), "whenPresent", "optional");
     }
+  }
+
+  /**
+   * The patch of the bridge behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, as a
+   * function; for any other telescope, one that refuses, since nothing records how to overlay its
+   * target onto its source.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B> BiFunction<A, B, A> bridgePatch(final Telescope<A, B> bridge) {
+    if (bridge instanceof BridgeTelescope<?, ?> generated) {
+      final var fn = (BridgeFn<A, B>) generated.fn;
+      return fn::patch;
+    }
+    return (base, partial) -> {
+      throw new UnsupportedOperationException(
+        "This bridge was not built by Telescope.bridge(BridgeFn), so it has no patch to overlay a" +
+          " partial target with. Re-run the @Bridge processor."
+      );
+    };
+  }
+
+  /**
+   * The {@link BridgeFn} behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, or
+   * null.
+   */
+  static BridgeFn<?, ?> bridgeFnOf(final Object bridge) {
+    return bridge instanceof BridgeTelescope<?, ?> generated ? generated.fn : null;
   }
 
   // Specialised Telescope for @Bridge-emitted constants. The parent's read/set terminals walk

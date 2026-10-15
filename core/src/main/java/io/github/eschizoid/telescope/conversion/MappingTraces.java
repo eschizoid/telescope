@@ -68,6 +68,19 @@ public final class MappingTraces {
     }
     if (node instanceof OpticNode.Skipped s) return new Row("•", s.field(), "", "(" + label(s.reason()) + ")");
     if (node instanceof OpticNode.UnusedSource u) return new Row("•", u.field(), "", "(unused source)");
+    if (node instanceof OpticNode.Dispatched d) {
+      // A case row is taken when the sealed value at its path is of its source case; the others
+      // show which cases the value did not take.
+      final var value = d.path().isEmpty() ? input : readDotted(input, d.path());
+      final var sourceCase = d.sourceCase().getSimpleName();
+      final var targetCase = d.targetCase().getSimpleName();
+      final var from = d.path().isEmpty() ? sourceCase : d.path() + ": " + sourceCase;
+      if (value == UNREADABLE || !d.sourceCase().isInstance(value)) {
+        return new Row("•", from, "", targetCase + " (not taken)");
+      }
+      final var converted = d.path().isEmpty() ? output : readDotted(output, d.path());
+      return new Row("✓", from, render(value), targetCase + " " + render(converted));
+    }
     return new Row("•", String.valueOf(node), "", "");
   }
 

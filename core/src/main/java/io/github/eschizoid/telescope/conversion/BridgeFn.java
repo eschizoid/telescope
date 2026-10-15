@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.util.Set;
 
 /**
  * Two-method bidirectional conversion pair. Companion to {@link Telescope#bridge(BridgeFn)}.
@@ -41,4 +42,52 @@ public interface BridgeFn<A, B> {
 
   /** Backward conversion {@code B -> A}, inverse of {@link #forward}. */
   A backward(B target);
+
+  /**
+   * Overlay the non-null properties of {@code partial} onto {@code base}, as a new {@code A}. A
+   * bridge {@code @Bridge} generates answers with its own {@code patch}; a mapper between two
+   * sealed interfaces patches a case converted through its bridge with it.
+   *
+   * @throws UnsupportedOperationException by default: a pair written by hand has no properties to
+   *     overlay, and a bridge generated without this method needs the {@code @Bridge} processor run
+   *     again
+   */
+  default A patch(final A base, final B partial) {
+    throw new UnsupportedOperationException(
+      getClass().getName() +
+        " has no patch: a conversion pair written by hand has no properties to overlay. If it is a" +
+        " generated bridge, re-run the @Bridge processor."
+    );
+  }
+
+  /**
+   * Whether this bridge lists the properties it does not walk in {@link
+   * #unwalkedSourceProperties()} and {@link #unwalkedTargetProperties()}. A bridge {@code @Bridge}
+   * generates does, even when both lists are empty. False by default: a runtime mapper then reads
+   * the bridge as walking every property, and does not look past a sealed interface into its cases
+   * when it decides whether the bridge may convert a nested pair for it.
+   */
+  default boolean declaresUnwalkedProperties() {
+    return false;
+  }
+
+  /**
+   * The properties of the source this bridge does not walk: those it drops, and those it converts
+   * by a conversion of its own through a {@code @Transform} or a {@code @ViaMapper}. A runtime
+   * mapper deciding whether this bridge may convert a nested pair for it looks only below the
+   * properties the bridge walks. Read only when {@link #declaresUnwalkedProperties()} is true.
+   * Empty by default.
+   */
+  default Set<String> unwalkedSourceProperties() {
+    return Set.of();
+  }
+
+  /**
+   * The properties of the target this bridge does not walk: those a {@code @Transform} or a
+   * {@code @ViaMapper} writes, and those a {@code @Constant} or a {@code @Compute} fills. See
+   * {@link #unwalkedSourceProperties()}.
+   */
+  default Set<String> unwalkedTargetProperties() {
+    return Set.of();
+  }
 }

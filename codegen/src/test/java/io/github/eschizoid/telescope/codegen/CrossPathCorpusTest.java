@@ -4915,7 +4915,7 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a sealed patch returns a new object on the generated path and is refused by name on the runtime one")
+  @DisplayName("a sealed patch overlays only a partial of the same case, and returns a new object, on both paths")
   void aSealedPatchReturnsANewObjectWhenThePartialOverlaysNothing() throws ReflectiveOperationException {
     final var head = "package " + PACKAGE + ";\n";
     final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
@@ -4939,14 +4939,13 @@ class CrossPathCorpusTest {
     final var cardDto = classes.get(PACKAGE + ".SpCardDto").getConstructors()[0];
     final var bank = classes.get(PACKAGE + ".SpBankDto").getConstructors()[0].newInstance("DE89");
     // A partial of the same case overlays; another case or a null partial is ignored and the base
-    // is rebuilt. The runtime mapper has no rule pairing the cases of two sealed roots, so it
-    // refuses every one of them in the same words.
+    // is rebuilt.
     final var partials = new LinkedHashMap<String, Object>();
     partials.put("the same case", cardDto.newInstance("5500"));
     partials.put("the same case, every field null", cardDto.newInstance((Object) null));
     partials.put("another case", bank);
     partials.put("null", null);
-    final var owedGenerated = Map.of(
+    final var owed = Map.of(
       "the same case",
       "#0(pan=\"5500\"), a new object",
       "the same case, every field null",
@@ -4956,28 +4955,327 @@ class CrossPathCorpusTest {
       "null",
       "#0(pan=\"4111\"), a new object"
     );
-    final var owedReflective = "refused: UnsupportedOperationException, names " + src.getName();
     final var failures = new ArrayList<String>();
+    final Map<String, Patch> sides = Map.of(
+      "generated",
+      (base, partial) -> patch.invoke(null, base, partial),
+      "reflective",
+      mapper::patch
+    );
     for (final var partial : partials.entrySet()) {
-      final var card = classes.get(PACKAGE + ".SpCard").getConstructors()[0].newInstance("4111");
-      final var result = patch.invoke(null, card, partial.getValue());
-      final var generated =
-        shape(result, new IdentityHashMap<>()) + (result == card ? ", the base itself" : ", a new object");
-      if (!generated.equals(owedGenerated.get(partial.getKey()))) failures.add(
-        "generated, " + partial.getKey() + ": " + generated
-      );
-      String reflective;
-      try {
-        reflective = "returned " + mapper.patch(card, partial.getValue());
-      } catch (final RuntimeException e) {
-        reflective =
-          "refused: " +
-          e.getClass().getSimpleName() +
-          (e.getMessage().contains(src.getName()) ? ", names " + src.getName() : ", " + e.getMessage());
+      for (final var side : sides.entrySet()) {
+        final var card = classes.get(PACKAGE + ".SpCard").getConstructors()[0].newInstance("4111");
+        String outcome;
+        try {
+          final var result = side.getValue().apply(card, partial.getValue());
+          outcome = shape(result, new IdentityHashMap<>()) + (result == card ? ", the base itself" : ", a new object");
+        } catch (final InvocationTargetException | RuntimeException e) {
+          outcome = REFUSED + e;
+        }
+        if (!outcome.equals(owed.get(partial.getKey()))) failures.add(
+          side.getKey() + ", " + partial.getKey() + ": " + outcome
+        );
       }
-      if (!reflective.equals(owedReflective)) failures.add("reflective, " + partial.getKey() + ": " + reflective);
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
+  }
+
+  /**
+   * A conversion between two sealed interfaces, at the root or below it: each declaration with
+   * {@code %1$s} as the cell's prefix, and what both paths owe, rendered by {@link #shape}, for
+   * {@code forward(Src.sample())}, {@code backward(Tgt.sample())} and {@code patch(Src.sample(),
+   * Tgt.partial())}. Every case carries a {@code @Bridge} to the case it converts to, which is how
+   * both paths pair the cases.
+   */
+  private record SealedCell(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  private static final String SEALED_HEAD = "@io.github.eschizoid.telescope.annotations.Bridge(";
+
+  /** The two cases of a sealed source {@code root} and their bridges to the target's cases. */
+  private static List<String> sealedCases(final String root, final String bankBridge, final String bankDto) {
+    return List.of(
+      SEALED_HEAD + "%1$sCardDto.class)\npublic record %1$sCard(String pan) implements " + root + " {}\n",
+      SEALED_HEAD + bankBridge + ")\npublic record %1$sBank(String iban, int rank) implements " + root + " {}\n",
+      "public record %1$sCardDto(String pan) implements " + root + "Dto {}\n",
+      "public record %1$sBankDto(" + bankDto + ", int rank) implements " + root + "Dto {}\n"
+    );
+  }
+
+  /** A sealed source root and target root over {@link #sealedCases}, under the given names. */
+  private static List<String> sealedRoots(final String source, final String target, final String extra) {
+    return List.of(
+      "public sealed interface " + source + " permits %1$sCard, %1$sBank {" + extra + "}\n",
+      "public sealed interface " + target + " permits %1$sCardDto, %1$sBankDto {}\n"
+    );
+  }
+
+  private static List<String> concat(final List<String> first, final List<String> second) {
+    final var all = new ArrayList<>(first);
+    all.addAll(second);
+    return all;
+  }
+
+  private static final String BANK = "#0(iban=\"DE89\", rank=2)";
+
+  private static final List<SealedCell> SEALED_CELLS = List.of(
+    new SealedCell(
+      "two sealed roots whose cases each carry a bridge to a case",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sCardDto(\"5500\"); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(null, 7); }\n}\n"
+        ),
+        sealedCases("%1$sSrc", "%1$sBankDto.class", "String iban")
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      BANK,
+      "#0(pan=\"5500\")",
+      "#0(iban=\"DE89\", rank=7)"
+    ),
+    new SealedCell(
+      "two sealed roots, one case renaming a property through its own bridge",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sBankDto(\"NL01\", 1); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n"
+        ),
+        sealedCases(
+          "%1$sSrc",
+          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
+            "source = \"iban\", target = \"account\")",
+          "String account"
+        )
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      "#0(account=\"DE89\", rank=2)",
+      "#0(iban=\"NL01\", rank=1)",
+      "#0(iban=\"NL02\", rank=7)"
+    ),
+    new SealedCell(
+      "a sealed root in a field",
+      concat(
+        concat(
+          sealedRoots("%1$sShape", "%1$sShapeDto", ""),
+          sealedCases("%1$sShape", "%1$sBankDto.class", "String iban")
+        ),
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(String title, %1$sShape main) {\n" +
+            "  public static %1$sSrc sample() { return new %1$sSrc(\"t\", new %1$sBank(\"DE89\", 2)); }\n}\n",
+          "public record %1$sTgt(String title, %1$sShapeDto main) {\n" +
+            "  public static %1$sTgt sample() { return new %1$sTgt(\"u\", new %1$sCardDto(\"5500\")); }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(null, new %1$sBankDto(\"NL01\", 1)); }\n}\n"
+        )
+      ),
+      "#0(title=\"t\", main=#1(iban=\"DE89\", rank=2))",
+      "#0(title=\"u\", main=#1(pan=\"5500\"))",
+      "#0(title=\"t\", main=#1(iban=\"NL01\", rank=1))"
+    ),
+    new SealedCell(
+      "sealed values in a List, an Optional and a Map",
+      concat(
+        concat(
+          sealedRoots("%1$sShape", "%1$sShapeDto", ""),
+          sealedCases("%1$sShape", "%1$sBankDto.class", "String iban")
+        ),
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.List<%1$sShape> items, java.util.Optional<%1$sShape> spare," +
+            " java.util.Map<String, %1$sShape> named) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.List.of(new %1$sBank(\"DE89\", 2), new %1$sCard(\"4111\"))," +
+            " java.util.Optional.of(new %1$sCard(\"4222\")), java.util.Map.of(\"k\", new %1$sBank(\"FR76\", 3)));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.List<%1$sShapeDto> items, java.util.Optional<%1$sShapeDto> spare," +
+            " java.util.Map<String, %1$sShapeDto> named) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sCardDto(\"5500\")), java.util.Optional.empty()," +
+            " java.util.Map.of(\"k\", new %1$sBankDto(\"NL01\", 1)));\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sBankDto(\"BE68\", 4)), null, null);\n" +
+            "  }\n}\n"
+        )
+      ),
+      "#0(items=[#1(iban=\"DE89\", rank=2), #2(pan=\"4111\")], spare=of #3(pan=\"4222\")," +
+        " named={k=#4(iban=\"FR76\", rank=3)})",
+      "#0(items=[#1(pan=\"5500\")], spare=empty, named={k=#2(iban=\"NL01\", rank=1)})",
+      "#0(items=[#1(iban=\"BE68\", rank=4)], spare=of #2(pan=\"4222\"), named={k=#3(iban=\"FR76\", rank=3)})"
+    ),
+    new SealedCell(
+      "a cycle through a case of a sealed field",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sGroup, %1$sDot {}\n",
+        "public sealed interface %1$sShapeDto permits %1$sGroupDto, %1$sDotDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sGroupDto.class)\npublic final class %1$sGroup implements %1$sShape {\n  private %1$sSrc doc;\n  public %1$sSrc getDoc() { return doc; }\n  public void setDoc(final %1$sSrc doc) { this.doc = doc; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sDotDto.class)\npublic record %1$sDot(int x) implements %1$sShape {}\n",
+        "public final class %1$sGroupDto implements %1$sShapeDto {\n  private %1$sTgt doc;\n  public %1$sTgt getDoc() { return doc; }\n  public void setDoc(final %1$sTgt doc) { this.doc = doc; }\n}\n",
+        "public record %1$sDotDto(int x) implements %1$sShapeDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\npublic class %1$sSrc {\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n  public static %1$sSrc sample() {\n    final var d = new %1$sSrc();\n    final var g = new %1$sGroup();\n    g.setDoc(d);\n    d.setS(g);\n    return d;\n  }\n}\n",
+        "public class %1$sTgt {\n  private %1$sShapeDto s;\n  public %1$sShapeDto getS() { return s; }\n  public void setS(final %1$sShapeDto s) { this.s = s; }\n  public static %1$sTgt sample() {\n    final var d = new %1$sTgt();\n    final var g = new %1$sGroupDto();\n    g.setDoc(d);\n    d.setS(g);\n    return d;\n  }\n  public static %1$sTgt partial() { return new %1$sTgt(); }\n}\n"
+      ),
+      "#0(s=#1(doc=null))",
+      "#0(s=#1(doc=null))",
+      "#0(s=#1(doc=#2(s=@1)))"
+    ),
+    new SealedCell(
+      "a case holding its own sealed root",
+      List.of(
+        SEALED_HEAD +
+          "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sLit, %1$sAdd {\n" +
+          "  static %1$sSrc sample() {\n" +
+          "    return new %1$sAdd(new %1$sLit(1), new %1$sAdd(new %1$sLit(2), new %1$sLit(3)));\n" +
+          "  }\n}\n",
+        "public sealed interface %1$sTgt permits %1$sLitDto, %1$sAddDto {\n" +
+          "  static %1$sTgt sample() { return new %1$sAddDto(new %1$sLitDto(4), new %1$sLitDto(5)); }\n" +
+          "  static %1$sTgt partial() { return new %1$sAddDto(new %1$sLitDto(9), null); }\n}\n",
+        SEALED_HEAD + "%1$sLitDto.class)\npublic record %1$sLit(int value) implements %1$sSrc {}\n",
+        SEALED_HEAD + "%1$sAddDto.class)\npublic record %1$sAdd(%1$sSrc left, %1$sSrc right) implements %1$sSrc {}\n",
+        "public record %1$sLitDto(int value) implements %1$sTgt {}\n",
+        "public record %1$sAddDto(%1$sTgt left, %1$sTgt right) implements %1$sTgt {}\n"
+      ),
+      "#0(left=#1(value=1), right=#2(left=#3(value=2), right=#4(value=3)))",
+      "#0(left=#1(value=4), right=#2(value=5))",
+      "#0(left=#1(value=9), right=#2(left=#3(value=2), right=#4(value=3)))"
+    )
+  );
+
+  @Test
+  @DisplayName("two sealed interfaces convert case by case to the same result on both paths, at the root and below it")
+  void twoSealedInterfacesConvertTheSameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cell : SEALED_CELLS) {
+      final var prefix = "Sd" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(sealedName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = bridged(sources);
+      if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // Every bridge is defined before the mapper is built, so the runtime finds each case's own.
+      final var bridge = emitted(processed, plain, prefix);
+      final var refusal = refusalOf(() -> Telescope.mapper(src, tgt));
+      if (refusal != null) {
+        failures.add(cell.name() + ": the runtime owed a mapper, saw " + refusal);
+        continue;
+      }
+      final var mapper = Telescope.mapper(src, tgt);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final Attempt partial = () -> tgt.getMethod("partial").invoke(null);
+      final var operations = List.of(
+        Map.entry("forward", cell.forward()),
+        Map.entry("backward", cell.backward()),
+        Map.entry("patch", cell.patch())
+      );
+      for (final var operation : operations) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), partial.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), partial.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              cell.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " sealed cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * Sealed pairs both paths refuse where each should convert, by the words each path's refusal has
+   * to contain: the generated path's first, then the runtime's.
+   */
+  private static final Map<String, List<String>> SEALED_REFUSALS = Map.of(
+    // A defect still to close: neither path pairs the cases of a sealed interface given type
+    // arguments, so both refuse the field by name.
+    "a sealed field given type arguments",
+    List.of("field 'r' has incompatible types", "component 'r' has incompatible source/target shapes")
+  );
+
+  @Test
+  @DisplayName("a sealed field given type arguments is refused by name on both paths")
+  void aGenericSealedFieldIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var prefix = "Sg";
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
+    final var sources = List.of(
+      "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+      "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+      bridge + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+      "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+      bridge + "%1$sTgt.class)\npublic record %1$sSrc(%1$sRes<Integer> r) {}\n",
+      "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+    )
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(sealedName(code), head + code))
+      .toArray(JavaFileObject[]::new);
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), plain::errorMessages);
+    final var processed = bridged(sources);
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+    final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+    final var owed = SEALED_REFUSALS.get("a sealed field given type arguments");
+    assertTrue(processed.hasError(owed.get(0)), () -> "the generated path owed a refusal, saw " + describe(processed));
+    final var refusal = refusalOf(() -> Telescope.mapper(src, tgt));
+    assertTrue(refusal != null && refusal.contains(owed.get(1)), () -> "the runtime owed a refusal, saw " + refusal);
+  }
+
+  /** The name of the type {@code code} declares, a sealed interface or a record. */
+  private static String sealedName(final String code) {
+    final var matcher = Pattern.compile("public (?:sealed interface|record|final class|class) (\\w+)").matcher(code);
+    if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
+    return matcher.group(1);
   }
 
   /** One path's {@code patch}, called with a base and a partial. */

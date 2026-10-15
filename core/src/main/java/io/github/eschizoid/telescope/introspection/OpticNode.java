@@ -13,7 +13,7 @@ package io.github.eschizoid.telescope.introspection;
  *       {@link Traverse}, {@link Filter}, {@link Narrow}, {@link Bridge}.
  *   <li>{@link Row} — a field correspondence of a conversion built by {@code map} / {@code mapper}
  *       / {@code mapperForward} / {@code fromMap}: {@link Mapped}, {@link Transformed}, {@link
- *       Extracted}, {@link Skipped}, {@link UnusedSource}.
+ *       Extracted}, {@link Skipped}, {@link UnusedSource}, {@link Dispatched}.
  * </ul>
  *
  * <p>Every variant is a public record so a caller can assert on it directly ({@code
@@ -119,4 +119,12 @@ public sealed interface OpticNode {
 
   /** A source field with no target consumer — the unmatched-sources residue of a lenient mapper. */
   record UnusedSource(String field) implements Row {}
+
+  /**
+   * One case of a sealed source and the case of the sealed target it converts to, where a
+   * conversion dispatches on the case. {@code path} is the field the sealed value sits in, dotted
+   * for a nested one, and empty for the value the conversion is given. A value of {@code
+   * sourceCase} converts to {@code targetCase}; a report names each by its simple name.
+   */
+  record Dispatched(String path, Class<?> sourceCase, Class<?> targetCase) implements Row {}
 }

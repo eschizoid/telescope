@@ -89,6 +89,11 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean isSealedInterfaceType(final Type t) {
+    return rawType(t) instanceof Class<?> c && c.isInterface() && c.isSealed();
+  }
+
+  @Override
   public boolean isAbstractType(final Type t) {
     return rawType(t) instanceof Class<?> c && (c.isInterface() || Modifier.isAbstract(c.getModifiers()));
   }

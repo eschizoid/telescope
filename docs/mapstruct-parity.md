@@ -1156,11 +1156,14 @@ Function<Payment, PaymentDto> dispatch = Match.<Payment, PaymentDto>of(Payment.c
 
 For sealed hierarchies the coverage is real and in one way stronger — .exhaustive() names every uncovered permit, and
 the @Bridge codegen path refuses at compile time a sealed-to-sealed pair whose source permits do not each carry a
-@Bridge to a permit of the sealed target. Two genuine gaps versus @SubclassMapping: (1) Match.of() rejects non-sealed
-roots, so plain abstract-class hierarchies (common in legacy JPA models) have no dispatcher — closest workaround is a
-hand-rolled instanceof chain; (2) per-permit handlers are independent mappers with no automatic inheritance of shared
-parent-field config (mitigable by sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual). The
-project's own README names @SubclassMapping over open hierarchies as a reason to pick MapStruct.
+@Bridge to a permit of the sealed target. The runtime mapper dispatches the same way:
+`Telescope.mapper(Payment.class, PaymentDto.class)` pairs each permit through its own @Bridge, or through a
+`cases(CreditCard.class, CardDto.class)` row where there is no codegen, and refuses an unpaired permit by name when it
+is built. Two genuine gaps versus @SubclassMapping: (1) Match.of() rejects non-sealed roots, so plain abstract-class
+hierarchies (common in legacy JPA models) have no dispatcher — closest workaround is a hand-rolled instanceof chain; (2)
+per-permit handlers are independent mappers with no automatic inheritance of shared parent-field config (mitigable by
+sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual). The project's own README names
+@SubclassMapping over open hierarchies as a reason to pick MapStruct.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Match.java, `of` (rejects non-sealed roots),
 `when` (Prism.downcast-routed dispatch), `exhaustive()` (verifies coverage via Class.getPermittedSubclasses), and
