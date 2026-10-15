@@ -4567,53 +4567,176 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Shapes recorded by what the generated bridge writes alone, each pinned so a change to it is
-   * seen. The register holds no runtime result beside it.
+   * A bean {@code %1$s<name>} whose {@code value} is read as {@code String} and has two setters,
+   * one for {@code String} and one for {@code Object}, each recording which one wrote it. Its
+   * {@code sample()} holds {@code held}, set without either setter.
+   */
+  private static String overloadedValueBean(final String name, final String held) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n" +
+      "  private String value;\n" +
+      "  public %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public void setValue(final String v) { this.value = \"String:\" + v; }\n" +
+      "  public void setValue(final Object v) { this.value = \"Object:\" + v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var b = new %1$s" +
+      name +
+      "(); b.value = \"" +
+      held +
+      "\"; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A transform result of a type wider than the property's, written into a bean whose setters are
+   * overloaded for the property's type and for the result's: the declarations, each with {@code
+   * %1$s} as the row's prefix and the last of them the runtime row, and what both paths owe.
+   */
+  private static final List<VariableTransform> SETTER_TRANSFORMS = List.of(
+    new VariableTransform(
+      "a forward result wider than the target property's type",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        overloadedValueBean("Tgt", "q"),
+        transformFn("String", "Object", "a", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "Object")
+      ),
+      "#0(value=\"String:x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a backward result wider than the source property's type",
+      false,
+      List.of(
+        transformedValue(false) + overloadedValueBean("Src", "x"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"String:q\")",
+      "#0(value=\"String:q\")"
+    )
+  );
+
+  @Test
+  @DisplayName("a transform result is written through the setter the property's type chooses, on both paths")
+  void aTransformResultIsWrittenThroughTheSetterThePropertysTypeChooses() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : SETTER_TRANSFORMS) {
+      final var prefix = "Ts" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
+        ? (ForwardMapper<Object, Object>) runtime
+        : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardMapper != null
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * Shapes only the generated path can express, each with what the generated bridge writes. A
+   * runtime row's function returns a type the property's own type reaches, so a result of any other
+   * type has no runtime row to agree with; the row's test also holds javac to refusing that row.
    *
    * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
    */
   private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
-    // A defect still to close: the two paths write a transform result through different
-    // setter overloads. The bridge binds the overload the result's own type picks, here
-    // setV(Object). A runtime row typed to return Object compiles too, and the runtime
-    // writer writes through the setter the property's type picks, setV(String), so the same
-    // value arrives as String:x.
-    "a transform result the setter chosen from the property's type cannot take",
-    "Object:x"
+    // Inherent to the runtime row's typing: an accessor reading a String property cannot be
+    // typed
+    // to an Integer, so no runtime row returns one. The bridge passes the Integer as it is,
+    // and
+    // javac binds the setter overload that takes it.
+    "a transform result of a type the property's type does not reach",
+    "Object:7"
   );
 
   @Test
-  @DisplayName("a generated-only capability gives what its register records")
+  @DisplayName("a generated-only capability gives what its register records, and no runtime row can be typed for it")
   void aGeneratedOnlyCapabilityGivesWhatItsRegisterRecords() throws ReflectiveOperationException {
-    final var name = "a transform result the setter chosen from the property's type cannot take";
-    final var compilation = bridged(
-      ProcessorHarness.source(
-        PACKAGE + ".GocFn",
-        "package " +
-          PACKAGE +
-          ";\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" +
-          "public final class GocFn implements BridgeFn<String, Object> {\n" +
-          "  @Override public Object forward(final String s) { return s; }\n" +
-          "  @Override public String backward(final Object o) { return String.valueOf(o); }\n}\n"
-      ),
-      ProcessorHarness.source(
-        PACKAGE + ".GocSrc",
-        "package " +
-          PACKAGE +
-          ";\n@io.github.eschizoid.telescope.annotations.Bridge(value = GocTgt.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"v\", using = GocFn.class," +
-          " forwardOnly = true))\npublic record GocSrc(String v) {}\n"
-      ),
-      ProcessorHarness.source(
-        PACKAGE + ".GocTgt",
-        "package " +
-          PACKAGE +
-          ";\npublic class GocTgt {\n  private String v;\n  public GocTgt() {}\n" +
-          "  public String getV() { return v; }\n" +
-          "  public void setV(final String v) { this.v = \"String:\" + v; }\n" +
-          "  public void setV(final Object v) { this.v = \"Object:\" + v; }\n}\n"
-      )
+    final var name = "a transform result of a type the property's type does not reach";
+    final var prefix = "Goc";
+    final var head = "package " + PACKAGE + ";\n";
+    final var declarations = List.of(
+      transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+      overloadedValueBean("Tgt", "q"),
+      transformFn("String", "Integer", "7", "String.valueOf(b)")
     );
+    final var sources = declarations
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toList();
+    final var compilation = bridged(sources.toArray(JavaFileObject[]::new));
     assertTrue(compilation.success(), compilation::errorMessages);
     final var classes = compilation.define(MethodHandles.lookup());
     final var source = classes.get(PACKAGE + ".GocSrc");
@@ -4621,8 +4744,8 @@ class CrossPathCorpusTest {
     final var built = classes
       .get(PACKAGE + ".GocSrcBridge")
       .getMethod("forward", source)
-      .invoke(null, source.getConstructors()[0].newInstance("x"));
-    final var written = String.valueOf(target.getMethod("getV").invoke(built));
+      .invoke(null, source.getMethod("sample").invoke(null));
+    final var written = String.valueOf(target.getMethod("getValue").invoke(built));
     assertTrue(
       GENERATED_ONLY_CAPABILITIES.keySet().equals(Set.of(name)),
       () -> "registered capabilities with no row: " + GENERATED_ONLY_CAPABILITIES.keySet()
@@ -4630,6 +4753,17 @@ class CrossPathCorpusTest {
     assertTrue(
       written.equals(GENERATED_ONLY_CAPABILITIES.get(name)),
       () -> name + ": the bridge wrote " + written + ", registered " + GENERATED_ONLY_CAPABILITIES.get(name)
+    );
+    final var withRow = new ArrayList<>(sources);
+    withRow.add(source("GocRuntime", head + runtimeRow(true, "getValue", "String", "Integer").formatted(prefix)));
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), withRow.toArray(JavaFileObject[]::new));
+    assertTrue(
+      !runtime.success() &&
+        runtime
+          .errors()
+          .stream()
+          .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith("GocRuntime.java")),
+      () -> name + ": javac owed a refusal of the runtime row alone, saw " + describe(runtime)
     );
   }
 
