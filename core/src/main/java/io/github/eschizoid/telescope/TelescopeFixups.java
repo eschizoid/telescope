@@ -82,9 +82,8 @@ final class TelescopeFixups {
     for (final var rawFx : fixups) {
       // Conditional<A, B>(predicate, inner) gates the inner row's forward effect by the source
       // predicate. When the predicate rejects the source, skip the row entirely — the target
-      // field keeps whatever the base structural Iso produced. Predicate cast widens the
-      // upper-bound wildcard `? super A` against the type-erased source `s`; safe because the
-      // mapper's Class<A> verifies s at runtime through the surrounding forward(...) entry.
+      // field keeps whatever the base structural Iso produced. The row is keyed to the pair its
+      // inner row is keyed to, so the predicate receives the same `s` the inner row reads.
       final Mapping<?, ?> fx;
       if (rawFx instanceof Conditional<?, ?> cond) {
         final var predicate = (Predicate<Object>) cond.predicate();

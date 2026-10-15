@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.mapping;
 
-import io.github.eschizoid.telescope.Telescope;
 import java.util.Objects;
 import java.util.function.Predicate;
 
@@ -42,13 +41,12 @@ import java.util.function.Predicate;
  * <p><b>Nesting.</b> {@code when(when(...))} is rejected at construction. For multi-predicate
  * logic, compose at the predicate layer ({@code Predicate#and} / {@code Predicate#or}).
  *
- * <p><b>Predicate purity AND thread-safety.</b> The predicate is invoked exactly once per top-level
- * forward call for each {@code when(...)} row at the outer pair. Recursive structural mapping does
- * NOT re-invoke the predicate at nested pairs — Conditional rows pin to the top-level pair (see the
- * "Pinning" paragraph below). The engine makes no broader guarantee under future cycle-detection or
- * sub-pair caching changes, however, so predicates should be pure / side-effect-free. Predicates
- * that need to fire on every forward call should land their effect in a {@code Mapper.afterForward}
- * hook instead, where the contract is explicit.
+ * <p><b>Predicate purity and thread-safety.</b> The predicate is invoked once each time the pair
+ * the row is keyed to is converted forward (see "Keying" below): once per forward call for a pair
+ * converted once, and once per occurrence for a pair the mapper reaches several times, such as the
+ * elements of a list or the levels of a recursive structure. Predicates should be pure and
+ * side-effect-free. Predicates that need to fire on every forward call should land their effect in
+ * a {@code Mapper.afterForward} hook instead, where the contract is explicit.
  *
  * <p>The same {@code Conditional} instance is reused across every {@code mapper.forward(...)} call
  * (the cached Mapper holds it indefinitely). Production deployments under Spring / Quarkus pin
@@ -64,22 +62,24 @@ import java.util.function.Predicate;
  * most-specific case lands last, or refactor to a single row whose predicate disambiguates ({@code
  * when(p1.and(p2.negate()), rowA)}, {@code when(p1.and(p2), rowB)}).
  *
- * <p><b>Pinning — top-level only.</b> Every supported inner row carries at least one {@link
- * Telescope}, whose root class isn't recoverable at runtime (generics erased). Inner rows therefore
- * report {@code null} for {@code sourceClass} / {@code targetClass}; {@code Conditional}
- * unconditionally does the same (overriding to {@code null} keeps the contract explicit and
- * prevents a future inner permit with a non-null class from silently breaking the top-level pinning
- * the engine relies on — {@link io.github.eschizoid.telescope.DeepMap} pins {@code null}-classed
- * rows to the outer {@code (topSource, topTarget)} pair). A {@code when(...)} row therefore
- * evaluates its predicate against the <em>top-level source</em>, not against any nested type the
- * inner row's telescope navigates into. For predicate gating at a nested type pair (e.g. evaluating
- * against {@code Customer} when the outer mapper is {@code Order ↔ OrderDto}), use a top-level
- * predicate that traverses to the nested object: {@code when(order -> order.customer() != null &&
- * order .customer().email() != null, inner)}.
+ * <p><b>Keying.</b> A {@code when(...)} row is keyed to the type pair its inner row is keyed to,
+ * and applies wherever that row would apply unwrapped: {@link #sourceClass}, {@link #targetClass},
+ * {@link #sourceField} and {@link #targetField} are the inner row's. A side the inner row gives as
+ * an accessor keys to the class the accessor is applied to, which may name a pair the mapper
+ * reaches below its own; a side given as a telescope path records no root class and keys to the
+ * mapper's own class on that side. The predicate receives the source instance being converted at
+ * that pair, so its input is the inner row's source type {@code A}: the instance {@code srcAcc}
+ * reads for {@code to(srcAcc, targetTelescope)}, and an instance of the mapper's source for every
+ * other supported row. A row keyed to a nested pair sees the nested instance, not the mapper's root
+ * source. A {@code when(...)} row whose inner row is keyed to a pair the mapper never visits is
+ * refused when the mapper is built, with the message the inner row is refused with unwrapped. To
+ * gate a row that stays at the mapper's own pair on a nested value, have the predicate traverse to
+ * it: {@code when(order -> order.customer() != null && order.customer().email() != null, inner)}.
  *
  * <p>Constructed via {@link Mapping#when(Predicate, Mapping)} — record is package-private surface.
  *
- * @param predicate evaluated against the source object on every forward call
+ * @param predicate evaluated against the source of the type pair the inner row is keyed to, each
+ *     time that pair is converted forward
  * @param inner the telescope-based row this conditional gates; must not be another {@code
  *     Conditional}
  * @param <A> source type
@@ -139,35 +139,27 @@ public record Conditional<A, B>(Predicate<? super A> predicate, Mapping<A, B> in
     return " (" + (src == null ? "<telescope>" : src) + " → " + (tgt == null ? "<telescope>" : tgt) + ")";
   }
 
-  /**
-   * Always {@code null}: telescope-based inner rows have an erased root class on at least one side,
-   * so they pin to the outer {@code (topSource, topTarget)} pair. Returning {@code null}
-   * unconditionally keeps this contract explicit — see class-level javadoc, "Pinning — top-level
-   * only".
-   */
+  /** The inner row's source class, which keys this row to the same type pair. */
   @Override
   public Class<A> sourceClass() {
-    return null;
+    return inner.sourceClass();
   }
 
-  /** Always {@code null} — same rationale as {@link #sourceClass()}. */
+  /** The inner row's target class, which keys this row to the same type pair. */
   @Override
   public Class<B> targetClass() {
-    return null;
+    return inner.targetClass();
   }
 
-  /**
-   * Always {@code null} — the inner row's source-field name (if any) is consulted directly by the
-   * routing layer via {@link #inner()}; the wrapper itself contributes no field claim.
-   */
+  /** The inner row's source field. */
   @Override
   public String sourceField() {
-    return null;
+    return inner.sourceField();
   }
 
-  /** Always {@code null} — same rationale as {@link #sourceField()}. */
+  /** The inner row's target field. */
   @Override
   public String targetField() {
-    return null;
+    return inner.targetField();
   }
 }

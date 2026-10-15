@@ -624,10 +624,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     /**
      * Reports the rows keyed to a type pair the mapper never visits, with the message construction
      * refuses them with. Construction keys each row to the classes its accessors are applied to,
-     * and to the call's own pair for a side given as a telescope path, for a {@code when}, {@code
-     * constant}, {@code compute} or {@code zip} row, and for a target accessor applied to a type
-     * the call's target extends. It then visits the call's pair and every pair reached from it, and
-     * refuses the rows of any other pair, {@code drop} rows aside.
+     * and to the call's own pair for a side given as a telescope path, for a {@code constant},
+     * {@code compute} or {@code zip} row, and for a target accessor applied to a type the call's
+     * target extends. A {@code when} row is keyed as the row it wraps. Construction then visits the
+     * call's pair and every pair reached from it, and refuses the rows of any other pair, {@code
+     * drop} rows aside.
      *
      * <p>Nothing is reported unless every row can be keyed and the whole walk can be followed: a
      * row this cannot read could claim a property or reach a pair, and a property typed by a type
@@ -905,13 +906,49 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             ? null
             : new KeyedRow(row, src.owner(), explicitEl, RowKind.DROP, src.method(), null);
         }
-        case "when", "constant", "compute", "zip" -> {
+        case "when" -> {
+          return whenRow(row, srcEl, tgtEl, strict);
+        }
+        case "constant", "compute", "zip" -> {
           return new KeyedRow(row, srcEl, tgtEl, RowKind.PATH, null, null);
         }
         default -> {
           return null;
         }
       }
+    }
+
+    /**
+     * A {@code when(predicate, inner)} row, keyed exactly as {@code inner} is, or null when {@code
+     * inner} cannot be read or is a row {@code when} refuses to wrap: one converting a property
+     * through accessors on both sides, a {@code drop}, or another {@code when}.
+     */
+    private KeyedRow whenRow(
+      final MethodInvocationTree row,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final boolean strict
+    ) {
+      final var rowArgs = row.getArguments();
+      if (rowArgs.size() != 2 || !(rowArgs.get(1) instanceof MethodInvocationTree inner)) return null;
+      if (
+        !(elementAt(inner.getMethodSelect()) instanceof ExecutableElement innerExec) ||
+        !(innerExec.getEnclosingElement() instanceof TypeElement innerOwner) ||
+        !innerOwner.getQualifiedName().contentEquals(MAPPING_FQN) ||
+        innerExec.getSimpleName().contentEquals("when")
+      ) {
+        return null;
+      }
+      final var keyed = keyedRow(inner, innerExec, srcEl, tgtEl, strict);
+      if (keyed == null || keyed.kind() != RowKind.PATH) return null;
+      return new KeyedRow(
+        row,
+        keyed.source(),
+        keyed.target(),
+        RowKind.PATH,
+        keyed.sourceMethod(),
+        keyed.targetMethod()
+      );
     }
 
     /** A row given two accessors, keyed to the classes they are applied to, or null. */

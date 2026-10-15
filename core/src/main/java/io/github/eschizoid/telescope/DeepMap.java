@@ -426,24 +426,21 @@ public final class DeepMap {
     // In the order each pair's first row was given, which is the order a refusal names them in.
     final var grouped = new LinkedHashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
-      // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
-      // Telescope.mapper(...). Two reasons a class field comes back null:
-      //   - Drop(srcAcc) — single-arg form, no explicit target.
-      //   - TelescopeTo / FromTelescopeTo / TelescopeToTelescope — the side that's a
-      //     Telescope<X, ?> names no pair of its own: a path started at a lens, an iso or a bridge
-      //     records no root class at all.
-      // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
-      // populateIso picks it up at the outermost (source, target) recursion frame only. A
-      // FromTelescopeTo row whose target accessor is applied to a superclass or interface of the
-      // top-level target lands there too: that pair is never visited, and the row writes the
-      // property by name on the target's own class. Every other FromTelescopeTo row keys by its
-      // accessor's class, which may name a nested pair the recursion reaches.
-      final Class<?> effectiveSource = row.sourceClass() == null ? topSource : row.sourceClass();
+      // A row is keyed to the classes its accessors are applied to. A side that names no class
+      // keys to the mapper's own class on that side: drop(srcAcc) has no target, and a side given
+      // as a telescope path records no root class, since a path started at a lens, an iso or a
+      // bridge has none. A to(path, tgtAcc) row whose target accessor is applied to a superclass or
+      // interface of the mapper's target keys to the mapper's target too: that pair is never
+      // visited, and the row writes the property by name on the target's own class. A when(...)
+      // row is keyed exactly as the row it wraps, so its predicate receives the source of the pair
+      // that row is applied at.
+      final Mapping<?, ?> keyed = row instanceof Conditional<?, ?> c ? c.inner() : row;
+      final Class<?> effectiveSource = keyed.sourceClass() == null ? topSource : keyed.sourceClass();
       final Class<?> effectiveTarget =
-        row.targetClass() == null ||
-        (row instanceof FromTelescopeTo<?, ?, ?> && row.targetClass().isAssignableFrom(topTarget))
+        keyed.targetClass() == null ||
+        (keyed instanceof FromTelescopeTo<?, ?, ?> && keyed.targetClass().isAssignableFrom(topTarget))
           ? topTarget
-          : row.targetClass();
+          : keyed.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
       grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(writtenOnTarget(row, topSource, topTarget));
     }
