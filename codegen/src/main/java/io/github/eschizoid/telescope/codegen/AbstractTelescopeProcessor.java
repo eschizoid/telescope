@@ -88,6 +88,91 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected record Prop(String name, String getter, TypeMirror type) {}
 
   /**
+   * How a navigator or holder names the class it navigates. {@code ref} is the reference the
+   * emitted source uses, and {@code wildcards} is {@code <?>}, one wildcard per type parameter, or
+   * empty for a class that declares none.
+   *
+   * <p>Every declared type names a generic class raw. A static member cannot name the class's type
+   * variables, and a wildcard is no substitute in a public signature: a {@code Telescope<Box<?>,
+   * String>} is not assignable to the {@code Telescope<Box, String>} a caller declares, and an
+   * {@code update} returning {@code Box<?>} cannot be assigned to the {@code Box<String>} the
+   * caller passed in. The raw type accepts both. A member declaring a raw type carries {@link
+   * #RAW_TYPES_SUPPRESSION} and nothing wider.
+   *
+   * <p>A lens body reads and builds the class through the wildcard form instead. A component or
+   * property whose type names a type variable is refused before anything is emitted, so every
+   * component type is the same in each parameterisation, and reading one through {@code Box<?>}
+   * yields that type where reading it through the raw {@code Box} yields its erasure and an
+   * unchecked conversion.
+   */
+  protected record OwnerRef(String ref, String wildcards) {
+    /** {@code type} as generated code names it, by the reference {@code ref}. */
+    static OwnerRef of(final TypeElement type, final String ref) {
+      final var parameters = type.getTypeParameters().size();
+      return new OwnerRef(
+        ref,
+        parameters == 0 ? "" : "<" + String.join(", ", Collections.nCopies(parameters, "?")) + ">"
+      );
+    }
+
+    /** Whether the class declares type parameters, so its declared types name it raw. */
+    boolean generic() {
+      return !wildcards.isEmpty();
+    }
+
+    /** A method reference to the instance method {@code member}. */
+    String methodRef(final String member) {
+      return ref + wildcards + "::" + member;
+    }
+
+    /** {@code receiver}, an expression of the raw type, as a receiver its members are read from. */
+    String receiver(final String receiver) {
+      return generic() ? "((" + ref + wildcards + ") " + receiver + ")" : receiver;
+    }
+
+    /** The class instance creation {@code new <ref>(arguments)}, inferring any type arguments. */
+    String creation(final String arguments) {
+      return "new " + ref + (generic() ? "<>" : "") + "(" + arguments + ")";
+    }
+
+    /** The suppression line a member declaring the raw type carries, or empty. */
+    String suppression(final String indent) {
+      return rawTypesSuppression(generic(), indent);
+    }
+  }
+
+  /** The suppression a generated member carries when it names a generic class raw. */
+  protected static final String RAW_TYPES_SUPPRESSION = "@SuppressWarnings(\"rawtypes\")";
+
+  /**
+   * {@link #RAW_TYPES_SUPPRESSION} on a line of its own at {@code indent} when {@code raw}, else
+   * empty.
+   */
+  protected static String rawTypesSuppression(final boolean raw, final String indent) {
+    return raw ? indent + RAW_TYPES_SUPPRESSION + "\n" : "";
+  }
+
+  /**
+   * Whether {@code type} is, or has among its type arguments at any depth, a generic class used
+   * raw.
+   */
+  protected static boolean namesRaw(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case DECLARED -> {
+        final var declared = (DeclaredType) type;
+        final var element = (TypeElement) declared.asElement();
+        if (declared.getTypeArguments().isEmpty() && !element.getTypeParameters().isEmpty()) yield true;
+        for (final var arg : declared.getTypeArguments()) {
+          if (namesRaw(arg)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> namesRaw(((ArrayType) type).getComponentType());
+      default -> false;
+    };
+  }
+
+  /**
    * Emits exactly the given {@code imports} — no implicit {@code Telescope}. A generator whose body
    * references {@code Telescope} must include it in {@code imports}; one that doesn't (e.g. a
    * {@code ForwardMapper} converter) omits it and gets no dead import. Use simple names in the body
@@ -1012,6 +1097,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       );
       out.println("  }");
     } else {
+      // The bridge names the target raw, so a terminal hop's declared type does too.
+      final var target = processingEnv.getElementUtils().getTypeElement(targetFqn);
+      out.print(rawTypesSuppression(target != null && !target.getTypeParameters().isEmpty(), "  "));
       out.println("  public Telescope<R, " + targetFqn + "> " + methodName + "() {");
       out.println("    return path.then(" + bridgeName + ".BRIDGE)" + bridgeHop + ";");
       out.println("  }");
@@ -1048,16 +1136,21 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Telescope<R, focusType>}: callers can do {@code update} / {@code updateAsync} / {@code read} /
    * {@code toList} / etc. (including the four effect methods and {@code then}) at any hop without
    * first unwrapping with {@code get()}. The wrapped field is always named {@code path} by
-   * convention (see {@link #emitPathClassHeader} / {@link #emitContainerStep}).
+   * convention (see {@link #emitPathClassHeader} / {@link #emitContainerStep}). {@code suppression}
+   * is the line each forwarder naming {@code focusType} carries, or empty.
    */
-  protected void emitTelescopeForwarders(final PrintWriter out, final String focusType) {
+  protected void emitTelescopeForwarders(final PrintWriter out, final String focusType, final String suppression) {
     // Sync reads.
+    out.print(suppression);
     out.println("  public " + focusType + " read(final R source) { return path.read(source); }");
     out.println();
+    out.print(suppression);
     out.println("  public Optional<" + focusType + "> find(final R source) { return path.find(source); }");
     out.println();
+    out.print(suppression);
     out.println("  public List<" + focusType + "> toList(final R source) { return path.toList(source); }");
     out.println();
+    out.print(suppression);
     out.println(
       "  public List<Indexed<" + focusType + ">> toListIndexed(final R source) { return path.toListIndexed(source); }"
     );
@@ -1067,8 +1160,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     out.println("  public boolean exists(final R source) { return path.exists(source); }");
     out.println();
     // Sync writes.
+    out.print(suppression);
     out.println("  public R set(final R source, final " + focusType + " value) { return path.set(source, value); }");
     out.println();
+    out.print(suppression);
     out.println(
       "  public R update(final R source, final Function<" +
         focusType +
@@ -1077,6 +1172,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         "> fn) { return path.update(source, fn); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public R updateIndexed(final R source, final BiFunction<Integer, ? super " +
         focusType +
@@ -1086,6 +1182,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     // Effectful writes.
+    out.print(suppression);
     out.println(
       "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
         focusType +
@@ -1094,6 +1191,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ">> fn) { return path.updateAsync(source, fn); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
         focusType +
@@ -1102,6 +1200,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ">> fn, final Executor executor) { return path.updateAsync(source, fn, executor); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public Optional<R> updateOptional(final R source, final Function<? super " +
         focusType +
@@ -1110,6 +1209,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ">> fn) { return path.updateOptional(source, fn); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public <E> Either<E, R> updateEither(final R source, final Function<? super " +
         focusType +
@@ -1118,6 +1218,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ">> fn) { return path.updateEither(source, fn); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public <E> Validated<E, R> updateValidated(final R source, final Function<? super " +
         focusType +
@@ -1127,10 +1228,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     // Composition with an external Telescope.
+    out.print(suppression);
     out.println(
       "  public <B> Telescope<R, B> then(final Telescope<" + focusType + ", B> next) { return path.then(next); }"
     );
     out.println();
+    out.print(suppression);
     out.println(
       "  public Telescope<R, " +
         focusType +
@@ -1157,13 +1260,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * io.github.eschizoid.telescope.Telescope#of(Class)} — the navigator's name already names the
    * type, so no class argument is needed), and a {@code get()} accessor. Used by every
    * navigator-emitting processor (records via {@link FocusProcessor} and beans via {@link
-   * #emitBeanNavigator}) so the boilerplate lives in one place.
+   * #emitBeanNavigator}) so the boilerplate lives in one place. Each member names {@code target}
+   * and carries its suppression line.
    */
-  protected void emitPathClassHeader(final PrintWriter out, final String pathName, final String targetTypeName) {
+  protected void emitPathClassHeader(final PrintWriter out, final String pathName, final OwnerRef target) {
+    final var targetTypeName = target.ref();
+    final var suppression = target.suppression("  ");
+    out.print(suppression);
     out.println("  private final Telescope<R, " + targetTypeName + "> path;");
     out.println();
+    out.print(suppression);
     out.println("  public " + pathName + "(final Telescope<R, " + targetTypeName + "> path) { this.path = path; }");
     out.println();
+    out.print(suppression);
     out.println(
       "  public static " +
         pathName +
@@ -1176,6 +1285,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ".class)); }"
     );
     out.println();
+    out.print(suppression);
     out.println("  public Telescope<R, " + targetTypeName + "> get() { return path; }");
     out.println();
   }
@@ -1405,6 +1515,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     //   pathBaseName    File-level base, with the outer hierarchy flattened ("Foo" / "OuterInner").
     //   pathName        The Path class's simple name, derived from pathBaseName.
     final var pojoName = navigatorTypeRefOf(pojo);
+    final var owner = OwnerRef.of(pojo, pojoName);
     final var pathBaseName = flattenedNameOf(pojo);
     final var pathName = pathBaseName + "Telescope";
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
@@ -1456,20 +1567,20 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       "Generated by telescope-codegen for " + triggerLabel + " POJO " + pojoName + ".",
       pojo,
       out -> {
-        emitPathClassHeader(out, pathName, pojoName);
+        emitPathClassHeader(out, pathName, owner);
         for (var i = 0; i < props.size(); i++) {
-          emitBeanPropertyMethod(out, pojoName, props, rebuild, i, navigableAnnotations);
+          emitBeanPropertyMethod(out, owner, props, rebuild, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
-        emitTelescopeForwarders(out, pojoName);
+        emitTelescopeForwarders(out, pojoName, owner.suppression("  "));
       }
     );
 
     // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
     // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
     // holder emission for that POJO only — the Path navigator above is unaffected.
-    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, rebuild, triggerLabel);
+    emitBeanMetadataHolder(pojo, owner, pathBaseName, pkg, props, rebuild, triggerLabel);
   }
 
   /**
@@ -1675,13 +1786,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   // navigator above uses, so write semantics are identical.
   private void emitBeanMetadataHolder(
     final TypeElement pojo,
-    final String pojoName,
+    final OwnerRef owner,
     final String pojoBaseName,
     final String pkg,
     final List<Prop> props,
     final BeanRebuild rebuild,
     final String triggerLabel
   ) {
+    final var pojoName = owner.ref();
     final var holderName = pojoBaseName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
@@ -1706,10 +1818,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out -> {
         for (final var p : props) {
           final var fieldType = shortenStdImports(boxedType(p.type()));
-          final var lensArgs = pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, rebuild, pojoName);
-          emitFieldConstant(out, pojoName, fieldType, p.name(), lensArgs);
+          final var lensArgs = owner.methodRef(p.getter()) + ", " + beanRebuild(p, props, rebuild, owner);
+          emitFieldConstant(out, owner, p.type(), fieldType, p.name(), lensArgs);
         }
-        emitBeanConstruct(out, pojoName, props, rebuild);
+        emitBeanConstruct(out, owner, props, rebuild);
         emitConstantsMap(out, props.stream().map(Prop::name).toList());
       }
     );
@@ -1720,18 +1832,21 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Telescope.lens(lensArgs);} metadata constant. Shared by the {@code @Focus} record holder
    * ({@link FocusProcessor}) and the bean holder ({@link #emitBeanMetadataHolder}) — only the
    * {@code lensArgs} (canonical-ctor rebuild vs setter/builder rebuild) and the field-name source
-   * differ; the constant's shape is identical.
+   * differ; the constant's shape is identical. The constant carries {@link #RAW_TYPES_SUPPRESSION}
+   * when it names the owner or a class in {@code fieldMirror} raw.
    */
   protected void emitFieldConstant(
     final PrintWriter out,
-    final String ownerType,
+    final OwnerRef owner,
+    final TypeMirror fieldMirror,
     final String fieldType,
     final String fieldName,
     final String lensArgs
   ) {
+    out.print(rawTypesSuppression(owner.generic() || namesRaw(fieldMirror), "  "));
     out.println(
       "  public static final Telescope<" +
-        ownerType +
+        owner.ref() +
         ", " +
         fieldType +
         "> " +
@@ -1779,12 +1894,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    */
   private void emitBeanConstruct(
     final PrintWriter out,
-    final String pojoName,
+    final OwnerRef owner,
     final List<Prop> props,
     final BeanRebuild rebuild
   ) {
+    final var pojoName = owner.ref();
     out.println("  /** Bean rebuild short-circuit for the runtime forward branch. */");
-    out.println("  @SuppressWarnings(\"unchecked\")");
+    out.println(constructSuppression(owner, props.stream().map(Prop::type).toList()));
     out.println("  public static " + pojoName + " construct(final Function<String, Object> values) {");
     final var members = rebuild.members();
     switch (rebuild.strategy()) {
@@ -1822,6 +1938,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
     out.println("  }");
     out.println();
+  }
+
+  /**
+   * The suppression a holder's {@code construct} carries: {@code unchecked} for its casts from
+   * {@code Object} to each property's type, and {@code rawtypes} as well when it names the owner or
+   * a class in one of {@code types} raw.
+   */
+  protected static String constructSuppression(final OwnerRef owner, final List<? extends TypeMirror> types) {
+    return owner.generic() || types.stream().anyMatch(AbstractTelescopeProcessor::namesRaw)
+      ? "  @SuppressWarnings({\"unchecked\", \"rawtypes\"})"
+      : "  @SuppressWarnings(\"unchecked\")";
   }
 
   /**
@@ -1890,15 +2017,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   private void emitBeanPropertyMethod(
     final PrintWriter out,
-    final String pojoName,
+    final OwnerRef owner,
     final List<Prop> props,
     final BeanRebuild rebuild,
     final int propertyIndex,
     final Set<String> navigableAnnotations
   ) {
     final var target = props.get(propertyIndex);
-    final var lensArgs = pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, rebuild, pojoName);
-    emitNavigatorMethod(out, pojoName, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
+    final var lensArgs = owner.methodRef(target.getter()) + ", " + beanRebuild(target, props, rebuild, owner);
+    emitNavigatorMethod(out, owner, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
   private void emitBeanStep(
@@ -1915,7 +2042,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       pojoBaseName,
       pkg,
       prop.name(),
-      shortenStdImports(prop.type().toString()),
+      prop.type(),
       shape,
       navigableAnnotations,
       "Generated by telescope-codegen container hop " + pojoName + "." + prop.name() + "."
@@ -1933,17 +2060,21 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * BeanFocusProcessor}, {@code LombokFocusProcessor}) navigators — the only difference between the
    * two emission flavors used to be the navigable-element check, which is now expressed uniformly
    * via the {@code navigableAnnotations} set.
+   *
+   * <p>Every member names the container type, so each carries {@link #RAW_TYPES_SUPPRESSION} when
+   * that type names a generic class raw.
    */
   protected void emitContainerStep(
     final TypeElement origin,
     final String enclosingSimpleName,
     final String pkg,
     final String componentName,
-    final String containerType,
+    final TypeMirror containerMirror,
     final TraversalShape shape,
     final Set<String> navigableAnnotations,
     final String javadoc
   ) {
+    final var containerType = shortenStdImports(containerMirror.toString());
     if (!shape.rebuildable()) {
       // Reads enumerate any Iterable, so the step is useful and still emitted. Only a write has
       // nowhere to put its result, and it fails at update time. This is the one moment that is
@@ -2002,18 +2133,23 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var hoppedCore = stepCore + traverseHop;
     final var elementBody = elementIsNavigable ? "new " + elementType + "Telescope<>(" + hoppedCore + ")" : hoppedCore;
 
+    final var suppression = rawTypesSuppression(namesRaw(containerMirror), "  ");
     writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
+      out.print(suppression);
       out.println("  private final Telescope<R, " + containerType + "> path;");
       out.println();
+      out.print(suppression);
       out.println("  public " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
       out.println();
+      out.print(suppression);
       out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
       out.println();
+      out.print(suppression);
       out.println("  public " + elementResultType + " " + stepMethod + "() {");
       out.println("    return " + elementBody + ";");
       out.println("  }");
       out.println();
-      emitTelescopeForwarders(out, containerType);
+      emitTelescopeForwarders(out, containerType, suppression);
     });
   }
 
@@ -2029,10 +2165,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * componentLens} records the fusion identity a hand-written {@code field(...)} records without
    * loading a class by name, and {@code Telescope.all} fuses navigator paths like hand-written
    * ones.
+   *
+   * <p>The per-component holder names the owner and the component type, and carries {@link
+   * #RAW_TYPES_SUPPRESSION} when either names a generic class raw. So does a terminal method, which
+   * names the component type alone.
    */
   protected void emitNavigatorMethod(
     final PrintWriter out,
-    final String enclosingSimpleName,
+    final OwnerRef owner,
     final int componentIndex,
     final String componentName,
     final TypeMirror componentType,
@@ -2059,6 +2199,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // reference, which is dotted for a nested source — the lens bodies resolve that segment, not
     // the whole reference. The other is the navigator's own class name, which a member class may
     // not repeat at all. Where the holder would take either, it steps aside.
+    final var enclosingSimpleName = owner.ref();
     var holder = "Optic_" + componentIndex + "_" + componentName;
     final var dot = enclosingSimpleName.indexOf('.');
     final var outerSegment = dot < 0 ? enclosingSimpleName : enclosingSimpleName.substring(0, dot);
@@ -2070,6 +2211,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var shape = traversalKind(componentType);
     final var subFq = navigableType(componentType, navigableAnnotations);
     final var recordsFocus = shape == null;
+    final var componentRaw = namesRaw(componentType);
+    out.print(rawTypesSuppression(owner.generic() || componentRaw, "  "));
     out.println("  private static final class " + holder + " {");
     out.println();
     out.println("    private " + holder + "() {}");
@@ -2109,6 +2252,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out.println();
       return;
     }
+    out.print(rawTypesSuppression(componentRaw, "  "));
     out.println("  public Telescope<R, " + componentTypeStr + "> " + componentName + "() {");
     out.println("    return path.then(" + holder + ".LENS)" + focusHop + ";");
     out.println("  }");
@@ -2121,13 +2265,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Prop target,
     final List<Prop> all,
     final BeanRebuild rebuild,
-    final String pojoName
+    final OwnerRef owner
   ) {
     final var members = rebuild.members();
     return switch (rebuild.strategy()) {
       case BUILDER -> {
-        final var read = readFor(target);
-        final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
+        final var read = readFor(target, owner);
+        final var sb = new StringBuilder("(p, v) -> " + owner.ref() + ".builder()");
         for (var i = 0; i < all.size(); i++) {
           if (members[i] != null) sb
             .append(".")
@@ -2140,14 +2284,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
       case CONSTRUCTOR -> {
         final var prelude = new StringBuilder();
-        final var args = guardedArguments(all, rebuild.ctorOrder(), rebuild, readFor(target), prelude);
-        yield lensBody(prelude, "new " + pojoName + "(" + String.join(", ", args) + ")");
+        final var args = guardedArguments(all, rebuild.ctorOrder(), rebuild, readFor(target, owner), prelude);
+        yield lensBody(prelude, owner.creation(String.join(", ", args)));
       }
       case SETTERS -> {
-        final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
+        final var sb = new StringBuilder("(p, v) -> { final var c = " + owner.creation("") + "; ");
         for (var i = 0; i < all.size(); i++) {
           final var prop = all.get(i);
-          final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
+          final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop, owner);
           if (rebuild.nullGuarded()[i]) {
             // The setter takes a primitive and the property does not, so null cannot be passed: it
             // unboxes and throws. The reflective writer skips the property instead, leaving the
@@ -2175,8 +2319,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /** Reads the focused property from the incoming value and every other one from {@code p}. */
-  private static Function<Prop, String> readFor(final Prop target) {
-    return prop -> prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
+  private static Function<Prop, String> readFor(final Prop target, final OwnerRef owner) {
+    return prop -> prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop, owner);
   }
 
   /** A lens rebuild lambda: an expression body, or a block when guarded reads need locals. */
@@ -2196,9 +2340,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * single-property bean emits no guard at all and its rebuild is unchanged. The guard makes every
    * generated lens tolerate a null {@code p} independently, so it holds at arbitrary nesting depth.
    */
-  private static String offPathRead(final Prop p) {
+  private static String offPathRead(final Prop p, final OwnerRef owner) {
     final var def = primitiveDefaultLiteral(p.type().getKind()).orElse("null");
-    return "(p == null ? " + def + " : p." + p.getter() + "())";
+    return "(p == null ? " + def + " : " + owner.receiver("p") + "." + p.getter() + "())";
   }
 
   /**
@@ -2296,8 +2440,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * whether the sub-element is a record-flavored {@code @Focus} target or a bean-flavored
    * {@code @BeanFocus} / Lombok target. A type whose navigator is not {@linkplain
    * #navigatorWrittenInTime written in time} to be named yields {@code null}.
+   *
+   * <p>So does a parameterised type. Its class's navigator holds the class raw, and a path focused
+   * on {@code Box<String>} is not a path focused on {@code Box}, so the hop ends in a terminal, as
+   * it does for a container whose elements are parameterised.
    */
   protected String navigableType(final TypeMirror type, final Set<String> annotationFqns) {
+    if (type.getKind() == TypeKind.DECLARED && !((DeclaredType) type).getTypeArguments().isEmpty()) return null;
     if (type.getKind() == TypeKind.DECLARED && !navigatorWrittenInTime(((DeclaredType) type).asElement())) return null;
     for (final var fqn : annotationFqns) {
       final var asClass = navigableType(type, ElementKind.CLASS, fqn);

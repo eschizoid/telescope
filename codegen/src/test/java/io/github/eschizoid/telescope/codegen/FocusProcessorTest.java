@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -21,7 +22,7 @@ import org.junit.jupiter.api.Test;
 class FocusProcessorTest {
 
   private static Compilation compile(final JavaFileObject... sources) {
-    return ProcessorHarness.compile(new FocusProcessor(), sources);
+    return NavigatorCompiler.warningFree(List.of(new FocusProcessor(), new BridgeProcessor()), sources);
   }
 
   @Nested
