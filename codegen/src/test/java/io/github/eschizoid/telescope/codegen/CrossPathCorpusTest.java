@@ -4624,6 +4624,48 @@ class CrossPathCorpusTest {
       "#0(value=\"x\")",
       "#0(value=\"String:q\")",
       "#0(value=\"String:q\")"
+    ),
+    // The bridge names a generic class raw, where the inherited setValue(T) takes Object; a
+    // String
+    // argument would bind setValue(CharSequence) there instead.
+    new VariableTransform(
+      "a forward result wider than the property's type, into a generic target whose setter is inherited",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        "public class %1$sBase<T> {\n" +
+          "  protected String value;\n" +
+          "  public void setValue(final T v) { this.value = \"T:\" + v; }\n}\n",
+        "public class %1$sTgt<Y> extends %1$sBase<String> {\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public void setValue(final CharSequence v) { this.value = \"CharSequence:\" + v; }\n" +
+          "  public static %1$sTgt<Object> sample() { final var t = new %1$sTgt<Object>(); t.value = \"q\"; return t; }\n}\n",
+        transformFn("String", "CharSequence", "a", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "CharSequence")
+      ),
+      "#0(value=\"T:x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a forward result wider than a property whose type has type arguments",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        "public class %1$sTgt {\n" +
+          "  private java.util.List<String> value;\n" +
+          "  public %1$sTgt() {}\n" +
+          "  public java.util.List<String> getValue() { return value; }\n" +
+          "  public void setValue(final java.util.List<String> v) { this.value = v; }\n" +
+          "  public void setValue(final Object v) {" +
+          " this.value = java.util.List.of(\"Object:\" + v); }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        transformFn("String", "Object", "java.util.List.of(a)", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "Object")
+      ),
+      "#0(value=[\"x\"])",
+      null,
+      null
     )
   );
 

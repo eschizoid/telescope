@@ -6786,7 +6786,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             choice.argument() != null &&
             types.isAssignable(gives, choice.argument())
           ) {
-            final var call = "{ final " + choice.argumentText() + " __arg = __tv; out." + setter + "(__arg); }";
+            final var call = "{ final " + boundArgumentText(to, choice) + " __arg = __tv; out." + setter + "(__arg); }";
             if (choice.argument().getKind().isPrimitive() && !gives.getKind().isPrimitive()) {
               sb.append("{ final ").append(gives).append(" __tv = ").append(value).append("; ");
               sb.append("if (__tv != null) ").append(call).append(" } ");
@@ -6820,16 +6820,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               .append(setter)
               .append("(__arg); } } ");
           } else if (castsToChosen(gives, choice.argument())) {
+            // The local's type is the one the call binds the chosen setter by. A parameter with
+            // type arguments is reached through a cast javac cannot check, which only this
+            // local's declaration suppresses.
+            final var bound = boundArgument(to, choice);
+            final var boundText = boundArgumentText(to, choice);
+            final var narrows = !types.isAssignable(gives, bound);
+            final var unchecked = narrows && bound instanceof DeclaredType d && !d.getTypeArguments().isEmpty();
             sb
               .append("{ final ")
               .append(gives)
               .append(" __tv = ")
               .append(value)
-              .append("; { final ")
-              .append(choice.argumentText())
-              .append(" __arg = (")
-              .append(choice.argumentText())
-              .append(") __tv; out.")
+              .append("; { ")
+              .append(unchecked ? "@SuppressWarnings(\"unchecked\") " : "")
+              .append("final ")
+              .append(boundText)
+              .append(" __arg = ")
+              .append(narrows ? "(" + boundText + ") " : "")
+              .append("__tv; out.")
               .append(setter)
               .append("(__arg); } } ");
           } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
@@ -6860,18 +6869,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Whether a transform result of type {@code gives} reaches the chosen setter parameter {@code
-   * parameter} through a cast: both are reference types naming no type variable, the parameter
-   * names no type arguments, so the cast is checked, and the parameter is a proper subtype of the
-   * result's type, so the cast narrows. A result the parameter takes as it is needs no cast.
+   * parameter} only through a cast: both are reference types naming no type variable, the result is
+   * not assignable to the parameter, and the parameter's erasure is a proper subtype of the
+   * result's, so the cast narrows. A result the parameter takes as it is needs no cast, and a
+   * result of a type the parameter's does not reach admits none.
    */
   private boolean castsToChosen(final TypeMirror gives, final TypeMirror parameter) {
     if (gives == null || parameter == null) return false;
     if (gives.getKind().isPrimitive() || parameter.getKind().isPrimitive()) return false;
     if (mirrorProps().mentionsTypeVariable(gives) || mirrorProps().mentionsTypeVariable(parameter)) return false;
     final var types = processingEnv.getTypeUtils();
-    if (!types.isSameType(parameter, types.erasure(parameter))) return false;
     if (types.isAssignable(gives, parameter)) return false;
-    return types.isSubtype(parameter, types.erasure(gives));
+    return types.isSubtype(types.erasure(parameter), types.erasure(gives));
+  }
+
+  /**
+   * The type a generated call hands the chosen setter of {@code to} its value as, so that javac
+   * binds that setter and no other overload. The bridge names a generic class raw, and a raw
+   * class's members take the erasure of their declared parameters, so there it is the erasure of
+   * the chosen setter's declared parameter: an inherited {@code setV(T)} that {@code Tgt extends
+   * Base<String>} reads as {@code setV(String)} is {@code setV(Object)} on the raw {@code Tgt}, and
+   * a {@code String} argument would bind an overload such as {@code setV(CharSequence)} instead.
+   * Elsewhere it is the parameter as a member of {@code to}. Where the value spreads into a
+   * variable-arity setter, it is the array's component.
+   */
+  private TypeMirror boundArgument(final TypeElement to, final MirrorSetters.SetterChoice choice) {
+    if (to.getTypeParameters().isEmpty()) return choice.argument();
+    final var declared = processingEnv.getTypeUtils().erasure(choice.member().getParameters().getFirst().asType());
+    return choice.spreads() && declared instanceof ArrayType array ? array.getComponentType() : declared;
+  }
+
+  /** {@link #boundArgument} as a generated local declares it. */
+  private String boundArgumentText(final TypeElement to, final MirrorSetters.SetterChoice choice) {
+    return to.getTypeParameters().isEmpty() ? choice.argumentText() : boundArgument(to, choice).toString();
   }
 
   /** One constructor argument: the parameter it fills, its declared type, and its expression. */
@@ -7066,6 +7096,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     boolean rawAccess = false;
     for (final var f : everySourceField) rawAccess |= !types.isSameType(asReachedThrough(source, f), f.type());
     for (final var f : targetFields) rawAccess |= !types.isSameType(asReachedThrough(target, f), f.type());
+    // A setter a generic class inherits with its superclass's variable is reached raw too, and a
+    // call to it through the raw class is unchecked, whatever its getter returns.
+    for (final var f : everySourceField) rawAccess |= setterReachedRaw(source, f);
+    for (final var f : targetFields) rawAccess |= setterReachedRaw(target, f);
     for (int i = 0; i < sourceFields.size(); i++) {
       final var sf = sourceFields.get(i);
       final var tgtName = renames.getOrDefault(sf.name(), sf.name());
@@ -7113,6 +7147,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       backwardCasts,
       rawAccess
     );
+  }
+
+  /**
+   * Whether the bridge writes {@code field} of {@code owner} through a setter whose declared
+   * parameter names a type variable while it names {@code owner} raw, a call javac reports as
+   * unchecked.
+   */
+  private boolean setterReachedRaw(final TypeElement owner, final Field field) {
+    if (owner.getTypeParameters().isEmpty()) return false;
+    final var member = setterChoice(owner, field.name()).member();
+    return member != null && mirrorProps().mentionsTypeVariable(member.getParameters().getFirst().asType());
   }
 
   /**
