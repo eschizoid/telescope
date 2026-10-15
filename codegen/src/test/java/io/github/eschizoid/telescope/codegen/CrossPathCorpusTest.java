@@ -4382,6 +4382,28 @@ class CrossPathCorpusTest {
       source("GwkCaseDto", head + "public record GwkCaseDto<U>(String name) implements GwkTgt {}\n")
     );
     assertTrue(genericCase.success(), () -> "the sealed bridge should compile: " + genericCase.errorMessages());
+    // Only the source's case is generic, and the patch names it in its case tests.
+    final var genericSourceCase = bridged(
+      source("BsSrc", head + bridge + "BsTgt.class)\npublic sealed interface BsSrc permits BsCase {}\n"),
+      source("BsCase", head + bridge + "BsCaseDto.class)\npublic record BsCase<T>(String name) implements BsSrc {}\n"),
+      source("BsTgt", head + "public sealed interface BsTgt permits BsCaseDto {}\n"),
+      source("BsCaseDto", head + "public record BsCaseDto(String name) implements BsTgt {}\n")
+    );
+    assertTrue(
+      genericSourceCase.success(),
+      () -> "the sealed bridge should compile: " + genericSourceCase.errorMessages()
+    );
+    // Only the target's case is generic, and the patch names it in its case tests.
+    final var genericTargetCase = bridged(
+      source("BcSrc", head + bridge + "BcTgt.class)\npublic sealed interface BcSrc permits BcCase {}\n"),
+      source("BcCase", head + bridge + "BcCaseDto.class)\npublic record BcCase(String name) implements BcSrc {}\n"),
+      source("BcTgt", head + "public sealed interface BcTgt permits BcCaseDto {}\n"),
+      source("BcCaseDto", head + "public record BcCaseDto<U>(String name) implements BcTgt {}\n")
+    );
+    assertTrue(
+      genericTargetCase.success(),
+      () -> "the sealed bridge should compile: " + genericTargetCase.errorMessages()
+    );
   }
 
   @Test
