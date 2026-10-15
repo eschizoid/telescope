@@ -260,11 +260,13 @@ class CrossPathCorpusTest {
    * converting fails too.
    */
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
-    // Iterable is not a Collection subtype, so neither path's classifier gives it a shape.
+    // Agreement, not a difference: Iterable is not a Collection subtype, so neither path's
+    // classifier gives it a shape, and both refuse it by name.
     "iterable/record",
     new Refusal("has incompatible types", "incompatible source/target shapes"),
-    // A sorted set whose elements are converted cannot carry the source's comparator, and the
-    // converted element does not implement Comparable, so both paths refuse the pairing.
+    // Agreement, not a difference, in this entry and the three after it: a sorted set whose
+    // elements are converted cannot carry the source's comparator, and the converted
+    // element does not implement Comparable, so both paths refuse the pairing by name.
     "sortedset/iface/record",
     new Refusal("does not implement Comparable", "does not implement Comparable"),
     "navigableset/record",
@@ -4565,17 +4567,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Shapes only the generated path can express, each with what the generated bridge writes. Each is
-   * a capability rather than a divergence: no runtime mapper can be written for it, so there is
-   * nothing for the generated result to agree with.
+   * Shapes recorded by what the generated bridge writes alone, each pinned so a change to it is
+   * seen. The register holds no runtime result beside it.
    *
    * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
    */
   private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
-    // Generated-only, not a defect. A runtime row's forward function returns the property's
-    // own type, so no runtime mapper hands a setter a value of any other type. A @Transform
-    // can return a type the setter chosen from the property's type cannot take; the bridge
-    // then passes the value as it is, and javac binds the overload that takes it.
+    // A defect still to close: the two paths write a transform result through different
+    // setter overloads. The bridge binds the overload the result's own type picks, here
+    // setV(Object). A runtime row typed to return Object compiles too, and the runtime
+    // writer writes through the setter the property's type picks, setV(String), so the same
+    // value arrives as String:x.
     "a transform result the setter chosen from the property's type cannot take",
     "Object:x"
   );
@@ -5303,8 +5305,8 @@ class CrossPathCorpusTest {
    * to contain: the generated path's first, then the runtime's.
    */
   private static final Map<String, List<String>> SEALED_REFUSALS = Map.of(
-    // A defect still to close: neither path pairs the cases of a sealed interface given type
-    // arguments, so both refuse the field by name.
+    // A defect still to close: neither path pairs the cases of a sealed interface given
+    // type arguments, so both refuse the field by name.
     "a sealed field given type arguments",
     List.of("field 'r' has incompatible types", "component 'r' has incompatible source/target shapes")
   );
@@ -5881,10 +5883,11 @@ class CrossPathCorpusTest {
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
   private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
-    // A defect still to close: a sub-pair that reaches back to a pair being converted around
-    // it
-    // is walked, because the runtime's guard against an object reaching itself does not pass
-    // through a generated bridge.
+    // A defect still to close: the runtime walks a nested pair that reaches back to a pair
+    // being converted around it, rather than using its own bridge, because its guard
+    // against an object reaching itself does not pass through a generated bridge. Walked,
+    // the enum pair has no transform and refuses the constant the bridge would have
+    // converted.
     "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
     "%1$sEa has no constant named C, which the backward direction needs"
   );
@@ -6831,8 +6834,9 @@ class CrossPathCorpusTest {
    * <p>An entry no row exercises, or whose row either path stops giving, fails the test.
    */
   private static final Map<String, List<String>> UNCHECKED_CONVERSION_DIVERGENCES = Map.ofEntries(
-    // A defect still to close: neither path checks a converted value against the type of the
-    // property it is read from or written to, so the runtime hands on whatever it is given.
+    // A defect still to close, in this entry and the four after it: the runtime writes a
+    // transform's result into a property a target fixes to a narrower type without checking
+    // it, where the processor refuses the transform.
     Map.entry(
       "a target that fixes the variable to String, with a transform returning Object",
       List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
@@ -6853,6 +6857,9 @@ class CrossPathCorpusTest {
       "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
       List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
     ),
+    // A defect still to close, in this entry and the next: a runtime row typed by a class's
+    // arguments reads the property as that argument without checking it, where the
+    // processor holds it as the erasure and refuses a transform narrower than that.
     Map.entry(
       "a row typed by both classes' arguments, with a transform on String",
       List.of(REFUSED + "does not fit forward", "value=a!, a String", "value=q?, a String")
@@ -6861,10 +6868,16 @@ class CrossPathCorpusTest {
       "a row typed by the source's argument under Number, with a transform on Integer",
       List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
     ),
+    // A defect still to close: the runtime writes a backward result into a property bounded
+    // by Number without checking it, and throws a bare ClassCastException where the
+    // processor refuses the transform by name.
     Map.entry(
       "a row reading a variable bounded by Number as Object, with a backward returning Object",
       List.of(REFUSED + "does not fit backward", "value=7, a String", REFUSED + "ClassCastException")
     ),
+    // A defect still to close: the runtime writes the via mapper's result into a property
+    // the target fixes to another class without checking it, where the processor refuses
+    // the row.
     Map.entry(
       "a @ViaMapper whose forward returns a class the target's fixed property does not take",
       List.of(
@@ -6873,6 +6886,9 @@ class CrossPathCorpusTest {
         REFUSED + "ClassCastException"
       )
     ),
+    // A defect still to close: the runtime builds a via row whose mapper cannot take the
+    // property's values and throws a bare ClassCastException on each call, where the
+    // processor refuses the row by name.
     Map.entry(
       "a @ViaMapper whose forward takes a class the variable's bound does not reach",
       List.of(
@@ -6881,6 +6897,10 @@ class CrossPathCorpusTest {
         REFUSED + "ClassCastException"
       )
     ),
+    // A defect still to close, in this entry and the next: the processor refuses an
+    // overloaded mapper method on a value it holds only as Object, since the overload javac
+    // picks for Object need not be the one the value's class calls for, while the runtime
+    // row converts through the one mapper it has.
     Map.entry(
       "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
       List.of(
