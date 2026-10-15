@@ -333,12 +333,15 @@ class CrossPathCorpusTest {
           // Resolved outside the attempt below, because a harness fault has to be an error rather
           // than an outcome: recorded as a refusal it would pair with the other path's refusal, and
           // the cell would report agreement having measured nothing.
-          final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+          final var nested = nestedBridgesFirst(processed, plain, prefix);
+          reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+          final var forward = processed.success()
+            ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+            : null;
           generated =
             forward == null
               ? Outcome.refused(processed.errorMessages().strip())
               : run(items, () -> forward.invoke(null, source));
-          reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
         } catch (final ReflectiveOperationException e) {
           throw new IllegalStateException(cell + " could not be built", e);
         }
@@ -462,6 +465,22 @@ class CrossPathCorpusTest {
     final var bridge = defined.get(bridgeName);
     if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
     return bridge;
+  }
+
+  /**
+   * Define every bridge the processor's compile added except the cell's own, so a runtime mapper
+   * built next finds each nested pair's own bridge as it would in a real build, and hand back their
+   * names for {@link #emitted(ProcessorHarness.Compilation, ProcessorHarness.Compilation, String,
+   * Set)} to pass over. A compile the processor refused added nothing. The cell's own bridge comes
+   * after the runtime mapper, so a mapper that would route through a bridge beside its source
+   * cannot be the generated path a second time.
+   */
+  private static Set<String> nestedBridgesFirst(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix
+  ) {
+    return processed.success() ? definedExceptOwn(processed, plain, prefix) : Set.of();
   }
 
   /**
@@ -722,12 +741,15 @@ class CrossPathCorpusTest {
       final var source = src.getConstructors()[0].newInstance(container);
       final var items = tgt.getMethod("items");
 
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
       final var generated =
         forward == null
           ? Outcome.refused(processed.errorMessages().strip())
           : run(items, () -> forward.invoke(null, source));
-      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       final var owed = shape
         .owed()
@@ -1187,11 +1209,12 @@ class CrossPathCorpusTest {
         ? classes.get(PACKAGE + "." + prefix + "InnerDto").getConstructors()[0].newInstance(items)
         : items;
       final var target = tgt.getConstructors()[0].newInstance(held);
-      final var backward = emitted(processed, plain, prefix).getMethod("backward", tgt);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = thrown(() -> Telescope.mapper(cast(src), cast(tgt)).backward(target));
+      final var backward = emitted(processed, plain, prefix, nested).getMethod("backward", tgt);
 
       final var owed = shape.owed().replace("%s", PACKAGE + "." + prefix);
       final var generated = thrown(() -> backward.invoke(null, target));
-      final var reflective = thrown(() -> Telescope.mapper(cast(src), cast(tgt)).backward(target));
       if (!owed.equals(generated)) failures.add(shape.name() + ": generated threw " + generated);
       if (!owed.equals(reflective)) failures.add(shape.name() + ": reflective threw " + reflective);
     }
@@ -1492,10 +1515,16 @@ class CrossPathCorpusTest {
       }
       final var source = src.getConstructors()[0].newInstance(input);
 
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(source));
+      });
       final Outcome generated;
       final Outcome generatedBack;
       if (processed.success()) {
-        final var bridge = emitted(processed, plain, prefix);
+        final var bridge = emitted(processed, plain, prefix, nested);
         final var forward = bridge.getMethod("forward", src);
         final var backward = bridge.getMethod("backward", tgt);
         generated = run(tgt.getMethod("items"), () -> forward.invoke(null, source));
@@ -1504,11 +1533,6 @@ class CrossPathCorpusTest {
         generated = Outcome.refused(processed.errorMessages().strip());
         generatedBack = generated;
       }
-      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
-      final var reflectiveBack = run(src.getMethod("items"), () -> {
-        final var mapper = Telescope.mapper(cast(src), cast(tgt));
-        return mapper.backward(mapper.forward(source));
-      });
 
       if (shape.refused() != null) {
         if (generated.refusal() == null || !generated.refusal().contains(shape.refused().generatedSays())) {
@@ -1844,10 +1868,16 @@ class CrossPathCorpusTest {
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
       final var input = src.getMethod("sample").invoke(null);
 
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(input));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(input));
+      });
       final Outcome generated;
       final Outcome generatedBack;
       if (processed.success()) {
-        final var bridge = emitted(processed, plain, prefix);
+        final var bridge = emitted(processed, plain, prefix, nested);
         final var forward = bridge.getMethod("forward", src);
         final var backward = bridge.getMethod("backward", tgt);
         generated = run(tgt.getMethod("items"), () -> forward.invoke(null, input));
@@ -1856,11 +1886,6 @@ class CrossPathCorpusTest {
         generated = Outcome.refused(processed.errorMessages().strip());
         generatedBack = generated;
       }
-      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(input));
-      final var reflectiveBack = run(src.getMethod("items"), () -> {
-        final var mapper = Telescope.mapper(cast(src), cast(tgt));
-        return mapper.backward(mapper.forward(input));
-      });
 
       if (row.refused() != null) {
         if (generated.refusal() == null || !generated.refusal().contains(row.refused().generatedSays())) {
@@ -2058,8 +2083,9 @@ class CrossPathCorpusTest {
     final var tgt = classes.get(PACKAGE + ".SsTgt");
     final var base = classes.get(PACKAGE + ".SsBase").getConstructor();
     final var sub = classes.get(PACKAGE + ".SsSub").getConstructor();
-    final var backward = emitted(processed, plain, "Ss").getMethod("backward", tgt);
+    final var nested = nestedBridgesFirst(processed, plain, "Ss");
     final var mapper = Telescope.mapper(cast(src), cast(tgt));
+    final var backward = emitted(processed, plain, "Ss", nested).getMethod("backward", tgt);
 
     final var refusal = "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and ";
     final var cause = " <- ClassCastException";
@@ -2735,12 +2761,15 @@ class CrossPathCorpusTest {
       final var source = src.getConstructors()[0].newInstance(fixedInput(classes, prefix, srcField, pairing.input()));
       final var items = tgt.getMethod("items");
 
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
       final var generated =
         forward == null
           ? Outcome.refused(processed.errorMessages().strip())
           : run(items, () -> forward.invoke(null, source));
-      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
       // path refuses either while compiling, where only the processor's own diagnostic counts, or
@@ -3052,15 +3081,18 @@ class CrossPathCorpusTest {
       final Class<Object> src = cast(classes.get(qualified + "Src"));
       final Class<Object> tgt = cast(classes.get(qualified + "Tgt"));
       final var source = src.getConstructors()[0].newInstance("x");
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
-      final var generated =
-        forward == null ? REFUSED + processed.errorMessages().strip() : built(() -> forward.invoke(null, source));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var reflective = built(() ->
         (construction.strategy().equals("AUTO")
           ? Telescope.mapper(src, tgt)
           : Telescope.mapper(src, tgt, WriteHint.writeBean(tgt, WriteStrategy.valueOf(construction.strategy())))
         ).forward(source)
       );
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
+      final var generated =
+        forward == null ? REFUSED + processed.errorMessages().strip() : built(() -> forward.invoke(null, source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
       // path's refusal has to be the processor's own diagnostic, so a javac error inside a
@@ -3502,8 +3534,9 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(cast(src), cast(tgt));
+      final var bridge = emitted(processed, plain, prefix, nested);
       final var srcItems = src.getMethod("items");
       final var tgtItems = tgt.getMethod("items");
       final var forwardIn = row.input().get();
@@ -3968,8 +4001,9 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = List.of(
@@ -4111,8 +4145,9 @@ class CrossPathCorpusTest {
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".TvSrc"));
     final Class<Object> tgt = cast(classes.get(PACKAGE + ".TvTgt"));
-    final var bridge = emitted(processed, plain, "Tv");
+    final var nested = nestedBridgesFirst(processed, plain, "Tv");
     final var mapper = Telescope.mapper(src, tgt);
+    final var bridge = emitted(processed, plain, "Tv", nested);
     // Two nodes that name each other as next, so the field is both inherited and part of a cycle.
     final Attempt srcSample = () -> chain(src, "alice", "bob");
     final Attempt tgtSample = () -> chain(tgt, "carol", "dave");
@@ -4230,8 +4265,9 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(processed, plain, prefix, nested);
       for (final var operation : owed) {
         for (final var side : List.of("generated", "reflective")) {
           final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
@@ -4332,10 +4368,12 @@ class CrossPathCorpusTest {
       final Class<Object> target = cast(classes.get(PACKAGE + "." + tgt));
       final var sample = source.getConstructor().newInstance();
       source.getMethod("setName", String.class).invoke(sample, "a");
-      final var generated = emitted(processed, plain, src.replace("Src", "")).getMethod("forward", source);
+      final var cellPrefix = src.replace("Src", "");
+      final var nested = nestedBridgesFirst(processed, plain, cellPrefix);
       final var getName = target.getMethod("getName");
-      final var viaBridge = getName.invoke(generated.invoke(null, sample));
       final var viaRuntime = getName.invoke(Telescope.mapper(source, target).forward(sample));
+      final var generated = emitted(processed, plain, cellPrefix, nested).getMethod("forward", source);
+      final var viaBridge = getName.invoke(generated.invoke(null, sample));
       if (!"a".equals(viaBridge) || !"a".equals(viaRuntime)) {
         failures.add(src + ": the bridge gave " + viaBridge + ", the runtime " + viaRuntime);
       }
@@ -4508,8 +4546,9 @@ class CrossPathCorpusTest {
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> source = cast(classes.get(PACKAGE + ".PtwSrc"));
     final Class<Object> target = cast(classes.get(PACKAGE + ".PtwTgt"));
-    final var bridge = emitted(processed, plain, "Ptw");
+    final var nested = nestedBridgesFirst(processed, plain, "Ptw");
     final var mapper = Telescope.mapper(source, target);
+    final var bridge = emitted(processed, plain, "Ptw", nested);
     final var name = "an Integer into a property the target fixes to String";
     final Attempt generated = () ->
       bridge.getMethod("forward", source).invoke(null, passThroughSample(source, "k", 42, List.of()));
@@ -4890,8 +4929,9 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final var patch = bridge.getMethod("patch", src, tgt);
       final Map<String, Patch> sides = Map.of(
         "generated",
@@ -4933,8 +4973,9 @@ class CrossPathCorpusTest {
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".SpSrc"));
     final Class<Object> tgt = cast(classes.get(PACKAGE + ".SpTgt"));
-    final var patch = emitted(processed, plain, "Sp").getMethod("patch", src, tgt);
+    final var nested = nestedBridgesFirst(processed, plain, "Sp");
     final var mapper = Telescope.mapper(src, tgt);
+    final var patch = emitted(processed, plain, "Sp", nested).getMethod("patch", src, tgt);
     final var cardDto = classes.get(PACKAGE + ".SpCardDto").getConstructors()[0];
     final var bank = classes.get(PACKAGE + ".SpBankDto").getConstructors()[0].newInstance("DE89");
     // A partial of the same case overlays; another case or a null partial is ignored and the base
@@ -5206,14 +5247,14 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      // Every bridge is defined before the mapper is built, so the runtime finds each case's own.
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var refusal = refusalOf(() -> Telescope.mapper(src, tgt));
       if (refusal != null) {
         failures.add(cell.name() + ": the runtime owed a mapper, saw " + refusal);
         continue;
       }
       final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final Attempt partial = () -> tgt.getMethod("partial").invoke(null);
@@ -5877,7 +5918,7 @@ class CrossPathCorpusTest {
       // own bridge is there for the runtime to find. The cell's own bridge comes after: a
       // forward-only mapper given no rows routes through a bridge it finds beside the source, and
       // would then be the generated path a second time.
-      final var subBridges = processed.success() ? definedExceptOwn(processed, plain, prefix) : Set.<String>of();
+      final var subBridges = nestedBridgesFirst(processed, plain, prefix);
       final Attempt build = () -> forwardOnly ? Telescope.mapperForward(src, tgt) : Telescope.mapper(src, tgt);
       final var refusal = refusalOf(build);
       final var built = refusal == null;
@@ -6300,7 +6341,8 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      // Built before the bridge is defined, so the runtime converts through its own row.
+      // Built before the cell's own bridge is defined, so the runtime converts through its own row.
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
       @SuppressWarnings("unchecked")
       final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
@@ -6308,7 +6350,7 @@ class CrossPathCorpusTest {
       final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
         ? (ForwardMapper<Object, Object>) runtime
         : null;
-      final var bridge = emitted(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = new ArrayList<Map.Entry<String, String>>();
@@ -7118,13 +7160,14 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      // Built before the bridge is defined, so the runtime converts through its own row.
+      // Built before the cell's own bridge is defined, so the runtime converts through its own row.
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       @SuppressWarnings("unchecked")
       final var mapper = (Mapper<Object, Object>) classes
         .get(PACKAGE + "." + prefix + "Runtime")
         .getMethod("mapper")
         .invoke(null);
-      final var bridge = emitted(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = List.of(
