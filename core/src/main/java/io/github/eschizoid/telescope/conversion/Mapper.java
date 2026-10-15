@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.introspection.Trace;
@@ -574,9 +575,9 @@ public final class Mapper<A, B> {
       final var entry = caseOfTarget(target);
       if (produced != null && !entry.targetCase().isInstance(produced)) throw new IllegalArgumentException(
         "Mapper.into(target, source): the source converts to " +
-          produced.getClass().getSimpleName() +
+          PairingMessages.className(produced.getClass()) +
           ", and the target is a " +
-          target.getClass().getSimpleName() +
+          PairingMessages.className(target.getClass()) +
           ". A value is written into a target of the case it converts to; call forward(source) to" +
           " change the case."
       );

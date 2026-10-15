@@ -1620,24 +1620,35 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (root == null) return;
       final var rootErased = types.erasure(root);
       final var srcErased = types.erasure(srcType);
-      if (types.isSubtype(srcErased, rootErased) || mayBeInstance(srcErased, rootErased)) return;
+      if (mayBeInstance(srcErased, rootErased)) return;
       report(row, PairingMessages.sourcePathNotOnSource(srcSimple, tgtSimple, rowName, simpleName(root)));
     }
 
     /**
-     * Whether an instance of {@code source} can also be an instance of {@code root}, a type that is
-     * not a supertype of the source, as construction decides it: {@code root} extends the source,
-     * or {@code root} is an interface and the source is a class that is not final, so a subclass of
-     * it can implement that interface. The source of a call this verifies is a record or a bean
-     * class: never an interface, and never an enum, which construction treats as final whether or
-     * not its constants declare bodies.
+     * Whether one object can be an instance of both {@code source} and {@code root}, as
+     * construction decides it: one extends the other; either is sealed and one of its permitted
+     * cases can be such an instance, since every instance of a sealed type is an instance of one of
+     * its cases; or {@code root} is an interface and the source is a class that is not final, so a
+     * subclass of it can implement that interface. The source of a call this verifies, and each
+     * permitted case of it, is a class: never an interface or an enum.
      */
     private boolean mayBeInstance(final TypeMirror source, final TypeMirror root) {
-      if (types.isSubtype(root, source)) return true;
-      return (
-        types.asElement(root).getKind().isInterface() &&
-        !types.asElement(source).getModifiers().contains(Modifier.FINAL)
-      );
+      if (types.isSubtype(root, source) || types.isSubtype(source, root)) return true;
+      final var sourceEl = (TypeElement) types.asElement(source);
+      final var rootEl = (TypeElement) types.asElement(root);
+      if (sourceEl.getModifiers().contains(Modifier.SEALED)) {
+        return sourceEl
+          .getPermittedSubclasses()
+          .stream()
+          .anyMatch(c -> mayBeInstance(types.erasure(c), root));
+      }
+      if (rootEl.getModifiers().contains(Modifier.SEALED)) {
+        return rootEl
+          .getPermittedSubclasses()
+          .stream()
+          .anyMatch(c -> mayBeInstance(source, types.erasure(c)));
+      }
+      return rootEl.getKind().isInterface() && !sourceEl.getModifiers().contains(Modifier.FINAL);
     }
 
     private String simpleName(final TypeMirror type) {

@@ -576,4 +576,84 @@ class TargetPathStartTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("A value whose class has no simple name is named in the refusal")
+  class UnnamedValueClasses {
+
+    @Test
+    @DisplayName("a constant of an anonymous class replacing the target is named by its binary name")
+    void anonymousConstant() {
+      final SuperRowConcreteBase anonymous = new SuperRowConcreteBase() {};
+      assertEquals(
+        PairingMessages.targetValueOffTarget(
+          "SuperRowSource",
+          "SuperRowConcreteSub",
+          "constant",
+          anonymous.getClass().getName()
+        ),
+        refusal(() ->
+          Telescope.mapperForward(
+            SuperRowSource.class,
+            SuperRowConcreteSub.class,
+            constant(Telescope.of(SuperRowConcreteBase.class), anonymous)
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a constant that is an enum constant with a body is named by its enum")
+    void bodiedEnumConstant() {
+      assertEquals(
+        PairingMessages.targetValueOffTarget("SuperRowSource", "SuperRowConcreteSub", "constant", "SourceRootBodied"),
+        refusal(() ->
+          Telescope.mapperForward(
+            SuperRowSource.class,
+            SuperRowConcreteSub.class,
+            constant(Telescope.of(Object.class), (Object) SourceRootBodied.A)
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a write that returns an anonymous class is named by its binary name")
+    void anonymousWrite() {
+      final SuperRowConcreteBase anonymous = new SuperRowConcreteBase() {};
+      final var mapper = Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowConcreteSub.class,
+        constant(Telescope.lens(SuperRowConcreteBase::getName, (SuperRowConcreteBase b, String v) -> anonymous), "x")
+      );
+      assertEquals(
+        PairingMessages.targetPathWroteOffTarget(
+          "SuperRowSource",
+          "SuperRowConcreteSub",
+          "constant",
+          anonymous.getClass().getName()
+        ),
+        failedWrite(() -> mapper.forward(SOURCE))
+      );
+    }
+
+    @Test
+    @DisplayName("a write that returns an enum constant with a body is named by its enum")
+    void bodiedEnumWrite() {
+      final var mapper = Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowConcreteSub.class,
+        constant(Telescope.lens((Function<Object, Object>) o -> o, (o, v) -> SourceRootBodied.A), (Object) "x")
+      );
+      assertEquals(
+        PairingMessages.targetPathWroteOffTarget(
+          "SuperRowSource",
+          "SuperRowConcreteSub",
+          "constant",
+          "SourceRootBodied"
+        ),
+        failedWrite(() -> mapper.forward(SOURCE))
+      );
+    }
+  }
 }

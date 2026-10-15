@@ -434,6 +434,17 @@ class MapperVerifierProcessorTest {
       record SourceRootNoteDto(String note) {}
       interface SourceRootNamed { String getLabel(); }
       enum SourceRootBodied { A { @Override public String toString() { return "a"; } }; public String getLabel() { return "b"; } }
+      sealed interface ClosedRoot permits ClosedRootRecord { String getLabel(); }
+      record ClosedRootRecord(String label) implements ClosedRoot { public String getLabel() { return label; } }
+      sealed interface SubRoot permits SubRootCase { String getLabel(); }
+      final class SubRootCase extends SourceRootBase implements SubRoot { public SubRootCase() {} }
+      sealed interface OpenRoot permits OpenRootMore { String getLabel(); }
+      non-sealed interface OpenRootMore extends OpenRoot {}
+      abstract sealed class AbstractNoCase permits AbstractNoCaseFinal { public String getLabel() { return "s"; } }
+      final class AbstractNoCaseFinal extends AbstractNoCase { public AbstractNoCaseFinal() {} }
+      abstract sealed class SomeSealed permits SomeSealedNamed, SomeSealedPlain { public String getLabel() { return "s"; } }
+      final class SomeSealedNamed extends SomeSealed implements SourceRootNamed { public SomeSealedNamed() {} }
+      final class SomeSealedPlain extends SomeSealed { public SomeSealedPlain() {} }
       record SourceRootWholeDto(SourceRootBase whole) {}
       record SourceRootOtherDto(SourceRootOther whole) {}
       """;
@@ -602,6 +613,74 @@ class MapperVerifierProcessorTest {
       );
       assertTrue(
         compilation.hasError(PairingMessages.sourcePathNotOnSource("Tree", "TreeDto", "to", "SourceRootNamed")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a root no permitted case of which can be the source is refused as construction refuses it")
+    void sealedRootWithNoCaseIsRefused() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.lens(ClosedRoot::getLabel, (ClosedRoot r, String v) -> r), SourceRootNoteDto::note));
+          static final Object B = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(ClosedRoot.class).field(ClosedRoot::getLabel), SourceRootNoteDto::note));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertEquals(2, errorCount(compilation), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourcePathNotOnSource("SourceRootBase", "SourceRootNoteDto", "to", "ClosedRoot")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("SourceRootBase", "SourceRootNoteDto", "to", "ClosedRoot", "label")
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a sealed root with a case the source may be is left to construction's per-call check")
+    void sealedRootWithAPossibleCaseIsAccepted() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.lens(SubRoot::getLabel, (SubRoot r, String v) -> r), SourceRootNoteDto::note));
+          static final Object B = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.lens(OpenRoot::getLabel, (OpenRoot r, String v) -> r), SourceRootNoteDto::note));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a sealed source decides an interface root through its permitted cases, as construction does")
+    void sealedSourceDecidesThroughItsCases() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(AbstractNoCase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(SourceRootNamed.class).field(SourceRootNamed::getLabel), SourceRootNoteDto::note));
+          static final Object B = Telescope.mapperForward(SomeSealed.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(SourceRootNamed.class).field(SourceRootNamed::getLabel), SourceRootNoteDto::note));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertEquals(1, errorCount(compilation), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("AbstractNoCase", "SourceRootNoteDto", "to", "SourceRootNamed", "label")
+        ),
         compilation::errorMessages
       );
     }
