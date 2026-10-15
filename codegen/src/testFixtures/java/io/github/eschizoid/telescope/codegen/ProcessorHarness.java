@@ -7,6 +7,7 @@ import java.lang.invoke.MethodHandles;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -176,6 +177,22 @@ public final class ProcessorHarness {
         }
       }
       return defined;
+    }
+
+    /**
+     * Every warning javac reported in a source file a processor generated, any lint category
+     * included, as {@code file:line: message}.
+     */
+    public List<String> warningsInGenerated() {
+      final var generatedFiles = new HashSet<String>();
+      for (final var name : generated.keySet()) generatedFiles.add("/" + name.replace('.', '/') + ".java");
+      final var warnings = new ArrayList<String>();
+      for (final var d : diagnostics) {
+        if (d.getKind() != Diagnostic.Kind.WARNING && d.getKind() != Diagnostic.Kind.MANDATORY_WARNING) continue;
+        if (d.getSource() == null || !generatedFiles.contains(d.getSource().getName())) continue;
+        warnings.add(d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT));
+      }
+      return warnings;
     }
 
     public List<Diagnostic<? extends JavaFileObject>> errors() {
