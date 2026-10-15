@@ -546,4 +546,56 @@ public final class PairingMessages {
       "differing scalar types, add a to(src, tgt, forward, backward) row to supply the conversion."
     );
   }
+
+  /**
+   * A bean property whose setter cannot take a value of the type its getter returns, on a path that
+   * writes such a value: a mapper filling the property from a source, a lens, a navigator, or a
+   * patch.
+   */
+  public static String setterCannotTake(
+    final String owner,
+    final String property,
+    final String setter,
+    final String readType,
+    final String writeType
+  ) {
+    return (
+      "Property '" +
+      property +
+      "' of " +
+      owner +
+      " is read as " +
+      readType +
+      ", but its setter " +
+      setter +
+      " takes " +
+      writeType +
+      ", so a value of the property's type cannot be written through it. Declare the setter with" +
+      " the getter's type, or write the property through a conversion that produces " +
+      writeType +
+      "."
+    );
+  }
+
+  /** A bean property with several setters, none of which Java would bind its value to alone. */
+  public static String ambiguousSetters(
+    final String owner,
+    final String property,
+    final String readType,
+    final List<String> setters
+  ) {
+    return (
+      "Property '" +
+      property +
+      "' of " +
+      owner +
+      " has several setters, " +
+      String.join(", ", setters) +
+      ", and no single one takes its type " +
+      readType +
+      " more specifically than the rest. Remove the extra setters, or add one that takes " +
+      readType +
+      "."
+    );
+  }
 }

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -74,11 +75,15 @@ final class FromMap {
     final var known = target.isRecord()
       ? Arrays.stream(target.getRecordComponents()).map(RecordComponent::getName).toList()
       : List.of(Beans.propertyNames(target));
+    final Beans.BeanWriter<T> writer = target.isRecord() ? null : Beans.autoWriter(target);
+    // A bean property is converted to the type its write takes: its getter's type, or the type of
+    // a setter that a value of the getter's type cannot be passed to. The generated binder
+    // converts to the same type.
     final var typeByName = LinkedHashMap.<String, Type>newLinkedHashMap(known.size());
     if (target.isRecord()) {
       for (final var comp : target.getRecordComponents()) typeByName.put(comp.getName(), comp.getGenericType());
     } else {
-      for (final var name : known) typeByName.put(name, Beans.memberPropertyType(target, name));
+      for (final var name : known) typeByName.put(name, Beans.conversionType(writer, target, name));
     }
     for (final var fieldName : byField.keySet()) {
       if (!known.contains(fieldName)) throw new IllegalArgumentException(
@@ -107,7 +112,12 @@ final class FromMap {
         e
       );
     }
-    final Beans.BeanWriter<T> writer = target.isRecord() ? null : Beans.autoWriter(target);
+    if (writer != null) {
+      for (final var name : known) {
+        final var ambiguity = Beans.setterAmbiguity(writer, target, name);
+        if (ambiguity != null) throw new IllegalArgumentException("Telescope.fromMap: " + ambiguity);
+      }
+    }
     final var slots = LinkedHashMap.<String, Slot>newLinkedHashMap(known.size());
     for (final var entry : typeByName.entrySet()) {
       final var name = entry.getKey();
@@ -129,7 +139,7 @@ final class FromMap {
       // conversion can refuse anything on its account. A declared requirement on it still holds,
       // so its key is checked for presence and nothing more. The generated binder leaves the
       // same property out.
-      final var written = writer == null || writer.writes(name);
+      final var written = writer == null || writer.writes(name) || Beans.writtenOnlyConverted(writer, target, name);
       if (!written) {
         slots.put(name, new Slot(name, null, declaredRequired.contains(name), false));
         continue;
@@ -247,8 +257,17 @@ final class FromMap {
       converters[i] = slot.converter();
       required[i] = slot.required();
       written[i] = slot.written();
-      final var propertyType = Beans.memberPropertyType(target, propertyNames[i]);
+      final var propertyType = Beans.conversionType(writer, target, propertyNames[i]);
       defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
+    }
+    // A property written only through a setter its getter's type cannot reach is left out of the
+    // writer's build, so its converted value is written once the bean exists.
+    final var afterBuild = new ArrayList<Integer>();
+    final var convertedWriters = (BiConsumer<Object, Object>[]) new BiConsumer<?, ?>[n];
+    for (var i = 0; i < n; i++) {
+      if (!written[i] || !Beans.writtenOnlyConverted(writer, target, propertyNames[i])) continue;
+      afterBuild.add(i);
+      convertedWriters[i] = Beans.convertedWriter(target, propertyNames[i]);
     }
     final var refusal = MissingKeys.of(target, "property", keys, propertyNames, required);
     return mapSrc -> {
@@ -260,7 +279,9 @@ final class FromMap {
         final var value = written[i] ? mapSrc.get(keys[i]) : null;
         return value == null ? defaults[i] : converters[i].apply(value);
       };
-      return writer.construct(propertyNames, valueByName);
+      final var bean = writer.construct(propertyNames, valueByName);
+      for (final var i : afterBuild) convertedWriters[i].accept(bean, valueByName.apply(propertyNames[i]));
+      return bean;
     };
   }
 
@@ -276,6 +297,9 @@ final class FromMap {
     final Map<String, MapExtractStep> byField
   ) {
     for (final var row : byField.entrySet()) {
+      // A row converts its value for the property's own type, which this setter cannot take.
+      final var refusal = Beans.setterRefusal(writer, target, row.getKey());
+      if (refusal != null) throw new IllegalArgumentException("Telescope.fromMap: " + refusal);
       if (!writer.writes(row.getKey())) throw new IllegalArgumentException(
         "Telescope.fromMap: a row names property '" +
           row.getKey() +

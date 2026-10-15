@@ -2126,9 +2126,83 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild, pkg);
+    // A transformed field's value is what its transform returns, which the transform check has
+    // already held to the member it is written through; every other value has the field's own type.
+    final var transformedTargets = new HashSet<String>();
+    for (final var t : transforms.keySet()) transformedTargets.add(renames.getOrDefault(t, t));
+    final var transformedSources = new HashSet<>(transforms.keySet());
+    transformedSources.removeAll(forwardOnlyTransforms);
+    // What each transform hands the setter it writes through, by the field written: the target's
+    // field forward, the source's backward. A transform whose result type this cannot read is left
+    // out, and its call binds by that result as it is.
+    final var forwardGives = new HashMap<String, TypeMirror>();
+    final var backwardGives = new HashMap<String, TypeMirror>();
+    // Fields whose value reaches the setter as a reference that may be null although the field's
+    // own type is primitive: a @ViaMapper result, which the read gates on a null source.
+    final var referenceTargets = new HashSet<String>();
+    final var referenceSources = new HashSet<String>();
+    for (final var entry : fieldPlans.entrySet()) {
+      if (!entry.getValue().userSuppliedBridge()) continue;
+      final var sourceName = entry.getKey();
+      final var targetName = renames.getOrDefault(sourceName, sourceName);
+      if (!fieldByName(sourceFields, sourceName).type().getKind().isPrimitive()) referenceTargets.add(targetName);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      if (tf != null && !tf.type().getKind().isPrimitive()) referenceSources.add(sourceName);
+    }
+    for (final var t : transforms.keySet()) {
+      final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
+      if (usingEl == null) continue;
+      final var targetName = renames.getOrDefault(t, t);
+      final var sf = fieldByName(sourceFields, t);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      final var method = cfg.transformMethods().get(t);
+      final var qualified = method != null && !method.isEmpty();
+      final var forward = transformGives(
+        usingEl,
+        qualified ? method : "forward",
+        sf.type(),
+        bridgePackage,
+        !qualified,
+        1
+      );
+      if (forward != null) forwardGives.put(targetName, forward);
+      if (qualified || forwardOnlyTransforms.contains(t) || tf == null) continue;
+      final var backward = transformGives(usingEl, "backward", tf.type(), bridgePackage, true, 0);
+      if (backward != null) backwardGives.put(t, backward);
+    }
+    final var builtForward = buildExpr(
+      target,
+      readForward,
+      targetFields,
+      writeStrategy,
+      source,
+      targetRebuild,
+      pkg,
+      transformedTargets,
+      forwardGives,
+      referenceTargets
+    );
     if (builtForward == null) return;
-    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild, pkg);
+    final var builtBackward = buildExpr(
+      source,
+      readBackward,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      pkg,
+      transformedSources,
+      backwardGives,
+      referenceSources
+    );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
     final var backwardBody = withPrelude(backwardLocals, builtBackward);
@@ -2180,7 +2254,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
     pathArg = guarded ? FRESH_PATH : null;
-    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild, null);
+    final var patchInner = buildExpr(
+      source,
+      readPatch,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      null,
+      Set.of(),
+      Map.of(),
+      Set.of()
+    );
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
@@ -4011,6 +4096,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return new Resolution.Bound(raw ? (ExecutableType) types.erasure(best) : best);
   }
 
+  /**
+   * The type a transform's call returns for an argument of {@code argument}: the bound overload's
+   * return type, or, for a {@code BridgeFn} with none bound, its type argument at {@code
+   * fnArgument}. Null where neither says.
+   */
+  private TypeMirror transformGives(
+    final TypeElement usingEl,
+    final String name,
+    final TypeMirror argument,
+    final PackageElement callerPackage,
+    final boolean bridgeFn,
+    final int fnArgument
+  ) {
+    if (resolvedFn(usingEl, name, argument, callerPackage) instanceof Resolution.Bound bound) {
+      return bound.member().getReturnType();
+    }
+    if (!bridgeFn) return null;
+    final var fn = bridgeFnInstantiation(usingEl.asType());
+    if (fn == null || fn.getTypeArguments().size() != 2) return null;
+    return erasedBound(fn.getTypeArguments().get(fnArgument));
+  }
+
   private TypeMirror paramOf(final ExecutableType m, final boolean raw) {
     final var param = m.getParameterTypes().getFirst();
     return raw ? processingEnv.getTypeUtils().erasure(param) : param;
@@ -5821,11 +5928,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // whichever
       // one it names, it does not take the value, so the answer is refuse either way. Handing that
       // back to the declared type gives up the refusal in the one case the member is what refuses.
-      case SETTERS -> switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
-        case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
-        case Resolution.Ambiguous ignored -> null;
-        case Resolution.None ignored -> setterParameter(to, field);
-      };
+      // A variable-arity setter the property's value spreads into takes one value as its
+      // component, which is what the emitted call passes, so the component is the slot.
+      case SETTERS -> {
+        final var choice = setterChoice(to, field);
+        if (choice.spreads()) yield choice.argument();
+        yield switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
+          case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
+          case Resolution.Ambiguous ignored -> null;
+          case Resolution.None ignored -> setterParameter(to, field);
+        };
+      }
       case NONE -> null;
     };
   }
@@ -5849,7 +5962,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String writeStrategy,
     final TypeElement annotationSite,
     final Rebuild rebuild,
-    final String hoistInto
+    final String hoistInto,
+    final Set<String> transformed,
+    final Map<String, TypeMirror> transformGives,
+    final Set<String> referenceValued
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
@@ -5898,6 +6014,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case SETTERS -> {
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
+          // A value of the field's own type is written through the setter, which has to take it;
+          // a transformed value only has to fit the member, which the transform check decided.
+          final var refusal = setterRefusal(to, f.name(), transformed.contains(f.name()));
+          if (refusal != null) {
+            error(annotationSite, "@Bridge: " + refusal);
+            return null;
+          }
           final var setter = setterName(to, f.name());
           if (setter == null) {
             error(
@@ -5906,7 +6029,68 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return null;
           }
-          sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
+          // Every value is written through the setter chosen from the field's own type, as the
+          // runtime writer chooses it. Where that setter has overloads, or the value is a
+          // transform's result, it is first assigned to a local of the chosen parameter's type,
+          // which binds that method; a cast would type a conditional on its own and unbox a null.
+          // A transform's reference result bound for a primitive parameter is skipped when null,
+          // as the runtime writer skips a null there. A transform result the chosen parameter
+          // cannot take is passed as it is, and javac binds the overload that takes it.
+          final var choice = setterChoice(to, f.name());
+          final var value = read.apply(f.name());
+          final var gives = transformed.contains(f.name()) ? transformGives.get(f.name()) : null;
+          final var types = processingEnv.getTypeUtils();
+          if (
+            gives != null &&
+            !mirrorProps().mentionsTypeVariable(gives) &&
+            choice.argument() != null &&
+            types.isAssignable(gives, choice.argument())
+          ) {
+            final var call = "{ final " + choice.argumentText() + " __arg = __tv; out." + setter + "(__arg); }";
+            if (choice.argument().getKind().isPrimitive() && !gives.getKind().isPrimitive()) {
+              sb.append("{ final ").append(gives).append(" __tv = ").append(value).append("; ");
+              sb.append("if (__tv != null) ").append(call).append(" } ");
+            } else {
+              sb
+                .append("{ final ")
+                .append(gives)
+                .append(" __tv = ")
+                .append(value)
+                .append("; ")
+                .append(call)
+                .append(" } ");
+            }
+          } else if (
+            !transformed.contains(f.name()) &&
+            choice.argument() != null &&
+            choice.argument().getKind().isPrimitive() &&
+            (!f.type().getKind().isPrimitive() || referenceValued.contains(f.name())) &&
+            !mirrorProps().mentionsTypeVariable(f.type())
+          ) {
+            // A reference value bound for a primitive parameter is skipped when null, as the
+            // runtime writer skips it, and otherwise unboxed into the chosen parameter's type.
+            sb
+              .append("{ final ")
+              .append(boxedType(f.type()))
+              .append(" __tv = ")
+              .append(value)
+              .append("; if (__tv != null) { final ")
+              .append(choice.argumentText())
+              .append(" __arg = __tv; out.")
+              .append(setter)
+              .append("(__arg); } } ");
+          } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
+            sb
+              .append("{ final ")
+              .append(choice.argumentType())
+              .append(" __arg = ")
+              .append(value)
+              .append("; out.")
+              .append(setter)
+              .append("(__arg); } ");
+          } else {
+            sb.append("out.").append(setter).append("(").append(value).append("); ");
+          }
         }
         return sb.append("return out; }").toString();
       }
