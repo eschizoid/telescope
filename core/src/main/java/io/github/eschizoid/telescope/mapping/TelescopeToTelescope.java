@@ -9,9 +9,10 @@ import io.github.eschizoid.telescope.Telescope;
  * {@link Telescope}s with a shared leaf type {@code X}.
  *
  * <p>The {@link DeepMap} engine applies this row at the outer {@code (sourceClass, targetClass)}
- * pair only — both class fields come back {@code null} since neither side carries its root class at
- * runtime. Top-level field claim is recovered from each telescope's {@code firstHopName()}. The
- * engine dispatches on {@link #kind()}:
+ * pair only — both class fields come back {@code null}, and the engine starts the source path at
+ * the mapper's source and the target path at the mapper's target, or refuses a path that cannot
+ * start there when the mapper is built. Top-level field claim is recovered from each telescope's
+ * {@code firstHopName()}. The engine dispatches on {@link #kind()}:
  *
  * <ul>
  *   <li>{@link Kind#BROADCAST} — forward overlay: {@code tgtTelescope.set(b,

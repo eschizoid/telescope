@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
@@ -37,6 +38,19 @@ import java.util.function.Predicate;
 final class TelescopeFixups {
 
   private TelescopeFixups() {}
+
+  /**
+   * A {@code when} row's predicate behind the check its inner row's source path runs on each source
+   * it is given. The check runs first and outside the predicate's diagnostic, so a source the path
+   * cannot read fails with the path's own message, as the bare row does, before a predicate typed
+   * by the path's root class sees it.
+   */
+  record SourceChecked(Function<Object, Object> given, Predicate<Object> predicate) implements Predicate<Object> {
+    @Override
+    public boolean test(final Object source) {
+      return predicate.test(source);
+    }
+  }
 
   /**
    * Compose post-fixups on top of the base {@link Iso} produced by {@code DeepMap}'s structural
@@ -87,6 +101,7 @@ final class TelescopeFixups {
       final Mapping<?, ?> fx;
       if (rawFx instanceof Conditional<?, ?> cond) {
         final var predicate = (Predicate<Object>) cond.predicate();
+        if (predicate instanceof SourceChecked checked) checked.given().apply(s);
         final boolean accepted;
         try {
           accepted = predicate.test(s);

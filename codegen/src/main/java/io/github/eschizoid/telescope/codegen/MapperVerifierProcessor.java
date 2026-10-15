@@ -1111,6 +1111,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "to", "toOrElse", "toOrElseGet", "toOneWay", "enumTo", "via" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
+          if ("to".equals(rowName) && rowArgs.size() == 2 && isTelescopeParameter(rowExec, 0)) {
+            verifySourcePath(row, rowName, rowArgs.get(0), srcType, srcSimple, tgtSimple);
+          }
           if ("to".equals(rowName) && rowArgs.size() == 2 && tgt == null) {
             verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           }
@@ -1184,7 +1187,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           return true;
         }
         case "zip" -> {
-          if (rowArgs.size() == 2) verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
+          verifySourcePath(row, rowName, rowArgs.get(0), srcType, srcSimple, tgtSimple);
+          verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           return false;
         }
         default -> {
@@ -1419,20 +1423,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String srcSimple,
       final String tgtSimple
     ) {
-      final var calls = new ArrayList<MethodInvocationTree>();
-      var current = arg;
-      while (
-        current instanceof MethodInvocationTree call && call.getMethodSelect() instanceof MemberSelectTree select
-      ) {
-        calls.addFirst(call);
-        current = select.getExpression();
-      }
-      if (calls.isEmpty()) return;
-      if (!(elementAt(calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) return;
-      if (!(root.getEnclosingElement() instanceof TypeElement owner)) return;
-      if (!owner.getQualifiedName().contentEquals(TELESCOPE_FQN)) return;
+      final var calls = telescopeCalls(arg);
+      if (calls == null) return;
       final var rootArgs = calls.getFirst().getArguments();
-      final var rootName = root.getSimpleName().toString();
+      final var rootName = factoryName(calls.getFirst());
       if ("lens".equals(rootName)) {
         final var getter = rootArgs.isEmpty() ? null : accessorProp(rootArgs.getFirst());
         if (getter != null) verifyRootRelated(row, rowName, getter.owner().asType(), tgtType, srcSimple, tgtSimple);
@@ -1482,6 +1476,168 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var tgtErased = types.erasure(tgtType);
       if (types.isSubtype(tgtErased, rootErased) || types.isSubtype(rootErased, tgtErased)) return;
       report(row, PairingMessages.targetPathNotOnTarget(srcSimple, tgtSimple, rowName, simpleName(root)));
+    }
+
+    /**
+     * The calls of an inline telescope chain, the factory first, when the chain starts at a static
+     * factory of {@code Telescope}, or null for any other expression: a path held in a variable, or
+     * one returned by a method of another class.
+     */
+    private List<MethodInvocationTree> telescopeCalls(final ExpressionTree arg) {
+      final var calls = new ArrayList<MethodInvocationTree>();
+      var current = arg;
+      while (
+        current instanceof MethodInvocationTree call && call.getMethodSelect() instanceof MemberSelectTree select
+      ) {
+        calls.addFirst(call);
+        current = select.getExpression();
+      }
+      if (calls.isEmpty()) return null;
+      final var owner = (TypeElement) elementAt(calls.getFirst().getMethodSelect()).getEnclosingElement();
+      return owner.getQualifiedName().contentEquals(TELESCOPE_FQN) ? calls : null;
+    }
+
+    /** The name of the method a call invokes, read from its resolved element. */
+    private String factoryName(final MethodInvocationTree call) {
+      return elementAt(call.getMethodSelect()).getSimpleName().toString();
+    }
+
+    /**
+     * Reports an inline source telescope that construction is certain to refuse, with the message
+     * it refuses it with, and says nothing about any shape this does not model. The path is {@code
+     * Telescope.of(X.class)} or {@code Telescope.ofBean(X.class)} followed by navigation calls, or
+     * {@code Telescope.lens(getter, setter)} with a method-reference getter. Calls that keep the
+     * focus on the root value come first: {@code filter} and {@code observe}, which pass, and
+     * {@code as(Y.class)}, which passes when the source is {@code Y} or extends it, is reported
+     * when no source can be an instance of {@code Y}, and otherwise ends the check, since such a
+     * path reads only a source of that class. The first call after them decides the rest. An
+     * accessor hop must name a property of the source, of a type it extends, or of an interface a
+     * source may implement, and {@code fieldByName} reads its property on whatever class it is
+     * given. The end of the chain, a read of the root value, and a lens root are reported only when
+     * no source can be an instance of the root's class: a path rooted at any other class may still
+     * read the source, which construction checks on each call. Any other call, such as {@code
+     * then}, ends the check without a report.
+     */
+    private void verifySourcePath(
+      final MethodInvocationTree row,
+      final String rowName,
+      final ExpressionTree arg,
+      final TypeMirror srcType,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
+      final var calls = telescopeCalls(arg);
+      if (calls == null) return;
+      final var rootArgs = calls.getFirst().getArguments();
+      final var rootName = factoryName(calls.getFirst());
+      final var srcErased = types.erasure(srcType);
+      if ("lens".equals(rootName)) {
+        final var getter = accessorProp(rootArgs.getFirst());
+        if (getter != null) verifySourceRootRelated(
+          row,
+          rowName,
+          getter.owner().asType(),
+          srcType,
+          srcSimple,
+          tgtSimple
+        );
+        return;
+      }
+      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return;
+      for (final var call : calls.subList(1, calls.size())) {
+        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+        final var callArgs = call.getArguments();
+        if ("filter".equals(name) || "observe".equals(name)) continue;
+        if ("as".equals(name)) {
+          final var narrowed = classLiteral(callArgs.getFirst());
+          if (narrowed == null) return;
+          final var narrowedErased = types.erasure(narrowed);
+          if (types.isSubtype(srcErased, narrowedErased)) continue;
+          if (!mayBeInstance(srcErased, narrowedErased)) {
+            report(
+              row,
+              PairingMessages.sourcePathNarrowsOffSource(srcSimple, tgtSimple, rowName, simpleName(narrowed))
+            );
+          }
+          return;
+        }
+        if (ROOT_HOPS.contains(name)) verifySourceComponent(
+          row,
+          rowName,
+          accessorProp(callArgs.getFirst()),
+          srcErased,
+          srcSimple,
+          tgtSimple
+        );
+        return;
+      }
+      verifySourceRootRelated(row, rowName, classLiteral(rootArgs.getFirst()), srcType, srcSimple, tgtSimple);
+    }
+
+    /**
+     * Reports a source path's first component hop when construction refuses it with the same
+     * message: one whose class is neither a supertype of the source nor an interface a source may
+     * implement. A null {@code prop}, an accessor that is no method reference, is left to
+     * construction.
+     */
+    private void verifySourceComponent(
+      final MethodInvocationTree row,
+      final String rowName,
+      final Prop prop,
+      final TypeMirror srcErased,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
+      if (prop == null) return;
+      final var ownerErased = types.erasure(prop.owner().asType());
+      if (types.isSubtype(srcErased, ownerErased)) return;
+      if (prop.owner().getKind().isInterface() && mayBeInstance(srcErased, ownerErased)) return;
+      report(
+        row,
+        PairingMessages.sourceRowOffSource(
+          srcSimple,
+          tgtSimple,
+          rowName,
+          prop.owner().getSimpleName().toString(),
+          prop.name()
+        )
+      );
+    }
+
+    /**
+     * Reports a source path whose root class no instance of the call's source can be an instance
+     * of, which construction refuses with the same message. A null {@code root} is not statically
+     * known and is left to construction.
+     */
+    private void verifySourceRootRelated(
+      final MethodInvocationTree row,
+      final String rowName,
+      final TypeMirror root,
+      final TypeMirror srcType,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
+      if (root == null) return;
+      final var rootErased = types.erasure(root);
+      final var srcErased = types.erasure(srcType);
+      if (types.isSubtype(srcErased, rootErased) || mayBeInstance(srcErased, rootErased)) return;
+      report(row, PairingMessages.sourcePathNotOnSource(srcSimple, tgtSimple, rowName, simpleName(root)));
+    }
+
+    /**
+     * Whether an instance of {@code source} can also be an instance of {@code root}, a type that is
+     * not a supertype of the source, as construction decides it: {@code root} extends the source,
+     * or {@code root} is an interface and the source is a class that is not final, so a subclass of
+     * it can implement that interface. The source of a call this verifies is a record or a bean
+     * class: never an interface, and never an enum, which construction treats as final whether or
+     * not its constants declare bodies.
+     */
+    private boolean mayBeInstance(final TypeMirror source, final TypeMirror root) {
+      if (types.isSubtype(root, source)) return true;
+      return (
+        types.asElement(root).getKind().isInterface() &&
+        !types.asElement(source).getModifiers().contains(Modifier.FINAL)
+      );
     }
 
     private String simpleName(final TypeMirror type) {

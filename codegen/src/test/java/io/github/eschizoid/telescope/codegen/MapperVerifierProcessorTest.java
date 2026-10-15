@@ -391,6 +391,331 @@ class MapperVerifierProcessorTest {
     }
   }
 
+  @Nested
+  @DisplayName("Source telescopes rooted at another class than the call's source")
+  class SourceTelescopeRoots {
+
+    // The classes and names the runtime's source-path tests build the same rows on, so each report
+    // here is the exact text construction refuses the row with.
+    private static final String CLASSES = """
+      record Twig(String label, String note, Twig child) {}
+      record Tree(String label, String note, Twig child) {}
+      record TreeDto(String label, String note, TreeDto child) {}
+      class SourceRootBase {
+        private String label;
+        public SourceRootBase() {}
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+      }
+      abstract class SourceRootAbstractBase {
+        private String label;
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+      }
+      final class SourceRootSub extends SourceRootBase {
+        private int n;
+        public SourceRootSub() {}
+        public int getN() { return n; }
+        public void setN(int n) { this.n = n; }
+      }
+      final class SourceRootAbstractSub extends SourceRootAbstractBase {
+        private int n;
+        public SourceRootAbstractSub() {}
+        public int getN() { return n; }
+        public void setN(int n) { this.n = n; }
+      }
+      class SourceRootOther {
+        private String label;
+        public SourceRootOther() {}
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+      }
+      record SourceRootDto(String note, int n) {}
+      record SourceRootNoteDto(String note) {}
+      interface SourceRootNamed { String getLabel(); }
+      enum SourceRootBodied { A { @Override public String toString() { return "a"; } }; public String getLabel() { return "b"; } }
+      record SourceRootWholeDto(SourceRootBase whole) {}
+      record SourceRootOtherDto(SourceRootOther whole) {}
+      """;
+
+    private ProcessorHarness.Compilation verifyWithClasses(final String holder) {
+      return verify(
+        """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          """ +
+          CLASSES +
+          holder
+      );
+    }
+
+    @Test
+    @DisplayName("every row reading an unrelated record's component is refused as construction refuses it")
+    void unrelatedRecordComponentIsRefusedOnEveryRow() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapper(Tree.class, TreeDto.class,
+            to(Telescope.of(Twig.class).field(Twig::label), Telescope.of(TreeDto.class).field(TreeDto::note)));
+          static final Object B = Telescope.mapper(Tree.class, TreeDto.class,
+            to(Telescope.of(Twig.class).field(Twig::label), TreeDto::note));
+          static final Object C = Telescope.mapper(Tree.class, TreeDto.class,
+            zip(Telescope.of(Twig.class).field(Twig::label), Telescope.of(TreeDto.class).field(TreeDto::note)));
+          static final Object D = Telescope.mapper(Tree.class, TreeDto.class,
+            when(t -> true, to(Telescope.of(Twig.class).field(Twig::label), TreeDto::note)));
+          static final Object E = Telescope.mapper(Tree.class, TreeDto.class,
+            when(t -> true, zip(Telescope.of(Twig.class).field(Twig::label), Telescope.of(TreeDto.class).field(TreeDto::note))));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      final var toReports = compilation
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+        .map(d -> d.getMessage(null))
+        .filter(m -> m.contains(PairingMessages.sourceRowOffSource("Tree", "TreeDto", "to", "Twig", "label")))
+        .count();
+      final var zipReports = compilation
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+        .map(d -> d.getMessage(null))
+        .filter(m -> m.contains(PairingMessages.sourceRowOffSource("Tree", "TreeDto", "zip", "Twig", "label")))
+        .count();
+      assertEquals(3, toReports, compilation::errorMessages);
+      assertEquals(2, zipReports, compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("source telescopes construction is certain to refuse are refused as construction refuses them")
+    void sourceTelescopesConstructionRefusesAreRefused() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootOther.class).field(SourceRootOther::getLabel), SourceRootDto::note));
+          static final Object B = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(SourceRootSub.class).field(SourceRootSub::getLabel), SourceRootNoteDto::note));
+          static final Object C = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.of(Object.class).as(SourceRootOther.class).field(SourceRootOther::getLabel), SourceRootDto::note));
+          static final Object D = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.lens(SourceRootOther::getLabel, (SourceRootOther o, String v) -> o), SourceRootDto::note));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("SourceRootSub", "SourceRootDto", "to", "SourceRootOther", "label")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("SourceRootBase", "SourceRootNoteDto", "to", "SourceRootSub", "label")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourcePathNarrowsOffSource("SourceRootSub", "SourceRootDto", "to", "SourceRootOther")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourcePathNotOnSource("SourceRootSub", "SourceRootDto", "to", "SourceRootOther")
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("source telescopes construction accepts or checks on each call are accepted")
+    void sourceTelescopesConstructionAcceptsAreAccepted() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapper(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootBase.class).field(SourceRootBase::getLabel), SourceRootDto::note));
+          static final Object B = Telescope.mapper(SourceRootAbstractSub.class, SourceRootDto.class,
+            zip(Telescope.ofBean(SourceRootAbstractBase.class).field(SourceRootAbstractBase::getLabel),
+              Telescope.of(SourceRootDto.class).field(SourceRootDto::note)));
+          static final Object C = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(SourceRootBase.class).as(SourceRootSub.class).field(SourceRootSub::getLabel),
+              SourceRootNoteDto::note));
+          static final Object D = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.lens(SourceRootSub::getLabel, (SourceRootSub s, String v) -> s), SourceRootNoteDto::note));
+          static final Object E = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootOther.class).fieldByName("label", String.class), SourceRootDto::note));
+          static final Object F = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.of(SourceRootOther.class).then(Telescope.of(SourceRootOther.class).field(SourceRootOther::getLabel)),
+              SourceRootDto::note));
+          static final Object G = Telescope.mapper(Tree.class, TreeDto.class,
+            to(Telescope.of(Tree.class).field(Tree::label), TreeDto::note));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("an interface root on a non-final source class is left to construction's per-call check")
+    void interfaceRootOnANonFinalSourceIsAccepted() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(SourceRootNamed.class).field(SourceRootNamed::getLabel), SourceRootNoteDto::note));
+          static final Object B = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.lens(SourceRootNamed::getLabel, (SourceRootNamed n, String v) -> n), SourceRootNoteDto::note));
+          static final Object C = Telescope.mapperForward(SourceRootBase.class, SourceRootNoteDto.class,
+            to(Telescope.ofBean(Object.class).as(SourceRootNamed.class).field(SourceRootNamed::getLabel),
+              SourceRootNoteDto::note));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("an interface root on a final source class or a record is refused as construction refuses it")
+    void interfaceRootOnAFinalSourceIsRefused() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootNamed.class).field(SourceRootNamed::getLabel), SourceRootDto::note));
+          static final Object B = Telescope.mapper(Tree.class, TreeDto.class,
+            to(Telescope.lens(SourceRootNamed::getLabel, (SourceRootNamed n, String v) -> n), TreeDto::note));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("SourceRootSub", "SourceRootDto", "to", "SourceRootNamed", "label")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.sourcePathNotOnSource("Tree", "TreeDto", "to", "SourceRootNamed")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "a call whose source is an enum is not verified, so construction alone refuses an interface root on it"
+    )
+    void enumSourceIsLeftToConstruction() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootBodied.class, SourceRootNoteDto.class,
+            to(Telescope.lens(SourceRootNamed::getLabel, (SourceRootNamed n, String v) -> n), SourceRootNoteDto::note));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a source path that reads the root value is refused only when no source can be its root")
+    void rootValuePaths() {
+      final var compilation = verifyWithClasses(
+        """
+        class Holder {
+          static final Object A = Telescope.mapperForward(SourceRootSub.class, SourceRootOtherDto.class,
+            to(Telescope.ofBean(SourceRootOther.class).filter(o -> true).observe(o -> {}), SourceRootOtherDto::whole));
+          static final Object B = Telescope.mapper(SourceRootSub.class, SourceRootWholeDto.class,
+            to(Telescope.ofBean(SourceRootBase.class), SourceRootWholeDto::whole));
+          static final Object C = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.of(Object.class).as(Object.class).as(SourceRootOther.class).field(SourceRootOther::getLabel),
+              SourceRootDto::note));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertEquals(2, errorCount(compilation), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourcePathNotOnSource("SourceRootSub", "SourceRootOtherDto", "to", "SourceRootOther")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourcePathNarrowsOffSource("SourceRootSub", "SourceRootDto", "to", "SourceRootOther")
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("paths the verifier cannot read are left to construction, and the rest of the class is still verified")
+    void unreadablePathsAreLeftToConstruction() {
+      final var compilation = verifyWithClasses(
+        """
+        class Paths {
+          static Telescope<SourceRootOther, String> other() {
+            return Telescope.ofBean(SourceRootOther.class).field(SourceRootOther::getLabel);
+          }
+          static <T> Telescope<T, T> of(Class<T> type) { return Telescope.ofBean(type); }
+        }
+        class Holder {
+          static final Telescope<SourceRootOther, String> HELD =
+            Telescope.ofBean(SourceRootOther.class).field(SourceRootOther::getLabel);
+          static final Telescope<SourceRootOther, String> HELD_TARGET =
+            Telescope.ofBean(SourceRootOther.class).field(SourceRootOther::getLabel);
+          static final Class<SourceRootOther> OTHER = SourceRootOther.class;
+          static Telescope<SourceRootOther, String> local() { return Paths.other(); }
+          static final Object A = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class, to(HELD, SourceRootDto::note));
+          static final Object B = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Paths.of(SourceRootOther.class).field(SourceRootOther::getLabel), SourceRootDto::note));
+          static final Object C = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class, to(local(), SourceRootDto::note));
+          static final Object D = Telescope.mapperForward(SourceRootDto.class, SourceRootNoteDto.class,
+            to(SourceRootDto::note, HELD_TARGET));
+          static final Object E = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.lens((SourceRootOther o) -> o.getLabel(), (SourceRootOther o, String v) -> o), SourceRootDto::note));
+          static final Object F = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootOther.class).field(o -> o.getLabel()), SourceRootDto::note));
+          static final Object G = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.of(Object.class).as(OTHER).field(SourceRootOther::getLabel), SourceRootDto::note));
+          static final Object H = Telescope.mapperForward(SourceRootSub.class, SourceRootOtherDto.class,
+            to(Telescope.ofBean(OTHER), SourceRootOtherDto::whole));
+          static final Object I = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.iso((SourceRootOther o) -> o, (SourceRootOther o) -> o).field(SourceRootOther::getLabel),
+              SourceRootDto::note));
+          static final Object Z = Telescope.mapperForward(SourceRootSub.class, SourceRootDto.class,
+            to(Telescope.ofBean(SourceRootOther.class).field(SourceRootOther::getLabel), SourceRootDto::note));
+        }
+        """
+      );
+      // Only the last row, which the verifier can read, is reported: each shape above is passed
+      // over
+      // without stopping the scan of the class.
+      assertFalse(compilation.success());
+      assertEquals(1, errorCount(compilation), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.sourceRowOffSource("SourceRootSub", "SourceRootDto", "to", "SourceRootOther", "label")
+        ),
+        compilation::errorMessages
+      );
+    }
+  }
+
+  private static long errorCount(final ProcessorHarness.Compilation compilation) {
+    return compilation
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+      .count();
+  }
+
   private static ProcessorHarness.Compilation verify(final String code) {
     return verify(List.of(), code);
   }

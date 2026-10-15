@@ -130,9 +130,11 @@ to(OrderTelescope.of().customer().address().city(), OrderDto::city)
 All three shapes covered: nested source -> flat target, flat source -> nested target (with automatic intermediate
 allocation for record intermediates, described in the 'Intermediate allocation' paragraph of `to(Accessor, Telescope)`
 in Mapping.java), and nested -> nested. Paths are typed Telescope values instead of dotted strings, so javac checks
-every hop. Rows using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's
-per-method @Mapping. Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for
-bean intermediates lacking a no-arg ctor/builder.
+every hop. A source path is started at the mapper's source; one whose first property is read through a class the source
+neither is nor extends is refused when the mapper is built, and by the compile-time verifier where it can tell. Rows
+using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's per-method @Mapping.
+Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for bean intermediates
+lacking a no-arg ctor/builder.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
