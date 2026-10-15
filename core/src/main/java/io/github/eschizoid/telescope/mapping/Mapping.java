@@ -429,7 +429,8 @@ public sealed interface Mapping<A, B>
    * <p>The mapper can be at <em>element-level</em> or at <em>accessor-level</em>; telescope detects
    * which one the user passed and lifts through {@code List} / {@code Set} / {@code Optional} /
    * {@code Map<K, V>} automatically when the accessor returns a container and the mapper's
-   * source/target classes are the element types.
+   * source/target classes are the element types. An element typed by a type variable counts when
+   * the variable's bound admits the mapper's class.
    *
    * <pre>{@code
    * via(UserEntity::address,  UserDto::address,  addressMapper)   // scalar pair, no lift

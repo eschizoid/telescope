@@ -28,6 +28,14 @@ import java.lang.annotation.Target;
  * {@code Class.backward(...)} call sites into the generated bridge body for this field; if the
  * signatures don't match, {@code javac} catches the mismatch at the generated code, not here.
  *
+ * <p>On a container property, a {@code List}, a {@code Set}, an {@code Optional} or a map's values
+ * on both sides with one key type, the class may convert one element instead. When its one {@code
+ * forward} takes an element of the source's container and its one {@code backward} an element of
+ * the target's, the bridge calls them on each element that is not null and rebuilds the container,
+ * as the runtime {@code via} row lifts its mapper over the same pair. An element typed by a type
+ * variable counts when the variable's bound admits the method's parameter, unless that parameter
+ * takes the container itself, in which case the class converts the whole property.
+ *
  * <p><b>Not a {@code BridgeFn} instance.</b> Unlike {@link Transform#using()} which takes a {@link
  * io.github.eschizoid.telescope.conversion.BridgeFn} class that the processor <em>instantiates</em>
  * with a no-arg constructor and dispatches as {@code __tx_field.forward(...)} (instance method),

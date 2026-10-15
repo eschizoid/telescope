@@ -1843,8 +1843,20 @@ public final class DeepMap {
     return elementIso;
   }
 
+  /**
+   * Whether a container's {@code elementType} is what the element mapper converts: the mapper's own
+   * class, or a type variable whose bound admits it, since such a container may hold the mapper's
+   * class.
+   */
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
-    return elementType instanceof Class<?> cls && cls.equals(mapperClass);
+    if (elementType instanceof Class<?> cls) return cls.equals(mapperClass);
+    return elementType instanceof TypeVariable<?> variable && boundOf(variable).isAssignableFrom(mapperClass);
+  }
+
+  /** The class a type variable's first bound erases to, following a bound that is a variable. */
+  private static Class<?> boundOf(final TypeVariable<?> variable) {
+    final var bound = variable.getBounds()[0];
+    return bound instanceof TypeVariable<?> next ? boundOf(next) : rawClassOf(bound);
   }
 
   /**

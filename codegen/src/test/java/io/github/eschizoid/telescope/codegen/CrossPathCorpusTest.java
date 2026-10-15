@@ -7247,6 +7247,337 @@ class CrossPathCorpusTest {
     }
   }
 
+  /** {@code @Bridge} to {@code %1$sTgt} converting {@code children} through {@code %1$sChMap}. */
+  private static final String VIA_CHILDREN =
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
+    " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = %1$sChMap.class))\n";
+
+  /**
+   * A {@code @ViaMapper} on a container property: the mapper class, null for the child pair's own,
+   * the source and target declarations, each with {@code %1$s} as the row's prefix, and what each
+   * path owes for {@code Src.sample()} forward, and for {@code Tgt.sample()} backward and laid over
+   * {@code Src.sample()}: the runtime first, then the generated bridge.
+   */
+  private record ViaContainer(
+    String name,
+    String mapper,
+    String source,
+    String target,
+    String forward,
+    String backward,
+    String generatedForward,
+    String generatedBackward
+  ) {
+    /** A row both paths owe the same results for, through the child pair's own mapper. */
+    ViaContainer(
+      final String name,
+      final String source,
+      final String target,
+      final String forward,
+      final String backward
+    ) {
+      this(name, null, source, target, forward, backward, forward, backward);
+    }
+  }
+
+  /**
+   * A mapper class with the child pair's element methods and an overload of each that converts a
+   * whole list, marking what it builds with {@code W} forward and {@code WB} backward.
+   */
+  private static final String WHOLE_LIST_OVERLOADS =
+    "public class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static java.util.List<%1$sChDto> forward(final java.util.List<%1$sCh> l) {" +
+    " return l.stream().map(c -> new %1$sChDto(\"W\" + c.name())).toList(); }\n" +
+    "  public static java.util.List<%1$sCh> backward(final java.util.List<%1$sChDto> l) {" +
+    " return l.stream().map(d -> new %1$sCh(\"WB\" + d.name())).toList(); }\n}\n";
+
+  /**
+   * As {@link #WHOLE_LIST_OVERLOADS}, with each whole-list overload typed by its own result
+   * variable, which the call site infers, and marking what it builds with {@code GW} and {@code
+   * GWB}.
+   */
+  private static final String WHOLE_LIST_INFERRED =
+    "@SuppressWarnings(\"unchecked\")\npublic class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static <R> R forward(final java.util.List<%1$sCh> l) {" +
+    " return (R) l.stream().map(c -> new %1$sChDto(\"GW\" + c.name())).toList(); }\n" +
+    "  public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
+    " return (R) l.stream().map(d -> new %1$sCh(\"GWB\" + d.name())).toList(); }\n}\n";
+
+  /**
+   * A whole-list forward with a declared result, and a whole-list backward with an inferred one.
+   */
+  private static final String WHOLE_LIST_HALF_INFERRED =
+    "@SuppressWarnings(\"unchecked\")\npublic class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static java.util.List<%1$sChDto> forward(final java.util.List<%1$sCh> l) {" +
+    " return l.stream().map(c -> new %1$sChDto(\"W\" + c.name())).toList(); }\n" +
+    "  public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
+    " return (R) l.stream().map(d -> new %1$sCh(\"GWB\" + d.name())).toList(); }\n}\n";
+
+  /** A container row's source, generic over its element or not, holding {@code sample}. */
+  private static String containerSource(final boolean generic, final String declared, final String sample) {
+    return generic
+      ? VIA_CHILDREN +
+        sampledGeneric("%1$sSrc<X>", declared.replace("%1$sCh", "X") + " children", "new %1$sSrc<>(" + sample + ")")
+      : VIA_CHILDREN + sampled("%1$sSrc", declared + " children", "new %1$sSrc(" + sample + ")");
+  }
+
+  private static List<ViaContainer> viaContainers() {
+    final var rows = new ArrayList<ViaContainer>();
+    for (final var generic : List.of(false, true)) {
+      final var kind = generic ? "a source generic over its element" : "a source fixed to the child";
+      rows.add(
+        new ViaContainer(
+          "a List property, " + kind,
+          containerSource(generic, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.List<%1$sChDto> children",
+            "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "a Set property, " + kind,
+          containerSource(generic, "java.util.Set<%1$sCh>", "java.util.Set.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Set<%1$sChDto> children",
+            "new %1$sTgt(java.util.Set.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "an Optional property, " + kind,
+          containerSource(generic, "java.util.Optional<%1$sCh>", "java.util.Optional.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Optional<%1$sChDto> children",
+            "new %1$sTgt(java.util.Optional.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=Optional[ChDto:A]",
+          "children=Optional[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "a Map property's values, " + kind,
+          containerSource(generic, "java.util.Map<String, %1$sCh>", "java.util.Map.of(\"k\", new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Map<String, %1$sChDto> children",
+            "new %1$sTgt(java.util.Map.of(\"k\", new %1$sChDto(\"Q\")))"
+          ),
+          "children={k=ChDto:A}",
+          "children={k=Ch:q}"
+        )
+      );
+    }
+    rows.add(
+      new ViaContainer(
+        "a List property both sides type by a variable",
+        containerSource(true, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampledGeneric(
+          "%1$sTgt<Y>",
+          "java.util.List<Y> children",
+          "new %1$sTgt<>(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]"
+      )
+    );
+    // A mapper class that also converts the whole list keeps converting the whole property on the
+    // generated path, as it did before element mappers were lifted. A runtime via row's Mapper has
+    // one pair of classes and no overloads, so it can only express the element methods, which it
+    // lifts: the two paths are owed different results, and each holds its own.
+    for (final var generic : List.of(false, true)) {
+      rows.add(
+        new ViaContainer(
+          "a List property whose mapper class also converts the whole list, " +
+            (generic ? "a source generic over its element" : "a source fixed to the child"),
+          WHOLE_LIST_OVERLOADS,
+          containerSource(generic, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.List<%1$sChDto> children",
+            "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]",
+          "children=[ChDto:Wa]",
+          "children=[Ch:WBQ]"
+        )
+      );
+    }
+    // A whole-list overload whose result is the method's own variable gives what the call site
+    // infers, so it counts as converting the whole property. On a source generic over its
+    // element the bridge holds the property raw and refuses such a result by name, before and
+    // after element mappers were lifted; ViaMapperContainerShapeTest pins that.
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class also converts the whole list into an inferred result",
+        WHOLE_LIST_INFERRED,
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:GWa]",
+        "children=[Ch:GWBQ]"
+      )
+    );
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class converts the whole list one way declared and back inferred",
+        WHOLE_LIST_HALF_INFERRED,
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:Wa]",
+        "children=[Ch:GWBQ]"
+      )
+    );
+    // A null element is not handed to the mapper on either path: it stays null.
+    rows.add(
+      new ViaContainer(
+        "a List property holding a null element",
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.Arrays.asList(new %1$sCh(\"a\"), null)"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.Arrays.asList(null, new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A, null]",
+        "children=[null, Ch:q]"
+      )
+    );
+    return rows;
+  }
+
+  @Test
+  @DisplayName("a @ViaMapper on a List, Set, Optional or Map property converts each element the same way on both paths")
+  void aViaMapperOnAContainerPropertyConvertsEachElementTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : viaContainers()) {
+      final var prefix = "Vc" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var pair = row.mapper() == null ? CHILD_PAIR : List.of(CHILD_PAIR.get(0), CHILD_PAIR.get(1), row.mapper());
+      final var all = concat(pair, row.source(), row.target(), viaRow("children"))
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final Attempt runtime = () -> classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      for (final var operation : List.of("forward", "backward", "patch")) {
+        final Attempt generated = switch (operation) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        @SuppressWarnings("unchecked")
+        final Attempt reflective = switch (operation) {
+          case "forward" -> () -> ((Mapper<Object, Object>) runtime.get()).forward(srcSample.get());
+          case "backward" -> () -> ((Mapper<Object, Object>) runtime.get()).backward(tgtSample.get());
+          default -> () -> ((Mapper<Object, Object>) runtime.get()).patch(srcSample.get(), tgtSample.get());
+        };
+        final var forward = "forward".equals(operation);
+        final var sides = List.of(
+          List.of("generated", forward ? row.generatedForward() : row.generatedBackward()),
+          List.of("reflective", forward ? row.forward() : row.backward())
+        );
+        for (final var side : sides) {
+          final var held = childrenHeld(prefix, "generated".equals(side.get(0)) ? generated : reflective);
+          if (!held.equals(side.get(1))) {
+            failures.add(
+              row.name() + ", " + operation + ": " + side.get(0) + " gave " + held + ", owed " + side.get(1)
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code attempt}'s result holds as {@code children}, each element written as its class
+   * without the row's prefix and its name: a list or set as {@code [..]}, an optional as {@code
+   * Optional[..]}, and a map as {@code {key=..}}; or the refusal.
+   */
+  private static String childrenHeld(final String prefix, final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var children = out.getClass().getMethod("children").invoke(out);
+      return "children=" + described(prefix, children);
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  private static String described(final String prefix, final Object value) throws ReflectiveOperationException {
+    if (value == null) return "null";
+    if (value instanceof Optional<?> optional) {
+      return optional.isEmpty() ? "Optional.empty" : "Optional[" + described(prefix, optional.get()) + "]";
+    }
+    if (value instanceof Collection<?> collection) {
+      final var parts = new ArrayList<String>();
+      for (final var element : collection) parts.add(described(prefix, element));
+      return "[" + String.join(", ", parts) + "]";
+    }
+    if (value instanceof Map<?, ?> map) {
+      final var parts = new ArrayList<String>();
+      for (final var entry : map.entrySet()) parts.add(entry.getKey() + "=" + described(prefix, entry.getValue()));
+      return "{" + String.join(", ", parts) + "}";
+    }
+    return (
+      value.getClass().getSimpleName().replace(prefix, "") + ":" + value.getClass().getMethod("name").invoke(value)
+    );
+  }
+
   /** Whether a compilation succeeded, or the errors it reported. */
   private static String describe(final ProcessorHarness.Compilation compilation) {
     return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();
