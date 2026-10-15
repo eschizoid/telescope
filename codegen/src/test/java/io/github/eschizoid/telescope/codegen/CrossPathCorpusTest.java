@@ -6098,6 +6098,52 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * {@code header}, then a bean {@code name} declaring no type parameters, whose one property,
+   * {@code property}, is read and written through generic methods, {@code <T> T getP()} and {@code
+   * <T> void setP(T)}, and whose static {@code sample()} holds {@code sample}.
+   */
+  private static String genericAccessorBean(
+    final String header,
+    final String name,
+    final String property,
+    final String sample
+  ) {
+    final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
+    return (
+      header +
+      "public class " +
+      name +
+      " {\n" +
+      "  private Object " +
+      property +
+      ";\n" +
+      "  @SuppressWarnings(\"unchecked\") public <T> T get" +
+      cap +
+      "() { return (T) " +
+      property +
+      "; }\n" +
+      "  public <T> void set" +
+      cap +
+      "(final T " +
+      property +
+      ") { this." +
+      property +
+      " = " +
+      property +
+      "; }\n" +
+      "  public static " +
+      name +
+      " sample() { final var s = new " +
+      name +
+      "(); s.set" +
+      cap +
+      "(" +
+      sample +
+      "); return s; }\n}\n"
+    );
+  }
+
+  /**
    * A {@code @Transform} on a property typed by its class's own type variable: the declarations,
    * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
    * paths owe for {@code Src.sample()} forward and {@code Tgt.sample()} backward and laid over
@@ -6203,6 +6249,19 @@ class CrossPathCorpusTest {
       false,
       List.of(
         transformedValue(false) + valueBean("%1$sSrc<X>", "X", "7"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    ),
+    new VariableTransform(
+      "a bean property read and written through generic methods, both ways",
+      false,
+      List.of(
+        genericAccessorBean(transformedValue(false), "%1$sSrc", "value", "7"),
         valueBean("%1$sTgt", "String", "\"q\""),
         transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
         runtimeRow(false, "getValue", "Object", "String")
@@ -6617,6 +6676,52 @@ class CrossPathCorpusTest {
           "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
           " child));\n  }\n}\n"
       )
+    ),
+    new UncheckedConversion(
+      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      "child",
+      List.of(
+        "public record %1$sCh(String name) {}\n",
+        "public record %1$sChDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sCh::name, %1$sChDto::name, n -> \"f:\" + n, n -> n));\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      )
+    ),
+    new UncheckedConversion(
+      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      "child",
+      List.of(
+        "public record %1$sCh(String name) {}\n",
+        "public record %1$sChDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sCh::name, %1$sChDto::name, n -> \"f:\" + n, n -> n));\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      )
     )
   );
 
@@ -6649,7 +6754,7 @@ class CrossPathCorpusTest {
    */
   private static String refusalOfConversion(final ProcessorHarness.Compilation processed) {
     for (final var direction : List.of("forward", "backward")) {
-      for (final var reason : List.of("takes no value", "returns")) {
+      for (final var reason : List.of("takes no value", "returns", "has several overloads")) {
         if (processed.hasError("@ViaMapper field=\"child\"") && processed.hasError("'s " + direction + " " + reason)) {
           return REFUSED + "@ViaMapper " + direction + " " + reason;
         }
@@ -6705,7 +6810,7 @@ class CrossPathCorpusTest {
     ),
     Map.entry(
       "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
-      List.of(REFUSED + "does not fit forward, through a member taking T", "value=<a>, a String", "value=q, a String")
+      List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
     ),
     Map.entry(
       "a row typed by both classes' arguments, with a transform on String",
@@ -6733,6 +6838,22 @@ class CrossPathCorpusTest {
         REFUSED + "@ViaMapper forward takes no value",
         REFUSED + "ClassCastException",
         REFUSED + "ClassCastException"
+      )
+    ),
+    Map.entry(
+      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      List.of(
+        REFUSED + "@ViaMapper forward has several overloads",
+        "child=ChDto[name=f:a], a ChDto",
+        "child=Ch[name=q], a Ch"
+      )
+    ),
+    Map.entry(
+      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      List.of(
+        REFUSED + "@ViaMapper forward has several overloads",
+        "child=ChDto[name=f:a], a ChDto",
+        "child=Ch[name=q], a Ch"
       )
     )
   );
@@ -6866,6 +6987,40 @@ class CrossPathCorpusTest {
       "child=ChDto:A",
       "child=Ch:q",
       "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property read and written through generic methods",
+      List.of(
+        genericAccessorBean(VIA_CHILD, "%1$sSrc", "child", "new %1$sCh(\"a\")"),
+        "public class %1$sTgt {\n" +
+          "  private %1$sChDto child;\n" +
+          "  public %1$sChDto getChild() { return child; }\n" +
+          "  public void setChild(final %1$sChDto child) { this.child = child; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setChild(new %1$sChDto(\"Q\")); return t; }\n}\n",
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    // A mapper parameter typed by the method's own variable erases to the type the bridge
+    // holds
+    // the value as, which it takes as it is.
+    new ViaVariable(
+      "a property both sides pass through, to a mapper whose forward takes its own variable",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static <T> %1$sChDto forward(final T c) {" +
+          " return new %1$sChDto(((%1$sCh) c).name().toUpperCase()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
     )
   );
 
@@ -6877,7 +7032,14 @@ class CrossPathCorpusTest {
     for (final var row : VIA_VARIABLES) {
       final var prefix = "Vm" + index++;
       final var head = "package " + PACKAGE + ";\n";
-      final var all = concat(CHILD_PAIR, row.declarations().toArray(String[]::new))
+      final var ownMapper = row
+        .declarations()
+        .stream()
+        .anyMatch(d -> d.contains("class %1$sChMap "));
+      final var all = concat(
+        ownMapper ? CHILD_PAIR.subList(0, 2) : CHILD_PAIR,
+        row.declarations().toArray(String[]::new)
+      )
         .stream()
         .map(declaration -> declaration.formatted(prefix))
         .map(code -> source(declaredName(code), head + code))
