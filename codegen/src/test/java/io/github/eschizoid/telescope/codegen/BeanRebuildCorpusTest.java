@@ -111,18 +111,17 @@ class BeanRebuildCorpusTest {
    * one fails, and an entry whose cell has stopped differing fails too.
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.ofEntries(
-    // Inherent: a private constructor. The runtime calls it through a private lookup; the
-    // bridge
-    // is ordinary source in another class and cannot call it.
+    // Inherent, in this entry and the two after it: a private constructor. The runtime
+    // calls it through a private lookup; the bridge is ordinary source in another class and
+    // cannot.
     Map.entry("private-setters/scalar", new Verdict(false, true)),
     Map.entry("private-setters/record", new Verdict(false, true)),
     Map.entry("private-setters/list", new Verdict(false, true)),
-    // Inherent: a final field with no initializer that the builder has no member for. The
-    // processor sees from source that only a strategy gives it a value, and refuses the
-    // builder.
-    // The runtime cannot tell such a field from a final one given a non-constant value where
-    // it is
-    // declared, because neither leaves a trace in the class file, so it builds the bean.
+    // Inherent, in this entry and the two after it: a final field with no initializer that
+    // the builder has no member for. The processor sees from source that only a strategy
+    // gives it a value, and refuses the builder. The runtime cannot tell such a field from
+    // a final one given a non-constant value where it is declared, because neither leaves a
+    // trace in the class file, so it builds the bean.
     Map.entry("memberless-builder-final/scalar", new Verdict(false, true)),
     Map.entry("memberless-builder-final/record", new Verdict(false, true)),
     Map.entry("memberless-builder-final/list", new Verdict(false, true))
@@ -147,12 +146,16 @@ class BeanRebuildCorpusTest {
   );
 
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
+    // Agreement, not a difference, in this entry and the two after it: both paths refuse by
+    // name a target they could only write through its private fields.
     "fields/scalar",
     NO_WRITE_SURFACE,
     "fields/record",
     NO_WRITE_SURFACE,
     "fields/list",
     NO_WRITE_SURFACE,
+    // Agreement, not a difference, in this entry and the two after it: both paths refuse by
+    // name a builder that cannot carry a property only a strategy sets.
     "memberless-builder/scalar",
     BUILDER_CANNOT_CARRY,
     "memberless-builder/record",
