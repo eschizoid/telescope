@@ -260,6 +260,165 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A row that reads the mapper's source through a path ({@code to} or {@code zip}) whose first
+   * component hop names a property of a class the mapper's source neither is nor extends. A source
+   * the mapper is given is not certain to be an instance of that class, and a subclass's property
+   * is read only after narrowing to the subclass.
+   */
+  public static String sourceRowOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String owner,
+    final String srcField
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row reads '" +
+      srcField +
+      "' of " +
+      owner +
+      ", which " +
+      source +
+      " neither is nor extends. Name the property through " +
+      source +
+      " or a class it extends, and narrow with as(...) first to read a property only a subclass of " +
+      source +
+      " has."
+    );
+  }
+
+  /**
+   * A row whose source path narrows the mapper's source, with {@code as(...)}, to a class the
+   * source neither is, extends, nor is extended by. The narrowing never matches a source the mapper
+   * is given, so the row would never read.
+   */
+  public static String sourcePathNarrowsOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String narrowed
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path narrows to " +
+      narrowed +
+      ", which " +
+      source +
+      " neither is nor extends nor is extended by, so it never reads a " +
+      source +
+      ". Narrow to " +
+      source +
+      ", a class it extends, or a subclass of it."
+    );
+  }
+
+  /**
+   * A row whose source path starts at a class the mapper's source neither is, extends, nor is
+   * extended by, and that cannot be started again at the source because its first step off the root
+   * is not an accessor navigation: the path starts at a lens, reaches its first property through an
+   * iso or a bridge, or reads the root value itself. Such a path can never read the source.
+   */
+  public static String sourcePathNotOnSource(
+    final String source,
+    final String target,
+    final String row,
+    final String root
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path starts at " +
+      root +
+      ", which " +
+      source +
+      " neither is nor extends nor is extended by, and cannot be started again at " +
+      source +
+      " because its first step off the root is not an accessor navigation such as field(...)." +
+      " Start the path at " +
+      source +
+      "."
+    );
+  }
+
+  /**
+   * A row's source path, started at a subtype of the mapper's source or at an interface a source
+   * may implement, given a source that is not an instance of that class: the path reads only that
+   * class.
+   */
+  public static String sourcePathGivenOffRoot(
+    final String source,
+    final String target,
+    final String row,
+    final String root,
+    final String givenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path starts at " +
+      root +
+      " and was given a " +
+      givenClass +
+      ", which is not a " +
+      root +
+      ". Give the mapper only a " +
+      root +
+      " here, or start the path at " +
+      source +
+      "."
+    );
+  }
+
+  /**
+   * A write through a row's source path, started at a supertype of the mapper's source or at a
+   * class that is not known, that returned something other than a source instance or null: a lens
+   * setter, iso or bridge that built another class in place of the source it was given.
+   */
+  public static String sourcePathWroteOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String writtenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path returned " +
+      writtenClass +
+      " from a write on " +
+      source +
+      ", which is not a " +
+      source +
+      ". A lens or iso started at another class must return the instance it is given, or another " +
+      source +
+      "."
+    );
+  }
+
   /** Strict-bijection failure: a target field has no same-name source and no row. */
   public static String noSameNameSource(
     final String source,

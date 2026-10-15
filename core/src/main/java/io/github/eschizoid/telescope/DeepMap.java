@@ -35,6 +35,7 @@ import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
@@ -428,12 +429,12 @@ public final class DeepMap {
     for (final var row : overrides) {
       // A row is keyed to the classes its accessors are applied to. A side that names no class
       // keys to the mapper's own class on that side: drop(srcAcc) has no target, and a side given
-      // as a telescope path records no root class, since a path started at a lens, an iso or a
-      // bridge has none. A to(path, tgtAcc) row whose target accessor is applied to a superclass or
-      // interface of the mapper's target keys to the mapper's target too: that pair is never
-      // visited, and the row writes the property by name on the target's own class. A when(...)
-      // row is keyed exactly as the row it wraps, so its predicate receives the source of the pair
-      // that row is applied at.
+      // as a telescope path is read or written on the mapper's own source or target, so the path
+      // is started there, checked against it, or refused by rootedRow. A to(path, tgtAcc) row
+      // whose target accessor is applied to a superclass or interface of the mapper's target keys
+      // to the mapper's target too: that pair is never visited, and the row writes the property by
+      // name on the target's own class. A when(...) row is keyed exactly as the row it wraps, so
+      // its predicate receives the source of the pair that row is applied at.
       final Mapping<?, ?> keyed = row instanceof Conditional<?, ?> c ? c.inner() : row;
       final Class<?> effectiveSource = keyed.sourceClass() == null ? topSource : keyed.sourceClass();
       final Class<?> effectiveTarget =
@@ -442,23 +443,23 @@ public final class DeepMap {
           ? topTarget
           : keyed.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
-      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(writtenOnTarget(row, topSource, topTarget));
+      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(rootedRow(row, topSource, topTarget));
     }
     return grouped;
   }
 
   /**
-   * A row that writes the top-level target through a path, bare or under {@code when}, with that
-   * path started at the mapper's target, checked against it, or checked on each write, through
-   * {@link #targetRooted}: {@code constant}, {@code compute}, {@code to} onto a target telescope,
-   * and {@code zip}. Every other row is returned unchanged.
+   * A row that reads the top-level source or writes the top-level target through a path, bare or
+   * under {@code when}, with each path started at the mapper's own class on its side, checked
+   * against it, or refused: the source path of {@code to} or {@code zip} through {@link
+   * #sourceRooted}, and the target path of {@code constant}, {@code compute}, {@code to} and {@code
+   * zip} through {@link #targetRooted}. A row with both is checked on its source path first. A
+   * {@code when} row whose source path is checked on each call runs that check before its
+   * predicate, so a source the path cannot read fails as it does on the bare row rather than inside
+   * a predicate typed by the path's root. Every other row is returned unchanged.
    */
   @SuppressWarnings("unchecked")
-  private static Mapping<?, ?> writtenOnTarget(
-    final Mapping<?, ?> row,
-    final Class<?> topSource,
-    final Class<?> topTarget
-  ) {
+  private static Mapping<?, ?> rootedRow(final Mapping<?, ?> row, final Class<?> topSource, final Class<?> topTarget) {
     return switch (row) {
       case Constant<?, ?, ?> c -> new Constant<>(
         targetRooted(c.targetTelescope(), "constant", topSource, topTarget, true, c.value()),
@@ -472,26 +473,176 @@ public final class DeepMap {
         (Telescope.Accessor<Object, Object>) t.srcAccessor(),
         targetRooted(t.targetTelescope(), "to", topSource, topTarget, false, null)
       );
-      case TelescopeToTelescope<?, ?, ?> t -> new TelescopeToTelescope<>(
-        (Telescope<Object, Object>) t.sourceTelescope(),
-        targetRooted(
-          t.targetTelescope(),
-          t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
-          topSource,
-          topTarget,
-          false,
-          null
-        ),
-        t.kind()
+      case FromTelescopeTo<?, ?, ?> t -> new FromTelescopeTo<>(
+        sourceRooted(t.sourceTelescope(), "to", topSource, topTarget).path(),
+        (Telescope.Accessor<Object, Object>) t.tgtAccessor()
       );
+      case TelescopeToTelescope<?, ?, ?> t -> {
+        final var name = t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to";
+        final var source = sourceRooted(t.sourceTelescope(), name, topSource, topTarget).path();
+        yield new TelescopeToTelescope<>(
+          source,
+          targetRooted(t.targetTelescope(), name, topSource, topTarget, false, null),
+          t.kind()
+        );
+      }
       case Conditional<?, ?> c -> {
-        final var inner = writtenOnTarget(c.inner(), topSource, topTarget);
-        yield inner == c.inner()
-          ? c
-          : new Conditional<>((Predicate<Object>) c.predicate(), (Mapping<Object, Object>) inner);
+        final var inner = rootedRow(c.inner(), topSource, topTarget);
+        final var given = switch (c.inner()) {
+          case FromTelescopeTo<?, ?, ?> t -> sourceRooted(t.sourceTelescope(), "to", topSource, topTarget).given();
+          case TelescopeToTelescope<?, ?, ?> t -> sourceRooted(
+            t.sourceTelescope(),
+            t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
+            topSource,
+            topTarget
+          ).given();
+          default -> null;
+        };
+        final var predicate = (Predicate<Object>) c.predicate();
+        yield new Conditional<>(
+          given == null ? predicate : new TelescopeFixups.SourceChecked(given, predicate),
+          (Mapping<Object, Object>) inner
+        );
       }
       default -> row;
     };
+  }
+
+  /**
+   * A source path as a row reads it, and the check it runs on each source it is given before
+   * reading it, or null when it runs none.
+   */
+  private record SourceRoot(Telescope<Object, Object> path, Function<Object, Object> given) {}
+
+  /**
+   * Whether an instance of {@code source} can also be an instance of {@code root}, a class that is
+   * not a supertype of the source: {@code root} extends the source, or one of the two is an
+   * interface and the other is a class a subclass can still extend to implement it.
+   */
+  private static boolean mayBeInstance(final Class<?> source, final Class<?> root) {
+    if (source.isAssignableFrom(root)) return true;
+    final Class<?> other = root.isInterface() ? source : source.isInterface() ? root : null;
+    return other != null && extendable(other);
+  }
+
+  /**
+   * Whether a class can gain a subclass that implements another interface. A final class cannot,
+   * and a record is final, as is the anonymous class of an enum constant's body. Neither can an
+   * enum: one whose constants declare bodies is not marked final, but its only subclasses are those
+   * bodies, and a body cannot implement an interface its enum does not.
+   */
+  private static boolean extendable(final Class<?> type) {
+    return !Modifier.isFinal(type.getModifiers()) && !type.isEnum();
+  }
+
+  /**
+   * The name a source-path message gives a class: its enum's for an enum constant's body, which is
+   * anonymous, and the binary name for any other class whose simple name is empty.
+   */
+  private static String className(final Class<?> type) {
+    final var parent = type.getSuperclass();
+    if (parent != null && parent.isEnum()) return parent.getSimpleName();
+    return type.getSimpleName().isEmpty() ? type.getName() : type.getSimpleName();
+  }
+
+  /**
+   * {@code path}, which a row reads the top-level source through, started at that source, checked
+   * against it, or refused when it cannot read there.
+   *
+   * <p>The hops before the path's first step off its root value keep the focus on that value. A
+   * filter or an observer is kept whatever its class. A narrowing to a class the source is or
+   * extends always matches and is kept. A narrowing to another class a source may be an instance
+   * of, such as a subclass of the source, matches only such a source, which is what a narrowing is
+   * for, so the path is kept as it is. A narrowing to a class no source can be an instance of never
+   * matches and is refused.
+   *
+   * <p>A first step that reads a component through an accessor is read again on the source when its
+   * class is the source or a type the source extends, since a write through a hop rebuilds the
+   * class that hop reads. A component of an interface the source does not implement, but that a
+   * source may, is kept and each source it is given is checked to implement it. A component of any
+   * other class is refused: a component of a subclass is read from a source of that subclass by
+   * narrowing to it first. A first step by {@code fieldByName} reads the property on whatever class
+   * it is given and is kept as it is.
+   *
+   * <p>Any other path cannot be started again: one that starts at a lens, reaches its first
+   * property through an iso or a bridge, or reads the root value itself. Such a path is kept when
+   * its root class is the source, and refused when no source can be an instance of its root class.
+   * A path rooted at another class a source may be an instance of reads only a source of that
+   * class, so each source it is given is checked to be one before it is read or written. A path
+   * rooted at a supertype reads any source, and one whose root class is unknown, as for a lambda
+   * lens, an iso or a bridge, may, so each is kept and each write's result is checked to be a
+   * source instance or null.
+   */
+  @SuppressWarnings("unchecked")
+  private static SourceRoot sourceRooted(
+    final Telescope<?, ?> path,
+    final String row,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    final var hops = path.hops;
+    final var kept = (Telescope<Object, Object>) path;
+    final Class<?> focus = path.rootClass;
+    final var step = path.rootStepIndex();
+    final var leading = hops == null ? 0 : step < 0 ? hops.size() : step;
+    final var source = topSource.getSimpleName();
+    final var target = topTarget.getSimpleName();
+    for (var i = 0; i < leading; i++) {
+      final var narrowed = hops.get(i).narrowedTo();
+      if (narrowed == null || narrowed.isAssignableFrom(topSource)) continue;
+      if (!mayBeInstance(topSource, narrowed)) throw new IllegalArgumentException(
+        PairingMessages.sourcePathNarrowsOffSource(source, target, row, narrowed.getSimpleName())
+      );
+      return new SourceRoot(kept, null);
+    }
+    if (step >= 0) {
+      final var first = hops.get(step);
+      final var owner = first.owner();
+      if (owner != null) {
+        if (owner.isAssignableFrom(topSource)) {
+          return new SourceRoot(kept.rootedAt((Class<Object>) topSource), null);
+        }
+        if (owner.isInterface() && mayBeInstance(topSource, owner)) return givenOnly(kept, owner, row, source, target);
+        throw new IllegalArgumentException(
+          PairingMessages.sourceRowOffSource(source, target, row, owner.getSimpleName(), first.component())
+        );
+      }
+      if (first.kind() == Fusion.Hop.Kind.BY_NAME) return new SourceRoot(kept, null);
+    }
+    if (focus == topSource) return new SourceRoot(kept, null);
+    if (focus != null && !focus.isAssignableFrom(topSource)) {
+      if (!mayBeInstance(topSource, focus)) throw new IllegalArgumentException(
+        PairingMessages.sourcePathNotOnSource(source, target, row, className(focus))
+      );
+      return givenOnly(kept, focus, row, source, target);
+    }
+    final Function<Object, Object> checked = written -> {
+      if (written == null || topSource.isInstance(written)) return written;
+      throw new IllegalStateException(
+        PairingMessages.sourcePathWroteOffSource(source, target, row, className(written.getClass()))
+      );
+    };
+    return new SourceRoot(Telescope.<Object, Object>iso(Function.identity(), checked).then(kept), null);
+  }
+
+  /**
+   * {@code path}, given only a source that is an instance of {@code root}. A row never receives a
+   * null source: a null converts to null before any row runs.
+   */
+  private static SourceRoot givenOnly(
+    final Telescope<Object, Object> path,
+    final Class<?> root,
+    final String row,
+    final String source,
+    final String target
+  ) {
+    final Function<Object, Object> given = value -> {
+      if (root.isInstance(value)) return value;
+      throw new IllegalStateException(
+        PairingMessages.sourcePathGivenOffRoot(source, target, row, className(root), className(value.getClass()))
+      );
+    };
+    return new SourceRoot(Telescope.<Object, Object>iso(given, Function.identity()).then(path), given);
   }
 
   /**
