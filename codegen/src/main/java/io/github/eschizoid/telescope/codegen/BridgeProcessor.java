@@ -4057,7 +4057,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String mapper
   ) {
     final var types = processingEnv.getTypeUtils();
-    final var parameter = types.erasure(method.getParameters().getFirst().asType());
+    final var parameter = parameterOf(method);
     final var handed = types.isSameType(parameter, types.erasure(from)) ? "in" : "(" + parameter + ") in";
     final var direction = method.getSimpleName().toString();
     out.println(
@@ -4075,6 +4075,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         handed +
         "); }"
     );
+  }
+
+  /** The erasure of the type {@code method}'s one parameter takes. */
+  private TypeMirror parameterOf(final ExecutableElement method) {
+    return processingEnv.getTypeUtils().erasure(method.getParameters().getFirst().asType());
   }
 
   /**
@@ -4494,25 +4499,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, unfit);
         return null;
       }
-      if (!MirrorProps.typeVariableIn(sourceOwn) && !MirrorProps.typeVariableIn(targetOwn)) continue;
-      if (mapper == null) continue;
       final var sourceHeld = fieldByName(paired.source(), field).type();
       final var targetHeld = fieldByName(paired.target(), tgtName).type();
+      final var variable = MirrorProps.typeVariableIn(sourceOwn) || MirrorProps.typeVariableIn(targetOwn);
+      // A property no type variable names is handed to the mapper as javac binds it. Where javac
+      // binds no method, the value is cast or told apart by its class to reach one, or the row is
+      // refused by name.
+      if (!variable && bindsAsHeld(mapper, sourceHeld, targetHeld, bridgePackage)) continue;
       final var forward = viaCall(mapper, "forward", sourceOwn, sourceHeld, bridgePackage);
       final var refusal =
         forward == null
-          ? viaRefusal(field, mapper, "forward", viaUnbound(mapper, "forward", sourceOwn, sourceHeld, bridgePackage))
-          : viaResultRefusal(
-              field,
-              mapper,
-              "forward",
-              forward,
-              target,
-              targetRebuild,
-              tgtName,
-              targetHeld,
-              bridgePackage
-            );
+          ? unboundRefusal(field, mapper, "forward", sourceOwn, sourceHeld, bridgePackage)
+          : viaResultRefusal(field, mapper, "forward", forward, target, targetRebuild, tgtName, bridgePackage);
       if (refusal != null) {
         error(source, refusal);
         return null;
@@ -4520,18 +4518,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backward = viaCall(mapper, "backward", targetOwn, targetHeld, bridgePackage);
       final var backRefusal =
         backward == null
-          ? viaRefusal(field, mapper, "backward", viaUnbound(mapper, "backward", targetOwn, targetHeld, bridgePackage))
-          : viaResultRefusal(
-              field,
-              mapper,
-              "backward",
-              backward,
-              source,
-              sourceRebuild,
-              field,
-              sourceHeld,
-              bridgePackage
-            );
+          ? unboundRefusal(field, mapper, "backward", targetOwn, targetHeld, bridgePackage)
+          : viaResultRefusal(field, mapper, "backward", backward, source, sourceRebuild, field, bridgePackage);
       if (backRefusal != null) {
         error(source, backRefusal);
         return null;
@@ -4540,6 +4528,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (backward.cast() != null) backwardCasts.put(field, backward.cast());
     }
     return new ViaCasts(forwardCasts, backwardCasts);
+  }
+
+  /**
+   * Whether javac binds a {@code forward} and a {@code backward} to the values as the bridge holds
+   * them.
+   */
+  private boolean bindsAsHeld(
+    final TypeElement mapper,
+    final TypeMirror sourceHeld,
+    final TypeMirror targetHeld,
+    final PackageElement bridgePackage
+  ) {
+    return (
+      resolvedFn(mapper, "forward", sourceHeld, bridgePackage) instanceof Resolution.Bound &&
+      resolvedFn(mapper, "backward", targetHeld, bridgePackage) instanceof Resolution.Bound
+    );
   }
 
   /**
@@ -4804,9 +4808,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * held type, which for a variable with a bound is that bound: the overload a method reference
    * typed by the bound binds as well. A variable with no bound is held as {@code Object}, and the
    * overload for {@code Object} need not be the one the value's own class calls for, so there the
-   * call binds only when the mapper declares one method of that name. A sole method binds as it is
-   * where it takes {@code held}, and otherwise through a cast to its parameter's erasure where that
-   * narrows {@code held}.
+   * call binds only when the mapper declares one method of that name. Where javac binds none, the
+   * call binds the one method a value of the property can be an instance of the parameter of, as it
+   * is where it takes {@code held}, and otherwise through a cast to its parameter's erasure.
    */
   private ViaCall viaCall(
     final TypeElement mapper,
@@ -4822,15 +4826,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return new ViaCall(null, bound.member().getReturnType());
       }
     }
-    if (candidates.size() != 1) return null;
-    final var method = candidates.getFirst();
-    final var parameter = types.erasure(method.getParameters().getFirst().asType());
-    final var erasedHeld = types.erasure(held);
-    if (!types.isSubtype(parameter, erasedHeld)) return null;
-    // A parameter whose erasure is the held type takes the value as it is; a cast to it would be
-    // one javac reports as redundant.
-    final var cast = types.isSameType(parameter, erasedHeld) ? null : parameter.toString();
-    return new ViaCall(cast, types.erasure(method.getReturnType()));
+    final var reached = candidates
+      .stream()
+      .filter(m -> mayShareInstance(boxedErasure(held), boxedErasure(m.getParameters().getFirst().asType())))
+      .toList();
+    if (reached.size() != 1) return null;
+    final var parameter = parameterOf(reached.getFirst());
+    // A parameter the held type is assignable to takes the value as it is; a cast to it would be
+    // one
+    // javac reports as redundant.
+    final var cast = types.isAssignable(types.erasure(held), parameter) ? null : parameter.toString();
+    return new ViaCall(cast, types.erasure(reached.getFirst().getReturnType()));
   }
 
   /**
@@ -4863,6 +4869,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * The refusal of a {@code @ViaMapper} whose {@code name} binds no method: the class declares no
+   * method of that name the bridge can call, or none of them takes the value; see {@link
+   * #viaUnbound}.
+   */
+  private String unboundRefusal(
+    final String field,
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final TypeMirror held,
+    final PackageElement bridgePackage
+  ) {
+    if (viaCandidates(mapper, name, bridgePackage).isEmpty()) {
+      return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + " declares no " + name;
+    }
+    return viaRefusal(field, mapper, name, viaUnbound(mapper, name, own, held, bridgePackage));
+  }
+
   /** Why {@link #viaCall} bound no method, for the refusal. */
   private String viaUnbound(
     final TypeElement mapper,
@@ -4893,11 +4918,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement owner,
     final Rebuild rebuild,
     final String property,
-    final TypeMirror held,
     final PackageElement bridgePackage
   ) {
-    final var slot = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
-    final var stores = slot == null ? held : slot;
+    final var stores = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
     if (processingEnv.getTypeUtils().isAssignable(call.result(), stores)) return null;
     return viaRefusal(
       field,

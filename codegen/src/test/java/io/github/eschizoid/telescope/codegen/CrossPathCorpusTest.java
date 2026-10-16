@@ -7287,13 +7287,168 @@ class CrossPathCorpusTest {
     )
   );
 
+  /**
+   * A {@code @ViaMapper} whose mapper method takes a class narrower than the property's own type,
+   * which no type variable names: a value of the property may still be an instance of it, so the
+   * bridge casts the value to the method's parameter, and a value that is not one fails at the call
+   * on both paths. The declarations other than the child pair, the last of them the runtime row,
+   * with a runtime mapper built from the same two functions.
+   */
+  private static final List<ViaVariable> VIA_CASTS = List.of(
+    new ViaVariable(
+      "a property of a class that is not final, to a mapper of an interface a subclass implements",
+      viaCastRow(
+        "public interface %1$sNamed { String name(); }\n",
+        "public class %1$sSub {\n" +
+          "  private final String name;\n" +
+          "  public %1$sSub(final String name) { this.name = name; }\n" +
+          "  public String name() { return name; }\n}\n",
+        "public class %1$sNamedSub extends %1$sSub implements %1$sNamed {\n" +
+          "  public %1$sNamedSub(final String name) { super(name); }\n}\n",
+        "%1$sSub",
+        "new %1$sNamedSub(\"a\")",
+        "%1$sNamed",
+        "new %1$sNamedSub(d.name())"
+      ),
+      "child=ChDto:f:a",
+      "child=NamedSub:q",
+      "child=NamedSub:q"
+    ),
+    new ViaVariable(
+      "a property of a class that is not final holding a value the mapper's interface is not",
+      viaCastRow(
+        "public interface %1$sNamed { String name(); }\n",
+        "public class %1$sSub {\n" +
+          "  private final String name;\n" +
+          "  public %1$sSub(final String name) { this.name = name; }\n" +
+          "  public String name() { return name; }\n}\n",
+        "public class %1$sNamedSub extends %1$sSub implements %1$sNamed {\n" +
+          "  public %1$sNamedSub(final String name) { super(name); }\n}\n",
+        "%1$sSub",
+        "new %1$sSub(\"a\")",
+        "%1$sNamed",
+        "new %1$sNamedSub(d.name())"
+      ),
+      REFUSED + "ClassCastException",
+      "child=NamedSub:q",
+      "child=NamedSub:q"
+    ),
+    new ViaVariable(
+      "an Object target property, to a mapper whose backward takes a class",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        VIA_CHILD + sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "Object child", "new %1$sTgt(new %1$sChDto(\"q\"))"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+          "      (%1$sCh c) -> new %1$sChDto(\"f:\" + c.name()), (%1$sChDto d) -> new %1$sCh(d.name())," +
+          " %1$sCh.class, %1$sChDto.class, java.util.Map.of());\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+          " child));\n  }\n}\n"
+      ),
+      "child=ChDto:f:a",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "an Object property, to a mapper of a class",
+      viaCastRow(
+        "public record %1$sLabel(String name) {}\n",
+        "",
+        "",
+        "Object",
+        "new %1$sLabel(\"a\")",
+        "%1$sLabel",
+        "new %1$sLabel(d.name())"
+      ),
+      "child=ChDto:f:a",
+      "child=Label:q",
+      "child=Label:q"
+    )
+  );
+
+  /**
+   * The declarations of a {@link #VIA_CASTS} row: {@code extras}, empty ones skipped; a source
+   * record whose {@code child} is {@code held} and holds {@code sample}; a target holding a child
+   * named {@code q}; a mapper class whose {@code forward} takes {@code takes} and whose {@code
+   * backward} builds {@code back}; and the runtime row, whose mapper is built from the same
+   * functions.
+   */
+  private static List<String> viaCastRow(
+    final String first,
+    final String second,
+    final String third,
+    final String held,
+    final String sample,
+    final String takes,
+    final String back
+  ) {
+    final var rows = new ArrayList<String>();
+    for (final var extra : List.of(first, second, third)) if (!extra.isEmpty()) rows.add(extra);
+    rows.add(
+      "public class %1$sChMap {\n" +
+        "  public static %1$sChDto forward(final " +
+        takes +
+        " c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+        "  public static " +
+        held +
+        " backward(final %1$sChDto d) { return " +
+        back +
+        "; }\n}\n"
+    );
+    rows.add(VIA_CHILD + sampled("%1$sSrc", held + " child", "new %1$sSrc(" + sample + ")"));
+    rows.add(sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"q\"))"));
+    rows.add(
+      "public class %1$sRuntime {\n" +
+        "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+        "  public static Object mapper() {\n" +
+        "    final var child = io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+        "      (" +
+        takes +
+        " c) -> new %1$sChDto(\"f:\" + c.name()), (%1$sChDto d) -> " +
+        back +
+        ", " +
+        takes +
+        ".class, %1$sChDto.class, java.util.Map.of());\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+        " child));\n  }\n}\n"
+    );
+    return rows;
+  }
+
+  @Test
+  @DisplayName(
+    "a @ViaMapper whose method takes a class narrower than the property casts to it, as the runtime row converts"
+  )
+  void aViaMapperOnAPropertyWiderThanItsParameterConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = viaConversionFailures(VIA_CASTS, "Vk");
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
   @Test
   @DisplayName("a @ViaMapper on a property typed by a type variable converts the same way on both paths")
   void aViaMapperOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = viaConversionFailures(VIA_VARIABLES, "Vm");
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code rows} owe and do not give: each row's generated bridge and runtime mapper, each
+   * named with {@code prefixBase} and the row's index, run forward, backward and laid over the
+   * source, and held to the row's {@code child} results on both paths.
+   */
+  private static List<String> viaConversionFailures(final List<ViaVariable> rows, final String prefixBase)
+    throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var row : VIA_VARIABLES) {
-      final var prefix = "Vm" + index++;
+    for (final var row : rows) {
+      final var prefix = prefixBase + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var ownMapper = row
         .declarations()
@@ -7371,7 +7526,7 @@ class CrossPathCorpusTest {
         }
       }
     }
-    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+    return failures;
   }
 
   /**
