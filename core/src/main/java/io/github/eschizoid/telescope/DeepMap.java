@@ -49,7 +49,6 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -197,13 +196,15 @@ public final class DeepMap {
     final var trail = new ArrayList<OpticNode>();
     final var ownBridges = new OwnBridges(
       overrideTable,
+      caseRows,
       hintMap.keySet(),
       beanRefl,
       nullStrategy == NullHint.NullStrategy.DEFAULT
         ? "the mapper's nullSourceValues(DEFAULT) reaches every pair, and a bridge has no counterpart for it"
         : defaultStrategy != null
           ? "the mapper's writeBeans(...) default reaches every pair, and a bridge has no counterpart for it"
-          : null
+          : null,
+      cyclicPairs
     );
     final var sealedCases = new SealedCases(caseRows);
     // A mapper between two sealed interfaces dispatches on the case, and each case's own mapper is
@@ -249,12 +250,11 @@ public final class DeepMap {
     sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = patchTableOf(topSteps, source);
-    final var rootKey = new TypePair(source, target);
     final Iso<A, B> guarded = cyclicPairs.isEmpty()
       ? iso
       : Iso.of(
-          value -> inInvocation(FORWARD_SEEN, rootKey, value, iso::to),
-          value -> inInvocation(BACKWARD_SEEN, rootKey, value, iso::from)
+          value -> inInvocation(FORWARD_SEEN, ownBridges, source, target, value, iso::to),
+          value -> inInvocation(BACKWARD_SEEN, ownBridges, target, source, value, iso::from)
         );
     return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail));
   }
@@ -1425,10 +1425,10 @@ public final class DeepMap {
         cases,
         null
       );
-      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair)));
+      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
       mapper = Mapper.ofCases((Iso) cache.get(pair), source, target, cases, List.of());
     } else if (bridge != null) {
-      iso = eraseIso(isoOf(pair, bridge));
+      iso = eraseIso(isoOf(pair, bridge, ownBridges));
       mapper = Mapper.ofPatcher(
         (Iso) iso,
         source,
@@ -1454,7 +1454,7 @@ public final class DeepMap {
         forwardOnly,
         null
       );
-      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair)));
+      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
       mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of());
     } else {
       // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
@@ -1608,7 +1608,7 @@ public final class DeepMap {
         forwardOnly,
         null
       );
-      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
+      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey), ownBridges);
     }
 
     // (b.1) Two sealed interfaces → each value converts through the pair its case belongs to. The
@@ -1633,7 +1633,7 @@ public final class DeepMap {
         null
       );
       final var subKey = new TypePair(srcCls, tgtCls);
-      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
+      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey), ownBridges);
     }
 
     // (c.1) Cross-paradigm Optional bridge — one side is Optional<X>, the other is a possibly-null
@@ -2223,16 +2223,25 @@ public final class DeepMap {
 
   // ---------- Cycle-safe cache reader ----------
 
-  /** Active identities per type pair, scoped to one public mapping invocation and direction. */
-  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> FORWARD_SEEN = new ThreadLocal<>();
+  /**
+   * The path of the public mapping invocation running on this thread, one per direction, by the
+   * pair of classes each object is converted between, as {@link ActivePath} keys them. A generated
+   * bridge that {@linkplain BridgeFn#takesActivePath() takes the active path} keys it the same way,
+   * so a path handed to such a bridge runs on through it. A bridge is handed the path only by the
+   * walk that opened it, so a mapper called from inside another one, through a row's function or a
+   * transform, starts a path of its own.
+   */
+  private static final ThreadLocal<ActivePath> FORWARD_SEEN = new ThreadLocal<>();
 
-  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> BACKWARD_SEEN = new ThreadLocal<>();
+  private static final ThreadLocal<ActivePath> BACKWARD_SEEN = new ThreadLocal<>();
 
+  /** {@code owner} is the walk the pair belongs to. */
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> lazyCacheIso(
     final Map<TypePair, Iso<?, ?>> cache,
     final TypePair key,
-    final boolean acyclic
+    final boolean acyclic,
+    final Object owner
   ) {
     // Acyclic-bypass: when the static type graph has no path from this pair back to itself, the
     // value-level cycle guard cannot fire. Skip the ThreadLocal probe + IdentityHashMap insert
@@ -2254,42 +2263,53 @@ public final class DeepMap {
       );
     }
     return Iso.of(
-      v -> cycleSafe(FORWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
-      v -> cycleSafe(BACKWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
+      v -> cycleSafe(FORWARD_SEEN, owner, key.source, key.target, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
+      v ->
+        cycleSafe(BACKWARD_SEEN, owner, key.target, key.source, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
     );
   }
 
-  /** Reentrant public calls get independent paths; restore the caller even after an exception. */
+  /**
+   * Converts {@code value} from {@code from} into {@code into} on a path of its own, for the walk
+   * {@code owner}. Reentrant public calls get independent paths; the caller's is restored even
+   * after an exception.
+   */
   private static <X, Y> Y inInvocation(
-    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
-    final TypePair key,
+    final ThreadLocal<ActivePath> ref,
+    final Object owner,
+    final Class<?> from,
+    final Class<?> into,
     final X value,
     final Function<X, Y> body
   ) {
     if (value == null) return null;
     final var previous = ref.get();
-    ref.set(new HashMap<>());
+    ref.set(new ActivePath(owner));
     try {
-      return cycleSafe(ref, key, value, body);
+      return cycleSafe(ref, owner, from, into, value, body);
     } finally {
       if (previous == null) ref.remove();
       else ref.set(previous);
     }
   }
 
-  /** Only an identity already on the active path is a cycle; siblings map independently. */
+  /**
+   * Only an identity already on the active path is a cycle; siblings map independently. A pair met
+   * with no path open, as a patch entry meets it, starts one for the walk {@code owner}.
+   */
   private static <X, Y> Y cycleSafe(
-    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
-    final TypePair key,
+    final ThreadLocal<ActivePath> ref,
+    final Object owner,
+    final Class<?> from,
+    final Class<?> into,
     final X value,
     final Function<X, Y> body
   ) {
     if (value == null) return null;
-    final var context = ref.get();
-    // A patch entry can invoke a nested Iso without going through the public root.
-    if (context == null) return inInvocation(ref, key, value, body);
-    final var active = context.computeIfAbsent(key, ignored -> new IdentityHashMap<>());
-    if (active.put(value, Boolean.TRUE) != null) return null;
+    final var path = ref.get();
+    if (path == null) return inInvocation(ref, owner, from, into, value, body);
+    final var active = path.objects(from, into);
+    if (active.putIfAbsent(value, Boolean.TRUE) != null) return null;
     try {
       return body.apply(value);
     } finally {
@@ -2438,11 +2458,16 @@ public final class DeepMap {
    * instead when the bridge would pass over something the mapper says:
    *
    * <ul>
-   *   <li>a row keyed to the pair, or to a pair its classes reach;
+   *   <li>a row keyed to the pair, or to a pair its classes reach, or a {@code cases} row pairing
+   *       two cases its classes reach;
    *   <li>a write hint naming one of its classes, or a class they reach;
-   *   <li>a type the pair reaches that is an ancestor on the walk's path, because the walk's guard
-   *       against an object reaching itself does not pass through a bridge.
+   *   <li>a type the pair reaches that is an ancestor on the walk's path, when the bridge does not
+   *       {@linkplain BridgeFn#takesActivePath() take the active path}, because the walk's guard
+   *       against an object reaching itself would not pass through it.
    * </ul>
+   *
+   * <p>A bridge that takes the active path converts a pair on a cycle along the walk's own path, so
+   * the reference that closes the cycle converts to null where it does on the generated path.
    *
    * <p>A mapper-wide {@code nullSourceValues(DEFAULT)} or {@code writeBeans(...)} default reaches
    * every pair, and a bridge has no counterpart for either, so such a mapper walks every pair.
@@ -2456,17 +2481,24 @@ public final class DeepMap {
     private final String everyPair;
     private final Map<Reach, Set<Class<?>>> reached = new HashMap<>();
     private final Set<TypePair> converted = new HashSet<>();
+    // The walk's pairs whose objects are kept on the active path while they convert.
+    private final Set<TypePair> cyclicPairs;
+    private final List<Cases> caseRows;
 
     OwnBridges(
       final Map<TypePair, List<Mapping<?, ?>>> rows,
+      final List<Cases> caseRows,
       final Set<Class<?>> hinted,
       final Reflective beanRefl,
-      final String everyPair
+      final String everyPair,
+      final Set<TypePair> cyclicPairs
     ) {
       this.rows = rows;
+      this.caseRows = List.copyOf(caseRows);
       this.hinted = hinted;
       this.beanRefl = beanRefl;
       this.everyPair = everyPair;
+      this.cyclicPairs = cyclicPairs;
     }
 
     /**
@@ -2475,7 +2507,7 @@ public final class DeepMap {
      */
     Iso<?, ?> isoFor(final TypePair pair, final Collection<TypePair> ancestors) {
       final var bridge = bridgeFor(pair, ancestors);
-      return bridge == null ? null : isoOf(pair, bridge);
+      return bridge == null ? null : isoOf(pair, bridge, this);
     }
 
     /** As {@link #isoFor}, the generated bridge itself. */
@@ -2483,8 +2515,30 @@ public final class DeepMap {
       if (settingReason(pair, ancestors) != null) return null;
       final var found = ownBridge(pair.source, pair.target, false);
       if (found.isEmpty() || reachReason(pair, ancestors, found.get()) != null) return null;
+      markCycle(pair, ancestors, found.get());
       converted.add(pair);
       return found.get();
+    }
+
+    /**
+     * Marks as cyclic the pairs around {@code pair} that lie on a cycle running through its bridge:
+     * the outermost ancestor the bridge reaches, and every ancestor inside it. Their objects then
+     * stay on the active path while they convert, which is what the bridge reads to cut the cycle.
+     * {@code ancestors} runs from the innermost pair out.
+     */
+    private void markCycle(final TypePair pair, final Collection<TypePair> ancestors, final Object bridge) {
+      final var fn = Telescope.bridgeFnOf(bridge);
+      if (fn == null || !fn.takesActivePath()) return;
+      final var fromSource = reachedFrom(pair.source, fn.unwalkedSourceProperties(), fn.declaresUnwalkedProperties());
+      final var fromTarget = reachedFrom(pair.target, fn.unwalkedTargetProperties(), fn.declaresUnwalkedProperties());
+      final var around = List.copyOf(ancestors);
+      for (var i = around.size() - 1; i >= 0; i--) {
+        final var ancestor = around.get(i);
+        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
+          cyclicPairs.addAll(around.subList(0, i + 1));
+          return;
+        }
+      }
     }
 
     /**
@@ -2532,11 +2586,24 @@ public final class DeepMap {
           );
         }
       }
+      for (final var row : caseRows) {
+        if (fromSource.contains(row.sourceCase()) && fromTarget.contains(row.targetCase())) {
+          return (
+            "a cases row pairs " +
+            row.sourceCase().getSimpleName() +
+            " with " +
+            row.targetCase().getSimpleName() +
+            ", a pair it reaches"
+          );
+        }
+      }
       for (final var hint : hinted) {
         if (fromSource.contains(hint) || fromTarget.contains(hint)) {
           return "a writeBean hint names " + hint.getSimpleName() + ", a class it reaches";
         }
       }
+      // A bridge taking the active path cuts a cycle through it at the reference the walk would.
+      if (fn != null && fn.takesActivePath()) return null;
       for (final var ancestor : ancestors) {
         if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
           return (
@@ -2701,12 +2768,28 @@ public final class DeepMap {
   }
 
   /**
-   * A nested pair's own bridge as the pair's leaf, as it is: a generated bridge converts null to
-   * null in both directions.
+   * A nested pair's own bridge as the pair's leaf: a generated bridge converts null to null in both
+   * directions. A bridge that {@linkplain BridgeFn#takesActivePath() takes the active path} is
+   * handed the path of the walk {@code owner} when that walk has one open, so an object the walk is
+   * converting is one the bridge finds on it; met outside that walk, the bridge starts its own.
    *
    * @throws IllegalStateException when the bridge is not a two-way conversion
    */
-  private static Iso<?, ?> isoOf(final TypePair pair, final Object bridge) {
+  @SuppressWarnings("unchecked")
+  private static Iso<?, ?> isoOf(final TypePair pair, final Object bridge, final Object owner) {
+    if (Telescope.bridgeFnOf(bridge) instanceof BridgeFn<?, ?> raw && raw.takesActivePath()) {
+      final var fn = (BridgeFn<Object, Object>) raw;
+      return Iso.of(
+        v -> {
+          final var path = FORWARD_SEEN.get();
+          return path == null || path.owner() != owner ? fn.forward(v) : fn.forward(v, path);
+        },
+        v -> {
+          final var path = BACKWARD_SEEN.get();
+          return path == null || path.owner() != owner ? fn.backward(v) : fn.backward(v, path);
+        }
+      );
+    }
     if (bridge instanceof Telescope<?, ?> telescope && telescope.optic instanceof Iso<?, ?> iso) return iso;
     throw new IllegalStateException(
       "The bridge generated for (" +

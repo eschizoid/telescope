@@ -13,8 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -212,8 +214,10 @@ class NestedOwnBridgeTest {
   }
 
   @Test
-  @DisplayName("a nested pair that reaches back to its parent is walked, so an object reaching itself converts to null")
-  void aNestedPairOnACycleIsWalked() {
+  @DisplayName(
+    "a nested pair that reaches back to its parent converts through its own bridge, and an object reaching itself converts to null"
+  )
+  void aNestedPairOnACycleConvertsThroughItsOwnBridge() {
     final var a = new ObCa();
     final var b = new ObCb();
     a.setName("a");
@@ -222,12 +226,12 @@ class NestedOwnBridgeTest {
     b.setA(a);
     final var converted = Telescope.mapper(ObCa.class, ObCaDto.class).forward(a);
     assertNull(converted.getB().getA());
-    assertEquals("b", converted.getB().getLabel());
+    assertEquals("B", converted.getB().getLabel());
   }
 
   @Test
-  @DisplayName("a bridged pair met off a cycle first is still walked where it closes the cycle")
-  void aPairBridgedOffACycleIsWalkedOnIt() {
+  @DisplayName("a bridged pair converts through its own bridge off a cycle and where it closes one")
+  void aBridgedPairConvertsThroughItsBridgeOnAndOffACycle() {
     final var a = new ObCa();
     final var b = new ObCb();
     a.setName("a");
@@ -236,8 +240,79 @@ class NestedOwnBridgeTest {
     b.setA(a);
     final var converted = Telescope.mapper(ObOff.class, ObOffDto.class).forward(new ObOff(b, a));
     assertNull(converted.a().getB().getA());
-    assertEquals("b", converted.a().getB().getLabel());
+    assertEquals("B", converted.a().getB().getLabel());
     assertEquals("B", converted.b().getLabel());
+  }
+
+  @Test
+  @DisplayName("a mapper called from inside another mapper's row converts a bridged pair on a path of its own")
+  void aMapperCalledFromARowStartsItsOwnPath() {
+    final var a = new ObCa();
+    final var b = new ObCb();
+    a.setName("a");
+    a.setB(b);
+    b.setLabel("b");
+    b.setA(a);
+    final var inner = Telescope.mapper(ObWrapB.class, ObWrapBDto.class);
+    final var alone = inner.forward(new ObWrapB(b)).b();
+    assertEquals("B", alone.getLabel());
+    assertEquals("a", alone.getA().getName());
+    assertNull(alone.getA().getB());
+    final var inside = new ArrayList<ObCbDto>();
+    final var outer = Telescope.mapper(
+      ObCa.class,
+      ObCaDto.class,
+      to(
+        ObCa::getName,
+        ObCaDto::getName,
+        (final String name) -> {
+          inside.add(inner.forward(new ObWrapB(b)).b());
+          return name;
+        },
+        (final String name) -> name
+      )
+    );
+    outer.forward(a);
+    assertEquals("B", inside.getFirst().getLabel());
+    assertEquals("a", inside.getFirst().getA().getName());
+    assertNull(inside.getFirst().getA().getB());
+  }
+
+  @Test
+  @DisplayName("a bridge claiming the active path without converting along it refuses rather than restarting the path")
+  void aBridgeClaimingThePathWithoutTakingItRefuses() {
+    final BridgeFn<String, String> fn = new BridgeFn<>() {
+      @Override
+      public String forward(final String source) {
+        return source;
+      }
+
+      @Override
+      public String backward(final String target) {
+        return target;
+      }
+
+      @Override
+      public boolean takesActivePath() {
+        return true;
+      }
+    };
+    final var forward = assertThrows(UnsupportedOperationException.class, () ->
+      fn.forward("x", new IdentityHashMap<>())
+    );
+    assertTrue(forward.getMessage().contains("overrides both forward and backward taking a path"), forward::getMessage);
+    assertThrows(UnsupportedOperationException.class, () -> fn.backward("x", new IdentityHashMap<>()));
+  }
+
+  @Test
+  @DisplayName("a bridge that does not take the active path is walked where it reaches back to its parent")
+  void aBridgeTakingNoPathIsWalkedOnACycle() {
+    final var bs = new ArrayList<ObOb>();
+    final var a = new ObOa("a", bs);
+    bs.add(new ObOb("b", a));
+    final var converted = Telescope.mapper(ObOa.class, ObOaDto.class).forward(a);
+    assertEquals("b", converted.bs().getFirst().label());
+    assertNull(converted.bs().getFirst().a());
   }
 
   @Test

@@ -3977,8 +3977,183 @@ class CrossPathCorpusTest {
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")"
+    ),
+    new Cycle(
+      "a subclass that refers to itself through a property typed by its superclass",
+      List.of(
+        // A superclass is defined before the classes that extend or hold it.
+        bean("%1$sNode", "", "String n", "%1$sNode next"),
+        "public class %1$sSub extends %1$sNode {}\n",
+        bean("%1$sNodeDto", "", "String n", "%1$sNodeDto next"),
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sSub s) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var sub = new %1$sSub();\n" +
+          "    sub.setN(\"s\");\n" +
+          "    sub.setNext(sub);\n" +
+          "    return new %1$sSrc(sub);\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(%1$sNodeDto s) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var node = new %1$sNodeDto();\n" +
+          "    node.setN(\"t\");\n" +
+          "    node.setNext(node);\n" +
+          "    return new %1$sTgt(node);\n" +
+          "  }\n" +
+          "}\n"
+      ),
+      "#0(s=#1(n=\"s\", next=#2(n=\"s\", next=null)))",
+      "#0(s=#1(n=\"t\", next=#2(n=\"t\", next=null)))",
+      "#0(s=#1(n=\"t\", next=#2(n=\"t\", next=null)))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge renames the property leading back",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", group("%1$sSrc", "%1$sGroup", "%1$sHolder", "Node"), "%1$sGroup g"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sGroupDto.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"node\", target = \"child\"))\n" +
+          bean("%1$sGroup", "", "%1$sHolder node"),
+        bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sTgt", group("%1$sTgt", "%1$sGroupDto", "%1$sHolderDto", "Child"), "%1$sGroupDto g"),
+        bean("%1$sGroupDto", "", "%1$sHolderDto child"),
+        bean("%1$sHolderDto", "", "%1$sTgt back")
+      ),
+      "#0(g=#1(child=#2(back=null)))",
+      "#0(g=#1(node=#2(back=null)))",
+      "#0(g=#1(node=#2(back=#3(g=null))))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge fills a constant",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, constants =" +
+          " @io.github.eschizoid.telescope.annotations.Constant(field = \"tag\", value = \"k\"))\n" +
+          bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
+        bean("%1$sHolderDto", "", "String tag", "%1$sTgt back")
+      ),
+      "#0(h=#1(back=null, tag=\"k\"))",
+      "#0(h=#1(back=null))",
+      "#0(h=#1(back=#2(h=null)))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge computes a value",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, computes =" +
+          " @io.github.eschizoid.telescope.annotations.Compute(field = \"tag\", using = %1$sTagFn.class))\n" +
+          bean("%1$sHolder", "", "%1$sSrc back"),
+        "public class %1$sTagFn implements java.util.function.Supplier<String> {\n" +
+          "  public String get() { return \"c\"; }\n" +
+          "}\n",
+        bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
+        bean("%1$sHolderDto", "", "String tag", "%1$sTgt back")
+      ),
+      "#0(h=#1(back=null, tag=\"c\"))",
+      "#0(h=#1(back=null))",
+      "#0(h=#1(back=#2(h=null)))"
+    ),
+    new Cycle(
+      "a nested pair whose own bridge transforms a property, on a cycle closing at a walked pair around it",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", walkedBetween("%1$sSrc", "%1$sA", "%1$sMid"), "%1$sA a"),
+        bean("%1$sA", "", "%1$sMid m"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"label\", using = %1$sUpFn.class))\n" +
+          bean("%1$sMid", "", "String label", "%1$sA back"),
+        "public class %1$sUpFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+          "  public String forward(final String s) { return s == null ? null : s.toUpperCase(); }\n" +
+          "  public String backward(final String s) { return s == null ? null : s.toLowerCase(); }\n" +
+          "}\n",
+        bean("%1$sTgt", walkedBetween("%1$sTgt", "%1$sADto", "%1$sMidDto"), "%1$sADto a"),
+        bean("%1$sADto", "", "%1$sMidDto m"),
+        bean("%1$sMidDto", "", "String label", "%1$sADto back")
+      ),
+      "#0(a=#1(m=#2(back=null, label=\"M\")))",
+      "#0(a=#1(m=#2(back=null, label=\"m\")))",
+      "#0(a=#1(m=#2(back=null, label=\"m\")))"
     )
   );
+
+  /**
+   * A {@code sample()} building {@code type} whose {@code g}, a {@code groupType}, holds a {@code
+   * holderType} under {@code set<property>} that leads back to the sample.
+   */
+  private static String group(
+    final String type,
+    final String groupType,
+    final String holderType,
+    final String property
+  ) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var group = new " +
+      groupType +
+      "();\n" +
+      "    final var holder = new " +
+      holderType +
+      "();\n" +
+      "    holder.setBack(root);\n" +
+      "    group.set" +
+      property +
+      "(holder);\n" +
+      "    root.setG(group);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
+
+  /** A {@code sample()} building {@code type} whose {@code h}, a {@code holderType}, leads back. */
+  private static String held(final String type, final String holderType) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var holder = new " +
+      holderType +
+      "();\n" +
+      "    holder.setBack(root);\n" +
+      "    root.setH(holder);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
+
+  /**
+   * A {@code sample()} building {@code type} whose {@code a}, an {@code aType}, holds a {@code
+   * midType} labelled {@code m} that leads back to the {@code a}.
+   */
+  private static String walkedBetween(final String type, final String aType, final String midType) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var a = new " +
+      aType +
+      "();\n" +
+      "    final var mid = new " +
+      midType +
+      "();\n" +
+      "    mid.setLabel(\"m\");\n" +
+      "    mid.setBack(a);\n" +
+      "    a.setM(mid);\n" +
+      "    root.setA(a);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
 
   @Test
   @DisplayName("an object graph that leads back to an object being converted maps to the same shape on both paths")
@@ -5394,6 +5569,24 @@ class CrossPathCorpusTest {
       "#0(s=#1(doc=#2(s=@1)))"
     ),
     new SealedCell(
+      "a cycle through a case of a sealed field held by a nested pair with its own bridge",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sBack, %1$sDot {}\n",
+        "public sealed interface %1$sShapeDto permits %1$sBackDto, %1$sDotDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sBackDto.class)\npublic final class %1$sBack implements %1$sShape {\n  private %1$sSrc top;\n  public %1$sSrc getTop() { return top; }\n  public void setTop(final %1$sSrc top) { this.top = top; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sDotDto.class)\npublic record %1$sDot(int x) implements %1$sShape {}\n",
+        "public final class %1$sBackDto implements %1$sShapeDto {\n  private %1$sTgt top;\n  public %1$sTgt getTop() { return top; }\n  public void setTop(final %1$sTgt top) { this.top = top; }\n}\n",
+        "public record %1$sDotDto(int x) implements %1$sShapeDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sXDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(source = \"s\", target = \"shape\"))\npublic class %1$sX {\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n}\n",
+        "public class %1$sXDto {\n  private %1$sShapeDto shape;\n  public %1$sShapeDto getShape() { return shape; }\n  public void setShape(final %1$sShapeDto shape) { this.shape = shape; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\npublic class %1$sSrc {\n  private %1$sX x;\n  public %1$sX getX() { return x; }\n  public void setX(final %1$sX x) { this.x = x; }\n  public static %1$sSrc sample() {\n    final var top = new %1$sSrc();\n    final var x = new %1$sX();\n    final var back = new %1$sBack();\n    back.setTop(top);\n    x.setS(back);\n    top.setX(x);\n    return top;\n  }\n}\n",
+        "public class %1$sTgt {\n  private %1$sXDto x;\n  public %1$sXDto getX() { return x; }\n  public void setX(final %1$sXDto x) { this.x = x; }\n  public static %1$sTgt sample() {\n    final var top = new %1$sTgt();\n    final var x = new %1$sXDto();\n    final var back = new %1$sBackDto();\n    back.setTop(top);\n    x.setShape(back);\n    top.setX(x);\n    return top;\n  }\n  public static %1$sTgt partial() { return new %1$sTgt(); }\n}\n"
+      ),
+      "#0(x=#1(shape=#2(top=null)))",
+      "#0(x=#1(s=#2(top=null)))",
+      "#0(x=#1(s=#2(top=#3(x=@1))))"
+    ),
+    new SealedCell(
       "a case holding its own sealed root",
       List.of(
         SEALED_HEAD +
@@ -6693,15 +6886,7 @@ class CrossPathCorpusTest {
    *
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
-  private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
-    // A defect still to close: the runtime walks a nested pair that reaches back to a pair
-    // being converted around it, rather than using its own bridge, because its guard
-    // against an object reaching itself does not pass through a generated bridge. Walked,
-    // the enum pair has no transform and refuses the constant the bridge would have
-    // converted.
-    "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
-    "%1$sEa has no constant named C, which the backward direction needs"
-  );
+  private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of();
 
   @Test
   @DisplayName("an enum maps to an enum by constant name on both paths, and both refuse the same mismatches")

@@ -2495,7 +2495,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           targetFq,
           declares(thisPair),
           unwalkedSource,
-          unwalkedTarget
+          unwalkedTarget,
+          guarded
         );
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
@@ -2782,6 +2783,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<String> unwalkedSource,
     final Set<String> unwalkedTarget
   ) {
+    emitBridgeHandles(
+      out,
+      suppression,
+      bridgeName,
+      sourceFq,
+      targetFq,
+      declared,
+      unwalkedSource,
+      unwalkedTarget,
+      false
+    );
+  }
+
+  /**
+   * As above; {@code takesPath} says the bridge has the path-carrying overloads {@link
+   * #emitDirection} writes for a pair that can reach itself, which the {@code Fn} then exposes, so
+   * a runtime mapper converting the pair on a cycle hands the bridge its own path.
+   */
+  private static void emitBridgeHandles(
+    final PrintWriter out,
+    final String suppression,
+    final String bridgeName,
+    final String sourceFq,
+    final String targetFq,
+    final boolean declared,
+    final Set<String> unwalkedSource,
+    final Set<String> unwalkedTarget,
+    final boolean takesPath
+  ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
     out.println("  private static final class Fn implements BridgeFn<" + sourceFq + ", " + targetFq + "> {");
@@ -2800,6 +2830,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".patch(base, partial);");
     out.println("    }");
     out.println();
+    if (takesPath) {
+      out.println("    @Override");
+      out.println("    public boolean takesActivePath() {");
+      out.println("      return true;");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + targetFq + " forward(final " + sourceFq + " s, final " + PATH_TYPE + " __path) {");
+      out.println("      return " + bridgeName + ".forward(s, __path);");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + sourceFq + " backward(final " + targetFq + " t, final " + PATH_TYPE + " __path) {");
+      out.println("      return " + bridgeName + ".backward(t, __path);");
+      out.println("    }");
+      out.println();
+    }
     if (declared) {
       out.println("    @Override");
       out.println("    public boolean declaresPair() {");
@@ -6617,7 +6664,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     final var token = "__" + direction.toUpperCase(Locale.ROOT) + "_PATH";
-    out.println("  private static final Object " + token + " = new Object();");
+    // The token names the pair this direction converts between, so a runtime mapper that hands
+    // the bridge its own path finds the objects the bridge enters under that pair; on a path
+    // the bridge started itself, the token is only an identity, as a plain object would be.
+    out.println(
+      "  private static final Object " +
+        token +
+        " = new io.github.eschizoid.telescope.PathKey(" +
+        inFq +
+        ".class, " +
+        outFq +
+        ".class);"
+    );
     out.println();
     out.print(suppressRaw);
     out.println("  public static " + outFq + " " + direction + "(final " + inFq + " " + in + ") {");

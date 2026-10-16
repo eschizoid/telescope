@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.util.IdentityHashMap;
 import java.util.Set;
 
 /**
@@ -42,6 +43,56 @@ public interface BridgeFn<A, B> {
 
   /** Backward conversion {@code B -> A}, inverse of {@link #forward}. */
   A backward(B target);
+
+  /**
+   * Whether {@link #forward(Object, IdentityHashMap)} and {@link #backward(Object,
+   * IdentityHashMap)} convert along the active path they are handed. A bridge {@code @Bridge}
+   * generates for a pair that can reach itself does. A runtime mapper converts a nested pair on a
+   * cycle through its own bridge only when this is true, handing it the mapper's path, so the
+   * reference that closes the cycle converts to null on both paths. False by default: the mapper
+   * then walks such a pair itself.
+   *
+   * <p>A bridge answering true has to override both path-taking methods, which throw by default.
+   * One that ignored the path would start a path of its own on every call, and a cycle through it
+   * would never close.
+   */
+  default boolean takesActivePath() {
+    return false;
+  }
+
+  /**
+   * {@link #forward(Object)} along {@code path}, the objects being converted right now: one
+   * identity set per key, which a generated bridge takes as a {@link
+   * io.github.eschizoid.telescope.PathKey} naming the two classes it converts between. A {@code
+   * source} already in the set converts to null; otherwise it is in the set for as long as it
+   * converts, and the path is handed to the bridges this one calls.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge that does not {@linkplain
+   *     #takesActivePath() take the path}
+   */
+  default B forward(final A source, final IdentityHashMap<Object, IdentityHashMap<Object, Boolean>> path) {
+    throw new UnsupportedOperationException(noActivePath(getClass()));
+  }
+
+  /**
+   * {@link #backward(Object)} along {@code path}, as {@link #forward(Object, IdentityHashMap)}
+   * does.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge that does not {@linkplain
+   *     #takesActivePath() take the path}
+   */
+  default A backward(final B target, final IdentityHashMap<Object, IdentityHashMap<Object, Boolean>> path) {
+    throw new UnsupportedOperationException(noActivePath(getClass()));
+  }
+
+  private static String noActivePath(final Class<?> bridge) {
+    return (
+      bridge.getName() +
+      " does not convert along an active path. A bridge whose takesActivePath() is true overrides" +
+      " both forward and backward taking a path; if it is a generated bridge, re-run the @Bridge" +
+      " processor."
+    );
+  }
 
   /**
    * Overlay the non-null properties of {@code partial} onto {@code base}, as a new {@code A}. A
