@@ -157,6 +157,15 @@ GraalVM's strict missing-registration mode, a `Class.forName` of a name that is 
 than reporting the class absent, and the probe does not catch it, under either name. Run a runtime mapper's image
 without that mode, or register the names it can look up.
 
+## The order a bean's properties convert in
+
+A runtime mapper converts a bean's properties in the order of the fields that back them, read with `getDeclaredFields`,
+superclass fields first, and then the properties no field backs, by name. The generated bridge uses the same order. On
+the JVM, `getDeclaredFields` returns the class file's order, which javac writes in source order. In an image, the fields
+come from the reflection metadata registered for the bean, so their order is whatever the image builder recorded. The
+`:core:imageTest` gate checks this order on the accessor substrate an image uses, but it runs on the JVM. `NativeVerify`
+does not check the order, so a real image's order is not verified. It matters only to conversions with side effects.
+
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's

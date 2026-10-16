@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -886,7 +887,39 @@ public final class Beans {
         map.put(prop, m);
       }
     }
-    return map;
+    return inDeclarationOrder(cls, map);
+  }
+
+  /**
+   * {@code getters} reordered by a rule that holds in every JVM: properties a field of the same
+   * name backs, in the order the class and its superclasses declare those fields, the root class
+   * first, and then every other property by name.
+   *
+   * <p>{@code Class.getMethods()} lists methods in no particular order. HotSpot lists them in the
+   * order their names were first seen in the JVM, so the same class gives a different order after
+   * other code has run. {@code Class.getDeclaredFields()} has no order the specification promises
+   * either, but HotSpot returns the class file's order, which javac writes in source order, and
+   * that does not change with what ran before. The bridge processor orders a bean's properties by
+   * the same rule, so both paths convert them in one order.
+   */
+  private static Map<String, Method> inDeclarationOrder(final Class<?> cls, final Map<String, Method> getters) {
+    final var hierarchy = new ArrayDeque<Class<?>>();
+    for (Class<?> c = cls; c != null && c != Object.class; c = c.getSuperclass()) hierarchy.push(c);
+    final var ordered = new LinkedHashMap<String, Method>();
+    for (final var c : hierarchy) {
+      for (final var field : c.getDeclaredFields()) {
+        if (Modifier.isStatic(field.getModifiers())) continue;
+        final var getter = getters.get(field.getName());
+        if (getter != null) ordered.putIfAbsent(field.getName(), getter);
+      }
+    }
+    getters
+      .keySet()
+      .stream()
+      .filter(name -> !ordered.containsKey(name))
+      .sorted()
+      .forEach(name -> ordered.put(name, getters.get(name)));
+    return ordered;
   }
 
   private static String capitalize(final String s) {
