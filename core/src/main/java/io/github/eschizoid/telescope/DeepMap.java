@@ -815,8 +815,9 @@ public final class DeepMap {
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
     final OwnBridges ownBridges
   ) {
+    if (!(srcType instanceof Class<?> srcCls) || !(tgtType instanceof Class<?> tgtCls)) return false;
     if (!(PAIRING.decidePair(srcType, tgtType, "") instanceof PairDecision.RecursePair)) return false;
-    final var pair = new TypePair((Class<?>) srcType, (Class<?>) tgtType);
+    final var pair = new TypePair(srcCls, tgtCls);
     return overrides.getOrDefault(pair, List.of()).isEmpty() && !ownBridges.converts(pair);
   }
 
@@ -1578,8 +1579,10 @@ public final class DeepMap {
 
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (decision instanceof PairDecision.RecursePair) {
-      final var srcCls = (Class<?>) srcType;
-      final var tgtCls = (Class<?>) tgtType;
+      // A pair given type arguments converts as its raw classes, which read each other's type
+      // variables by position, so the arguments name no pair of their own.
+      final var srcCls = rawClassOf(srcType);
+      final var tgtCls = rawClassOf(tgtType);
       final var subKey = new TypePair(srcCls, tgtCls);
       // A bridge is decided where the pair is met, from the pairs being converted around it, and is
       // never stored in the cache: a walked pair on a cycle reads the cache when it runs, so a

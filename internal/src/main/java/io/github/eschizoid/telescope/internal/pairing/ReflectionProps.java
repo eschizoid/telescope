@@ -9,6 +9,7 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.time.temporal.Temporal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
@@ -455,13 +456,49 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
-  public List<Type> upperBounds(final Type t) {
-    return t instanceof TypeVariable<?> variable ? List.of(variable.getBounds()) : List.of();
+  public List<Type> typeParametersInUse(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls) || cls.getTypeParameters().length == 0) return List.of();
+    final var members = new ArrayList<Type>();
+    if (cls.isRecord()) {
+      for (final var component : cls.getRecordComponents()) members.add(component.getGenericType());
+    } else {
+      for (final var method : cls.getMethods()) {
+        if (Modifier.isStatic(method.getModifiers()) || method.getDeclaringClass() == Object.class) continue;
+        final var declaring = method.getDeclaringClass();
+        final var arguments = argumentsAs(cls, declaring);
+        if (method.getParameterCount() == 0 && method.getReturnType() != void.class) {
+          members.add(resolve(method.getGenericReturnType(), declaring, arguments));
+        } else if (method.getParameterCount() == 1) {
+          members.add(resolve(method.getGenericParameterTypes()[0], declaring, arguments));
+        }
+      }
+    }
+    return Arrays.stream(cls.getTypeParameters())
+      .<Type>map(variable -> variable)
+      .filter(variable -> members.stream().anyMatch(member -> mentions(member, variable)))
+      .toList();
+  }
+
+  /** Whether {@code type} names {@code variable} anywhere inside it. */
+  private static boolean mentions(final Type type, final Type variable) {
+    return switch (type) {
+      case TypeVariable<?> named -> named.equals(variable);
+      case GenericArrayType array -> mentions(array.getGenericComponentType(), variable);
+      case WildcardType wildcard -> (Arrays.stream(wildcard.getUpperBounds()).anyMatch(bound ->
+          mentions(bound, variable)
+        ) ||
+        Arrays.stream(wildcard.getLowerBounds()).anyMatch(bound -> mentions(bound, variable)));
+      case ParameterizedType parameterized -> (Arrays.stream(parameterized.getActualTypeArguments()).anyMatch(
+          argument -> mentions(argument, variable)
+        ) ||
+        (parameterized.getOwnerType() != null && mentions(parameterized.getOwnerType(), variable)));
+      default -> false;
+    };
   }
 
   @Override
-  public boolean isSealedCase(final Type t) {
-    return rawType(t) instanceof Class<?> cls && Arrays.stream(cls.getInterfaces()).anyMatch(Class::isSealed);
+  public List<Type> upperBounds(final Type t) {
+    return t instanceof TypeVariable<?> variable ? List.of(variable.getBounds()) : List.of();
   }
 
   @Override

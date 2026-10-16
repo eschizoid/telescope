@@ -4923,10 +4923,8 @@ class CrossPathCorpusTest {
         properties.put(String.format("%03d", properties.size()) + component.getName(), component.getAccessor());
       }
     } else {
-      for (final var method : value.getClass().getDeclaredMethods()) {
-        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
-          properties.put(Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4), method);
-        }
+      for (final var method : beanGetters(value.getClass())) {
+        properties.put(Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4), method);
       }
     }
     final var parts = new ArrayList<String>();
@@ -5527,10 +5525,248 @@ class CrossPathCorpusTest {
   @Test
   @DisplayName("two sealed interfaces convert case by case to the same result on both paths, at the root and below it")
   void twoSealedInterfacesConvertTheSameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = cellFailures(SEALED_CELLS, "Sd");
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " sealed cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * Generic records and beans given type arguments, in a field, in containers and below another
+   * record, in the shape of {@link SealedCell}. Each pair converts as its raw classes, with the
+   * target's type variables read as the source's in the same position, where both sides give the
+   * same arguments.
+   */
+  private static final List<SealedCell> GENERIC_RECORD_CELLS = List.of(
+    new SealedCell(
+      "a generic record field passing its variable across",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<U>(U v) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(5)); }\n}\n"
+      ),
+      "#0(b=#1(v=3))",
+      "#0(b=#1(v=4))",
+      "#0(b=#1(v=5))"
+    ),
+    new SealedCell(
+      "a generic record field holding none of its variable",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(null); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"x\"))"
+    ),
+    new SealedCell(
+      "a generic record field against a record declaring no type variables",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sFixedDto(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sFixedDto b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sFixedDto(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sFixedDto(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic records in a List, an Optional and a Map value",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(java.util.List<%1$sBox<Integer>> bs, java.util.Optional<%1$sBox<Integer>> o," +
+          " java.util.Map<String, %1$sBox<Integer>> m) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(java.util.List.of(new %1$sBox<>(1), new %1$sBox<>(2))," +
+          " java.util.Optional.of(new %1$sBox<>(3)), java.util.Map.of(\"k\", new %1$sBox<>(4)));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(java.util.List<%1$sBoxDto<Integer>> bs, java.util.Optional<%1$sBoxDto<Integer>> o," +
+          " java.util.Map<String, %1$sBoxDto<Integer>> m) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(java.util.List.of(new %1$sBoxDto<>(5)), java.util.Optional.empty()," +
+          " java.util.Map.of(\"j\", new %1$sBoxDto<>(6)));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() {\n" +
+          "    return new %1$sTgt(null, java.util.Optional.of(new %1$sBoxDto<>(7)), null);\n" +
+          "  }\n}\n"
+      ),
+      "#0(bs=[#1(v=1), #2(v=2)], o=of #3(v=3), m={k=#4(v=4)})",
+      "#0(bs=[#1(v=5)], o=empty, m={j=#2(v=6)})",
+      "#0(bs=[#1(v=1), #2(v=2)], o=of #3(v=7), m={k=#4(v=4)})"
+    ),
+    new SealedCell(
+      "a generic record holding another of its variable, two records deep",
+      List.of(
+        "public record %1$sInner<T>(T v) {}\n",
+        "public record %1$sInnerDto<T>(T v) {}\n",
+        "public record %1$sBox<T>(%1$sInner<T> in, String tag) {}\n",
+        "public record %1$sBoxDto<T>(%1$sInnerDto<T> in, String tag) {}\n",
+        "public record %1$sMid(%1$sBox<Integer> b) {}\n",
+        "public record %1$sMidDto(%1$sBoxDto<Integer> b) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sMid m) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(new %1$sMid(new %1$sBox<>(new %1$sInner<>(3), \"a\")));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(%1$sMidDto m) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(new %1$sMidDto(new %1$sBoxDto<>(new %1$sInnerDto<>(4), \"b\")));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(null); }\n}\n"
+      ),
+      "#0(m=#1(b=#2(in=#3(v=3), tag=\"a\")))",
+      "#0(m=#1(b=#2(in=#3(v=4), tag=\"b\")))",
+      "#0(m=#1(b=#2(in=#3(v=3), tag=\"a\")))"
+    ),
+    new SealedCell(
+      "a generic record field whose record carries its own bridge",
+      List.of(
+        SEALED_HEAD + "%1$sBoxDto.class)\npublic record %1$sBox<T>(T v, String s) {}\n",
+        "public record %1$sBoxDto<T>(T v, String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(3, \"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(4, \"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(null, \"z\")); }\n}\n"
+      ),
+      "#0(b=#1(v=3, s=\"x\"))",
+      "#0(b=#1(v=4, s=\"y\"))",
+      "#0(b=#1(v=null, s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic record fields holding none of their variable, given different type arguments",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "a generic record field holding none of its variable, used raw against one given type arguments",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "@SuppressWarnings(\"rawtypes\")\npublic record %1$sSrc(%1$sBox b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic bean fields holding none of their variable, given different type arguments",
+      List.of(
+        "public class %1$sBox<T> {\n  private String s;\n  public String getS() { return s; }\n" +
+          "  public void setS(final String s) { this.s = s; }\n" +
+          "  public static <T> %1$sBox<T> of(final String s) { final var b = new %1$sBox<T>(); b.setS(s); return b; }\n}\n",
+        "public class %1$sBoxDto<T> {\n  private String s;\n  public String getS() { return s; }\n" +
+          "  public void setS(final String s) { this.s = s; }\n" +
+          "  public static <T> %1$sBoxDto<T> of(final String s) { final var b = new %1$sBoxDto<T>(); b.setS(s); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic bean fields passing their variable to a superclass's property",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {\n" +
+          "  public static <X> %1$sBox<X> of(final X item) { final var b = new %1$sBox<X>(); b.setItem(item); return b; }\n}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBase<Y> {\n" +
+          "  public static <Y> %1$sBoxDto<Y> of(final Y item) { final var b = new %1$sBoxDto<Y>(); b.setItem(item); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(5)); }\n}\n"
+      ),
+      "#0(b=#1(item=3))",
+      "#0(b=#1(item=4))",
+      "#0(b=#1(item=5))"
+    ),
+    new SealedCell(
+      "a generic bean field passing its variable across",
+      List.of(
+        "public class %1$sBox<T> {\n  private T v;\n  public T getV() { return v; }\n" +
+          "  public void setV(final T v) { this.v = v; }\n" +
+          "  public static <T> %1$sBox<T> of(final T v) { final var b = new %1$sBox<T>(); b.setV(v); return b; }\n}\n",
+        "public class %1$sBoxDto<T> {\n  private T v;\n  public T getV() { return v; }\n" +
+          "  public void setV(final T v) { this.v = v; }\n" +
+          "  public static <T> %1$sBoxDto<T> of(final T v) { final var b = new %1$sBoxDto<T>(); b.setV(v); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(5)); }\n}\n"
+      ),
+      "#0(b=#1(v=3))",
+      "#0(b=#1(v=4))",
+      "#0(b=#1(v=5))"
+    )
+  );
+
+  @Test
+  @DisplayName("a generic record or bean given type arguments converts to the same result on both paths")
+  void aGenericRecordGivenArgumentsConvertsTheSameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = cellFailures(GENERIC_RECORD_CELLS, "Gr");
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " generic record cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * What each of {@code cells} gives on each path that it does not owe, prefixed {@code
+   * prefixBase}.
+   */
+  private static List<String> cellFailures(final List<SealedCell> cells, final String prefixBase)
+    throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var cell : SEALED_CELLS) {
-      final var prefix = "Sd" + index++;
+    for (final var cell : cells) {
+      final var prefix = prefixBase + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var sources = cell
         .declarations()
@@ -5596,10 +5832,7 @@ class CrossPathCorpusTest {
         }
       }
     }
-    assertTrue(
-      failures.isEmpty(),
-      () -> failures.size() + " sealed cell(s) failed:\n  " + String.join("\n  ", failures)
-    );
+    return failures;
   }
 
   /**
@@ -5611,19 +5844,6 @@ class CrossPathCorpusTest {
   private record SealedRefusal(String name, List<String> declarations, String generated, String runtime) {}
 
   private static final List<SealedRefusal> GENERIC_SEALED_REFUSALS = List.of(
-    new SealedRefusal(
-      "a generic record field that is no case of a sealed interface",
-      List.of(
-        "public record %1$sBox<T>(T v) {}\n",
-        "public record %1$sBoxDto<T>(T v) {}\n",
-        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
-        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
-      ),
-      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' has incompatible source/target shapes \u2014" +
-        " %2$s.%1$sBox<java.lang.Integer> vs %2$s.%1$sBoxDto<java.lang.Integer>",
-      "Deep map: component 'b' has incompatible source/target shapes \u2014 %2$s.%1$sBox<java.lang.Integer> vs" +
-        " %2$s.%1$sBoxDto<java.lang.Integer>"
-    ),
     new SealedRefusal(
       "a case whose type argument is not the field's",
       List.of(
@@ -5668,6 +5888,135 @@ class CrossPathCorpusTest {
         " with gives %2$s.%1$sResDto <B, A>",
       "case %2$s.%1$sOk gives %2$s.%1$sRes the type arguments <A, B>, and the case %2$s.%1$sOkDto it pairs" +
         " with gives %2$s.%1$sResDto <B, A>"
+    ),
+    new SealedRefusal(
+      "a generic record field given a generic record pair as its argument",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<%1$sBox<Integer>> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<%1$sBoxDto<Integer>> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<%2$s.%1$sBox<java.lang.Integer>>" +
+        " with %2$s.%1$sBoxDto<%2$s.%1$sBoxDto<java.lang.Integer>>, generic classes whose type arguments are not" +
+        " the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<%2$s.%1$sBox<java.lang.Integer>> with" +
+        " %2$s.%1$sBoxDto<%2$s.%1$sBoxDto<java.lang.Integer>>, generic classes whose type arguments are not" +
+        " the same"
+    ),
+    new SealedRefusal(
+      "generic record fields passing their variable across, given different type arguments",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sBoxDto<java.lang.String>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sBoxDto<java.lang.String>," +
+        " generic classes whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "generic beans passing their variable to a superclass's property, given different type arguments",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBase<Y> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sBoxDto<java.lang.String>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sBoxDto<java.lang.String>," +
+        " generic classes whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a generic record whose component the other fills with its variable",
+      List.of(
+        "public record %1$sBox<T>(Integer v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: Deep map: component 'v' has incompatible source/target shapes \u2014" +
+        " java.lang.Integer vs T",
+      "Deep map: component 'v' has incompatible source/target shapes \u2014 java.lang.Integer vs T"
+    ),
+    new SealedRefusal(
+      "generic beans whose property two different generic superclasses declare",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBaseDto<U> {\n  private U item;\n  public U getItem() { return item; }\n" +
+          "  public void setItem(final U item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBaseDto<Y> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: field 'item' has incompatible types (X vs Y)",
+      "Deep map: component 'item' has incompatible source/target shapes \u2014 T vs U"
+    ),
+    new SealedRefusal(
+      "a generic record passing its variable into a record declaring none",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sFixedDto(Integer v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sFixedDto b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sFixedDto, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sFixedDto, generic classes" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a record declaring no variables against a generic record passing its variable across",
+      List.of(
+        "public record %1$sIntBox(Integer v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sIntBox b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sIntBox with" +
+        " %2$s.%1$sBoxDto<java.lang.Integer>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sIntBox with %2$s.%1$sBoxDto<java.lang.Integer>, generic classes" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a generic record whose variables the other declares in the other order",
+      List.of(
+        "public record %1$sPair<A, B>(A a, B b) {}\n",
+        "public record %1$sPairDto<B, A>(A a, B b) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sPair<String, Integer> p) {}\n",
+        "public record %1$sTgt(%1$sPairDto<String, Integer> p) {}\n"
+      ),
+      "@Bridge %1$sPair -> %1$sPairDto: Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B",
+      "Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B"
+    ),
+    new SealedRefusal(
+      "a generic record whose components hold the other's variables swapped",
+      List.of(
+        "public record %1$sPair<A, B>(A a, B b) {}\n",
+        "public record %1$sPairDto<A, B>(B a, A b) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sPair<String, Integer> p) {}\n",
+        "public record %1$sTgt(%1$sPairDto<String, Integer> p) {}\n"
+      ),
+      "@Bridge %1$sPair -> %1$sPairDto: Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B",
+      "Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B"
+    ),
+    new SealedRefusal(
+      "generic records bounding their variable differently",
+      List.of(
+        "public record %1$sBox<T extends Number>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: Deep map: component 'v' has incompatible source/target shapes \u2014 T vs T",
+      "Deep map: component 'v' has incompatible source/target shapes \u2014 T vs T"
     ),
     new SealedRefusal(
       "a generic record field against an array",
@@ -5793,104 +6142,6 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
-  /**
-   * Generic record pairs given type arguments that the generated path converts and the runtime
-   * refuses: each cell's declarations with {@code %1$s} as the prefix, what the generated {@code
-   * forward(Src.sample())} and {@code backward(Tgt.sample())} give, rendered by {@link #shape}, and
-   * the words the runtime's refusal has to contain.
-   *
-   * <p>A defect still to close. A sub-bridge converts a record holding none of its own type
-   * variables as its raw class, whatever arguments the field gives it, while the runtime takes no
-   * pair of parameterized records and refuses the field.
-   */
-  private record GenericRecordDivergence(
-    String name,
-    List<String> declarations,
-    String forward,
-    String backward,
-    String runtimeSays
-  ) {}
-
-  private static final List<GenericRecordDivergence> GENERIC_RECORD_DIVERGENCES = List.of(
-    new GenericRecordDivergence(
-      "a generic record field holding none of its variable",
-      List.of(
-        "public record %1$sBox<T>(String s) {}\n",
-        "public record %1$sBoxDto<T>(String s) {}\n",
-        BRIDGE_TO_TGT +
-          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
-          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
-        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
-          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n}\n"
-      ),
-      "#0(b=#1(s=\"x\"))",
-      "#0(b=#1(s=\"y\"))",
-      "component 'b' has incompatible source/target shapes"
-    ),
-    new GenericRecordDivergence(
-      "a List of generic records holding none of their variable",
-      List.of(
-        "public record %1$sBox<T>(String s) {}\n",
-        "public record %1$sBoxDto<T>(String s) {}\n",
-        BRIDGE_TO_TGT +
-          "public record %1$sSrc(java.util.List<%1$sBox<Integer>> bs) {\n" +
-          "  public static %1$sSrc sample() { return new %1$sSrc(java.util.List.of(new %1$sBox<>(\"x\"))); }\n}\n",
-        "public record %1$sTgt(java.util.List<%1$sBoxDto<Integer>> bs) {\n" +
-          "  public static %1$sTgt sample() { return new %1$sTgt(java.util.List.of(new %1$sBoxDto<>(\"y\"))); }\n}\n"
-      ),
-      "#0(bs=[#1(s=\"x\")])",
-      "#0(bs=[#1(s=\"y\")])",
-      "component 'bs[*]' has incompatible source/target shapes"
-    )
-  );
-
-  @Test
-  @DisplayName(
-    "a generic record field holding none of its variable converts on the generated path and is refused at runtime"
-  )
-  void aGenericRecordFieldDivergesBetweenThePaths() throws ReflectiveOperationException {
-    final var failures = new ArrayList<String>();
-    var index = 0;
-    for (final var cell : GENERIC_RECORD_DIVERGENCES) {
-      final var prefix = "Sgd" + index++;
-      final var head = "package " + PACKAGE + ";\n";
-      final var sources = cell
-        .declarations()
-        .stream()
-        .map(declaration -> declaration.formatted(prefix))
-        .map(code -> source(sealedName(code), head + code))
-        .toArray(JavaFileObject[]::new);
-      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
-      assertTrue(plain.success(), () -> cell.name() + " should compile: " + plain.errorMessages());
-      final var processed = bridged(sources);
-      if (!processed.success()) {
-        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
-        continue;
-      }
-      final var classes = plain.define(MethodHandles.lookup());
-      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
-      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var refused = refusalOf(() -> Telescope.mapper(src, tgt));
-      if (refused == null || !refused.contains(cell.runtimeSays())) {
-        failures.add(cell.name() + ": the runtime owed a refusal naming '" + cell.runtimeSays() + "', saw " + refused);
-      }
-      final var bridge = emitted(processed, plain, prefix);
-      final var forward = shapeOf(() ->
-        bridge.getMethod("forward", src).invoke(null, src.getMethod("sample").invoke(null))
-      );
-      if (!forward.equals(cell.forward())) failures.add(
-        cell.name() + ", forward: generated gave " + forward + ", owed " + cell.forward()
-      );
-      final var backward = shapeOf(() ->
-        bridge.getMethod("backward", tgt).invoke(null, tgt.getMethod("sample").invoke(null))
-      );
-      if (!backward.equals(cell.backward())) failures.add(
-        cell.name() + ", backward: generated gave " + backward + ", owed " + cell.backward()
-      );
-    }
-    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
-  }
-
   /** The name of the type {@code code} declares, a sealed interface or a record. */
   private static String sealedName(final String code) {
     final var matcher = Pattern.compile("public (?:sealed interface|record|final class|class) (\\w+)").matcher(code);
@@ -5957,14 +6208,24 @@ class CrossPathCorpusTest {
         children.put(component.getName(), component.getAccessor().invoke(value));
       }
     } else {
-      for (final var method : value.getClass().getDeclaredMethods()) {
-        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
-          final var name = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
-          children.put(name, method.invoke(value));
-        }
+      for (final var method : beanGetters(value.getClass())) {
+        final var name = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
+        children.put(name, method.invoke(value));
       }
     }
     return children;
+  }
+
+  /**
+   * The public getters of {@code type}, a superclass's included and {@code Object}'s left out, by
+   * name, so a bean renders the same properties whichever class declares them.
+   */
+  private static List<Method> beanGetters(final Class<?> type) {
+    return Arrays.stream(type.getMethods())
+      .filter(method -> method.getDeclaringClass() != Object.class)
+      .filter(method -> method.getName().startsWith("get") && method.getParameterCount() == 0)
+      .sorted(Comparator.comparing(Method::getName))
+      .toList();
   }
 
   /**

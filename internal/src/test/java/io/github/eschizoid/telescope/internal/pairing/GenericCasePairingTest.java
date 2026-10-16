@@ -9,6 +9,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.WildcardType;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +48,9 @@ class GenericCasePairingTest {
 
   /** Another. */
   record LooseDto<U>(U v) {}
+
+  /** A record declaring no type variables. */
+  record Fixed(Integer v) {}
 
   sealed interface Pair<A, B> permits Both {}
 
@@ -142,19 +146,53 @@ class GenericCasePairingTest {
   }
 
   @Test
-  @DisplayName("nothing reads across unless both classes are cases of sealed interfaces")
-  void nothingReadsAcrossOutsideSealedCases() {
-    final var loose = component(LooseDto.class, 0);
-    assertEquals(loose, rules.alignedToSource(loose, Loose.class, LooseDto.class));
-    assertEquals(loose, rules.alignedToSource(loose, Gen.class, LooseDto.class));
-    final var target = component(GenDto.class, 0);
-    assertEquals(target, rules.alignedToSource(target, Loose.class, GenDto.class));
-    // A pair of such records given arguments is refused as any parameterized pair is.
-    final var refused = assertInstanceOf(
-      PairDecision.Incompatible.class,
-      rules.decidePair(held("loose"), held("looseDto"), "b")
+  @DisplayName("two generic records that are no cases of a sealed interface read across too")
+  void genericRecordsOutsideASealedInterfaceReadAcross() {
+    assertEquals(
+      Loose.class.getTypeParameters()[0],
+      rules.alignedToSource(component(LooseDto.class, 0), Loose.class, LooseDto.class)
     );
-    assertTrue(refused.message().contains("has incompatible source/target shapes"), refused.message());
+    assertEquals(
+      Gen.class.getTypeParameters()[0],
+      rules.alignedToSource(component(LooseDto.class, 0), Gen.class, LooseDto.class)
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "two generic records given the same arguments recurse, and ones given different arguments are refused by name"
+  )
+  void genericRecordsGivenArgumentsRecurseWhereTheArgumentsMatch() {
+    assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(held("loose"), held("looseDto"), "b"));
+    for (final var pair : List.of(
+      List.of("loose", "looseStrings"),
+      List.of("loose", "someLooseDto"),
+      List.of("someLoose", "looseDto"),
+      List.of("someLoose", "someLooseDto"),
+      List.of("rawLoose", "looseDto")
+    )) {
+      final var refused = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(held(pair.get(0)), held(pair.get(1)), "b")
+      );
+      assertTrue(
+        refused.message().contains("generic classes whose type arguments are not the same"),
+        refused.message()
+      );
+    }
+    // A variable a member uses, with no counterpart on a class declaring none, refuses the pair.
+    assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(held("loose"), Fixed.class, "b"));
+    assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(Fixed.class, held("looseDto"), "b"));
+    // A wildcard, a type variable or an interface on either side is no generic record pair.
+    final var wildcard = ((ParameterizedType) held("someLoose")).getActualTypeArguments()[0];
+    final var variable = Gen.class.getTypeParameters()[0];
+    for (final var other : List.<Type>of(wildcard, variable, held("comparable"))) {
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(other, held("looseDto"), "b"));
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(held("loose"), other, "b"));
+    }
+    // A container given arguments is no generic record pair.
+    assertInstanceOf(PairDecision.LiftContainer.class, rules.decidePair(held("looses"), held("looseDtos"), "b"));
+    assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(held("loose"), held("looseDtos"), "b"));
   }
 
   @Test
@@ -211,6 +249,25 @@ class GenericCasePairingTest {
     String text;
     Loose<Integer> loose;
     LooseDto<Integer> looseDto;
+    LooseDto<String> looseStrings;
+    Loose<? extends Number> someLoose;
+    LooseDto<? extends Number> someLooseDto;
+
+    @SuppressWarnings("rawtypes")
+    Loose rawLoose;
+
+    List<Loose<Integer>> looses;
+    Comparable<Integer> comparable;
+    Tagged<Integer> tagged;
+    TaggedDto<String> taggedStrings;
+
+    @SuppressWarnings("rawtypes")
+    Tagged rawTagged;
+
+    Half<Integer, String> half;
+    HalfDto<Integer, Long> halfOther;
+    HalfDto<Long, String> halfDiffers;
+    List<LooseDto<Integer>> looseDtos;
   }
 
   private static Type held(final String name) {
@@ -292,6 +349,99 @@ class GenericCasePairingTest {
     assertTrue(shapes.message().contains("has incompatible source/target shapes"), shapes.message());
   }
 
+  /** A generic record whose component uses none of its variables. */
+  record Tagged<T>(String s) {}
+
+  /** Another. */
+  record TaggedDto<U>(String s) {}
+
+  /** A generic record using only its first variable. */
+  record Half<A, B>(A a, String s) {}
+
+  /** Another. */
+  record HalfDto<A, B>(A a, String s) {}
+
+  /** A generic bean whose property a generic superclass declares. */
+  public static class Base<T> {
+
+    public T getItem() {
+      return null;
+    }
+
+    public void setLabel(final String label) {}
+
+    public static <T> T make() {
+      return null;
+    }
+  }
+
+  /** A generic class with an inner class, whose type names the outer class's variable. */
+  public static final class Outer<T> {
+
+    /** The inner class. */
+    public final class Inner {}
+  }
+
+  record InArray<T>(T[] a) {}
+
+  record InUpper<T>(List<? extends T> a) {}
+
+  record InLower<T>(List<? super T> a) {}
+
+  record InOwner<T>(Outer<T>.Inner a) {}
+
+  record Unnamed<T>(
+    List<?> a,
+    String[] b,
+    int c,
+    List<? extends String> d,
+    List<? super String> e,
+    Map.Entry<String, String> f
+  ) {}
+
+  /**
+   * A bean whose only methods naming its variable take two arguments or none and return nothing.
+   */
+  public static final class Quiet<T> {
+
+    public void run() {}
+
+    public void put(final String key, final T value) {}
+  }
+
+  /** A bean passing its own variable to the superclass. */
+  public static final class Sub<X> extends Base<X> {}
+
+  /** A bean fixing the superclass's variable, and declaring one no member uses. */
+  public static final class Named<Y> extends Base<String> {}
+
+  @Test
+  @DisplayName("only the arguments of variables a member uses are compared")
+  void onlyTheArgumentsOfVariablesInUseAreCompared() {
+    assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(held("tagged"), held("taggedStrings"), "b"));
+    assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(held("rawTagged"), held("taggedStrings"), "b"));
+    assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(held("tagged"), Fixed.class, "b"));
+    assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(held("half"), held("halfOther"), "b"));
+    assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(held("half"), held("halfDiffers"), "b"));
+  }
+
+  @Test
+  @DisplayName("a variable is in use when a component, a getter or a setter names it, a superclass's included")
+  void theVariablesInUseAreTheOnesAMemberNames() {
+    assertEquals(List.of(), props.typeParametersInUse(Tagged.class));
+    assertEquals(List.of(Half.class.getTypeParameters()[0]), props.typeParametersInUse(Half.class));
+    assertEquals(List.of(Sub.class.getTypeParameters()[0]), props.typeParametersInUse(Sub.class));
+    assertEquals(List.of(), props.typeParametersInUse(Named.class));
+    assertEquals(List.of(), props.typeParametersInUse(Fixed.class));
+    assertEquals(List.of(), props.typeParametersInUse(Gen.class.getTypeParameters()[0]));
+    // Inside an array, either bound of a wildcard, and the owner of an inner class's type.
+    for (final var record : List.<Class<?>>of(InArray.class, InUpper.class, InLower.class, InOwner.class)) {
+      assertEquals(List.of(record.getTypeParameters()[0]), props.typeParametersInUse(record), record.getName());
+    }
+    assertEquals(List.of(), props.typeParametersInUse(Unnamed.class));
+    assertEquals(List.of(), props.typeParametersInUse(Quiet.class));
+  }
+
   @Test
   @DisplayName("a type naming no class declares no variables, permits nothing and gives no supertype arguments")
   void aTypeNamingNoClassHasNoGenericFacts() {
@@ -300,9 +450,6 @@ class GenericCasePairingTest {
     assertEquals(List.of(), props.typeParameters(wildcard));
     assertEquals(List.of(), props.upperBounds(String.class));
     assertEquals(List.of(), props.permittedSubclasses(Gen.class));
-    assertTrue(props.isSealedCase(Gen.class));
-    assertTrue(!props.isSealedCase(Loose.class));
-    assertTrue(!props.isSealedCase(wildcard));
     assertEquals(List.of(), props.permittedSubclasses(wildcard));
     assertEquals(List.of(), props.declaredArgumentsAs(wildcard, One.class));
     assertEquals(List.of(), props.declaredArgumentsAs(Single.class, wildcard));
