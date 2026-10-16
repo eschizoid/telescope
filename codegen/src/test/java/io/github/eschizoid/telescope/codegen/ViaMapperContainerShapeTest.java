@@ -692,8 +692,8 @@ class ViaMapperContainerShapeTest {
   }
 
   @Test
-  @DisplayName("a mapper class with no forward is left to javac, which rejects the call")
-  void mapperWithNoForwardIsLeftToJavac() {
+  @DisplayName("a mapper class with no forward is refused by name")
+  void mapperWithNoForwardIsRefused() {
     final var compilation = compiled(
       "Wnf",
       "  public static %1$sCh backward(final %1$sChDto d) { return null; }\n",
@@ -702,7 +702,10 @@ class ViaMapperContainerShapeTest {
       "WnfChDto children"
     );
     assertFalse(compilation.success());
-    assertTrue(compilation.hasError("cannot find symbol"), compilation::errorMessages);
+    assertTrue(
+      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WnfChMap declares no forward"),
+      compilation::errorMessages
+    );
   }
 
   @Test
@@ -735,6 +738,63 @@ class ViaMapperContainerShapeTest {
         "WneChMap.Kind",
         "WneChDto"
       )
+    );
+  }
+
+  @Test
+  @DisplayName("a property of an unbounded variable with an overload taking a primitive is refused by name")
+  void propertyOverloadTakingAPrimitiveIsRefused() {
+    final var compilation = compiled(
+      "Wp",
+      "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+        "  public static %1$sChDto forward(final int n) { return null; }\n" +
+        "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n",
+      "WpSrc<X>",
+      "X children",
+      "WpChDto children"
+    );
+    assertFalse(compilation.success());
+    assertTrue(
+      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WpChMap's forward has several overloads"),
+      compilation::errorMessages
+    );
+  }
+
+  @Test
+  @DisplayName("an Object property whose mapper has two methods a value could reach is refused by name")
+  void objectPropertyWithTwoReachableMethodsIsRefused() {
+    final var compilation = compiled(
+      "Wo2",
+      "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+        "  public static %1$sChDto forward(final String s) { return null; }\n" +
+        "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n",
+      "Wo2Src",
+      "Object children",
+      "Wo2ChDto children"
+    );
+    assertFalse(compilation.success());
+    assertTrue(
+      compilation.hasError(
+        "@ViaMapper field=\"children\": " + PACKAGE + ".Wo2ChMap's forward takes no value of java.lang.Object"
+      ),
+      compilation::errorMessages
+    );
+  }
+
+  @Test
+  @DisplayName("a mapper class with no backward is refused by name")
+  void mapperWithNoBackwardIsRefused() {
+    final var compilation = compiled(
+      "Wnb",
+      "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n",
+      "WnbSrc",
+      "WnbCh children",
+      "WnbChDto children"
+    );
+    assertFalse(compilation.success());
+    assertTrue(
+      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WnbChMap declares no backward"),
+      compilation::errorMessages
     );
   }
 }
