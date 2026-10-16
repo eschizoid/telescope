@@ -3728,8 +3728,8 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a computed argument into a type-variable slot stays inline, since the bridge cannot declare it")
-    void computeIntoTypeVariableSlotStaysInline() {
+    @DisplayName("a computed argument into a type-variable slot is evaluated into a local of the variable's erasure")
+    void computeIntoTypeVariableSlotIsHoistedAsItsErasure() {
       final var compilation = compileAttributed(
         source(
           "demo.NowSupplier",
@@ -3764,8 +3764,8 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ABridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
-      assertTrue(bridge.contains("new demo.B(__fs_id, __cp_createdAt.get())"), bridge);
-      assertFalse(bridge.contains("__cv_createdAt"), bridge);
+      assertTrue(bridge.contains("final java.lang.Object __cv_createdAt = __cp_createdAt.get();"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cv_createdAt)"), bridge);
     }
 
     @Test

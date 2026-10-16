@@ -8198,6 +8198,212 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
+  /** {@code %1$sLog}, a log every conversion of an order row appends to as it runs. */
+  private static final String ORDER_LOG =
+    "public class %1$sLog { public static final StringBuilder LOG = new StringBuilder(); }\n";
+
+  /**
+   * A child pair whose own bridge converts its one component through a transform that logs {@code
+   * c;} each way.
+   */
+  private static final List<String> LOGGED_CHILD = List.of(
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sCDto.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"n\", using = %1$sCFn.class))\n" +
+      "public record %1$sC(String n) {}\n",
+    "public record %1$sCDto(String n) {}\n",
+    "public class %1$sCFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+      "  public String forward(final String a) { %1$sLog.LOG.append(\"c;\"); return a; }\n" +
+      "  public String backward(final String b) { %1$sLog.LOG.append(\"c;\"); return b; }\n}\n"
+  );
+
+  /**
+   * {@code %1$sVFn}, a transform from {@code String} to {@code to} that logs {@code v;} each way.
+   */
+  private static String loggedValueFn(final String to) {
+    return (
+      "public class %1$sVFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, " +
+      to +
+      "> {\n" +
+      "  public " +
+      to +
+      " forward(final String a) { %1$sLog.LOG.append(\"v;\"); return a; }\n" +
+      "  public String backward(final " +
+      to +
+      " b) { %1$sLog.LOG.append(\"v;\"); return String.valueOf(b); }\n}\n"
+    );
+  }
+
+  /**
+   * A pair whose conversions log the order they run in: the declarations, each with {@code %1$s} as
+   * the row's prefix and the last of them the runtime row, and what both paths owe forward and
+   * backward, each as the log followed by the result. A row owing no backward is forward only. No
+   * row owes a patch: the runtime's patch converts a row's property after the properties it walks,
+   * where its forward and backward, and the generated patch, convert in component order. Every row
+   * builds a record: the runtime walks a bean's properties in the order reflection lists its
+   * methods, which is not fixed, so no order can be owed for a bean.
+   */
+  private record OrderRow(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  /** {@code @Bridge} to {@code %1$sTgt} with a transform on {@code v} through {@code %1$sVFn}. */
+  private static String loggedTransform(final boolean forwardOnly) {
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"v\", using = %1$sVFn.class" +
+      (forwardOnly ? ", forwardOnly = true" : "") +
+      "))\n"
+    );
+  }
+
+  /**
+   * {@code %1$sRuntime} over a typed-transform row on {@code v}, reading it through {@code
+   * accessor}.
+   */
+  private static String loggedRuntime(final boolean forwardOnly, final String accessor, final String to) {
+    final var row = forwardOnly
+      ? "toOneWay(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", fn::forward)"
+      : "to(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", fn::forward, b -> fn.backward((" + to + ") b))";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sVFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      (forwardOnly ? "mapperForward" : "mapper") +
+      "(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt, String, Object>" +
+      row +
+      ");\n  }\n}\n"
+    );
+  }
+
+  private static final List<OrderRow> ORDER_ROWS = List.of(
+    // The transform's result is typed by Tgt's variable, which a local in the static method
+    // can
+    // name only as its erasure; the child's conversion is a nested bridge's.
+    new OrderRow(
+      "a transform on a type-variable component ahead of a nested pair, in a generic record",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        loggedValueFn("Object"),
+        loggedTransform(false) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        "public record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<>(\"q\", new %1$sCDto(\"b\")); }\n}\n",
+        loggedRuntime(false, "v", "Object")
+      ),
+      "v;c; #0(v=\"x\", c=#1(n=\"a\"))",
+      "v;c; #0(v=\"q\", c=#1(n=\"b\"))",
+      null
+    ),
+    // A second constructor of the same arity takes a CharSequence; the transform's result is
+    // one,
+    // and the canonical constructor still has to be the one called.
+    new OrderRow(
+      "a transform on a type-variable component ahead of a nested pair, in a generic record with a second constructor",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        loggedValueFn("CharSequence"),
+        loggedTransform(true) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
+          "  public %1$sTgt(final CharSequence v, final %1$sCDto c) { this((Y) (\"CharSequence:\" + v), c); }\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\", new %1$sCDto(\"b\")); }\n}\n",
+        loggedRuntime(true, "v", "CharSequence")
+      ),
+      "v;c; #0(v=\"x\", c=#1(n=\"a\"))",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName("a rebuild runs its conversions in the same order on both paths")
+  void aRebuildRunsItsConversionsInTheSameOrderOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : ORDER_ROWS) {
+      final var prefix = "Ao" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      // A transform on a type-variable component is evaluated into a local of the variable's
+      // erasure, ahead of the constructor call, as an argument of a nameable type is.
+      final var text = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
+      final var local = text.indexOf("final java.lang.Object __cv_v = ");
+      final var call = text.indexOf("new " + PACKAGE + "." + prefix + "Tgt(");
+      if (row.name().contains("type-variable") && (local < 0 || local > call)) {
+        failures.add(row.name() + ": forward owed the transform's result in a local of its erasure before the call");
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var log = (StringBuilder) classes.get(PACKAGE + "." + prefix + "Log").getField("LOG").get(null);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var forwardOnly = row.backward() == null;
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = forwardOnly ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = forwardOnly ? (ForwardMapper<Object, Object>) runtime : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          log.setLength(0);
+          final var shape = shapeOf(side.getValue());
+          final var seen = log + " " + shape;
+          if (!seen.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                seen +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
   /** Whether a compilation succeeded, or the errors it reported. */
   private static String describe(final ProcessorHarness.Compilation compilation) {
     return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();
