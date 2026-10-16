@@ -445,6 +445,47 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean isTypeVariable(final Type t) {
+    return t instanceof TypeVariable<?>;
+  }
+
+  @Override
+  public List<Type> typeParameters(final Type t) {
+    return rawType(t) instanceof Class<?> cls ? List.of(cls.getTypeParameters()) : List.of();
+  }
+
+  @Override
+  public List<Type> upperBounds(final Type t) {
+    return t instanceof TypeVariable<?> variable ? List.of(variable.getBounds()) : List.of();
+  }
+
+  @Override
+  public boolean isSealedCase(final Type t) {
+    return rawType(t) instanceof Class<?> cls && Arrays.stream(cls.getInterfaces()).anyMatch(Class::isSealed);
+  }
+
+  @Override
+  public List<Type> permittedSubclasses(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls) || !cls.isSealed()) return List.of();
+    return List.of(cls.getPermittedSubclasses());
+  }
+
+  @Override
+  public List<Type> declaredArgumentsAs(final Type t, final Type supertype) {
+    if (!(rawType(t) instanceof Class<?> cls) || !(rawType(supertype) instanceof Class<?> target)) return List.of();
+    return argumentsAs(cls, target);
+  }
+
+  @Override
+  public Type substitute(final Type type, final List<Type> variables, final List<Type> replacements) {
+    final var bindings = new HashMap<TypeVariable<?>, Type>();
+    for (int i = 0; i < variables.size() && i < replacements.size(); i++) {
+      if (variables.get(i) instanceof TypeVariable<?> variable) bindings.put(variable, replacements.get(i));
+    }
+    return substitute(type, bindings);
+  }
+
+  @Override
   public Allocability copyAllocability(final Type src, final Type tgt) {
     // The allocator probe invokes a real constructor/builder; a type whose no-arg path throws is
     // simply not allocable — the failure must resolve the decision, not escape mid-analysis.

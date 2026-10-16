@@ -117,7 +117,9 @@ public record Reflective(
   /**
    * The types of a source property and the target property it pairs with, decided once for the pair
    * by {@link PairingRules#readsAsDeclared}: each as a member of its own class, or both as
-   * declared.
+   * declared. Read as declared, the target's type of two paired cases of sealed interfaces reads
+   * each type variable its class declares as the source class's variable in the same position
+   * ({@link PairingRules#alignedToSource}).
    */
   public static PairedTypes pairedTypes(
     final Reflective sourceRefl,
@@ -132,7 +134,10 @@ public record Reflective(
     if (!RULES.readsAsDeclared(asSourceMember, asTargetMember)) {
       return new PairedTypes(asSourceMember, asTargetMember);
     }
-    return new PairedTypes(sourceRefl.genericType(source, sourceName), targetRefl.genericType(target, targetName));
+    return new PairedTypes(
+      sourceRefl.genericType(source, sourceName),
+      RULES.alignedToSource(targetRefl.genericType(target, targetName), source, target)
+    );
   }
 
   /** A record component's type, which nothing inherits, or a bean property's type as a member. */

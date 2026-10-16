@@ -820,6 +820,95 @@ public final class PairingMessages {
   }
 
   /**
+   * Two sealed interfaces given type arguments that are not the same, one by one, on both sides. A
+   * case converts as its class pairs with the other side's, which passes each type variable across
+   * unchanged, so only a pair whose arguments agree holds them on the far side.
+   */
+  public static String sealedArgumentsDiffer(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", sealed interfaces whose type arguments are not the same, one by one. A case converts as its" +
+      " class pairs with the other side's, passing each type variable across unchanged, so it converts" +
+      " only between arguments that are the same type. Give both sides the same type arguments, or convert" +
+      " the component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A case of a sealed interface that gives the interface type arguments other than the ones the
+   * component's type gives it, or ones that cannot be told apart from them without binding a type
+   * variable inside another type.
+   */
+  public static String caseOutsideArguments(
+    final String componentName,
+    final String componentType,
+    final String caseName,
+    final String caseGives
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      componentType +
+      ", and its case " +
+      caseName +
+      " gives the interface the type arguments " +
+      caseGives +
+      ", which are not the component's. A case converts as its class pairs with the other side's, not as" +
+      " the component's type arguments read it, so it is refused rather than converted for a type it does" +
+      " not hold. Remove the case from the permits clause, or convert the component with an explicit" +
+      " Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * Two paired cases of generic sealed interfaces that give the interfaces different type
+   * arguments, with the target case's type variables read as the source case's in the order each
+   * declares them. A value converted through the pair would hold arguments its interface does not
+   * give it.
+   */
+  public static String caseArgumentsDiffer(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String sourceGives,
+    final String targetGives
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " gives " +
+      source +
+      " the type arguments " +
+      sourceGives +
+      ", and the case " +
+      targetCase +
+      " it pairs with gives " +
+      target +
+      " " +
+      targetGives +
+      ", with " +
+      targetCase +
+      "'s type variables read as " +
+      sourceCase +
+      "'s in the order each declares them. A value converted through the pair would not hold the type" +
+      " arguments its interface gives it. Pair " +
+      sourceCase +
+      " with a case that gives the same type arguments."
+    );
+  }
+
+  /**
    * A case of a sealed source that nothing pairs with a case of the sealed target: it has no
    * {@code @Bridge} to one, and no {@code cases} row names it.
    */

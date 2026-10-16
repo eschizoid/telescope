@@ -262,9 +262,9 @@ class CrossPathCorpusTest {
    */
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
     // Agreement, not a difference: Iterable is not a Collection subtype, so neither path's
-    // classifier gives it a shape, and both refuse it by name.
+    // classifier gives it a shape, and both refuse it in the shared rules' words.
     "iterable/record",
-    new Refusal("has incompatible types", "incompatible source/target shapes"),
+    new Refusal("incompatible source/target shapes", "incompatible source/target shapes"),
     // Agreement, not a difference, in this entry and the three after it: a sorted set whose
     // elements are converted cannot carry the source's comparator, and the converted
     // element does not implement Comparable, so both paths refuse the pairing by name.
@@ -5238,6 +5238,22 @@ class CrossPathCorpusTest {
 
   private static final String BANK = "#0(iban=\"DE89\", rank=2)";
 
+  /**
+   * Two generic sealed interfaces {@code Res<T>} and {@code ResDto<T>}, each permitting a case that
+   * passes its variable across, one that declares the variable and holds none of it, and one that
+   * fixes it to {@code Integer}.
+   */
+  private static final List<String> GENERIC_CASES = List.of(
+    "public sealed interface %1$sRes<T> permits %1$sOk, %1$sNone, %1$sCount {}\n",
+    "public sealed interface %1$sResDto<T> permits %1$sOkDto, %1$sNoneDto, %1$sCountDto {}\n",
+    SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+    "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+    SEALED_HEAD + "%1$sNoneDto.class)\npublic record %1$sNone<T>(String why) implements %1$sRes<T> {}\n",
+    "public record %1$sNoneDto<T>(String why) implements %1$sResDto<T> {}\n",
+    SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sRes<Integer> {}\n",
+    "public record %1$sCountDto(Integer n) implements %1$sResDto<Integer> {}\n"
+  );
+
   private static final List<SealedCell> SEALED_CELLS = List.of(
     new SealedCell(
       "two sealed roots whose cases each carry a bridge to a case",
@@ -5398,6 +5414,113 @@ class CrossPathCorpusTest {
       "#0(left=#1(value=1), right=#2(left=#3(value=2), right=#4(value=3)))",
       "#0(left=#1(value=4), right=#2(value=5))",
       "#0(left=#1(value=9), right=#2(left=#3(value=2), right=#4(value=3)))"
+    ),
+    new SealedCell(
+      "a sealed field given type arguments, with a case passing the variable across, one ignoring it and one fixing it",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(%1$sRes<Integer> r) {\n" +
+            "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sOk<>(3)); }\n}\n",
+          "public record %1$sTgt(%1$sResDto<Integer> r) {\n" +
+            "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sCountDto(5)); }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sOkDto<>(9)); }\n}\n"
+        )
+      ),
+      "#0(r=#1(v=3))",
+      "#0(r=#1(n=5))",
+      "#0(r=#1(v=9))"
+    ),
+    new SealedCell(
+      "a List of sealed values given type arguments",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.List<%1$sRes<Integer>> rs) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.List.of(new %1$sOk<>(3), new %1$sNone<>(\"gone\"), new %1$sCount(4)));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.List<%1$sResDto<Integer>> rs) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sNoneDto<>(\"late\"), new %1$sOkDto<>(6)));\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(java.util.List.of(new %1$sCountDto(8))); }\n}\n"
+        )
+      ),
+      "#0(rs=[#1(v=3), #2(why=\"gone\"), #3(n=4)])",
+      "#0(rs=[#1(why=\"late\"), #2(v=6)])",
+      "#0(rs=[#1(n=8)])"
+    ),
+    new SealedCell(
+      "sealed values given type arguments in a Set, a Map and an Optional",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.Set<%1$sRes<Integer>> s, java.util.Map<String, %1$sRes<Integer>> m," +
+            " java.util.Optional<%1$sRes<Integer>> o) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.Set.of(new %1$sOk<>(3)), java.util.Map.of(\"k\", new %1$sCount(4))," +
+            " java.util.Optional.of(new %1$sNone<>(\"gone\")));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.Set<%1$sResDto<Integer>> s, java.util.Map<String, %1$sResDto<Integer>> m," +
+            " java.util.Optional<%1$sResDto<Integer>> o) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.Set.of(new %1$sCountDto(5)), java.util.Map.of(\"j\", new %1$sOkDto<>(6))," +
+            " java.util.Optional.empty());\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(null, null, java.util.Optional.of(new %1$sOkDto<>(7))); }\n}\n"
+        )
+      ),
+      "#0(s=[#1(v=3)], m={k=#2(n=4)}, o=of #3(why=\"gone\"))",
+      "#0(s=[#1(n=5)], m={j=#2(v=6)}, o=empty)",
+      "#0(s=[#1(v=3)], m={k=#2(n=4)}, o=of #3(v=7))"
+    ),
+    new SealedCell(
+      "a generic sealed root whose case passes its type variable across",
+      List.of(
+        SEALED_HEAD +
+          "%1$sTgt.class)\npublic sealed interface %1$sSrc<T> permits %1$sOk, %1$sCount {\n" +
+          "  static %1$sSrc<Integer> sample() { return new %1$sOk<>(3); }\n}\n",
+        "public sealed interface %1$sTgt<T> permits %1$sOkDto, %1$sCountDto {\n" +
+          "  static %1$sTgt<Integer> sample() { return new %1$sOkDto<>(4); }\n" +
+          "  static %1$sTgt<Integer> partial() { return new %1$sOkDto<>(null); }\n}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sSrc<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sTgt<T> {}\n",
+        SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sSrc<Integer> {}\n",
+        "public record %1$sCountDto(Integer n) implements %1$sTgt<Integer> {}\n"
+      ),
+      "#0(v=3)",
+      "#0(v=4)",
+      "#0(v=3)"
+    ),
+    new SealedCell(
+      "a sealed field given type arguments, its case bounding the variable and holding it in an array and a" +
+        " wildcard",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD +
+          "%1$sOkDto.class)\npublic record %1$sOk<T extends Number & Comparable<T>>(T v, T[] vs," +
+          " java.util.List<? extends T> ws) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T extends Number & Comparable<T>>(T v, T[] vs, java.util.List<? extends T> ws)" +
+          " implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sRes<Integer> r) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(new %1$sOk<>(3, new Integer[] { 4 }, java.util.List.of(5)));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(new %1$sOkDto<>(6, new Integer[] { 7 }, java.util.List.of(8)));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sOkDto<>(null, null, null)); }\n}\n"
+      ),
+      "#0(r=#1(v=3, vs=#2(), ws=[5]))",
+      "#0(r=#1(v=6, vs=#2(), ws=[8]))",
+      "#0(r=#1(v=null, vs=null, ws=null))"
     )
   );
 
@@ -5480,44 +5603,292 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Sealed pairs both paths refuse where each should convert, by the words each path's refusal has
-   * to contain: the generated path's first, then the runtime's.
+   * A pair given type arguments that both paths refuse by name, two sealed interfaces or two
+   * generic records: its declarations with {@code %1$s} as the prefix, the parent pair's two last,
+   * and the words the generated path's refusal and then the runtime's have to contain, with {@code
+   * %2$s} as the package.
    */
-  private static final Map<String, List<String>> SEALED_REFUSALS = Map.of(
-    // A defect still to close: neither path pairs the cases of a sealed interface given
-    // type arguments, so both refuse the field by name.
-    "a sealed field given type arguments",
-    List.of("field 'r' has incompatible types", "component 'r' has incompatible source/target shapes")
+  private record SealedRefusal(String name, List<String> declarations, String generated, String runtime) {}
+
+  private static final List<SealedRefusal> GENERIC_SEALED_REFUSALS = List.of(
+    new SealedRefusal(
+      "a generic record field that is no case of a sealed interface",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' has incompatible source/target shapes \u2014" +
+        " %2$s.%1$sBox<java.lang.Integer> vs %2$s.%1$sBoxDto<java.lang.Integer>",
+      "Deep map: component 'b' has incompatible source/target shapes \u2014 %2$s.%1$sBox<java.lang.Integer> vs" +
+        " %2$s.%1$sBoxDto<java.lang.Integer>"
+    ),
+    new SealedRefusal(
+      "a case whose type argument is not the field's",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sCount {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sCountDto {}\n",
+        SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sRes<Integer> {}\n",
+        "public record %1$sCountDto(Integer n) implements %1$sResDto<String> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sResDto<java.lang.Integer>, and its" +
+        " case %2$s.%1$sCountDto gives the interface the type arguments <java.lang.String>",
+      "Deep map: component 'r' is a %2$s.%1$sResDto<java.lang.Integer>, and its case %2$s.%1$sCountDto gives" +
+        " the interface the type arguments <java.lang.String>"
+    ),
+    new SealedRefusal(
+      "sealed fields given different type arguments",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(java.util.List<%1$sRes<Integer>> rs) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sResDto<String>> rs) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'rs' pairs %2$s.%1$sRes<java.lang.Integer> with" +
+        " %2$s.%1$sResDto<java.lang.String>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'rs[*]' pairs %2$s.%1$sRes<java.lang.Integer> with %2$s.%1$sResDto<java.lang.String>," +
+        " sealed interfaces whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "paired cases giving the interfaces their type arguments in another order",
+      List.of(
+        "public sealed interface %1$sRes<A, B> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<A, B> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<A, B>(A a, B b) implements %1$sRes<A, B> {}\n",
+        "public record %1$sOkDto<A, B>(A a, B b) implements %1$sResDto<B, A> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer, String> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer, String> r) {}\n"
+      ),
+      "case %2$s.%1$sOk gives %2$s.%1$sRes the type arguments <A, B>, and the case %2$s.%1$sOkDto it pairs" +
+        " with gives %2$s.%1$sResDto <B, A>",
+      "case %2$s.%1$sOk gives %2$s.%1$sRes the type arguments <A, B>, and the case %2$s.%1$sOkDto it pairs" +
+        " with gives %2$s.%1$sResDto <B, A>"
+    ),
+    new SealedRefusal(
+      "a generic record field against an array",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(String[] b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' has incompatible source/target shapes \u2014" +
+        " %2$s.%1$sBox<java.lang.Integer> vs java.lang.String[]",
+      "Deep map: component 'b' has incompatible source/target shapes \u2014 %2$s.%1$sBox<java.lang.Integer> vs" +
+        " java.lang.String[]"
+    ),
+    new SealedRefusal(
+      "a sealed field used raw against one given type arguments",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "@SuppressWarnings(\"rawtypes\")\npublic record %1$sSrc(%1$sRes r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' pairs %2$s.%1$sRes with" +
+        " %2$s.%1$sResDto<java.lang.Integer>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'r' pairs %2$s.%1$sRes with %2$s.%1$sResDto<java.lang.Integer>, sealed interfaces" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "sealed fields given a wildcard",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<? extends Number> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<? extends Number> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' pairs %2$s.%1$sRes<? extends java.lang.Number> with" +
+        " %2$s.%1$sResDto<? extends java.lang.Number>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'r' pairs %2$s.%1$sRes<? extends java.lang.Number> with" +
+        " %2$s.%1$sResDto<? extends java.lang.Number>, sealed interfaces whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a case giving the interface a type built over its own variable",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sMany {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sManyDto {}\n",
+        SEALED_HEAD +
+          "%1$sManyDto.class)\npublic record %1$sMany<T>(java.util.List<T> vs) implements" +
+          " %1$sRes<java.util.List<T>> {}\n",
+        "public record %1$sManyDto<T>(java.util.List<T> vs) implements %1$sResDto<java.util.List<T>> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<java.util.List<Integer>> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<java.util.List<Integer>> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sRes<java.util.List<java.lang.Integer>>," +
+        " and its case %2$s.%1$sMany gives the interface the type arguments <java.util.List<T>>",
+      "Deep map: component 'r' is a %2$s.%1$sRes<java.util.List<java.lang.Integer>>, and its case %2$s.%1$sMany" +
+        " gives the interface the type arguments <java.util.List<T>>"
+    ),
+    new SealedRefusal(
+      "a case of a sealed case giving the interface another type argument",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk, %1$sSub {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto, %1$sSubDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        SEALED_HEAD + "%1$sSubDto.class)\npublic sealed interface %1$sSub<T> extends %1$sRes<T> permits %1$sWord {}\n",
+        "public sealed interface %1$sSubDto<T> extends %1$sResDto<T> permits %1$sWordDto {}\n",
+        SEALED_HEAD + "%1$sWordDto.class)\npublic record %1$sWord(String w) implements %1$sSub<String> {}\n",
+        "public record %1$sWordDto(String w) implements %1$sSubDto<String> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sRes<java.lang.Integer>, and its case" +
+        " %2$s.%1$sWord gives the interface the type arguments <java.lang.String>",
+      "Deep map: component 'r' is a %2$s.%1$sRes<java.lang.Integer>, and its case %2$s.%1$sWord gives the" +
+        " interface the type arguments <java.lang.String>"
+    )
   );
 
   @Test
-  @DisplayName("a sealed field given type arguments is refused by name on both paths")
-  void aGenericSealedFieldIsRefusedOnBothPaths() throws ReflectiveOperationException {
-    final var prefix = "Sg";
-    final var head = "package " + PACKAGE + ";\n";
-    final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
-    final var sources = List.of(
-      "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
-      "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
-      bridge + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
-      "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
-      bridge + "%1$sTgt.class)\npublic record %1$sSrc(%1$sRes<Integer> r) {}\n",
-      "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+  @DisplayName("a pair given type arguments a conversion cannot hold is refused by name on both paths, sealed or not")
+  void aGenericSealedPairACaseCannotHoldIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var refusal : GENERIC_SEALED_REFUSALS) {
+      final var prefix = "Sgr" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = refusal
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(sealedName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> refusal.name() + " should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      final var generated = refusal.generated().formatted(prefix, PACKAGE);
+      if (!processed.hasError(generated)) {
+        failures.add(
+          refusal.name() + ": the generated path owed a refusal naming '" + generated + "', saw " + describe(processed)
+        );
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // The cases' own bridges, compiled without the parent pair the processor refuses, are what
+      // the runtime pairs the cases through.
+      final var cases = bridged(Arrays.copyOf(sources, sources.length - 2));
+      if (!cases.success()) {
+        failures.add(refusal.name() + ": the cases should bridge, saw " + describe(cases));
+        continue;
+      }
+      defineAdded(cases, plain, name -> true);
+      final var runtime = refusal.runtime().formatted(prefix, PACKAGE);
+      final var refused = refusalOf(() -> Telescope.mapper(src, tgt));
+      if (refused == null || !refused.contains(runtime)) {
+        failures.add(refusal.name() + ": the runtime owed a refusal naming '" + runtime + "', saw " + refused);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * Generic record pairs given type arguments that the generated path converts and the runtime
+   * refuses: each cell's declarations with {@code %1$s} as the prefix, what the generated {@code
+   * forward(Src.sample())} and {@code backward(Tgt.sample())} give, rendered by {@link #shape}, and
+   * the words the runtime's refusal has to contain.
+   *
+   * <p>A defect still to close. A sub-bridge converts a record holding none of its own type
+   * variables as its raw class, whatever arguments the field gives it, while the runtime takes no
+   * pair of parameterized records and refuses the field.
+   */
+  private record GenericRecordDivergence(
+    String name,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String runtimeSays
+  ) {}
+
+  private static final List<GenericRecordDivergence> GENERIC_RECORD_DIVERGENCES = List.of(
+    new GenericRecordDivergence(
+      "a generic record field holding none of its variable",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "component 'b' has incompatible source/target shapes"
+    ),
+    new GenericRecordDivergence(
+      "a List of generic records holding none of their variable",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(java.util.List<%1$sBox<Integer>> bs) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(java.util.List.of(new %1$sBox<>(\"x\"))); }\n}\n",
+        "public record %1$sTgt(java.util.List<%1$sBoxDto<Integer>> bs) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(java.util.List.of(new %1$sBoxDto<>(\"y\"))); }\n}\n"
+      ),
+      "#0(bs=[#1(s=\"x\")])",
+      "#0(bs=[#1(s=\"y\")])",
+      "component 'bs[*]' has incompatible source/target shapes"
     )
-      .stream()
-      .map(declaration -> declaration.formatted(prefix))
-      .map(code -> source(sealedName(code), head + code))
-      .toArray(JavaFileObject[]::new);
-    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
-    assertTrue(plain.success(), plain::errorMessages);
-    final var processed = bridged(sources);
-    final var classes = plain.define(MethodHandles.lookup());
-    final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
-    final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-    final var owed = SEALED_REFUSALS.get("a sealed field given type arguments");
-    assertTrue(processed.hasError(owed.get(0)), () -> "the generated path owed a refusal, saw " + describe(processed));
-    final var refusal = refusalOf(() -> Telescope.mapper(src, tgt));
-    assertTrue(refusal != null && refusal.contains(owed.get(1)), () -> "the runtime owed a refusal, saw " + refusal);
+  );
+
+  @Test
+  @DisplayName(
+    "a generic record field holding none of its variable converts on the generated path and is refused at runtime"
+  )
+  void aGenericRecordFieldDivergesBetweenThePaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cell : GENERIC_RECORD_DIVERGENCES) {
+      final var prefix = "Sgd" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(sealedName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> cell.name() + " should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var refused = refusalOf(() -> Telescope.mapper(src, tgt));
+      if (refused == null || !refused.contains(cell.runtimeSays())) {
+        failures.add(cell.name() + ": the runtime owed a refusal naming '" + cell.runtimeSays() + "', saw " + refused);
+      }
+      final var bridge = emitted(processed, plain, prefix);
+      final var forward = shapeOf(() ->
+        bridge.getMethod("forward", src).invoke(null, src.getMethod("sample").invoke(null))
+      );
+      if (!forward.equals(cell.forward())) failures.add(
+        cell.name() + ", forward: generated gave " + forward + ", owed " + cell.forward()
+      );
+      final var backward = shapeOf(() ->
+        bridge.getMethod("backward", tgt).invoke(null, tgt.getMethod("sample").invoke(null))
+      );
+      if (!backward.equals(cell.backward())) failures.add(
+        cell.name() + ", backward: generated gave " + backward + ", owed " + cell.backward()
+      );
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   /** The name of the type {@code code} declares, a sealed interface or a record. */
