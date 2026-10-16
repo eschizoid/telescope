@@ -7211,10 +7211,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         .map(c -> new Field(c.getSimpleName().toString(), c.asType()))
         .toList();
     }
-    return beanProperties(type)
+    final var byName = new LinkedHashMap<String, Field>();
+    for (final var p : beanProperties(type)) byName.put(p.name(), new Field(p.name(), p.type()));
+    // The order the runtime walks a bean's properties in: those a field of the same name backs, in
+    // the order the class and its superclasses declare the fields, the root class first, then the
+    // rest by name. A bean's properties are converted in this order on both paths.
+    final var hierarchy = new ArrayDeque<TypeElement>();
+    for (TypeElement c = type; c != null; ) {
+      if (c.getQualifiedName().contentEquals("java.lang.Object")) break;
+      hierarchy.push(c);
+      c = c.getSuperclass() instanceof DeclaredType parent ? (TypeElement) parent.asElement() : null;
+    }
+    final var ordered = new LinkedHashMap<String, Field>();
+    for (final var c : hierarchy) {
+      for (final var f : ElementFilter.fieldsIn(c.getEnclosedElements())) {
+        if (f.getModifiers().contains(Modifier.STATIC)) continue;
+        final var name = f.getSimpleName().toString();
+        final var property = byName.get(name);
+        if (property != null) ordered.putIfAbsent(name, property);
+      }
+    }
+    byName
+      .keySet()
       .stream()
-      .map(p -> new Field(p.name(), p.type()))
-      .toList();
+      .filter(name -> !ordered.containsKey(name))
+      .sorted()
+      .forEach(name -> ordered.put(name, byName.get(name)));
+    return List.copyOf(ordered.values());
   }
 
   /**

@@ -45,6 +45,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -247,7 +248,7 @@ public final class DeepMap {
     validateAllOverridesConsumed(overrideTable, cache, source, target);
     sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
-    final var patchTable = patchTableOf(topSteps);
+    final var patchTable = patchTableOf(topSteps, source);
     final var rootKey = new TypePair(source, target);
     final Iso<A, B> guarded = cyclicPairs.isEmpty()
       ? iso
@@ -258,13 +259,35 @@ public final class DeepMap {
     return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail));
   }
 
-  /** The patch table for a pair whose fields {@code steps} resolved, keyed by target field. */
+  /**
+   * The patch table for a pair whose fields {@code steps} resolved, keyed by target field, in the
+   * order {@code source} declares the fields they write. Patch converts the entries in table order,
+   * so a row's field and a walked one convert in the source's own order, as forward and backward
+   * convert them, rather than in the order the steps were resolved. A step writing no source field,
+   * a constant or a computed value, comes after the rest, in the order it was resolved.
+   */
   @SuppressWarnings("unchecked")
-  private static Map<String, Mapper.PatchEntry> patchTableOf(final Map<String, FieldStep> steps) {
-    final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
-    steps.forEach((tgtName, step) ->
-      patchTable.put(tgtName, new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v)))
+  private static Map<String, Mapper.PatchEntry> patchTableOf(
+    final Map<String, FieldStep> steps,
+    final Class<?> source
+  ) {
+    final var order = List.of((source.isRecord() ? Reflective.RECORDS : Reflective.BEANS).names(source));
+    final var entries = new ArrayList<>(steps.entrySet());
+    entries.sort(
+      Comparator.comparingInt(entry -> {
+        final var sourceName = entry.getValue().sourceName;
+        final var index = sourceName == null ? -1 : order.indexOf(sourceName);
+        return index < 0 ? Integer.MAX_VALUE : index;
+      })
     );
+    final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
+    for (final var entry : entries) {
+      final var step = entry.getValue();
+      patchTable.put(
+        entry.getKey(),
+        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v))
+      );
+    }
     return patchTable;
   }
 
@@ -1431,7 +1454,7 @@ public final class DeepMap {
         null
       );
       iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair)));
-      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps), List.of());
+      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of());
     } else {
       // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
       // decision says and has no fields to patch.

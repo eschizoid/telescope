@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -147,9 +148,12 @@ public final class Mapper<A, B> {
     this.targetClass = targetClass;
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
-    // Defensive copy — patch behavior must not mutate after construction.
-    // null = patch unsupported (see patch()); copyOf would NPE on the sentinel.
-    this.patchByTargetField = patchByTargetField == null ? null : Map.copyOf(patchByTargetField);
+    // Defensive copy — patch behavior must not mutate after construction. The copy keeps the
+    // table's order, which is the order patch converts the partial's fields in; Map.copyOf would
+    // iterate in an order that changes from one JVM run to the next. null = patch unsupported (see
+    // patch()).
+    this.patchByTargetField =
+      patchByTargetField == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(patchByTargetField));
     this.preForward = preForward;
     this.postForward = postForward;
     this.preBackward = preBackward;

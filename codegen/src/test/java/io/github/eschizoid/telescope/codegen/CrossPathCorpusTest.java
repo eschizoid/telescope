@@ -8390,12 +8390,9 @@ class CrossPathCorpusTest {
 
   /**
    * A pair whose conversions log the order they run in: the declarations, each with {@code %1$s} as
-   * the row's prefix and the last of them the runtime row, and what both paths owe forward and
-   * backward, each as the log followed by the result. A row owing no backward is forward only. No
-   * row owes a patch: the runtime's patch converts a row's property after the properties it walks,
-   * where its forward and backward, and the generated patch, convert in component order. Every row
-   * builds a record: the runtime walks a bean's properties in the order reflection lists its
-   * methods, which is not fixed, so no order can be owed for a bean.
+   * the row's prefix and the last of them the runtime row, and what both paths owe forward,
+   * backward and through patch, each as the log followed by the result. A row owing no backward is
+   * forward only, and one owing no patch leaves it out.
    */
   private record OrderRow(String name, List<String> declarations, String forward, String backward, String patch) {}
 
@@ -8430,10 +8427,157 @@ class CrossPathCorpusTest {
     );
   }
 
+  /**
+   * {@code %1$sLFn}, a transform from {@code String} to {@code String} that logs the value it
+   * converts, each way.
+   */
+  private static final String LOGGING_FN =
+    "public class %1$sLFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+    "  public String forward(final String a) { %1$sLog.LOG.append(a + \";\"); return a; }\n" +
+    "  public String backward(final String b) { %1$sLog.LOG.append(b + \";\"); return b; }\n}\n";
+
+  /**
+   * {@code @Bridge} to {@code %1$sTgt} converting {@code first%1$s} and {@code second%1$s} through
+   * {@code %1$sLFn}.
+   */
+  private static String twoLoggedTransforms(final boolean forwardOnly) {
+    final var only = forwardOnly ? ", forwardOnly = true" : "";
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms = {\n" +
+      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"first%1$s\", using = %1$sLFn.class" +
+      only +
+      "),\n" +
+      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"second%1$s\", using = %1$sLFn.class" +
+      only +
+      ")})\n"
+    );
+  }
+
+  /**
+   * {@code %1$sIntern}, which declares the getters and setters of {@code first%1$s} and {@code
+   * second%1$s} the other way round. Loaded ahead of the bean, it fixes the order HotSpot lists the
+   * bean's methods in, which follows the order their names were first seen in the JVM, so the
+   * bean's methods come back second first whatever ran before.
+   */
+  private static final String REVERSED_NAMES =
+    "public class %1$sIntern {\n" +
+    "  public String getSecond%1$s() { return null; }\n" +
+    "  public void setSecond%1$s(final String v) {}\n" +
+    "  public String getFirst%1$s() { return null; }\n" +
+    "  public void setFirst%1$s(final String v) {}\n}\n";
+
+  /**
+   * {@code %1$sRuntime} over two logged typed-transform rows, reading {@code first%1$s} through
+   * {@code srcFirst} and {@code tgtFirst} and {@code second%1$s} through {@code srcSecond} and
+   * {@code tgtSecond}.
+   */
+  private static String twoLoggedRows(
+    final boolean forwardOnly,
+    final String srcFirst,
+    final String tgtFirst,
+    final String srcSecond,
+    final String tgtSecond
+  ) {
+    final var factory = forwardOnly ? "mapperForward" : "mapper";
+    final var row = forwardOnly ? "toOneWay" : "to";
+    final var fns = forwardOnly ? "fn::forward" : "fn::forward, fn::backward";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sLFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      factory +
+      "(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      "(%1$sSrc::" +
+      srcFirst +
+      ", %1$sTgt::" +
+      tgtFirst +
+      ", " +
+      fns +
+      "),\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      "(%1$sSrc::" +
+      srcSecond +
+      ", %1$sTgt::" +
+      tgtSecond +
+      ", " +
+      fns +
+      "));\n  }\n}\n"
+    );
+  }
+
+  /** A record {@code %1$sSrc(String first%1$s, String second%1$s)} holding 1 and 2. */
+  private static final String FIRST_SECOND_RECORD =
+    "public record %1$sSrc(String first%1$s, String second%1$s) {\n" +
+    "  public static %1$sSrc sample() { return new %1$sSrc(\"1\", \"2\"); }\n}\n";
+
+  /**
+   * A bean {@code %1$s<name>} with {@code first%1$s} and {@code second%1$s}, written through
+   * setters, whose {@code sample()} holds 3 and 4.
+   */
+  private static String setterPair(final String name, final String header) {
+    return (
+      header +
+      "public class %1$s" +
+      name +
+      " {\n" +
+      "  private String first%1$s;\n" +
+      "  private String second%1$s;\n" +
+      "  public String getFirst%1$s() { return first%1$s; }\n" +
+      "  public void setFirst%1$s(final String v) { this.first%1$s = v; }\n" +
+      "  public String getSecond%1$s() { return second%1$s; }\n" +
+      "  public void setSecond%1$s(final String v) { this.second%1$s = v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var b = new %1$s" +
+      name +
+      "(); b.first%1$s = \"3\"; b.second%1$s = \"4\"; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$sTgt} with {@code first%1$s} and {@code second%1$s}, built through a builder.
+   * It declares the getters the other way round from the fields, which decide the order.
+   */
+  private static final String BUILDER_PAIR =
+    "public class %1$sTgt {\n" +
+    "  private final String first%1$s;\n" +
+    "  private final String second%1$s;\n" +
+    "  private %1$sTgt(final Builder b) { this.first%1$s = b.first; this.second%1$s = b.second; }\n" +
+    "  public String getSecond%1$s() { return second%1$s; }\n" +
+    "  public String getFirst%1$s() { return first%1$s; }\n" +
+    "  public static Builder builder() { return new Builder(); }\n" +
+    "  public static %1$sTgt sample() { return builder().first%1$s(\"3\").second%1$s(\"4\").build(); }\n" +
+    "  public static final class Builder {\n" +
+    "    private String first;\n" +
+    "    private String second;\n" +
+    "    public Builder first%1$s(final String v) { this.first = v; return this; }\n" +
+    "    public Builder second%1$s(final String v) { this.second = v; return this; }\n" +
+    "    public %1$sTgt build() { return new %1$sTgt(this); }\n" +
+    "  }\n}\n";
+
+  /**
+   * A bean {@code %1$sTgt} with {@code first%1$s} and {@code second%1$s}, built through a
+   * constructor whose parameters name them.
+   */
+  private static final String CONSTRUCTOR_PAIR =
+    "public class %1$sTgt {\n" +
+    "  private final String first%1$s;\n" +
+    "  private final String second%1$s;\n" +
+    "  public %1$sTgt(final String first%1$s, final String second%1$s) {\n" +
+    "    this.first%1$s = first%1$s;\n" +
+    "    this.second%1$s = second%1$s;\n" +
+    "  }\n" +
+    "  public String getFirst%1$s() { return first%1$s; }\n" +
+    "  public String getSecond%1$s() { return second%1$s; }\n" +
+    "  public static %1$sTgt sample() { return new %1$sTgt(\"3\", \"4\"); }\n}\n";
+
   private static final List<OrderRow> ORDER_ROWS = List.of(
-    // The transform's result is typed by Tgt's variable, which a local in the static method
-    // can
-    // name only as its erasure; the child's conversion is a nested bridge's.
+    // The transform's result is typed by Tgt's variable, which a local in the static
+    // method can name only as its erasure; the child's conversion is a nested bridge's.
     new OrderRow(
       "a transform on a type-variable component ahead of a nested pair, in a generic record",
       concat(
@@ -8449,9 +8593,8 @@ class CrossPathCorpusTest {
       "v;c; #0(v=\"q\", c=#1(n=\"b\"))",
       null
     ),
-    // A second constructor of the same arity takes a CharSequence; the transform's result is
-    // one,
-    // and the canonical constructor still has to be the one called.
+    // A second constructor of the same arity takes a CharSequence; the transform's result
+    // is one, and the canonical constructor still has to be the one called.
     new OrderRow(
       "a transform on a type-variable component ahead of a nested pair, in a generic record with a second constructor",
       concat(
@@ -8467,6 +8610,86 @@ class CrossPathCorpusTest {
       "v;c; #0(v=\"x\", c=#1(n=\"a\"))",
       null,
       null
+    ),
+    // HotSpot lists a class's methods in the order their names were first seen in the JVM, so
+    // loading %1$sIntern first makes the bean's methods come back second first. Both paths
+    // convert in the order the bean declares its fields.
+    new OrderRow(
+      "two transformed properties of a bean written through setters, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(false) + FIRST_SECOND_RECORD,
+        setterPair("Tgt", ""),
+        twoLoggedRows(false, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")",
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")"
+    ),
+    new OrderRow(
+      "two transformed properties of a bean built through a builder, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        BUILDER_PAIR,
+        twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      null,
+      null
+    ),
+    new OrderRow(
+      "two transformed properties of a bean built through its constructor, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        CONSTRUCTOR_PAIR,
+        twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      null,
+      null
+    ),
+    new OrderRow(
+      "two transformed properties written backward and through patch into a bean, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        setterPair("Src", twoLoggedTransforms(false)),
+        "public record %1$sTgt(String first%1$s, String second%1$s) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"5\", \"6\"); }\n}\n",
+        twoLoggedRows(false, "getFirst%1$s", "first%1$s", "getSecond%1$s", "second%1$s")
+      ),
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")",
+      "5;6; #0(first%1$s=\"5\", second%1$s=\"6\")",
+      "5;6; #0(first%1$s=\"5\", second%1$s=\"6\")"
+    ),
+    // Patch converts each property the partial supplies, a row's and a walked one's alike, in
+    // the
+    // source's component order.
+    new OrderRow(
+      "two transformed components either side of a nested pair, through patch",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(false) +
+          "public record %1$sSrc(String first%1$s, %1$sC c, String second%1$s) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"1\", new %1$sC(\"a\"), \"2\"); }\n}\n",
+        "public record %1$sTgt(String first%1$s, %1$sCDto c, String second%1$s) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"3\", new %1$sCDto(\"b\"), \"4\"); }\n}\n",
+        twoLoggedRows(false, "first%1$s", "first%1$s", "second%1$s", "second%1$s")
+      ),
+      "1;c;2; #0(first%1$s=\"1\", c=#1(n=\"a\"), second%1$s=\"2\")",
+      "3;c;4; #0(first%1$s=\"3\", c=#1(n=\"b\"), second%1$s=\"4\")",
+      "3;c;4; #0(first%1$s=\"3\", c=#1(n=\"b\"), second%1$s=\"4\")"
     )
   );
 
@@ -8484,7 +8707,13 @@ class CrossPathCorpusTest {
         .map(declaration -> declaration.formatted(prefix))
         .map(code -> source(declaredName(code), head + code))
         .toList();
-      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      // Compiled with its parameter names, which the runtime reads to call a name-matched
+      // constructor.
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
       assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
       final ProcessorHarness.Compilation processed;
       try {
@@ -8540,17 +8769,10 @@ class CrossPathCorpusTest {
           log.setLength(0);
           final var shape = shapeOf(side.getValue());
           final var seen = log + " " + shape;
-          if (!seen.equals(operation.getValue())) {
+          final var owedText = operation.getValue().formatted(prefix);
+          if (!seen.equals(owedText)) {
             failures.add(
-              row.name() +
-                ", " +
-                operation.getKey() +
-                ": " +
-                side.getKey() +
-                " gave " +
-                seen +
-                ", owed " +
-                operation.getValue()
+              row.name() + ", " + operation.getKey() + ": " + side.getKey() + " gave " + seen + ", owed " + owedText
             );
           }
         }
