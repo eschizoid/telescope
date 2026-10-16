@@ -351,6 +351,41 @@ class PairingRulesTest {
     }
 
     @Override
+    public boolean isTypeVariable(final Type t) {
+      return delegate.isTypeVariable(t);
+    }
+
+    @Override
+    public List<Type> typeParameters(final Type t) {
+      return delegate.typeParameters(t);
+    }
+
+    @Override
+    public List<Type> upperBounds(final Type t) {
+      return delegate.upperBounds(t);
+    }
+
+    @Override
+    public boolean isSealedCase(final Type t) {
+      return delegate.isSealedCase(t);
+    }
+
+    @Override
+    public List<Type> permittedSubclasses(final Type t) {
+      return delegate.permittedSubclasses(t);
+    }
+
+    @Override
+    public List<Type> declaredArgumentsAs(final Type t, final Type supertype) {
+      return delegate.declaredArgumentsAs(t, supertype);
+    }
+
+    @Override
+    public Type substitute(final Type type, final List<Type> variables, final List<Type> replacements) {
+      return delegate.substitute(type, variables, replacements);
+    }
+
+    @Override
     public Allocability copyAllocability(final Type src, final Type tgt) {
       return Allocability.UNKNOWN;
     }

@@ -2452,13 +2452,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           mentionsRawUse(f.type())
         );
         final var namesRaw = rawNameSuppression(List.of(source, target));
+        // A sealed interface, record or bean given type arguments converts through a sub-bridge
+        // that names it raw, so the value it returns is held as the property's parameterized type
+        // unchecked.
+        final var bridgedArguments = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
+          givesBridgedArguments(f.type())
+        );
         // A member reached through a class the bridge names raw has its type erased, so a read or
         // a write through one whose erasure differs is unchecked.
-        final var suppressRaw = paired.rawAccess()
-          ? RAW_SUPPRESSION + "\n"
-          : rawFields
-            ? RAW_TYPES_SUPPRESSION + "\n"
-            : namesRaw;
+        final var suppressRaw =
+          paired.rawAccess() || bridgedArguments
+            ? RAW_SUPPRESSION + "\n"
+            : rawFields
+              ? RAW_TYPES_SUPPRESSION + "\n"
+              : namesRaw;
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
@@ -2591,6 +2598,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var targetCaseEl = (TypeElement) ((DeclaredType) caseTarget).asElement();
       final var targetCaseFq = targetCaseEl.getQualifiedName().toString();
+      final var crossed = rules.caseArgumentsRefusal(
+        source.asType(),
+        target.asType(),
+        sourceCaseEl.asType(),
+        targetCaseEl.asType()
+      );
+      if (crossed != null) {
+        error(reportOn, crossed);
+        return;
+      }
       final var caseBridgeFq = bridgeNameOf(sourceCaseEl, targetCaseEl).qualified();
       entries.add(new CaseEntry(sourceCaseEl, targetCaseEl, caseBridgeFq));
       // Defensively enqueue the per-case pair too — if the user @Bridge'd it (required), it's
@@ -3120,6 +3137,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private static final String RAW_TYPES_SUPPRESSION = "  @SuppressWarnings(\"rawtypes\")";
 
+  /**
+   * Whether a type is, or has among its type arguments at any depth, a sealed interface or a record
+   * or bean given type arguments, which converts through a sub-bridge that names it raw.
+   */
+  private boolean givesBridgedArguments(final TypeMirror type) {
+    if (!(type instanceof DeclaredType declared)) return false;
+    final var bridged = sealedInterface(declared) || isReflectableDeclared(declared);
+    if (bridged && !declared.getTypeArguments().isEmpty()) return true;
+    return declared.getTypeArguments().stream().anyMatch(this::givesBridgedArguments);
+  }
+
   /** Whether a type is, or has among its type arguments at any depth, a generic class used raw. */
   private static boolean mentionsRawUse(final TypeMirror type) {
     if (usedRaw(type)) return true;
@@ -3606,7 +3634,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         continue;
       }
       // (4) Both sides are scalar reflectable declared types, or two sealed interfaces whose
-      //     bridge dispatches on the case → sub-bridge.
+      //     bridge dispatches on the case → sub-bridge. A pair given type arguments the shared
+      //     rules refuse is refused in the rules' words, since its sub-bridge names both raw.
+      final var argumentsRefusal = parameterizedRefusal(sf.type(), tf.type(), sf.name());
+      if (argumentsRefusal != null) {
+        error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + argumentsRefusal);
+        return null;
+      }
       if (
         sf.type() instanceof DeclaredType st &&
         tf.type() instanceof DeclaredType tt &&
@@ -3767,6 +3801,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         new NestedElement(srcElement, tgtElement, FieldPlan.ofKind(copy, IDENTITY_ELEMENT_SENTINEL).asRawContainer())
       );
       return FieldPlan.ofKind(kind, name);
+    }
+    final var argumentsRefusal = parameterizedRefusal(srcElement, tgtElement, fieldName);
+    if (argumentsRefusal != null) {
+      error(
+        parentSource,
+        "@Bridge " + parentSource.getSimpleName() + " -> " + parentTarget.getSimpleName() + ": " + argumentsRefusal
+      );
+      return null;
     }
     if (
       srcElement instanceof DeclaredType sd &&
@@ -5806,7 +5848,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, bridgePkg));
@@ -5825,7 +5869,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -6048,7 +6094,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -6359,6 +6407,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private boolean dispatchesCases(final DeclaredType source, final DeclaredType target, final String name) {
     return rules.decidePair(source, target, name) instanceof PairDecision.DispatchCases;
+  }
+
+  /**
+   * The shared rules' refusal of two declared types at least one of which is given type arguments,
+   * or null for a pair the rules convert, for one given none, and for one the sub-bridge converts
+   * raw. A sub-bridge names both classes raw, so it converts such a pair whatever arguments it is
+   * given. The rules decide which arguments two sealed interfaces may be given and refuse the rest.
+   * Two records or beans each holding none of its own type variables bridge raw where the runtime
+   * refuses them, and are left to the sub-bridge; a record holding one of its own has no
+   * sub-bridge, and is refused in the rules' words.
+   */
+  private String parameterizedRefusal(final TypeMirror source, final TypeMirror target, final String name) {
+    final var props = mirrorProps();
+    if (props.typeArguments(source).isEmpty() && props.typeArguments(target).isEmpty()) return null;
+    if (!(rules.decidePair(source, target, name) instanceof PairDecision.Incompatible<TypeMirror> refused)) return null;
+    return Stream.of(source, target).allMatch(this::bridgesRaw) ? null : refused.message();
+  }
+
+  /**
+   * Whether a sub-bridge converts {@code type} as its raw class: a record or bean, which is not a
+   * record holding one of its own type variables in a component.
+   */
+  private boolean bridgesRaw(final TypeMirror type) {
+    if (!(type instanceof DeclaredType declared) || !isReflectableDeclared(declared)) return false;
+    return ((TypeElement) declared.asElement()).getRecordComponents()
+      .stream()
+      .noneMatch(component -> MirrorProps.typeVariableIn(component.asType()));
   }
 
   private static boolean sealedInterface(final DeclaredType type) {
@@ -7275,8 +7350,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * spec decides whether a pair reads as members of its own classes or as declared ({@link
    * PairingRules#readsAsDeclared}). Read as declared, both are read as the one type the superclass
    * they share declares, with each type variable erased, since no static method of the bridge can
-   * name the variable. A pair whose declared types differ keeps them, and is refused in their
-   * terms.
+   * name the variable. The target's declared type of two paired cases of sealed interfaces reads
+   * each type variable its class declares as the source class's in the same position ({@link
+   * PairingRules#alignedToSource}), so two generic cases passing a variable across convert it
+   * unchanged. A pair whose declared types differ keeps them, and is refused in their terms.
    *
    * <p>The bridge names a generic class raw, so every member it reaches on one returns its erased
    * type: a property {@code class Page<X> extends Base<String, X>} fixes to {@code String} reads
@@ -7333,7 +7410,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
       } else if (rules.readsAsDeclared(sf.type(), tf.type())) {
         final var sourceDeclared = declaredTypeOf(source, sf);
-        final var targetDeclared = declaredTypeOf(target, tf);
+        final var targetDeclared = rules.alignedToSource(declaredTypeOf(target, tf), source.asType(), target.asType());
         if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
         sourceRead = withVariablesErased(sourceDeclared);
         targetRead = sourceRead;

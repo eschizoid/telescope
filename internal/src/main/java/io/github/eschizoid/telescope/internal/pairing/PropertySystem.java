@@ -164,6 +164,45 @@ public interface PropertySystem<T> {
   /** The raw/erased class handle of {@code t} ({@code List<X>} → {@code List}). */
   T rawType(T t);
 
+  /** Whether {@code t} is a type variable. */
+  boolean isTypeVariable(T t);
+
+  /**
+   * The type variables the class {@code t} names declares, in declaration order. Empty for a class
+   * that declares none and for a type that names no class.
+   */
+  List<T> typeParameters(T t);
+
+  /** The upper bounds of the type variable {@code t}: {@code Object} when it declares none. */
+  List<T> upperBounds(T t);
+
+  /**
+   * Whether the class {@code t} names is a case of a sealed interface: one it implements directly
+   * is sealed, and so permits it.
+   */
+  boolean isSealedCase(T t);
+
+  /**
+   * The classes the sealed class or interface {@code t} names permits, each as its class with no
+   * type arguments. Empty for a class that is not sealed.
+   */
+  List<T> permittedSubclasses(T t);
+
+  /**
+   * The type arguments the class {@code t} names gives {@code supertype}, read in terms of the type
+   * variables that class declares, whatever arguments {@code t} itself carries. {@code record
+   * Ok<T>(T v) implements Res<T>} gives {@code Res} its own {@code T}, and {@code record IntOk(int
+   * v) implements Res<Integer>} gives it {@code Integer}. Empty when {@code supertype} takes no
+   * type arguments or is not a supertype of the class.
+   */
+  List<T> declaredArgumentsAs(T t, T supertype);
+
+  /**
+   * {@code type} with each type variable in {@code variables} replaced by the type at the same
+   * position in {@code replacements}, at any depth.
+   */
+  T substitute(T type, List<T> variables, List<T> replacements);
+
   /**
    * Whether a same-kind collection/map pair can actually be element-copied. An interface or
    * abstract class is built through the default implementation {@link

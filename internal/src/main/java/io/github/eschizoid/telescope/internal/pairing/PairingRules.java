@@ -84,6 +84,10 @@ public final class PairingRules<T> {
     // (a) Same type → identity, or a copy for a container the allocation table can rebuild.
     if (props.sameType(srcType, tgtType)) return unchanged(srcType);
 
+    // (a.0) Two sealed interfaces given type arguments → dispatch on the case, where the arguments
+    // allow it. One with none on either side is a class type and takes (b.1) below.
+    if (sealedWithArgumentsPair(srcType, tgtType)) return sealedWithArguments(srcType, tgtType, componentName);
+
     if (props.isClassType(srcType) && props.isClassType(tgtType)) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
@@ -239,6 +243,134 @@ public final class PairingRules<T> {
 
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
+    );
+  }
+
+  /** Whether both sides are sealed interfaces and at least one of them is given type arguments. */
+  private boolean sealedWithArgumentsPair(final T srcType, final T tgtType) {
+    if (!props.isSealedInterfaceType(srcType) || !props.isSealedInterfaceType(tgtType)) return false;
+    return !props.isClassType(srcType) || !props.isClassType(tgtType);
+  }
+
+  /**
+   * The decision for two sealed interfaces at least one of which is given type arguments.
+   *
+   * <p>A case converts as its class pairs with the other side's case, the same conversion whatever
+   * arguments the component gives the interfaces, and a type variable a case passes across is read
+   * as the paired case's variable in the same position ({@link #alignedToSource}). That conversion
+   * is the one the component's arguments call for only when both sides give the same arguments, one
+   * by one, so any other pair is refused, as is a wildcard argument, which names no one type.
+   *
+   * <p>Each case of either interface, and each case of a sealed case below it, then has to be able
+   * to hold the component's arguments. A case giving the interface its own type variable can; one
+   * giving it a type with no variable in it can when that type is the component's argument, and is
+   * refused otherwise, since no value of the component's type is of that case. A case giving it a
+   * type built over its own variable, such as {@code List<T>}, is refused too, because telling
+   * whether it fits would mean binding the variable inside that type.
+   */
+  private PairDecision<T> sealedWithArguments(final T srcType, final T tgtType, final String componentName) {
+    final var srcArguments = props.typeArguments(srcType);
+    final var tgtArguments = props.typeArguments(tgtType);
+    var same = srcArguments.size() == tgtArguments.size();
+    for (int i = 0; same && i < srcArguments.size(); i++) {
+      same =
+        !props.isWildcard(srcArguments.get(i)) &&
+        !props.isWildcard(tgtArguments.get(i)) &&
+        props.sameType(srcArguments.get(i), tgtArguments.get(i));
+    }
+    if (!same) {
+      return new PairDecision.Incompatible<>(
+        PairingMessages.sealedArgumentsDiffer(componentName, props.typeName(srcType), props.typeName(tgtType))
+      );
+    }
+    for (final var side : List.of(srcType, tgtType)) {
+      final var root = props.rawType(side);
+      final var arguments = props.typeArguments(side);
+      final var pending = new ArrayDeque<>(props.permittedSubclasses(root));
+      while (!pending.isEmpty()) {
+        final var caseType = pending.pop();
+        pending.addAll(props.permittedSubclasses(caseType));
+        final var gives = props.declaredArgumentsAs(caseType, root);
+        for (int i = 0; i < gives.size(); i++) {
+          final var given = gives.get(i);
+          if (props.isTypeVariable(given)) continue;
+          if (!props.mentionsTypeVariable(given) && props.sameType(given, arguments.get(i))) continue;
+          return new PairDecision.Incompatible<>(
+            PairingMessages.caseOutsideArguments(
+              componentName,
+              props.typeName(side),
+              props.sourceName(caseType),
+              argumentList(gives)
+            )
+          );
+        }
+      }
+    }
+    return new PairDecision.DispatchCases<>();
+  }
+
+  /** {@code arguments} as a type argument list is written: {@code <Integer, String>}. */
+  private String argumentList(final List<T> arguments) {
+    return "<" + String.join(", ", arguments.stream().map(props::typeName).toList()) + ">";
+  }
+
+  /**
+   * {@code targetType}, a member type read off {@code targetClass}, with each type variable that
+   * class declares read as the variable {@code sourceClass} declares in the same position. Two
+   * cases of sealed interfaces paired with each other pass a variable across by position, so {@code
+   * record OkDto<U>(U v) implements ResDto<U>} paired with {@code record Ok<T>(T v) implements
+   * Res<T>} reads its {@code v} as a {@code T} and converts it unchanged, which is what dispatching
+   * on the case of a {@code Res<Integer>} needs. Nothing is read across between classes that are
+   * not both such cases, so any other generic pair stays refused in terms of its own variables;
+   * between two that declare a different number of type variables; or where a variable's bounds,
+   * read the same way, are not its counterpart's. The target's member type is then returned as it
+   * is.
+   */
+  public T alignedToSource(final T targetType, final T sourceClass, final T targetClass) {
+    if (!props.isSealedCase(sourceClass) || !props.isSealedCase(targetClass)) return targetType;
+    final var sourceVariables = props.typeParameters(sourceClass);
+    final var targetVariables = props.typeParameters(targetClass);
+    if (targetVariables.isEmpty() || sourceVariables.size() != targetVariables.size()) return targetType;
+    for (int i = 0; i < sourceVariables.size(); i++) {
+      final var sourceBounds = props.upperBounds(sourceVariables.get(i));
+      final var targetBounds = props.upperBounds(targetVariables.get(i));
+      if (sourceBounds.size() != targetBounds.size()) return targetType;
+      for (int b = 0; b < sourceBounds.size(); b++) {
+        final var read = props.substitute(targetBounds.get(b), targetVariables, sourceVariables);
+        if (!props.sameType(sourceBounds.get(b), read)) return targetType;
+      }
+    }
+    return props.substitute(targetType, targetVariables, sourceVariables);
+  }
+
+  /**
+   * Why a case of the sealed {@code sourceRoot} cannot convert through the case of {@code
+   * targetRoot} it pairs with, or null when it can. Two generic roots declaring the same number of
+   * type variables pass each across by position, so each case has to give its root the arguments
+   * the paired case gives the other, with the target case's variables read as the source case's
+   * ({@link #alignedToSource}). {@code record Ok<A, B>(A a, B b) implements Res<A, B>} paired with
+   * {@code record OkDto<A, B>(A a, B b) implements ResDto<B, A>} gives them in the other order, and
+   * a value converted through the pair would hold its {@code a} where its interface reads a {@code
+   * B}. Roots without type variables, or with a different number of them, carry none across, so any
+   * case pairing their cases make is left to the cases' own conversion.
+   */
+  public String caseArgumentsRefusal(final T sourceRoot, final T targetRoot, final T sourceCase, final T targetCase) {
+    final var rootVariables = props.typeParameters(sourceRoot);
+    if (rootVariables.isEmpty() || rootVariables.size() != props.typeParameters(targetRoot).size()) return null;
+    final var sourceGives = props.declaredArgumentsAs(sourceCase, sourceRoot);
+    final var targetGives = props.declaredArgumentsAs(targetCase, targetRoot);
+    var same = sourceGives.size() == targetGives.size();
+    for (int i = 0; same && i < sourceGives.size(); i++) {
+      same = props.sameType(sourceGives.get(i), alignedToSource(targetGives.get(i), sourceCase, targetCase));
+    }
+    if (same) return null;
+    return PairingMessages.caseArgumentsDiffer(
+      props.sourceName(sourceRoot),
+      props.sourceName(targetRoot),
+      props.sourceName(sourceCase),
+      props.sourceName(targetCase),
+      argumentList(sourceGives),
+      argumentList(targetGives)
     );
   }
 

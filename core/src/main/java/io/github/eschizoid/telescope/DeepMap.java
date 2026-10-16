@@ -2380,6 +2380,8 @@ public final class DeepMap {
           targetCase = bridged.getFirst();
           throughBridge.add(new TypePair(sourceCase, targetCase));
         }
+        final var crossed = PAIRING.caseArgumentsRefusal(roots.source, roots.target, sourceCase, targetCase);
+        if (crossed != null) throw new IllegalStateException(crossed);
         pairs.add(new TypePair(sourceCase, targetCase));
       }
       if (!forwardOnly) for (final var targetCase : targetCases) {
