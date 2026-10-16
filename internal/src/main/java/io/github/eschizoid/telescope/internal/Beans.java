@@ -1153,7 +1153,7 @@ public final class Beans {
 
         @Override
         public BeanWriteStrategy.Member builderMember(final String property) {
-          final var member = builderSetterFor(builderType, property);
+          final var member = builderSetterFor(cls, builderType, property);
           if (member == null) return BeanWriteStrategy.Member.ABSENT;
           return builderMemberAccepts(member, cls, property)
             ? BeanWriteStrategy.Member.ACCEPTS
@@ -1241,7 +1241,7 @@ public final class Beans {
   ) {
     final var missing = new ArrayList<String>();
     for (final var property : props) {
-      final var member = builderSetterFor(builderType, property);
+      final var member = builderSetterFor(cls, builderType, property);
       final var lost =
         member == null ? declaresInstanceField(cls, property) : !builderMemberAccepts(member, cls, property);
       if (lost) missing.add(property);
@@ -1725,6 +1725,59 @@ public final class Beans {
     return setterInvoker(cls, name, true);
   }
 
+  /**
+   * The class the member {@code writer} writes property {@code name} of {@code cls} through takes,
+   * as a wrapper where it is primitive, or null where nothing is known to check a value against:
+   * the record component, the constructor parameter, the builder member or the setter the
+   * property's type chooses, its component where the value spreads into a variable-arity setter.
+   * {@code Object} takes anything and answers null as well. {@code writer} is null for a record.
+   */
+  public static Class<?> writtenClass(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    final var taken = writtenMember(writer, cls, name);
+    if (taken == null || taken == Object.class) return null;
+    return MethodType.methodType(taken).wrap().returnType();
+  }
+
+  /**
+   * What the member {@code writer} writes property {@code name} of {@code cls} through takes in
+   * place of a null value: the JLS default of a primitive record component, constructor parameter
+   * or builder member, which cannot hold null, and null otherwise. A primitive setter skips a null
+   * instead, so it answers null too. {@code writer} is null for a record.
+   */
+  public static Object writtenNullValue(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    if (writer instanceof SettersWriter<?>) return null;
+    final var taken = writtenMember(writer, cls, name);
+    return taken != null && taken.isPrimitive() ? jlsDefault(taken) : null;
+  }
+
+  /** The class the member {@link #writtenClass} names takes, as declared, or null. */
+  private static Class<?> writtenMember(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    return switch (writer) {
+      case null -> cls.isRecord() ? recordComponentClass(cls, name) : null;
+      case SettersWriter<?> __ -> {
+        final var choice = setterChoice(cls, name);
+        if (choice.method() == null) yield null;
+        final var parameter = choice.method().getParameterTypes()[0];
+        yield choice.spreads() ? parameter.getComponentType() : parameter;
+      }
+      case BuilderWriter<?> builder -> builder.memberParameter(name);
+      case ConstructorWriter<?> constructor -> constructor.parameterFor(name);
+    };
+  }
+
+  /** A class as source code names it: its canonical name, or its type name where it has none. */
+  private static String sourceName(final Class<?> cls) {
+    final var canonical = cls.getCanonicalName();
+    return canonical == null ? cls.getTypeName() : canonical;
+  }
+
+  private static Class<?> recordComponentClass(final Class<?> cls, final String name) {
+    for (final var component : cls.getRecordComponents()) {
+      if (component.getName().equals(name)) return component.getType();
+    }
+    return null;
+  }
+
   // A setter as a message names it: its name and its parameter type.
   private static String setterSignature(final Method setter) {
     return setter.getName() + "(" + setter.getGenericParameterTypes()[0].getTypeName() + ")";
@@ -1780,11 +1833,16 @@ public final class Beans {
   }
 
   /**
-   * The single-argument builder method that carries {@code name}, by the rule BuilderWriter binds.
+   * The builder member that writes property {@code name} of {@code beanClass}: among the builder's
+   * public single-argument methods named {@code name}, {@code setX} or {@code withX}, the one
+   * {@link PairingRules#chooseSetter} picks for the property's type, as a bean's setter is picked.
+   * Where the bean has no getter for the property, or no one member is chosen, the first in a fixed
+   * order stands, so the answer does not depend on the order the class lists its methods in.
    */
-  private static Method builderSetterFor(final Class<?> builderType, final String name) {
+  private static Method builderSetterFor(final Class<?> beanClass, final Class<?> builderType, final String name) {
     final var set = "set" + capitalize(name);
     final var with = "with" + capitalize(name);
+    final var candidates = new ArrayList<Method>();
     for (final var m : builderType.getMethods()) {
       if (m.getParameterCount() != 1) continue;
       // Every builder inherits Object's methods, and a property named `wait` or `equals` finds one
@@ -1792,11 +1850,24 @@ public final class Beans {
       // java.lang, so the match has to exclude what every type has rather than what this builder
       // declares -- which skips nothing of the builder's own, since `wait(long)` is final and an
       // overload or an override is declared on the builder itself.
-      if (m.getDeclaringClass() == Object.class) continue;
+      if (m.getDeclaringClass() == Object.class || m.isBridge()) continue;
       final var mn = m.getName();
-      if (mn.equals(name) || mn.equals(set) || mn.equals(with)) return m;
+      if (mn.equals(name) || mn.equals(set) || mn.equals(with)) candidates.add(m);
     }
-    return null;
+    if (candidates.size() <= 1) return candidates.isEmpty() ? null : candidates.getFirst();
+    // Ordered by name and parameter as source spells them, the order the processor sorts them in.
+    candidates.sort(Comparator.comparing(m -> m.getName() + "(" + sourceName(m.getParameterTypes()[0]) + ")"));
+    final var getter = beanClass == null ? null : getters(beanClass).get(name);
+    if (getter == null) return candidates.getFirst();
+    final var erased = new ArrayList<Type>(candidates.size());
+    final var components = new ArrayList<Type>(candidates.size());
+    for (final var m : candidates) {
+      final var parameter = m.getParameterTypes()[0];
+      erased.add(parameter);
+      components.add(m.isVarArgs() ? parameter.getComponentType() : null);
+    }
+    final var index = RULES.chooseSetter(memberReturnClass(getter, beanClass), erased, components);
+    return candidates.get(index < 0 ? 0 : index);
   }
 
   private static boolean hasAnySetter(final Class<?> cls) {
@@ -1898,6 +1969,15 @@ public final class Beans {
     /** What argument {@code index} takes in place of null. */
     Object nullArgument(final int index) {
       return nullArguments[index];
+    }
+
+    /** The class the parameter property {@code name} is passed as takes, or null where none is. */
+    Class<?> parameterFor(final String name) {
+      final var names = argumentNames(propertyNames(beanClass));
+      for (var i = 0; i < names.length; i++) {
+        if (names[i].equals(name)) return constructor.getParameterTypes()[i];
+      }
+      return null;
     }
 
     /**
@@ -2074,7 +2154,7 @@ public final class Beans {
      * discarded as {@link #construct} discards it, or {@code null} when the builder has none.
      */
     MethodHandle composableMember(final String name) {
-      final var member = builderSetterFor(builderType, name);
+      final var member = builderSetterFor(beanType, builderType, name);
       if (member == null) return null;
       final var lookup = privateLookupOrThrow(member.getDeclaringClass(), builderType, "builder setter");
       return unreflected(() -> lookup.unreflect(member)).asType(
@@ -2082,9 +2162,15 @@ public final class Beans {
       );
     }
 
+    /** The class the member for {@code name} takes, or null where the builder has none. */
+    Class<?> memberParameter(final String name) {
+      final var member = builderSetterFor(beanType, builderType, name);
+      return member == null ? null : member.getParameterTypes()[0];
+    }
+
     /** What the member for {@code name} takes in place of null: its JLS default when primitive. */
     Object nullArgument(final String name) {
-      final var member = builderSetterFor(builderType, name);
+      final var member = builderSetterFor(beanType, builderType, name);
       if (member == null || !member.getParameterTypes()[0].isPrimitive()) return null;
       return jlsDefault(member.getParameterTypes()[0]);
     }
@@ -2173,7 +2259,7 @@ public final class Beans {
     @SuppressWarnings("unchecked")
     private Object buildNullSafeSetterInvoker(final String name) {
       final var invoker = buildSetterInvoker(name);
-      final var member = builderSetterFor(builderType, name);
+      final var member = builderSetterFor(beanType, builderType, name);
       if (member == null || !member.getParameterTypes()[0].isPrimitive()) return invoker;
       final var fallback = jlsDefault(member.getParameterTypes()[0]);
       if (invoker instanceof BiConsumer<?, ?>) {
@@ -2192,7 +2278,7 @@ public final class Beans {
      */
     @Override
     public boolean writes(final String name) {
-      return builderSetterFor(builderType, name) != null;
+      return builderSetterFor(beanType, builderType, name) != null;
     }
 
     /**
@@ -2213,7 +2299,7 @@ public final class Beans {
      */
     @SuppressWarnings("unchecked")
     private Object buildSetterInvoker(final String name) {
-      final var setter = builderSetterFor(builderType, name);
+      final var setter = builderSetterFor(beanType, builderType, name);
       // Align with SettersWriter and the captured-writer path — when a target property has no
       // matching builder setter (getter-only on the target POJO, computed-only value, etc.),
       // silently skip rather than throw. The names array passed to

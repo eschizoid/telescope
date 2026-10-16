@@ -1617,9 +1617,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             bwdGives == null ? null : heldAs(writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
           final var storesInto = targetSlot == null ? tfHeld : targetSlot;
           final var storesBack = sourceSlot == null ? sfHeld : sourceSlot;
-          final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
-          final var backwardFits =
-            forwardOnly || (types.isAssignable(tfHeld, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
+          // A result wider than the parameter of the member the property's type chooses is written
+          // through that member after a check of its class, as the runtime writes it.
+          // A result assignable only by an unchecked conversion, a class used raw, gives no
+          // arguments to show it fits those the member fixes, and is refused as one no cast
+          // reaches. Its arguments are held to the member the property's type chooses, which every
+          // path writes through, whichever overload javac would bind the result to.
+          final var forwardChosen = chosenParameter(target, targetRebuild, t, targetSlot);
+          final var backwardChosen = bwdGives == null ? null : chosenParameter(source, sourceRebuild, t, sourceSlot);
+          final var forwardStores =
+            (types.isAssignable(fwdGives, storesInto) &&
+              rules.argumentsFit(fwdGives, storesInto) &&
+              (forwardChosen == null || rules.argumentsFit(fwdGives, forwardChosen))) ||
+            reachesByCheck(fwdGives, forwardChosen);
+          final var backwardStores =
+            bwdGives != null &&
+            ((types.isAssignable(bwdGives, storesBack) &&
+                rules.argumentsFit(bwdGives, storesBack) &&
+                (backwardChosen == null || rules.argumentsFit(bwdGives, backwardChosen))) ||
+              reachesByCheck(bwdGives, backwardChosen));
+          final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && forwardStores;
+          final var backwardFits = forwardOnly || (types.isAssignable(tfHeld, bwdAccepts) && backwardStores);
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message
@@ -1638,9 +1656,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             // Named only where the store is what refused. A row can fail on the read alone -- the
             // transform will not take what the getter gives -- and a member that accepts the value
             // perfectly well had no part in that, so printing it points at the wrong thing.
-            final var storeRefused = forwardFits
-              ? !types.isAssignable(bwdGives, storesBack)
-              : !types.isAssignable(fwdGives, storesInto);
+            final var storeRefused = forwardFits ? !backwardStores : !forwardStores;
             final var into =
               !storeRefused || slot == null || types.isSameType(slot, declared)
                 ? ""
@@ -2251,6 +2267,72 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backward = transformGives(usingEl, "backward", heldAs(tf.type()), bridgePackage, true, 0);
       if (backward != null) backwardGives.put(t, backward);
     }
+    // A @ViaMapper's result is written as a transform's is: through the member the property's type
+    // chooses, after a check of its class where the mapper's method returns a wider type, and only
+    // where its type arguments can be shown to fit that member's; any other result is refused by
+    // the mapper's name. One whose mapper converts each element of a container is left as it is.
+    for (final var v : viaMappers.keySet()) {
+      if (viaLifts.containsKey(v) || !hasField(sourceFields, v)) continue;
+      final var mapper = processingEnv.getElementUtils().getTypeElement(viaMappers.get(v));
+      if (mapper == null) continue;
+      final var targetName = renames.getOrDefault(v, v);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      final var handed = heldAs(fieldByName(sourceFields, v).type());
+      // The resolver binds no method whose one parameter is its own type variable, which javac
+      // infers from the value handed to it; such a method is held to the same rule, as inferred.
+      final var forward =
+        resolvedFn(mapper, "forward", handed, bridgePackage) instanceof Resolution.Bound bound
+          ? bound
+          : inferringFn(mapper, "forward", handed, bridgePackage);
+      if (forward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
+        final var gives = bound.member().getReturnType();
+        final var refusal = viaResultUnfit(
+          v,
+          mapper,
+          "forward",
+          bound.member(),
+          handed,
+          target,
+          targetRebuild,
+          targetName,
+          bridgePackage
+        );
+        if (refusal != null) {
+          error(source, refusal);
+          return;
+        }
+        forwardGives.put(targetName, gives);
+        transformedTargets.add(targetName);
+      }
+      if (tf == null) continue;
+      final var backward = resolvedFn(mapper, "backward", heldAs(tf.type()), bridgePackage);
+      if (backward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
+        final var gives = bound.member().getReturnType();
+        final var refusal = lenient
+          ? null
+          : viaResultUnfit(
+              v,
+              mapper,
+              "backward",
+              bound.member(),
+              heldAs(tf.type()),
+              source,
+              sourceRebuild,
+              v,
+              bridgePackage
+            );
+        if (refusal != null) {
+          error(source, refusal);
+          return;
+        }
+        backwardGives.put(v, gives);
+        transformedSources.add(v);
+      }
+    }
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -2342,15 +2424,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // than the setter chosen from the property's type, patch casts to that setter as backward
     // does; every other value is written as it is.
     final var patchCasts = new HashMap<String, TypeMirror>();
-    if (sourceRebuild.kind() == Rebuild.Kind.SETTERS) {
-      for (final var entry : backwardGives.entrySet()) {
-        if (!transformedSources.contains(entry.getKey()) || !hasField(sourceFields, entry.getKey())) continue;
-        final var property = fieldByName(sourceFields, entry.getKey()).type();
-        final var parameter = setterChoice(source, entry.getKey()).argument();
-        final var assignable = processingEnv.getTypeUtils().isAssignable(property, entry.getValue());
-        if (assignable && castsToChosen(entry.getValue(), parameter)) {
-          patchCasts.put(entry.getKey(), entry.getValue());
-        }
+    for (final var entry : backwardGives.entrySet()) {
+      if (!transformedSources.contains(entry.getKey()) || !hasField(sourceFields, entry.getKey())) continue;
+      final var property = fieldByName(sourceFields, entry.getKey()).type();
+      final var slot = heldAs(writeSlotType(source, sourceRebuild, entry.getKey(), entry.getValue(), bridgePackage));
+      final var parameter = chosenParameter(source, sourceRebuild, entry.getKey(), slot);
+      final var assignable = processingEnv.getTypeUtils().isAssignable(heldAs(property), entry.getValue());
+      final var setters = sourceRebuild.kind() == Rebuild.Kind.SETTERS;
+      if (
+        assignable &&
+        ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))
+      ) {
+        patchCasts.put(entry.getKey(), entry.getValue());
       }
     }
     final var patchInner = buildExpr(
@@ -5043,6 +5128,142 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * Why a {@code @ViaMapper}'s {@code name} result of type {@code gives} cannot be written into
+   * {@code property} of {@code owner}, or null where it can: through the member the property's type
+   * chooses, as it is or after a check of its class, with type arguments shown to fit the member's.
+   */
+  private String viaResultUnfit(
+    final String field,
+    final TypeElement mapper,
+    final String name,
+    final ExecutableType member,
+    final TypeMirror argument,
+    final TypeElement owner,
+    final Rebuild rebuild,
+    final String property,
+    final PackageElement bridgePackage
+  ) {
+    final var declared = member.getReturnType();
+    final var slot = heldAs(writeSlotType(owner, rebuild, property, declared, bridgePackage));
+    final var chosen = chosenParameter(owner, rebuild, property, slot);
+    if (chosen == null || mirrorProps().mentionsTypeVariable(chosen)) return null;
+    // A result typed by a variable the method declares is inferred at the call. A variable the
+    // parameter is is inferred as the value handed to it; any other is left to javac, unless its
+    // bound shows no instantiation of it can fit the member's argument in its place.
+    final var gives = inferredResult(member, argument);
+    if (mirrorProps().mentionsTypeVariable(gives)) {
+      return unfitVariable(gives, chosen)
+        ? viaRefusal(
+            field,
+            mapper,
+            name,
+            "returns " +
+              declared +
+              ", which no instantiation of its type variables lets the member " +
+              owner.getSimpleName() +
+              " writes " +
+              property +
+              " through take: it takes " +
+              chosen
+          )
+        : null;
+    }
+    final var types = processingEnv.getTypeUtils();
+    if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return null;
+    if (reachesByCheck(gives, chosen)) return null;
+    return viaRefusal(
+      field,
+      mapper,
+      name,
+      "returns " +
+        gives +
+        ", which the member " +
+        owner.getSimpleName() +
+        " writes " +
+        property +
+        " through does not take: it takes " +
+        chosen
+    );
+  }
+
+  /**
+   * The one public method {@code name} of {@code declaringType} whose one parameter is a type
+   * variable the method declares and whose bound takes {@code argType}, which javac binds by
+   * inferring the variable; null where there is not exactly one.
+   */
+  private Resolution.Bound inferringFn(
+    final TypeElement declaringType,
+    final String name,
+    final TypeMirror argType,
+    final PackageElement callerPackage
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    final var owner = (DeclaredType) declaringType.asType();
+    Resolution.Bound found = null;
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(declaringType))) {
+      if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
+      if (m.getModifiers().contains(Modifier.ABSTRACT) || !bindableFrom(m, callerPackage)) continue;
+      final var seen = (ExecutableType) types.asMemberOf(owner, m);
+      final var parameter = seen.getParameterTypes().getFirst();
+      if (!(parameter instanceof TypeVariable variable) || !seen.getTypeVariables().contains(variable)) continue;
+      if (!types.isAssignable(argType, types.erasure(variable.getUpperBound()))) continue;
+      if (found != null) return null;
+      found = new Resolution.Bound(seen);
+    }
+    return found;
+  }
+
+  /**
+   * {@code member}'s result type with each type variable the method declares that is its one
+   * parameter's whole type read as {@code argument}, the value handed to it.
+   */
+  private TypeMirror inferredResult(final ExecutableType member, final TypeMirror argument) {
+    final var result = member.getReturnType();
+    final var variables = new ArrayList<TypeMirror>();
+    final var replacements = new ArrayList<TypeMirror>();
+    final var parameter = member.getParameterTypes().isEmpty() ? null : member.getParameterTypes().getFirst();
+    for (final var variable : member.getTypeVariables()) {
+      if (parameter != null && processingEnv.getTypeUtils().isSameType(parameter, variable)) {
+        variables.add(variable);
+        replacements.add(argument);
+      }
+    }
+    return variables.isEmpty() ? result : mirrorProps().substitute(result, variables, replacements);
+  }
+
+  /**
+   * Whether {@code gives}, a type of the parameter's class given arguments some of which are type
+   * variables, has an argument whose variable's bound and the parameter's argument in its place are
+   * two classes neither of which extends the other, so no value is of both.
+   */
+  private boolean unfitVariable(final TypeMirror gives, final TypeMirror chosen) {
+    final var types = processingEnv.getTypeUtils();
+    if (!types.isSameType(types.erasure(gives), types.erasure(chosen))) return false;
+    if (!(gives instanceof DeclaredType given) || !(chosen instanceof DeclaredType wanted)) return false;
+    final var givenArguments = given.getTypeArguments();
+    final var wantedArguments = wanted.getTypeArguments();
+    if (givenArguments.size() != wantedArguments.size()) return false;
+    for (int i = 0; i < givenArguments.size(); i++) {
+      if (!(givenArguments.get(i) instanceof TypeVariable variable)) continue;
+      final var bound = types.erasure(variable.getUpperBound());
+      final var against = types.erasure(wantedArguments.get(i));
+      if (disjointClasses(bound, against)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether {@code a} and {@code b} are two classes, not interfaces, neither a subtype of the
+   * other.
+   */
+  private boolean disjointClasses(final TypeMirror a, final TypeMirror b) {
+    if (!(a instanceof DeclaredType da) || !(b instanceof DeclaredType db)) return false;
+    if (da.asElement().getKind() != ElementKind.CLASS || db.asElement().getKind() != ElementKind.CLASS) return false;
+    final var types = processingEnv.getTypeUtils();
+    return !types.isSubtype(a, b) && !types.isSubtype(b, a);
+  }
+
   private static String viaRefusal(final String field, final TypeElement mapper, final String name, final String why) {
     return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + "'s " + name + " " + why;
   }
@@ -6929,9 +7150,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // builder declares with its variable takes the class builder() fixes the variable to.
       case BUILDER -> {
         final var builder = staticBuilderMethod(to);
-        final var member = builderSetterMember(rebuild.builderType(), field);
+        final var member = builderSetterMember(to, rebuild.builderType(), field);
         if (member == null || builder == null || !(builder.getReturnType() instanceof DeclaredType made)) {
-          yield builderSetterParameter(rebuild.builderType(), field);
+          yield builderSetterParameter(to, rebuild.builderType(), field);
         }
         yield ((ExecutableType) processingEnv.getTypeUtils().asMemberOf(made, member)).getParameterTypes().getFirst();
       }
@@ -7000,7 +7221,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var slots = new ArrayList<CtorSlot>();
         for (final var c : to.getRecordComponents()) {
           final var name = c.getSimpleName().toString();
-          slots.add(new CtorSlot(name, c.asType(), read.apply(name)));
+          final var gives = transformed.contains(name) ? transformGives.get(name) : null;
+          final var value = read.apply(name);
+          final var held = heldAs(c.asType());
+          final var checked = reachesByCheck(gives, held) ? checkedResult(value, held, to, name) : value;
+          slots.add(new CtorSlot(name, c.asType(), checked));
         }
         return construct(to, slots, hoistInto);
       }
@@ -7008,7 +7233,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var slots = new ArrayList<CtorSlot>();
         for (final var pa : rebuild.constructor().getParameters()) {
           final var name = pa.getSimpleName().toString();
-          slots.add(new CtorSlot(name, pa.asType(), read.apply(name)));
+          final var gives = transformed.contains(name) ? transformGives.get(name) : null;
+          final var value = read.apply(name);
+          final var held = heldAs(pa.asType());
+          final var checked = reachesByCheck(gives, held) ? checkedResult(value, held, to, name) : value;
+          slots.add(new CtorSlot(name, pa.asType(), checked));
         }
         return construct(to, slots, hoistInto);
       }
@@ -7016,7 +7245,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var builderType = rebuild.builderType();
         final var sb = new StringBuilder(toFq + ".builder()");
         for (final var f : toFields) {
-          final var method = builderSetter(builderType, f.name());
+          final var method = builderSetter(to, builderType, f.name());
           // A property no strategy writes (a computed getter, a final field given its value where
           // it is declared) is skipped, as the runtime builder writer skips it. One that only a
           // strategy can set is refused: building without it would drop the value.
@@ -7034,7 +7263,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return null;
           }
-          sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
+          final var gives = transformed.contains(f.name()) ? transformGives.get(f.name()) : null;
+          final var argument =
+            gives == null
+              ? read.apply(f.name())
+              : resultArgument(
+                  read.apply(f.name()),
+                  gives,
+                  heldAs(writeSlotType(to, rebuild, f.name(), gives, null)),
+                  to,
+                  f.name()
+                );
+          sb.append(".").append(method).append("(").append(argument).append(")");
         }
         return sb.append(".build()").toString();
       }
@@ -7111,6 +7351,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               .append(" __arg = __tv; out.")
               .append(setter)
               .append("(__arg); } } ");
+          } else if (
+            choice.argument() != null &&
+            choice.argument().getKind().isPrimitive() &&
+            reachesByCheck(gives, choice.argument())
+          ) {
+            // A result wider than the primitive parameter's wrapper is skipped when null, as the
+            // runtime writer skips it, and otherwise checked against the wrapper and unboxed.
+            final var wrapper = boxedErasure(choice.argument());
+            sb
+              .append("{ final ")
+              .append(gives)
+              .append(" __tv = ")
+              .append(value)
+              .append("; if (__tv != null) { final ")
+              .append(choice.argumentText())
+              .append(" __arg = (")
+              .append(wrapper)
+              .append(") ")
+              .append(FIXED_CLASS)
+              .append(".result(__tv, ")
+              .append(wrapper)
+              .append(".class, ")
+              .append(types.erasure(to.asType()))
+              .append(".class, ")
+              .append(literal(f.name()))
+              .append("); out.")
+              .append(setter)
+              .append("(__arg); } } ");
           } else if (castsToChosen(gives, choice.argument())) {
             // The local's type is the one the call binds the chosen setter by. A parameter with
             // type arguments is reached through a cast javac cannot check, which only this
@@ -7129,8 +7397,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               .append("final ")
               .append(boundText)
               .append(" __arg = ")
-              .append(narrows ? "(" + boundText + ") " : "")
-              .append("__tv; out.")
+              .append(
+                narrows
+                  ? "(" +
+                    boundText +
+                    ") " +
+                    FIXED_CLASS +
+                    ".result(__tv, " +
+                    types.erasure(bound) +
+                    ".class, " +
+                    types.erasure(to.asType()) +
+                    ".class, " +
+                    literal(f.name()) +
+                    ")"
+                  : "__tv"
+              )
+              .append("; out.")
               .append(setter)
               .append("(__arg); } } ");
           } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
@@ -7157,6 +7439,115 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // would fall through here and return the value meaning "already reported" -- emitting nothing
     // and saying nothing.
     throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
+  }
+
+  /**
+   * The parameter of the member the type of {@code field} of {@code to} chooses to write it
+   * through: the setter {@link #setterChoice} picks, as a single value is passed to it, for a
+   * setters rebuild, and {@code slot}, the member {@link #writeSlotType} names, for any other.
+   */
+  private TypeMirror chosenParameter(
+    final TypeElement to,
+    final Rebuild rebuild,
+    final String field,
+    final TypeMirror slot
+  ) {
+    if (rebuild.kind() != Rebuild.Kind.SETTERS) return slot;
+    final var choice = setterChoice(to, field);
+    return choice.member() == null ? null : choice.argument();
+  }
+
+  /**
+   * Whether a conversion result of type {@code gives} reaches the member parameter {@code
+   * parameter} only through a check of its class: both name no type variable, the result is a
+   * reference the parameter does not take as it is, and the parameter's class, its wrapper where it
+   * is primitive, is a subtype of the result's erasure, and the result's type arguments, where it
+   * and the parameter are one class given arguments, fit the parameter's ({@link
+   * PairingRules#argumentsFit}), since the check sees only the value's class. The result is then
+   * written after {@code FixedClass.result} checks it, as the runtime checks it, and refused by
+   * name otherwise.
+   */
+  private boolean reachesByCheck(final TypeMirror gives, final TypeMirror parameter) {
+    if (gives == null || parameter == null || gives.getKind().isPrimitive()) return false;
+    if (mirrorProps().mentionsTypeVariable(gives) || mirrorProps().mentionsTypeVariable(parameter)) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (types.isAssignable(gives, parameter)) return false;
+    return types.isSubtype(boxedErasure(parameter), types.erasure(gives)) && rules.argumentsFit(gives, parameter);
+  }
+
+  /**
+   * {@code value}, a conversion result, checked against the class {@code parameter} takes and cast
+   * to it, for property {@code property} of {@code owner}. A primitive parameter takes its wrapper,
+   * and a null result its default, as a constructor or builder argument takes it.
+   */
+  private String checkedResult(
+    final String value,
+    final TypeMirror parameter,
+    final TypeElement owner,
+    final String property
+  ) {
+    final var expected = boxedErasure(parameter);
+    final var ownerClass = processingEnv.getTypeUtils().erasure(owner.asType()) + ".class";
+    if (parameter.getKind().isPrimitive()) {
+      return (
+        "((" +
+        expected +
+        ") " +
+        FIXED_CLASS +
+        ".resultOr(" +
+        value +
+        ", " +
+        expected +
+        ".class, " +
+        ownerClass +
+        ", " +
+        literal(property) +
+        ", " +
+        defaultLiteralFor(parameter) +
+        "))"
+      );
+    }
+    return (
+      "((" +
+      parameter +
+      ") " +
+      FIXED_CLASS +
+      ".result(" +
+      value +
+      ", " +
+      expected +
+      ".class, " +
+      ownerClass +
+      ", " +
+      literal(property) +
+      "))"
+    );
+  }
+
+  /**
+   * {@code value}, a conversion result of type {@code gives}, as a call to {@code member} with
+   * parameter {@code parameter} takes it: checked against the parameter where only a check reaches
+   * it, cast to the parameter where another overload would bind it as it is, and as it is
+   * otherwise.
+   */
+  private String resultArgument(
+    final String value,
+    final TypeMirror gives,
+    final TypeMirror parameter,
+    final TypeElement owner,
+    final String property
+  ) {
+    if (gives == null || parameter == null) return value;
+    if (reachesByCheck(gives, parameter)) return checkedResult(value, parameter, owner, property);
+    final var types = processingEnv.getTypeUtils();
+    if (
+      !mirrorProps().mentionsTypeVariable(parameter) &&
+      !types.isSameType(gives, parameter) &&
+      types.isAssignable(gives, parameter)
+    ) {
+      return "((" + parameter + ") " + value + ")";
+    }
+    return value;
   }
 
   /**

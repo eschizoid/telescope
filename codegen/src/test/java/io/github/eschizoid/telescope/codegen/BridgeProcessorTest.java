@@ -2881,17 +2881,17 @@ class BridgeProcessorTest {
     @DisplayName("@Transform on a raw generic BridgeFn is rejected by name instead of inside the generated" + " file")
     void transformWithRawGenericBridgeFnRejectedByName() {
       // An annotation carries only a raw class literal, so the emitter instantiates the fn raw and
-      // its forward erases to the type variable's bound — Object here. That fits an Object-typed
-      // slot and not a String one, so this pair is named at the declaration; the sibling test
-      // covers the pairs it does fit. Attributed compilation, so the generated-file error this
-      // replaces would be observable if it were still what the user saw.
+      // its methods erase to the type variable's bound, Number here. A String is not a Number, so
+      // this pair is named at the declaration; the sibling test covers the pairs it does fit.
+      // Attributed compilation, so the generated-file error this replaces would be observable if
+      // it were still what the user saw.
       final var compilation = compileAttributed(
         source(
           "demo.IdFn",
           """
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
-          public final class IdFn<T> implements BridgeFn<T, T> {
+          public final class IdFn<T extends Number> implements BridgeFn<T, T> {
             public IdFn() {}
             @Override public T forward(T t) { return t; }
             @Override public T backward(T t) { return t; }
@@ -2913,7 +2913,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a raw generic BridgeFn must not compile");
       assertTrue(
-        compilation.hasError("does not fit") && compilation.hasError("forward resolves to (java.lang.Object)"),
+        compilation.hasError("does not fit") && compilation.hasError("forward resolves to (java.lang.Number)"),
         () ->
           "expected the diagnostic to name the signature the call site binds to, which for a" +
           " raw instantiation is the erased one; saw " +
