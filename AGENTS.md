@@ -438,10 +438,34 @@ keyed by the projection type, never by bean name, and the list is fixed once the
 deliberately not in `TelescopeMapperRegistry`: a projection is not a `Mapper`. The Quarkus starter has no equivalent
 yet.
 
+**Spring only: mapped responses (ADR-0020).** Package `io.github.eschizoid.telescope.spring.web`. The five composed
+annotations (`@TelescopeGetMapping` …) are meta-annotated with `@RequestMapping(method = ...)` and `@TelescopeResponse`;
+`@TelescopeResponse` targets annotation types only. `TelescopeWebMvcAutoConfiguration` (servlet web apps with Spring MVC
+on the classpath) registers `TelescopeResponses`, a `SmartInitializingSingleton` that resolves every annotated handler's
+mapping and `ResponseShape` at startup and fails startup with the method named; `TelescopeResponseHandlers`, a
+`BeanPostProcessor` that wraps the adapter's `RequestResponseBodyMethodProcessor`, `ResponseEntityReturnValueHandler`
+and `HttpEntityMethodProcessor` so the value is mapped, and the declared type swapped through `MappedReturnType`, before
+a converter is chosen; and, with springdoc present, `TelescopeOpenApiCustomizer`, a global customizer that documents the
+response type in every document. The handler's Java return value is never changed. Request bodies are the same feature
+in the other direction (ADR-0021): `@TelescopeRequestBody` on a parameter, or a `TelescopeRequest<S, T>` parameter;
+`TelescopeRequests` resolves each at startup, and `TelescopeRequestBodyResolver`, placed first among the adapter's
+argument resolvers, reads the body through Spring's `RequestResponseBodyMethodProcessor` as the wire type
+(`WireParameter`, which carries a synthesized `@RequestBody` and the parameter's own `@Valid`) before mapping it. Both
+directions find their mapper through `MapperLookup`. Spring MVC, Spring Data and springdoc are `compileOnly`, each
+behind a class condition.
+
 **Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
-codegen-generated. No `@QuarkusTest`/`@SpringBootTest` integration tests: the registries are covered by unit tests, the
-Spring registry also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC
-container, and the generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`.
+codegen-generated. No `@QuarkusTest` integration tests. The registries are covered by unit tests, the Spring registry
+also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC container, and the
+generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`. Mapped responses are covered
+by `MockMvc` over a `WebApplicationContextRunner`, and by the starter's only `@SpringBootTest` classes, under
+`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`. Two tasks in `check` start the web
+auto-configuration from a named application module (`src/moduleSmoke`) with the starter jar and every dependency on the
+module path: `moduleSmokeRun` without Spring Data and springdoc, and `moduleSmokeFullRun` with both, which loads the
+springdoc configuration and serves a `Page`. Both register the configuration classes the jar's auto-configuration
+imports list, read through Spring Boot's `ImportCandidates`. They are what catch a `@Bean` method or a configuration
+class Spring cannot reach because the package is exported but not opened. Keep the configuration classes, their
+constructors, their nested `@Configuration` classes and their bean methods public.
 
 ---
 
@@ -695,6 +719,12 @@ JVM/codegen-only under AOT).
 19. **0019 — Which differences between the paths may remain.** (Proposed.) Only inherent limits (a private constructor,
     a non-public constructor in another package) stay in the cross-path registers, refused by name; every other
     difference is a defect with an issue. Runtime-only features are decided in their own ADRs.
+20. **0020 — Mapped Spring MVC responses.** (Accepted, shipped.) `@TelescopeGetMapping` and its siblings: the handler
+    declares the type it returns and the annotation names the response type; the value is mapped where Spring MVC writes
+    the body, never in the Java call. Resolved at startup; a fixed set of return shapes.
+21. **0021 — Mapped Spring MVC request bodies.** (Accepted, shipped.) `@TelescopeRequestBody(from = Wire.class)` or a
+    `TelescopeRequest<S, T>` parameter: the body is read and validated as the wire type by Spring's own `@RequestBody`
+    processor, then mapped before the handler runs.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

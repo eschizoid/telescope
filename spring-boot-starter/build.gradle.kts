@@ -62,16 +62,30 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 val springBootVersion = "4.1.1"
+val springdocVersion = "3.1.1"
 
 dependencies {
     api(project(":core"))
     api("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:$springBootVersion")
 
+    // Optional integrations: each is guarded by @ConditionalOnClass, so none reaches a consumer's classpath.
+    compileOnly(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+    compileOnly("org.springframework:spring-webmvc")
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
+    compileOnly("org.springframework.data:spring-data-commons")
+    compileOnly("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+
     testImplementation(platform(libs.junitBom))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.springframework.boot:spring-boot-starter-test:$springBootVersion")
+    testImplementation("org.springframework.boot:spring-boot-starter-web:$springBootVersion")
+    testImplementation("org.springframework.data:spring-data-commons")
+    testImplementation("org.springframework.boot:spring-boot-starter-validation")
+    testImplementation("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+    testImplementation("org.springdoc:springdoc-openapi-starter-webmvc-api:$springdocVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation(testFixtures(project(":codegen")))
     testAnnotationProcessor(project(":codegen"))
@@ -129,3 +143,58 @@ signing {
     if (signingKey != null && signingPassword != null) useInMemoryPgpKeys(signingKey, signingPassword)
     sign(publishing.publications["maven"])
 }
+
+// A named application module that starts the web auto-configuration from the starter's jar, with every jar on the module
+// path. The bare run has no Spring Data or springdoc; the full run adds both, which loads the springdoc configuration
+// and the Page shape.
+val moduleSmoke by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+}
+
+dependencies {
+    "moduleSmokeImplementation"(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+    "moduleSmokeImplementation"(project(":core"))
+    "moduleSmokeImplementation"("org.springframework.boot:spring-boot-autoconfigure")
+    "moduleSmokeImplementation"("org.springframework:spring-webmvc")
+    "moduleSmokeImplementation"("org.springframework:spring-test")
+    "moduleSmokeImplementation"("jakarta.servlet:jakarta.servlet-api")
+    "moduleSmokeImplementation"("tools.jackson.core:jackson-databind")
+    "moduleSmokeCompileOnly"("org.springframework.data:spring-data-commons")
+    "moduleSmokeCompileOnly"("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+}
+
+val moduleSmokeFull by configurations.creating {
+    extendsFrom(configurations["moduleSmokeRuntimeClasspath"])
+}
+
+dependencies {
+    moduleSmokeFull("org.springframework.data:spring-data-commons")
+    moduleSmokeFull("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+}
+
+fun JavaExec.moduleSmoke(mode: String, runtime: FileCollection) {
+    group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    classpath = files(tasks.jar) + moduleSmoke.output + runtime
+    mainModule = "telescope.spring.smoke"
+    mainClass = "io.github.eschizoid.telescope.spring.smoke.ModuleSmoke"
+    args(mode)
+    // Spring's jars are automatic modules, which declare no dependencies, so nothing pulls the named modules they load
+    // (commons-logging among them) into the graph; the run adds every module on the path.
+    jvmArgs("--add-modules", "ALL-MODULE-PATH")
+    val marker = layout.buildDirectory.file("module-smoke/$mode.ok")
+    outputs.file(marker)
+    doLast { marker.get().asFile.writeText("ok") }
+}
+
+val moduleSmokeRun by tasks.registering(JavaExec::class) {
+    description = "Serves mapped responses with the starter's jar on the module path, without Spring Data or springdoc."
+    moduleSmoke("bare", configurations["moduleSmokeRuntimeClasspath"])
+}
+
+val moduleSmokeFullRun by tasks.registering(JavaExec::class) {
+    description = "Serves mapped responses with the starter's jar on the module path, with Spring Data and springdoc."
+    moduleSmoke("full", moduleSmokeFull)
+}
+
+tasks.named("check") { dependsOn(moduleSmokeRun, moduleSmokeFullRun) }

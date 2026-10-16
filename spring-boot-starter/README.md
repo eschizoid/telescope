@@ -3,7 +3,9 @@
 The Spring Boot starter for [telescope](../README.md) collects every `Mapper<A, B>` bean in the application context into
 a `TelescopeMapperRegistry`, so a service can look a mapper up by its source and target class. It also lets the
 `telescope-codegen` annotation processor turn an interface annotated with `@TelescopeMapper` or `@TelescopeTransformer`
-into a Spring bean that you inject like any other.
+into a Spring bean that you inject like any other. In a Spring MVC application, `@TelescopeGetMapping` and its siblings
+map a controller's response to a DTO, and `@TelescopeRequestBody` maps a request body to the type the handler takes,
+with no mapper at the endpoint.
 
 The starter is compiled and tested against Spring Boot 4.1.1 and needs Java 21 or later. It registers itself through
 Spring Boot's autoconfiguration, so there is no `@Enable...` annotation to add.
@@ -420,6 +422,165 @@ source and target types need the same reflection registration as any runtime-map
 `@RegisterReflectionForBinding`. A transformer path built with `.field(Type::accessor)` is a runtime path too. Telescope
 reads the field name from the method reference, so the class that holds the method reference goes in
 `serialization-config.json`. See [`docs/native-image.md`](../docs/native-image.md) for what each path needs.
+
+## Mapped responses
+
+A controller can return what its service produced and let the starter write the response DTO. Replace `@GetMapping` with
+`@TelescopeGetMapping` and name the response type. No mapper is injected, imported or called:
+
+```java
+@RestController
+class UserRestController {
+
+  private final UserService service;
+
+  UserRestController(UserService service) {
+    this.service = service;
+  }
+
+  @TelescopeGetMapping(value = "/api/v1/users/{id}", to = UserRestDto.class)
+  UserDto user(@PathVariable String id) {
+    return service.findUser(id); // the client receives a UserRestDto
+  }
+
+  @TelescopeGetMapping(value = "/api/v1/users", to = UserRestDto.class)
+  List<UserDto> users() {
+    return service.findAll(); // a List<UserRestDto>
+  }
+
+  @TelescopePostMapping(value = "/api/v1/users", to = UserRestDto.class)
+  ResponseEntity<UserDto> create(@RequestBody CreateUser request) {
+    UserDto created = service.create(request);
+    return ResponseEntity.created(URI.create("/api/v1/users/" + created.id())).body(created); // status and headers kept
+  }
+}
+```
+
+`@TelescopePostMapping`, `@TelescopePutMapping`, `@TelescopePatchMapping` and `@TelescopeDeleteMapping` do the same for
+the other verbs and take every attribute of the Spring annotation they replace.
+
+### Which mapper is used
+
+The mapper for the pair is found once, at startup, in this order:
+
+1. a `@TelescopeMapper` projection for the pair;
+2. a `Mapper` bean for the pair;
+3. a generated `@Bridge`, or else a same-name forward mapping.
+
+A response DTO whose components match the source by name needs no mapper at all. A source component the DTO leaves out
+is ignored. A DTO component with no source counterpart is `null` in the last step, so give a renamed component a
+projection:
+
+```java
+@TelescopeMapper
+interface UserRestDtoProjection extends TelescopeProjection<UserDto, UserRestDto> {
+  @Override
+  default void translate(MapperBuilder<UserDto, UserRestDto> mapping) {
+    mapping.from(UserDto::fullName).to(UserRestDto::name);
+  }
+}
+```
+
+Two candidates for one pair fail startup, and the message lists them. The endpoint picks one with `using`, which also
+supplies the response type, so `to` can be left out:
+
+```java
+@TelescopeGetMapping(value = "/api/v1/users/{id}/summary", using = UserSummaryProjection.class)
+UserDto summary(@PathVariable String id) { ... }
+```
+
+### Return types
+
+| The method returns          | The client receives                                                   |
+| --------------------------- | --------------------------------------------------------------------- |
+| `S`                         | `T`                                                                   |
+| `List<S>` / `Collection<S>` | `List<T>`, in order                                                   |
+| `Set<S>`                    | `Set<T>`, in iteration order                                          |
+| `Optional<S>`               | `Optional<T>`                                                         |
+| `Page<S>`                   | `Page<T>`, with the paging kept                                       |
+| `ResponseEntity` of any row | the same entity, status and headers kept, with its body mapped by row |
+
+`null`, an empty `Optional` and a `ResponseEntity` with no body are written as they are, and so is a body of another
+type, such as the `ProblemDetail` that `ResponseEntity.of(problem).build()` returns. Any other return type fails startup
+with the method named, and so does a handler on a `@Controller` that is not a `@RestController` and has no
+`@ResponseBody`.
+
+### What stays the same
+
+Only the HTTP response is mapped. A Java caller of the method, a test or another bean, still receives the `UserDto` it
+returned. `ResponseBodyAdvice`, `@JsonView` and content negotiation see the response type, as if the method had declared
+it. With springdoc on the classpath, the API documentation shows the response type, in the default document and in every
+`GroupedOpenApi` group.
+
+### On the module path
+
+On the module path, open the package that holds your controllers and the types they return and map to every module, with
+an unqualified `opens`. Spring invokes the handler, Jackson writes the response type, and telescope's runtime mapper
+reads the source. The `opens ... to io.github.eschizoid.telescope.internal` that
+[docs/codegen.md](../docs/codegen.md#jpms--modular-consumers) describes covers only the last of the three.
+
+```java
+module com.acme.app {
+  requires io.github.eschizoid.telescope.spring;
+  requires spring.web;
+
+  opens com.acme.api;
+}
+```
+
+Spring's jars are automatic modules, which declare no dependencies, so a `java -m` launch may need
+`--add-modules ALL-MODULE-PATH` to bring in the modules they load, such as commons-logging.
+
+## Mapped request bodies
+
+The same idea works on the way in. Replace `@RequestBody` with `@TelescopeRequestBody`, name the type the client sends,
+and the handler receives the type it works with:
+
+```java
+@TelescopePostMapping(value = "/api/v1/users", to = UserRestDto.class)
+ResponseEntity<UserDto> create(@TelescopeRequestBody(from = CreateUserRestRequestDtoV1.class) @Valid UserDto user) {
+  UserDto created = service.create(user);
+  return ResponseEntity.created(URI.create("/api/v1/users/" + created.id())).body(created);
+}
+```
+
+The body is read as `CreateUserRestRequestDtoV1` by Spring's own `@RequestBody` machinery, so content negotiation,
+`RequestBodyAdvice`, a `415` for an unsupported content type and a `400` for malformed JSON all behave as before.
+`@Valid` validates the body as read, against the constraints on the wire DTO, and a failure is the usual `400`
+(`MethodArgumentNotValidException`) before anything is mapped. The parameter may be `T`, `List<T>`, `Collection<T>` or
+`Set<T>`; a `null` element stays `null`.
+
+When the handler needs the body as sent as well, for example to log a field the domain type does not carry, take a
+`TelescopeRequest`. Its type arguments name both types, so it needs no annotation:
+
+```java
+@PostMapping("/api/v1/users/audit")
+UserDto audit(@Valid TelescopeRequest<CreateUserRestRequestDtoV1, UserDto> request) {
+  log.info("client {}", request.original().clientRef());
+  return service.create(request.mapped());
+}
+```
+
+The mapper is found at startup in the same order as for responses. With two candidates, `using` picks one, on either
+form; on the plain form it also supplies the wire type, so `from` can be left out:
+
+```java
+UserDto create(@TelescopeRequestBody(using = CreateUserV1Projection.class) UserDto user)
+UserDto audit(@TelescopeRequestBody(using = CreateUserV1Projection.class) TelescopeRequest<CreateUserRestRequestDtoV1, UserDto> request)
+```
+
+`required = false` lets a request without a body reach the handler as `null`; by default a missing body is a `400`.
+These fail startup with the parameter named:
+
+- neither `from` nor `using` on the plain form;
+- `from` on a `TelescopeRequest`, whose first type argument is the wire type;
+- a `TelescopeRequest` without two concrete type arguments;
+- a parameter type other than `T`, `List<T>`, `Collection<T>` or `Set<T>`;
+- `@RequestBody` next to `@TelescopeRequestBody`;
+- a `using` projection that does not map the wire type to the parameter's type, and two mappers without `using`.
+
+With springdoc on the classpath, the operation's request body shows the wire type, and no query parameter is derived
+from the handler's argument.
 
 ## Configuration
 
