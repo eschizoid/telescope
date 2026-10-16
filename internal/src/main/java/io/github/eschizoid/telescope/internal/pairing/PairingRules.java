@@ -450,6 +450,120 @@ public final class PairingRules<T> {
     return props.mentionsTypeVariable(sourceMember) || props.mentionsTypeVariable(targetMember);
   }
 
+  /**
+   * What a value of a pair read as declared owes the side it is written into, given the type it has
+   * as a member of the side it is read from, {@code sendingMember}, and as a member of the side it
+   * is written into, {@code receivingMember}. Each member type keeps the variables its class passes
+   * through, so their bounds say what the side holds. Read as declared, the pair is one type on
+   * both sides and the value is handed across unchanged, so what the receiving side's class says
+   * about the property is the only thing that can refuse it.
+   *
+   * <p>A value fits where every value of the sending side's member type is one the receiving side's
+   * admits: a variable the receiving side passes through admits whatever its bound does, a type
+   * given arguments admits a value of its own class whose arguments fit its own, one by one, and an
+   * array admits an array whose component fits its own. A value that fits is not checked. Otherwise
+   * a type given arguments is refused, a container and any other generic class alike, since nothing
+   * checks a value's arguments as it is written, and so is an array whose component, once every
+   * array level is taken off, is given type arguments or is a variable: its class carries only the
+   * erasure of that component. Any other value is checked against the erasure of the receiving
+   * side's member type as it is written, unless every value of the sending side's is already of
+   * that class; that includes an array of a class with no type arguments, whose class carries its
+   * component whole.
+   */
+  public FixedFit<T> fixedFit(final T sendingMember, final T receivingMember, final String componentName) {
+    if (fitsFixed(sendingMember, receivingMember)) return new FixedFit.Fits<>();
+    if (
+      containerViewOf(receivingMember) != null ||
+      !props.typeArguments(receivingMember).isEmpty() ||
+      genericComponent(receivingMember)
+    ) {
+      return new FixedFit.Refused<>(
+        PairingMessages.fixedArgumentsDoNotFit(
+          componentName,
+          props.typeName(sendingMember),
+          props.typeName(receivingMember)
+        )
+      );
+    }
+    final var fixed = props.erasure(receivingMember);
+    return props.isAssignable(sendingMember, fixed) ? new FixedFit.Fits<>() : new FixedFit.Check<>(fixed);
+  }
+
+  /**
+   * Whether {@code type} is an array whose component, once every array level is taken off, is given
+   * type arguments or is a variable, so the array's class does not carry it whole.
+   */
+  private boolean genericComponent(final T type) {
+    var component = props.componentType(type);
+    if (component == null) return false;
+    while (props.componentType(component) != null) component = props.componentType(component);
+    return props.isTypeVariable(component) || !props.typeArguments(component).isEmpty();
+  }
+
+  /**
+   * Whether every value of {@code sending} fits {@code receiving}. A variable on the receiving side
+   * admits what its erasure does. An array fits an array whose component its own component fits.
+   * Where the two are the same class their type arguments are compared one by one ({@link
+   * #fitsArgument}).
+   */
+  private boolean fitsFixed(final T sending, final T receiving) {
+    if (props.isTypeVariable(receiving)) return props.isAssignable(sending, props.erasure(receiving));
+    if (props.isAssignable(sending, receiving)) return true;
+    final var receivingComponent = props.componentType(receiving);
+    if (receivingComponent != null) {
+      final var sendingComponent = props.componentType(sending);
+      return sendingComponent != null && fitsFixed(sendingComponent, receivingComponent);
+    }
+    final var receivingArguments = props.typeArguments(receiving);
+    final var sendingArguments = props.typeArguments(sending);
+    if (receivingArguments.isEmpty() || sendingArguments.size() != receivingArguments.size()) return false;
+    if (!props.sameType(props.rawType(sending), props.rawType(receiving))) return false;
+    for (int i = 0; i < receivingArguments.size(); i++) {
+      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether the type argument {@code receiving} contains what the type argument {@code sending}
+   * stands for, as Java's containment of type arguments decides it: an unbounded wildcard contains
+   * anything; {@code ? extends B} contains an argument whose values all fit {@code B}; {@code ?
+   * super B} contains an argument every {@code B} is a value of, which only one naming a type with
+   * no variable in it, or a wildcard bounded below by one, can show; and any other argument
+   * contains one whose values all fit it. A sending wildcard stands for values of its upper bound,
+   * {@code Object} where it declares none.
+   */
+  private boolean fitsArgument(final T sending, final T receiving) {
+    if (props.isWildcard(receiving)) {
+      final var lower = props.lowerBound(receiving);
+      if (lower != null) return everyValueIsOf(lower, sending);
+      final var upper = props.upperBound(receiving);
+      return upper == null || fitsFixed(valuesOf(sending), upper);
+    }
+    return fitsFixed(valuesOf(sending), receiving);
+  }
+
+  /** The type the values a type argument stands for are of: a wildcard's upper bound, or itself. */
+  private T valuesOf(final T argument) {
+    if (!props.isWildcard(argument)) return argument;
+    final var upper = props.upperBound(argument);
+    return upper == null ? props.typeNamed("java.lang.Object") : upper;
+  }
+
+  /**
+   * Whether every value of {@code lower} is a value of the type argument {@code sending}: a type
+   * that names no variable and that {@code lower} is assignable to, or a wildcard bounded below by
+   * one. A variable, or a wildcard bounded above, names no one type every value of {@code lower} is
+   * shown to be.
+   */
+  private boolean everyValueIsOf(final T lower, final T sending) {
+    if (props.isWildcard(sending)) {
+      final var sendingLower = props.lowerBound(sending);
+      return sendingLower != null && everyValueIsOf(lower, sendingLower);
+    }
+    return !props.mentionsTypeVariable(sending) && props.isAssignable(lower, sending);
+  }
+
   /** Whether both sides are enums. A pair of one enum is the same type and passes through. */
   public boolean bothEnums(final T srcType, final T tgtType) {
     return props.isEnumType(srcType) && props.isEnumType(tgtType);

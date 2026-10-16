@@ -8,11 +8,13 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.Match;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
+import io.github.eschizoid.telescope.internal.FixedCheck;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
@@ -1078,18 +1080,24 @@ public final class DeepMap {
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
-            ? autoIso(
-                srcType,
-                tgtType,
+            ? checkedAgainstFixed(
+                autoIso(
+                  srcType,
+                  tgtType,
+                  srcField + " → " + tgtField,
+                  overrides,
+                  beanRefl,
+                  cache,
+                  nullStrategy,
+                  cyclicPairs,
+                  inProgress,
+                  ownBridges,
+                  sealedCases,
+                  forwardOnly
+                ),
+                paired,
+                new RowSides(source, target, srcField, tgtField),
                 srcField + " → " + tgtField,
-                overrides,
-                beanRefl,
-                cache,
-                nullStrategy,
-                cyclicPairs,
-                inProgress,
-                ownBridges,
-                sealedCases,
                 forwardOnly
               )
             : fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
@@ -1172,18 +1180,24 @@ public final class DeepMap {
         final var step = new FieldStep(
           name,
           name,
-          autoIso(
-            autoSrcType,
-            autoTgtType,
+          checkedAgainstFixed(
+            autoIso(
+              autoSrcType,
+              autoTgtType,
+              name,
+              overrides,
+              beanRefl,
+              cache,
+              nullStrategy,
+              cyclicPairs,
+              inProgress,
+              ownBridges,
+              sealedCases,
+              forwardOnly
+            ),
+            autoPaired,
+            new RowSides(source, target, name, name),
             name,
-            overrides,
-            beanRefl,
-            cache,
-            nullStrategy,
-            cyclicPairs,
-            inProgress,
-            ownBridges,
-            sealedCases,
             forwardOnly
           )
         );
@@ -1520,6 +1534,45 @@ public final class DeepMap {
     // bean-side targets see a usable value rather than null. Non-DEFAULT strategy short-circuits
     // to the raw Iso for a no-op cost.
     return nullStrategy == NullHint.NullStrategy.DEFAULT ? wrapDefaultOnNull(raw, tgtType) : raw;
+  }
+
+  /**
+   * {@code iso}, or a slot checking the value written into each side against the class that side
+   * fixes the property's type variable to, where the pairing hands the value across unchanged and
+   * the shared rules call for it ({@link PairingRules#fixedFit}). A value given type arguments that
+   * cannot be shown to fit is refused here, while the mapper is built. {@code iso} itself is
+   * returned where nothing is checked, so an identity slot keeps the identity short-circuit.
+   */
+  private static Iso<?, ?> checkedAgainstFixed(
+    final Iso<?, ?> iso,
+    final Reflective.PairedTypes paired,
+    final RowSides sides,
+    final String componentName,
+    final boolean forwardOnly
+  ) {
+    if (!paired.handedAcross()) return iso;
+    final var intoTarget = fixedClass(PAIRING.fixedFit(paired.sourceMember(), paired.targetMember(), componentName));
+    final var intoSource = forwardOnly
+      ? null
+      : fixedClass(PAIRING.fixedFit(paired.targetMember(), paired.sourceMember(), componentName));
+    if (intoTarget == null && intoSource == null) return iso;
+    // Only a single value is checked, and a single value handed across unchanged is the identity
+    // slot: its declared type names a variable, which no default-on-null wrapper has a value for,
+    // and a type given arguments is either shown to fit or refused above. The check takes the
+    // slot's place, and the composed rebuild reads it as an identity read with a check on it.
+    return new FixedCheck(intoTarget, sides.target(), sides.tgtField(), intoSource, sides.source(), sides.srcField());
+  }
+
+  /**
+   * The class {@code fit} checks a value against, or null where it checks none; a refusal is thrown
+   * as the shared rules word it.
+   */
+  private static Class<?> fixedClass(final FixedFit<Type> fit) {
+    return switch (fit) {
+      case FixedFit.Fits<Type> __ -> null;
+      case FixedFit.Refused<Type> refused -> throw new IllegalStateException(refused.message());
+      case FixedFit.Check<Type> check -> (Class<?>) check.fixed();
+    };
   }
 
   private static Iso<?, ?> computeAutoIso(

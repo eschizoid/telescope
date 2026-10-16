@@ -840,6 +840,59 @@ public final class PairingMessages {
   }
 
   /**
+   * A value one side holds as {@code receivingType}, a type given arguments its class fixes, handed
+   * across unchanged from a side that holds it as {@code sendingType}, whose arguments cannot be
+   * shown to be of those classes. Nothing checks a value's type arguments as it is written, a
+   * container's elements included, so the pair is refused while it is planned.
+   */
+  public static String fixedArgumentsDoNotFit(
+    final String componentName,
+    final String sendingType,
+    final String receivingType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is handed across unchanged from a side that holds it as " +
+      sendingType +
+      " to a side that holds it as " +
+      receivingType +
+      ", whose class fixes the type arguments the value must fit. Nothing shows the value handed" +
+      " across to have arguments of those classes, and a value's type arguments, a container's" +
+      " elements included, are not checked as it is written, so the pair is refused. Give both sides" +
+      " the same type arguments, or convert the component with an explicit Mapping.to(src, tgt, fwd," +
+      " bwd) row."
+    );
+  }
+
+  /**
+   * A value of class {@code foundClass} written into the property {@code propertyName} of {@code
+   * ownerClass}, which fixes the type variable the property is declared with to {@code fixedClass},
+   * a class the value is not of. The other side passes the variable through, so only the value's
+   * own class says whether it fits.
+   */
+  public static String fixedClassMismatch(
+    final String ownerClass,
+    final String propertyName,
+    final String foundClass,
+    final String fixedClass
+  ) {
+    return (
+      "Deep map: property '" +
+      propertyName +
+      "' of " +
+      ownerClass +
+      " is fixed to " +
+      fixedClass +
+      ", but the value handed across for it is a " +
+      foundClass +
+      ". The other side passes the type variable through, and the value it holds there is not of the" +
+      " class this side fixes. Give both sides the same type argument, or convert the property with an" +
+      " explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
    * Two records or beans given type arguments that are not the same, one by one, on both sides. The
    * two classes convert as they pair with each other, passing each type variable across unchanged,
    * so only a pair whose arguments agree holds them on the far side.

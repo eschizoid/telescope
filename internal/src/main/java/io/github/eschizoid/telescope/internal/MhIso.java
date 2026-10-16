@@ -576,6 +576,16 @@ public final class MhIso {
     final MethodHandle isoDir,
     final Iso<Object, Object> identity
   ) {
+    // A value handed across unchanged into a side that fixes its class: the raw read, filtered by
+    // the check where the side written fixes one, so the slot stays on the composed handle.
+    if (slotIso instanceof FixedCheck check && sp >= 0) {
+      final MethodHandle filter = isoDir == ISO_TO ? check.forwardFilter() : check.backwardFilter();
+      final MethodHandle read = srcAccessors[sp];
+      if (filter == null) return read.asType(MethodType.methodType(slotType, srcCls));
+      return MethodHandles.filterReturnValue(read.asType(MethodType.methodType(Object.class, srcCls)), filter).asType(
+        MethodType.methodType(slotType, srcCls)
+      );
+    }
     final boolean isIdentity = slotIso == identity;
     if (isIdentity && sp >= 0) {
       // Plain passthrough: raw accessor straight into the slot, primitive-to-primitive, no box.

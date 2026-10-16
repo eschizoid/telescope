@@ -145,6 +145,15 @@ public interface PropertySystem<T> {
   /** A wildcard's lower bound, or null when {@code t} has none or is not a wildcard. */
   T lowerBound(T t);
 
+  /** An array type's component, generic or not, or null when {@code t} is not an array. */
+  T componentType(T t);
+
+  /**
+   * A wildcard's upper bound, or null when {@code t} declares none other than {@code Object}, as
+   * {@code ?} and {@code ? super X} do, or is not a wildcard.
+   */
+  T upperBound(T t);
+
   /**
    * Whether {@code t} is a type variable or has one anywhere inside it: among its type arguments,
    * at any depth, in a wildcard's bounds, or as an array's component. {@code List<List<?>>} answers
@@ -163,6 +172,13 @@ public interface PropertySystem<T> {
 
   /** The raw/erased class handle of {@code t} ({@code List<X>} → {@code List}). */
   T rawType(T t);
+
+  /**
+   * The class every value of {@code t} is an instance of, as the language erases it: a type
+   * variable to the erasure of its first bound, a wildcard to its upper bound's, and an array to an
+   * array of its component's erasure.
+   */
+  T erasure(T t);
 
   /** Whether {@code t} is a type variable. */
   boolean isTypeVariable(T t);

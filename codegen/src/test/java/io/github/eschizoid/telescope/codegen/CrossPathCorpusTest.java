@@ -42,6 +42,7 @@ import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -4405,24 +4406,14 @@ class CrossPathCorpusTest {
     // Seen from a subclass that passes its own variable through, first and items are typed by that
     // variable, which no static method of the bridge can name. Both paths read them as the
     // superclass declares them: one V, so first passes through and items is copied into a fresh
-    // list. In each row one side passes its own variable through, and the other passes its own
-    // through as well or fixes the variable to String. The bridge names a generic class raw, so
-    // the key, which every row fixes to String, reads back from a generic side as Object.
+    // list. Both sides pass their own variable through, so neither fixes a class a value must
+    // fit. The bridge names a generic class raw, so the key, which both fix to String, reads back
+    // as Object.
     final var pairs = List.of(
       List.of(
         "Ptv",
         "public class PtvSrc<X> extends PtvBase<String, X> {}\n",
         "public class PtvTgt<Y> extends PtvBase<String, Y> {}\n"
-      ),
-      List.of(
-        "Ptx",
-        "public class PtxSrc<X> extends PtxBase<String, X> {}\n",
-        "public class PtxTgt extends PtxBase<String, String> {}\n"
-      ),
-      List.of(
-        "Pts",
-        "public class PtsSrc extends PtsBase<String, String> {}\n",
-        "public class PtsTgt<Y> extends PtsBase<String, Y> {}\n"
       )
     );
     final var owed = List.of(
@@ -4696,50 +4687,681 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Inputs on which the two paths convert a pass-through pair differently, each with what the
-   * generated path and then the runtime give. Neither path checks a value against the class the
-   * receiving side fixes the variable to. The generated path writes through a cast to that class,
-   * which throws a bare {@code ClassCastException}; the runtime writes the value as it is, and the
-   * property then holds a value of a class its type does not admit.
-   *
-   * <p>An entry no row exercises, or whose row both paths start to agree on, fails the test.
+   * A superclass whose key is a type variable every row fixes to {@code String} and whose first is
+   * typed by a variable the subclasses pass through or fix. {@code %s} is the row's prefix.
    */
-  private static final Map<String, List<String>> UNCHECKED_WRITE_DIVERGENCES = Map.of(
-    // A defect still to close: neither path names the property when the value does not fit.
-    "an Integer into a property the target fixes to String",
-    List.of(REFUSED + "ClassCastException", "first=42, a java.lang.Integer")
+  private static final String FIXED_SCALAR_BASE =
+    "public class %sBase<K, V> {\n" +
+    "  private K key;\n" +
+    "  private V first;\n" +
+    "  public K getKey() { return key; }\n" +
+    "  public void setKey(final K key) { this.key = key; }\n" +
+    "  public V getFirst() { return first; }\n" +
+    "  public void setFirst(final V first) { this.first = first; }\n" +
+    "}\n";
+
+  /**
+   * One value handed across unchanged into a side that fixes the variable its property is declared
+   * with: the source and target declarations, any classes they name, each with {@code %s} as the
+   * row's prefix, whether the value goes forward or backward, the value the sending side holds as
+   * first, and what both paths owe. A refusal is owed as {@code REFUSED} and the exception's simple
+   * name and message; a conversion as what {@link #firstHeld} reads back.
+   */
+  private record FixedScalar(
+    String name,
+    String srcDecl,
+    String tgtDecl,
+    List<String> others,
+    boolean forward,
+    Function<Map<String, Class<?>>, Object> first,
+    Function<Map<String, Class<?>>, String> owed
+  ) {}
+
+  /**
+   * The refusal both paths owe for a value of class {@code found} written into {@code owner}'s
+   * first.
+   */
+  private static String fixedRefusal(final Class<?> owner, final String found, final String fixed) {
+    return (
+      REFUSED + "ClassCastException: " + PairingMessages.fixedClassMismatch(owner.getTypeName(), "first", found, fixed)
+    );
+  }
+
+  /** The constant {@code name} of the enum {@code type}. */
+  private static Object constant(final Class<?> type, final String name) {
+    return Arrays.stream(type.getEnumConstants())
+      .filter(c -> ((Enum<?>) c).name().equals(name))
+      .findFirst()
+      .orElseThrow();
+  }
+
+  private static final List<FixedScalar> FIXED_SCALARS = List.of(
+    new FixedScalar(
+      "a String into a property the target fixes to String",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String> {}\n",
+      List.of(),
+      true,
+      classes -> "a",
+      classes -> "first=a, a java.lang.String"
+    ),
+    new FixedScalar(
+      "an Integer into a property the target fixes to String",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String> {}\n",
+      List.of(),
+      true,
+      classes -> 42,
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Integer", "java.lang.String")
+    ),
+    new FixedScalar(
+      "a Long into a property the target fixes to Integer",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, Integer> {}\n",
+      List.of(),
+      true,
+      classes -> 42L,
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Long", "java.lang.Integer")
+    ),
+    new FixedScalar(
+      "a constant of another enum into a property the target fixes to an enum",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, %sColor> {}\n",
+      List.of("public enum %sColor { RED }\n", "public enum %sShade { RED }\n"),
+      true,
+      classes -> constant(classes.get("Shade"), "RED"),
+      classes -> fixedRefusal(classes.get("Tgt"), classes.get("Shade").getName(), classes.get("Color").getName())
+    ),
+    // The value's class has a bridge to the class the target fixes, which neither path
+    // applies: the
+    // pair is planned as one declared type, which names no class to convert from.
+    new FixedScalar(
+      "a value whose own bridge goes to the class the target fixes",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, %sChildDto> {}\n",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(%sChildDto.class)\npublic record %sChild(String name) {}\n",
+        "public record %sChildDto(String name) {}\n"
+      ),
+      true,
+      classes -> {
+        try {
+          return classes.get("Child").getConstructor(String.class).newInstance("c");
+        } catch (final ReflectiveOperationException e) {
+          throw new IllegalStateException(e);
+        }
+      },
+      classes -> fixedRefusal(classes.get("Tgt"), classes.get("Child").getName(), classes.get("ChildDto").getName())
+    ),
+    new FixedScalar(
+      "an Object[] into a property the target fixes to String[]",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String[]> {}\n",
+      List.of(),
+      true,
+      classes -> new Object[] { "a" },
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Object[]", "java.lang.String[]")
+    ),
+    new FixedScalar(
+      "an Integer the target passes through into a property the source fixes to String",
+      "public class %sSrc extends %sBase<String, String> {}\n",
+      "public class %sTgt<Y> extends %sBase<String, Y> {}\n",
+      List.of(),
+      false,
+      classes -> 42,
+      classes -> fixedRefusal(classes.get("Src"), "java.lang.Integer", "java.lang.String")
+    )
   );
 
   @Test
-  @DisplayName("a value that does not fit the class a side fixes the variable to is a registered divergence")
-  void aValueThatDoesNotFitTheFixedClassIsARegisteredDivergence() throws ReflectiveOperationException {
-    final var compiled = passThroughPair(
-      "Ptw",
-      "public class PtwSrc<X> extends PtwBase<String, X> {}\n",
-      "public class PtwTgt extends PtwBase<String, String> {}\n"
+  @DisplayName(
+    "a value handed into a side that fixes its variable converts when it fits and is refused by name on both paths otherwise"
+  )
+  void aValueThatDoesNotFitTheFixedClassIsRefusedByNameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : FIXED_SCALARS) {
+      final var prefix = "Fcw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var files = new ArrayList<JavaFileObject>();
+      files.add(source(prefix + "Base", head + FIXED_SCALAR_BASE.replace("%s", prefix)));
+      for (final var other : row.others()) {
+        final var named = Pattern.compile("(?:record|enum) (\\w+)").matcher(other.replace("%s", prefix));
+        if (!named.find()) throw new IllegalStateException(row.name() + " declares nothing it names");
+        files.add(source(named.group(1), head + other.replace("%s", prefix)));
+      }
+      files.add(
+        source(
+          prefix + "Src",
+          head +
+            "@io.github.eschizoid.telescope.annotations.Bridge(" +
+            prefix +
+            "Tgt.class)\n" +
+            row.srcDecl().replace("%s", prefix)
+        )
+      );
+      files.add(source(prefix + "Tgt", head + row.tgtDecl().replace("%s", prefix)));
+      final var sources = files.toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var defined = plain.define(MethodHandles.lookup());
+      final var classes = new LinkedHashMap<String, Class<?>>();
+      defined.forEach((name, cls) -> classes.put(name.substring(PACKAGE.length() + 1 + prefix.length()), cls));
+      final Class<Object> source = cast(classes.get("Src"));
+      final Class<Object> target = cast(classes.get("Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final var sender = row.forward() ? source : target;
+      final Attempt generated = () ->
+        row.forward()
+          ? bridge.getMethod("forward", source).invoke(null, fixedSample(sender, row.first().apply(classes)))
+          : bridge.getMethod("backward", target).invoke(null, fixedSample(sender, row.first().apply(classes)));
+      final Attempt reflective = () ->
+        row.forward()
+          ? mapper.forward(fixedSample(sender, row.first().apply(classes)))
+          : mapper.backward(fixedSample(sender, row.first().apply(classes)));
+      final var owed = row.owed().apply(classes);
+      final var viaBridge = firstHeld(generated);
+      final var viaRuntime = firstHeld(reflective);
+      if (!owed.equals(viaBridge)) failures.add(row.name() + ": generated gave " + viaBridge + ", owed " + owed);
+      if (!owed.equals(viaRuntime)) failures.add(row.name() + ": runtime gave " + viaRuntime + ", owed " + owed);
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A fresh {@code type} holding {@code "k"} as key and {@code first}, set through the setters. */
+  private static Object fixedSample(final Class<?> type, final Object first) throws ReflectiveOperationException {
+    final var sample = type.getConstructor().newInstance();
+    type.getMethod("setKey", Object.class).invoke(sample, "k");
+    type.getMethod("setFirst", Object.class).invoke(sample, first);
+    return sample;
+  }
+
+  @Test
+  @DisplayName(
+    "a container a side fixes the element type of is refused by name on both paths when nothing shows the elements fit"
+  )
+  void aContainerWhoseElementsCannotBeShownToFitIsRefusedWhenPlanned() {
+    // Each pair hands items across unchanged, one way from a side that passes its variable through
+    // into one that fixes it to String: forward for the first pair, backward for the second. The
+    // side passing its variable through holds items as a list of that variable.
+    final var pairs = List.of(
+      List.of(
+        "Ptx",
+        "public class PtxSrc<X> extends PtxBase<String, X> {}\n",
+        "public class PtxTgt extends PtxBase<String, String> {}\n",
+        "java.util.List<X>"
+      ),
+      List.of(
+        "Pts",
+        "public class PtsSrc extends PtsBase<String, String> {}\n",
+        "public class PtsTgt<Y> extends PtsBase<String, Y> {}\n",
+        "java.util.List<Y>"
+      )
     );
-    final var plain = compiled.get(0);
-    final var processed = compiled.get(1);
-    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
-    final var classes = plain.define(MethodHandles.lookup());
-    final Class<Object> source = cast(classes.get(PACKAGE + ".PtwSrc"));
-    final Class<Object> target = cast(classes.get(PACKAGE + ".PtwTgt"));
-    final var nested = nestedBridgesFirst(processed, plain, "Ptw");
+    final var failures = new ArrayList<String>();
+    for (final var pair : pairs) {
+      final var prefix = pair.get(0);
+      final var owed = PairingMessages.fixedArgumentsDoNotFit("items", pair.get(3), "java.util.List<java.lang.String>");
+      final var compiled = passThroughPair(prefix, pair.get(1), pair.get(2));
+      final var plain = compiled.get(0);
+      final var processed = compiled.get(1);
+      if (processed.success() || !processed.hasError(owed)) {
+        failures.add(prefix + ": the generated path should refuse it by name; saw " + processed.errorMessages());
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      try {
+        Telescope.mapper(source, target);
+        failures.add(prefix + ": the runtime should refuse it by name, and built the mapper");
+      } catch (final IllegalStateException e) {
+        if (!owed.equals(e.getMessage())) failures.add(prefix + ": the runtime refused it with " + e.getMessage());
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A bean superclass holding one value of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String ONE_VALUE_BASE =
+    "public class %sBase<V> {\n" +
+    "  private V v;\n" +
+    "  public V getV() { return v; }\n" +
+    "  public void setV(final V v) { this.v = v; }\n" +
+    "}\n";
+
+  /** A bean superclass holding a list of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String LIST_VALUE_BASE =
+    "public class %sBase<V> {\n" +
+    "  private java.util.List<V> v;\n" +
+    "  public java.util.List<V> getV() { return v; }\n" +
+    "  public void setV(final java.util.List<V> v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * A bean superclass holding a list of values that fit its variable as {@code v}. {@code %s} is
+   * the prefix.
+   */
+  private static final String WILDCARD_LIST_BASE =
+    "public class %sBase<V> {\n" +
+    "  private java.util.List<? extends V> v;\n" +
+    "  public java.util.List<? extends V> getV() { return v; }\n" +
+    "  public void setV(final java.util.List<? extends V> v) { this.v = v; }\n" +
+    "}\n";
+
+  /** A bean superclass holding an array of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String ARRAY_BASE =
+    "public class %sBase<V> {\n" +
+    "  private V[] v;\n" +
+    "  public V[] getV() { return v; }\n" +
+    "  public void setV(final V[] v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * A bean superclass holding as {@code v} an array of the type {@code %2$s} names, given its
+   * variable. {@code %1$s} is the prefix.
+   */
+  private static final String GENERIC_ARRAY_BASE =
+    "public class %1$sBase<V> {\n" +
+    "  private %2$s[] v;\n" +
+    "  public %2$s[] getV() { return v; }\n" +
+    "  public void setV(final %2$s[] v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * The base, the classes in {@code others}, the source {@code srcDecl} bridged to the target
+   * {@code tgtDecl}, leniently when {@code lenient}, compiled without the processor and with it.
+   * Each declaration has {@code %s} as the row's prefix.
+   */
+  private static List<ProcessorHarness.Compilation> valuePair(
+    final String prefix,
+    final String base,
+    final String srcDecl,
+    final String tgtDecl,
+    final List<String> others,
+    final boolean lenient
+  ) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var files = new ArrayList<JavaFileObject>();
+    files.add(source(prefix + "Base", head + base.replace("%1$s", prefix).replace("%s", prefix)));
+    for (final var other : others) {
+      final var named = Pattern.compile("(?:record|class) (\\w+)").matcher(other.replace("%s", prefix));
+      if (!named.find()) throw new IllegalStateException(prefix + " declares nothing it names");
+      files.add(source(named.group(1), head + other.replace("%s", prefix)));
+    }
+    files.add(
+      source(
+        prefix + "Src",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = " +
+          prefix +
+          "Tgt.class, lenient = " +
+          lenient +
+          ")\n" +
+          srcDecl.replace("%s", prefix)
+      )
+    );
+    files.add(source(prefix + "Tgt", head + tgtDecl.replace("%s", prefix)));
+    final var sources = files.toArray(JavaFileObject[]::new);
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> prefix + ": the pair should compile: " + plain.errorMessages());
+    return List.of(plain, bridged(sources));
+  }
+
+  /** What {@code attempt}'s result holds as {@code v}, or the refusal with its message. */
+  private static String valueHeld(final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var v = out.getClass().getMethod("getV").invoke(out);
+      return "v=" + (v instanceof Object[] array ? Arrays.deepToString(array) : v);
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
+  }
+
+  /** What {@code value} gives, with a checked failure rethrown as a reflective one. */
+  private static Object call(final Callable<Object> value) throws ReflectiveOperationException {
+    try {
+      return value.call();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new ReflectiveOperationException(e);
+    }
+  }
+
+  /** A fresh {@code type} holding {@code v}. */
+  private static Object holding(final Class<?> type, final Object v) throws ReflectiveOperationException {
+    final var sample = type.getConstructor().newInstance();
+    for (final var method : type.getMethods()) {
+      if (method.getName().equals("setV")) method.invoke(sample, v);
+    }
+    return sample;
+  }
+
+  @Test
+  @DisplayName(
+    "a value given type arguments a side fixes is refused by name on both paths when nothing shows its arguments fit"
+  )
+  void aValueGivenArgumentsThatCannotBeShownToFitIsRefusedWhenPlanned() {
+    // A generic class other than a container is held to its arguments as a container is: nothing
+    // checks a value's arguments as it is written. A wildcard argument contains only what fits its
+    // bound. A row that refuses forward is refused by a forward-only mapper and a lenient bridge
+    // too; the others refuse only backward, where a Number is handed into a variable bound by
+    // Integer.
+    record Row(String prefix, String base, String src, String tgt, List<String> others, boolean forward, String owed) {}
+    final var rows = List.of(
+      new Row(
+        "Fga",
+        ONE_VALUE_BASE,
+        "public class FgaSrc<X> extends FgaBase<X> {}\n",
+        "public class FgaTgt extends FgaBase<FgaBox<String>> {}\n",
+        List.of("public record %sBox<B>(B b) {}\n"),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "X", PACKAGE + ".FgaBox<java.lang.String>")
+      ),
+      new Row(
+        "Fgq",
+        LIST_VALUE_BASE,
+        "public class FgqSrc<T extends Integer> extends FgqBase<T> {}\n",
+        "public class FgqTgt extends FgqBase<Number> {}\n",
+        List.of(),
+        false,
+        PairingMessages.fixedArgumentsDoNotFit("v", "java.util.List<java.lang.Number>", "java.util.List<T>")
+      ),
+      new Row(
+        "Fwe",
+        WILDCARD_LIST_BASE,
+        "public class FweSrc<T> extends FweBase<T> {}\n",
+        "public class FweTgt extends FweBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends T>",
+          "java.util.List<? extends java.lang.String>"
+        )
+      ),
+      new Row(
+        "Fae",
+        GENERIC_ARRAY_BASE.replace("%2$s", "java.util.List<? extends V>"),
+        "public class FaeSrc<T> extends FaeBase<T> {}\n",
+        "public class FaeTgt extends FaeBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends T>[]",
+          "java.util.List<? extends java.lang.String>[]"
+        )
+      ),
+      new Row(
+        "Fax",
+        ARRAY_BASE,
+        "public class FaxSrc<T> extends FaxBase<T> {}\n",
+        "public class FaxTgt extends FaxBase<java.util.List<String>> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "T[]", "java.util.List<java.lang.String>[]")
+      ),
+      new Row(
+        "Fan",
+        GENERIC_ARRAY_BASE.replace("%2$s", "java.util.List<V>"),
+        "public class FanSrc<T> extends FanBase<T> {}\n",
+        "public class FanTgt extends FanBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "java.util.List<T>[]", "java.util.List<java.lang.String>[]")
+      ),
+      new Row(
+        "Fws",
+        WILDCARD_LIST_BASE,
+        "public class FwsSrc<T extends Integer> extends FwsBase<T> {}\n",
+        "public class FwsTgt extends FwsBase<Number> {}\n",
+        List.of(),
+        false,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends java.lang.Number>",
+          "java.util.List<? extends T>"
+        )
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), false);
+      final var processed = compiled.get(1);
+      if (processed.success() || !processed.hasError(row.owed())) {
+        failures.add(row.prefix() + ": the generated path should refuse it by name; saw " + processed.errorMessages());
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var builds = new ArrayList<Callable<Object>>();
+      builds.add(() -> Telescope.mapper(source, target));
+      if (row.forward()) builds.add(() -> Telescope.mapperForward(source, target));
+      for (final var build : builds) {
+        try {
+          build.call();
+          failures.add(row.prefix() + ": the runtime should refuse it by name, and built the mapper");
+        } catch (final IllegalStateException e) {
+          if (!row.owed().equals(e.getMessage())) failures.add(
+            row.prefix() + ": the runtime refused it with " + e.getMessage()
+          );
+        } catch (final Exception e) {
+          failures.add(row.prefix() + ": the runtime failed with " + e);
+        }
+      }
+      if (row.forward()) {
+        final var lenient = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), true).get(1);
+        if (lenient.success() || !lenient.hasError(row.owed())) {
+          failures.add(row.prefix() + ": a lenient bridge should refuse it by name; saw " + lenient.errorMessages());
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a variable whose bound fits the class the target fixes converts forward with no check, on both paths")
+  void aBoundThatFitsTheFixedClassConvertsForwardWithNoCheck() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    // A list of a variable bound by Integer into a list of Number, held as itself or through a
+    // wildcard: forward fits, and a forward-only mapper and a lenient bridge, which plan nothing
+    // backward, convert it.
+    for (final var shape : List.of(List.of("Fgl", LIST_VALUE_BASE), List.of("Fwl", WILDCARD_LIST_BASE))) {
+      final var prefix = shape.get(0);
+      final var list = valuePair(
+        prefix,
+        shape.get(1),
+        "public class %sSrc<T extends Integer> extends %sBase<T> {}\n",
+        "public class %sTgt extends %sBase<Number> {}\n",
+        List.of(),
+        true
+      );
+      if (!list.get(1).success()) {
+        failures.add(prefix + ": the lenient bridge should compile: " + list.get(1).errorMessages());
+        continue;
+      }
+      final var classes = list.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(list.get(1), list.get(0), prefix);
+      final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
+      final var bridge = emitted(list.get(1), list.get(0), prefix, nested);
+      final var viaBridge = valueHeld(() ->
+        bridge.getMethod("forward", source).invoke(null, holding(source, new ArrayList<>(List.of(1))))
+      );
+      final var viaRuntime = valueHeld(() -> mapper.forward(holding(source, new ArrayList<>(List.of(1)))));
+      for (final var seen : List.of(viaBridge, viaRuntime)) {
+        if (!"v=[1]".equals(seen)) failures.add(prefix + ": forward gave " + seen + ", owed v=[1]");
+      }
+    }
+    // A single value of a variable bound by Integer into a property fixed to Number: forward fits
+    // and checks nothing, while backward checks a Number against the bound.
+    final var single = valuePair(
+      "Fgr",
+      ONE_VALUE_BASE,
+      "public class FgrSrc<T extends Integer> extends FgrBase<T> {}\n",
+      "public class FgrTgt extends FgrBase<Number> {}\n",
+      List.of(),
+      false
+    );
+    assertTrue(single.get(1).success(), () -> "Fgr: the bridge should compile: " + single.get(1).errorMessages());
+    final var generated = single
+      .get(1)
+      .generated()
+      .entrySet()
+      .stream()
+      .filter(e -> e.getKey().endsWith("FgrSrcBridge"))
+      .map(Map.Entry::getValue)
+      .findFirst()
+      .orElseThrow();
+    final var forwardStart = generated.indexOf("forward(final ");
+    final var forwardBody = generated.substring(forwardStart, generated.indexOf("backward(final ", forwardStart));
+    if (forwardBody.contains("FixedClass")) failures.add("Fgr: the generated forward checks a value its bound proves");
+    final var classes = single.get(0).define(MethodHandles.lookup());
+    final Class<Object> source = cast(classes.get(PACKAGE + ".FgrSrc"));
+    final Class<Object> target = cast(classes.get(PACKAGE + ".FgrTgt"));
+    final var nested = nestedBridgesFirst(single.get(1), single.get(0), "Fgr");
     final var mapper = Telescope.mapper(source, target);
-    final var bridge = emitted(processed, plain, "Ptw", nested);
-    final var name = "an Integer into a property the target fixes to String";
-    final Attempt generated = () ->
-      bridge.getMethod("forward", source).invoke(null, passThroughSample(source, "k", 42, List.of()));
-    final Attempt reflective = () -> mapper.forward(passThroughSample(source, "k", 42, List.of()));
-    final var seen = List.of(firstHeld(generated), firstHeld(reflective));
-    assertTrue(
-      UNCHECKED_WRITE_DIVERGENCES.keySet().equals(Set.of(name)),
-      () -> "registered divergences with no row: " + UNCHECKED_WRITE_DIVERGENCES.keySet()
+    final var bridge = emitted(single.get(1), single.get(0), "Fgr", nested);
+    final var forwardOwed = "v=1";
+    final var backwardOwed =
+      REFUSED +
+      "ClassCastException: " +
+      PairingMessages.fixedClassMismatch(source.getTypeName(), "v", "java.lang.Double", "java.lang.Integer");
+    final var seen = List.of(
+      valueHeld(() -> bridge.getMethod("forward", source).invoke(null, holding(source, 1))),
+      valueHeld(() -> mapper.forward(holding(source, 1))),
+      valueHeld(() -> bridge.getMethod("backward", target).invoke(null, holding(target, 2.5))),
+      valueHeld(() -> mapper.backward(holding(target, 2.5)))
     );
-    assertTrue(
-      seen.equals(UNCHECKED_WRITE_DIVERGENCES.get(name)),
-      () -> name + ": generated and runtime gave " + seen + ", registered " + UNCHECKED_WRITE_DIVERGENCES.get(name)
+    final var owed = List.of(forwardOwed, forwardOwed, backwardOwed, backwardOwed);
+    if (!seen.equals(owed)) failures.add("Fgr: generated, runtime, then both backward gave " + seen + ", owed " + owed);
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a value given type arguments that provably fit converts both ways on both paths")
+  void aValueGivenArgumentsThatFitConvertsBothWays() throws ReflectiveOperationException {
+    // A variable bounded by the parameterized class the other side fixes, two sides that both pass
+    // their variable through, a list of values that fit a variable bound by the class the other
+    // side fixes, held through a wildcard on both, and an array of lists, given by a bounded
+    // variable or fixed on both sides: none is refused, and nothing is lost either way.
+    record Row(String prefix, String base, String src, String tgt) {}
+    final var rows = List.of(
+      new Row(
+        "Fgb",
+        ONE_VALUE_BASE,
+        "public class FgbSrc<T extends FgbBox<String>> extends FgbBase<T> {}\n",
+        "public class FgbTgt extends FgbBase<FgbBox<String>> {}\n"
+      ),
+      new Row(
+        "Fgu",
+        ONE_VALUE_BASE,
+        "public class FguSrc<X> extends FguBase<X> {}\n",
+        "public class FguTgt<Y> extends FguBase<Y> {}\n"
+      ),
+      new Row(
+        "Fwk",
+        WILDCARD_LIST_BASE,
+        "public class FwkSrc<T extends Integer> extends FwkBase<T> {}\n",
+        "public class FwkTgt extends FwkBase<Integer> {}\n"
+      ),
+      new Row(
+        "Fas",
+        ARRAY_BASE,
+        "public class FasSrc<T extends java.util.List<String>> extends FasBase<T> {}\n",
+        "public class FasTgt extends FasBase<java.util.List<String>> {}\n"
+      ),
+      new Row(
+        "Faf",
+        ARRAY_BASE,
+        "public class FafSrc extends FafBase<java.util.List<String>> {}\n",
+        "public class FafTgt extends FafBase<java.util.List<String>> {}\n"
+      )
     );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(
+        row.prefix(),
+        row.base(),
+        row.src(),
+        row.tgt(),
+        List.of("public record %sBox<B>(B b) {}\n"),
+        false
+      );
+      if (!compiled.get(1).success()) {
+        failures.add(row.prefix() + ": the bridge should compile: " + compiled.get(1).errorMessages());
+        continue;
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var box = classes.get(PACKAGE + "." + row.prefix() + "Box").getConstructor(Object.class);
+      final var listed = row.base().equals(WILDCARD_LIST_BASE);
+      final var arrayed = row.base().equals(ARRAY_BASE);
+      final Callable<Object> value = () ->
+        listed ? new ArrayList<>(List.of(1)) : arrayed ? new List<?>[] { List.of("a") } : box.newInstance("a");
+      final var nested = nestedBridgesFirst(compiled.get(1), compiled.get(0), row.prefix());
+      final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(compiled.get(1), compiled.get(0), row.prefix(), nested);
+      final var owed = listed ? "v=[1]" : arrayed ? "v=[[a]]" : "v=" + row.prefix() + "Box[b=a]";
+      final var seen = List.of(
+        valueHeld(() -> bridge.getMethod("forward", source).invoke(null, holding(source, call(value)))),
+        valueHeld(() -> mapper.forward(holding(source, call(value)))),
+        valueHeld(() -> bridge.getMethod("backward", target).invoke(null, holding(target, call(value)))),
+        valueHeld(() -> mapper.backward(holding(target, call(value))))
+      );
+      if (!seen.stream().allMatch(owed::equals)) {
+        failures.add(row.prefix() + ": gave " + seen + ", owed " + owed + " four times");
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a container only the backward direction cannot fit converts forward, on both paths")
+  void aContainerOnlyBackwardCannotFitConvertsForward() throws ReflectiveOperationException {
+    // A forward-only mapper and a lenient bridge have no backward to plan, so a pair that only the
+    // backward direction refuses converts forward.
+    final var head = "package " + PACKAGE + ";\n";
+    final var sources = new JavaFileObject[] {
+      source("PtfBase", head + PASS_THROUGH_BASE.replace("%s", "Ptf")),
+      source(
+        "PtfSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtfTgt.class, lenient = true)\n" +
+          "public class PtfSrc extends PtfBase<String, String> {}\n"
+      ),
+      source("PtfTgt", head + "public class PtfTgt<Y> extends PtfBase<String, Y> {}\n"),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    final var processed = bridged(sources);
+    assertTrue(processed.success(), () -> "the lenient bridge should compile: " + processed.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> source = cast(classes.get(PACKAGE + ".PtfSrc"));
+    final Class<Object> target = cast(classes.get(PACKAGE + ".PtfTgt"));
+    final var nested = nestedBridgesFirst(processed, plain, "Ptf");
+    final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
+    final var bridge = emitted(processed, plain, "Ptf", nested);
+    final var owed = "key=k, first=a, items=[b, c] in a fresh ArrayList";
+    final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
+    final var viaBridge = passedThrough(() -> bridge.getMethod("forward", source).invoke(null, srcSample), srcSample);
+    final var viaRuntime = passedThrough(() -> mapper.forward(srcSample), srcSample);
+    assertTrue(owed.equals(viaBridge), () -> "generated gave " + viaBridge + ", owed " + owed);
+    assertTrue(owed.equals(viaRuntime), () -> "runtime gave " + viaRuntime + ", owed " + owed);
   }
 
   /**
@@ -4985,16 +5607,20 @@ class CrossPathCorpusTest {
     );
   }
 
-  /** What {@code attempt}'s result holds as first, with that value's class, or the refusal. */
+  /**
+   * What {@code attempt}'s result holds as first, with that value's class, or the refusal with its
+   * message.
+   */
   private static String firstHeld(final Attempt attempt) {
     try {
       final var out = attempt.get();
       final var first = out.getClass().getMethod("getFirst").invoke(out);
       return "first=" + first + ", a " + first.getClass().getName();
     } catch (final InvocationTargetException e) {
-      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName() + ": " + cause.getMessage();
     } catch (final ReflectiveOperationException | RuntimeException e) {
-      return REFUSED + e.getClass().getSimpleName();
+      return REFUSED + e.getClass().getSimpleName() + ": " + e.getMessage();
     }
   }
 

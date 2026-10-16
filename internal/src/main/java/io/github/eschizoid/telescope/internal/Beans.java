@@ -719,6 +719,19 @@ public final class Beans {
     return PROPS.memberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), beanClass);
   }
 
+  /**
+   * A bean property's type as a member of {@code beanClass}, with every type variable its
+   * superclass chain passes through read as the variable it is passed as, so a variable {@code
+   * beanClass} declares, and its bound, stay in it.
+   */
+  public static Type resolvedPropertyType(final Class<?> beanClass, final String name) {
+    final var getter = getters(beanClass).get(name);
+    if (getter == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return PROPS.resolvedMemberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), beanClass);
+  }
+
   private static Map<String, Method> getters(final Class<?> cls) {
     return GETTERS.get(cls);
   }
