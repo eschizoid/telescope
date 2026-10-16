@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -26,9 +28,13 @@ import org.junit.jupiter.api.Test;
  * is a defect unless {@link #KNOWN_DIVERGENCES} carries it, and a mutual refusal owes an entry in
  * {@link #KNOWN_REFUSALS}, because two refusals agree while measuring nothing.
  *
- * <p>Sources compile without {@code -parameters}, which is what an ordinary build passes. The flag
- * changes one route's outcome, and {@link #theConstructorRouteAgreesWhenParameterNamesArePresent}
- * pins that rather than hiding it behind a compile option no adopter sets by default.
+ * <p>Sources compile without {@code -parameters}, which is what an ordinary build passes. The
+ * constructor route is the one whose outcome turns on how the class was compiled, because the
+ * runtime matches its arguments by parameter name and reads the names from {@code -parameters} or
+ * from the debug information {@code -g} keeps. The grid defines its classes through a lookup, which
+ * leaves no class bytes to read, so that route runs in its own tests, each under the compile
+ * options it is about and from a loader that serves each class's bytes as a class-path directory
+ * does.
  */
 class BeanRebuildCorpusTest {
 
@@ -46,10 +52,6 @@ class BeanRebuildCorpusTest {
       "setters",
       "private %2$s p;\n  public %2$s getP() { return p; }\n  public void setP(%2$s p) { this.p = p; }\n" +
         "  public %1$sTgt() {}\n"
-    ),
-    new Route(
-      "ctor",
-      "private final %2$s p;\n  public %1$sTgt(%2$s p) { this.p = p; }\n  public %2$s getP() { return p; }\n"
     ),
     new Route(
       "builder",
@@ -84,6 +86,12 @@ class BeanRebuildCorpusTest {
     )
   );
 
+  /** A public constructor named after the property, the route the compile options decide. */
+  private static final Route CTOR = new Route(
+    "ctor",
+    "private final %2$s p;\n  public %1$sTgt(%2$s p) { this.p = p; }\n  public %2$s getP() { return p; }\n"
+  );
+
   /** The property a cell carries: its type on each side, and the rendering both paths owe. */
   private record Shape(String name, String srcType, String tgtType, String rendered) {}
 
@@ -103,22 +111,17 @@ class BeanRebuildCorpusTest {
    * one fails, and an entry whose cell has stopped differing fails too.
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.ofEntries(
-    // The runtime matches constructor arguments by parameter name, which javac keeps only
-    // under
-    // -parameters; the processor reads them from the compilation unit and needs no flag.
-    Map.entry("ctor/scalar", new Verdict(true, false)),
-    Map.entry("ctor/record", new Verdict(true, false)),
-    Map.entry("ctor/list", new Verdict(true, false)),
-    // The runtime calls a private no-arg constructor through a private lookup. The bridge is
-    // ordinary source in another class and cannot call it.
+    // Inherent, in this entry and the two after it: a private constructor. The runtime
+    // calls it through a private lookup; the bridge is ordinary source in another class and
+    // cannot.
     Map.entry("private-setters/scalar", new Verdict(false, true)),
     Map.entry("private-setters/record", new Verdict(false, true)),
     Map.entry("private-setters/list", new Verdict(false, true)),
-    // A final field may be given its value where it is declared, which no strategy writes.
-    // The
-    // runtime cannot see initializers and so asks no builder to carry a final field; the
-    // processor
-    // sees this one has none, and refuses a builder that would build the bean without it.
+    // Inherent, in this entry and the two after it: a final field with no initializer that
+    // the builder has no member for. The processor sees from source that only a strategy
+    // gives it a value, and refuses the builder. The runtime cannot tell such a field from
+    // a final one given a non-constant value where it is declared, because neither leaves a
+    // trace in the class file, so it builds the bean.
     Map.entry("memberless-builder-final/scalar", new Verdict(false, true)),
     Map.entry("memberless-builder-final/record", new Verdict(false, true)),
     Map.entry("memberless-builder-final/list", new Verdict(false, true))
@@ -143,12 +146,16 @@ class BeanRebuildCorpusTest {
   );
 
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
+    // Agreement, not a difference, in this entry and the two after it: both paths refuse by
+    // name a target they could only write through its private fields.
     "fields/scalar",
     NO_WRITE_SURFACE,
     "fields/record",
     NO_WRITE_SURFACE,
     "fields/list",
     NO_WRITE_SURFACE,
+    // Agreement, not a difference, in this entry and the two after it: both paths refuse by
+    // name a builder that cannot carry a property only a strategy sets.
     "memberless-builder/scalar",
     BUILDER_CANNOT_CARRY,
     "memberless-builder/record",
@@ -214,16 +221,43 @@ class BeanRebuildCorpusTest {
   }
 
   @Test
+  @DisplayName("the constructor route agrees in an ordinary build, which keeps parameter names as debug info")
+  void theConstructorRouteAgreesWhenDebugInfoKeepsTheNames() {
+    // Gradle and Maven compile with -g and without -parameters. The names are then in the
+    // constructor's local variable table alone, which the runtime reads from the class's bytes.
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var shape : SHAPES) {
+      final var prefix = "Bg" + index++;
+      final var outcomes = run(prefix, CTOR, shape, List.of("-g"), true);
+      final var want = new Outcome(shape.rendered().formatted(prefix), true);
+      if (!want.equals(outcomes.get(0)) || !want.equals(outcomes.get(1))) {
+        failures.add(shape.name() + ": generated " + outcomes.get(0) + ", reflective " + outcomes.get(1));
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " shape(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("the constructor route diverges only when the class keeps no parameter names at all")
+  void theConstructorRouteDivergesWhenNoNamesAreKept() {
+    // Inherent: with neither -parameters nor a local variable table the class file holds no names,
+    // so the runtime has nothing to match the arguments by and refuses by name. The processor reads
+    // them from the compilation unit and converts.
+    final var outcomes = run("BgNone", CTOR, SHAPES.getFirst(), List.of("-g:none"), true);
+
+    assertTrue("hello".equals(outcomes.get(0).text()), () -> "the generated path should convert: " + outcomes);
+    assertTrue(
+      !outcomes.get(1).converted() && outcomes.get(1).text().contains("javac -parameters or -g"),
+      () -> "the runtime should refuse and name both ways to keep the names: " + outcomes.get(1)
+    );
+  }
+
+  @Test
   @DisplayName("the constructor route agrees once the source carries parameter names")
   void theConstructorRouteAgreesWhenParameterNamesArePresent() {
-    // The register above records this route diverging, which is true of an ordinary build. The flag
-    // is the whole of the difference, so the same cell is run again with it to say so — and to fail
-    // if the runtime ever stops reading names it was given.
-    final var ctor = ROUTES.stream()
-      .filter(r -> r.name().equals("ctor"))
-      .findFirst()
-      .orElseThrow();
-    final var outcomes = run("BrParam", ctor, SHAPES.getFirst(), List.of("-parameters"));
+    // -parameters keeps the names where reflection reads them, so no class bytes are needed.
+    final var outcomes = run("BrParam", CTOR, SHAPES.getFirst(), List.of("-parameters"));
 
     assertTrue(outcomes.get(0).converted(), () -> "the generated path should convert: " + outcomes.get(0));
     assertTrue(outcomes.get(1).converted(), () -> "the reflective path should convert: " + outcomes.get(1));
@@ -441,26 +475,46 @@ class BeanRebuildCorpusTest {
     }
   }
 
-  /** Both paths' outcomes for one cell, generated first. */
+  /** Both paths' outcomes for one cell, generated first, over classes defined through a lookup. */
   private static List<Outcome> run(
     final String prefix,
     final Route route,
     final Shape shape,
     final List<String> options
   ) {
+    return run(prefix, route, shape, options, false);
+  }
+
+  /**
+   * Both paths' outcomes for one cell, generated first. With {@code servesBytes} the classes come
+   * from a loader that answers each one's {@code .class} resource with its bytes, as a class-path
+   * directory does; otherwise they are defined through this class's lookup, which keeps no bytes.
+   */
+  private static List<Outcome> run(
+    final String prefix,
+    final Route route,
+    final Shape shape,
+    final List<String> options,
+    final boolean servesBytes
+  ) {
     final var sources = sources(prefix, route, shape);
     final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), options, sources);
     final var plain = ProcessorHarness.compileFully(List.of(), options, sources);
     assertTrue(plain.success(), () -> prefix + " should compile without the processor: " + plain.errorMessages());
     try {
-      final var classes = plain.define(MethodHandles.lookup());
+      final var classes = servesBytes ? loadServingBytes(processed, plain) : plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
       final var getP = tgt.getMethod("getP");
       final var source = src.getConstructor().newInstance();
       src.getMethod("setP", src.getMethod("getP").getReturnType()).invoke(source, property(classes, prefix, shape));
 
-      final var forward = processed.success() ? bridgeOf(processed, plain, prefix).getMethod("forward", src) : null;
+      final var bridge = !processed.success()
+        ? null
+        : servesBytes
+          ? classes.get(PACKAGE + "." + prefix + "SrcBridge")
+          : bridgeOf(processed, plain, prefix);
+      final var forward = bridge == null ? null : bridge.getMethod("forward", src);
       final var generated =
         forward == null
           ? new Outcome(processed.errorMessages().strip(), false)
@@ -469,6 +523,48 @@ class BeanRebuildCorpusTest {
       return List.of(generated, reflective);
     } catch (final ReflectiveOperationException e) {
       throw new IllegalStateException(prefix + " could not be built", e);
+    }
+  }
+
+  /**
+   * Loads every class both compilations produced through one {@link BytesServingLoader}, so the
+   * bridge sits in the same runtime package as the classes it converts.
+   */
+  private static Map<String, Class<?>> loadServingBytes(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain
+  ) throws ClassNotFoundException {
+    final var bytes = new LinkedHashMap<>(processed.classes());
+    bytes.putAll(plain.classes());
+    final var loader = new BytesServingLoader(bytes);
+    final var loaded = new LinkedHashMap<String, Class<?>>();
+    for (final var name : bytes.keySet()) loaded.put(name, Class.forName(name, false, loader));
+    return loaded;
+  }
+
+  /** Defines compiled classes and answers each one's {@code .class} resource with its bytes. */
+  private static final class BytesServingLoader extends ClassLoader {
+
+    private final Map<String, byte[]> classes;
+
+    BytesServingLoader(final Map<String, byte[]> classes) {
+      super(BeanRebuildCorpusTest.class.getClassLoader());
+      this.classes = Map.copyOf(classes);
+    }
+
+    @Override
+    protected Class<?> findClass(final String name) throws ClassNotFoundException {
+      final var bytes = classes.get(name);
+      if (bytes == null) throw new ClassNotFoundException(name);
+      return defineClass(name, bytes, 0, bytes.length);
+    }
+
+    @Override
+    public InputStream getResourceAsStream(final String name) {
+      final var bytes = name.endsWith(".class")
+        ? classes.get(name.substring(0, name.length() - ".class".length()).replace('/', '.'))
+        : null;
+      return bytes != null ? new ByteArrayInputStream(bytes) : super.getResourceAsStream(name);
     }
   }
 

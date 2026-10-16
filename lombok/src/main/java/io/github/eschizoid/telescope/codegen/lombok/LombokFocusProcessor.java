@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
-import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
@@ -46,7 +44,6 @@ import javax.lang.model.util.ElementFilter;
  * same-module main code is resolved.
  */
 @SupportedAnnotationTypes({ "lombok.Data", "lombok.Value", "lombok.Builder" })
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
 
   /**

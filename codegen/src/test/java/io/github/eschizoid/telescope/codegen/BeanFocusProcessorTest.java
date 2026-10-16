@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 class BeanFocusProcessorTest {
 
   private static Compilation compile(final JavaFileObject... sources) {
-    return ProcessorHarness.compile(new BeanFocusProcessor(), sources);
+    return NavigatorCompiler.warningFree(List.of(new BeanFocusProcessor(), new BridgeProcessor()), sources);
   }
 
   @Nested

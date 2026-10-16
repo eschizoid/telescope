@@ -130,9 +130,11 @@ to(OrderTelescope.of().customer().address().city(), OrderDto::city)
 All three shapes covered: nested source -> flat target, flat source -> nested target (with automatic intermediate
 allocation for record intermediates, described in the 'Intermediate allocation' paragraph of `to(Accessor, Telescope)`
 in Mapping.java), and nested -> nested. Paths are typed Telescope values instead of dotted strings, so javac checks
-every hop. Rows using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's
-per-method @Mapping. Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for
-bean intermediates lacking a no-arg ctor/builder.
+every hop. A source path is started at the mapper's source; one whose first property is read through a class the source
+neither is nor extends is refused when the mapper is built, and by the compile-time verifier where it can tell. Rows
+using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's per-method @Mapping.
+Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for bean intermediates
+lacking a no-arg ctor/builder.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
@@ -770,34 +772,37 @@ record UserDto(String fullName, String email, AddressDto address) {}
 final Mapper<UserEntity, UserDto> m = Telescope.mapper(
     UserEntity.class, UserDto.class,
     to(UserEntity::name, UserDto::fullName));   // same-name fields auto-mapped
-// immutable all-args-only POJO target (compile with -parameters for name matching):
+// immutable all-args-only POJO target; the hint binds by parameter name when -parameters or -g
+// keeps the names and every one names a property, by position when none does, and refuses a
+// constructor only some of whose names are properties:
 Telescope.mapper(OrderRecord.class, ImmutablePojo.class,
     writeBean(ImmutablePojo.class, WriteStrategy.CONSTRUCTOR));
 ```
 
 Records are the native happy path — canonical-constructor rebuild is the default everywhere (deep mapping, patch, @Focus
 codegen), no configuration needed. Immutable non-record classes work via the CONSTRUCTOR write strategy: auto-detected
-when there is exactly one public all-args constructor compiled with -parameters and parameter names align with
-getter-derived properties; otherwise pin with writeBean(X.class, CONSTRUCTOR). Same -parameters dependency MapStruct has
-for name-based constructor matching. No @Default-style disambiguation among multiple constructors — a class with more
-than one constructor of the property-count arity is never auto-selected for the constructor strategy (`Beans`'
-`solePublicConstructor`) and is refused when nothing else applies, but the writeBean hint plus the single-ctor rule
-covers the practical cases. Verified limitation: no counterpart to MapStruct's @Default — a target with multiple
-same-arity constructors cannot be disambiguated (records: full; single-ctor immutables: full with -parameters;
-multi-constructor immutables: unsupported).
+when there is exactly one public all-args constructor whose parameter names are known (from -parameters, or from the
+local variable table -g keeps) and align with getter-derived properties; otherwise pin with writeBean(X.class,
+CONSTRUCTOR). No @Default-style disambiguation among multiple constructors — a class with more than one constructor of
+the property-count arity is never auto-selected for the constructor strategy (`Beans`' `solePublicConstructor`) and is
+refused when nothing else applies, but the writeBean hint plus the single-ctor rule covers the practical cases. Verified
+limitation: no counterpart to MapStruct's @Default — a target with multiple same-arity constructors cannot be
+disambiguated (records: full; single-ctor immutables: full with -parameters or -g; multi-constructor immutables:
+unsupported).
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Records.java, `RecordInfo` and its
 `buildCtorFn` (cached canonical-constructor invoker per record class, components in canonical order, MethodHandle
 asSpreader); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, the `patch` javadoc ('Records:
 rebuilds via the canonical constructor'); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java,
-`ConstructorWriter` (name-matched with -parameters, positional fallback) and `computeAutoWriter` (the constructor is
-autoWriter's second rung, after a builder and before setters, guarded by -parameters and a name-alignment check, with a
-loud error otherwise); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, the `WriteStrategy` enum
-(CONSTRUCTOR strategy docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the record↔record
-fixtures at the top of the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested
-record mapper), and the `WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip',
-'autoWriter constructor fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws
-cleanly for ambiguous multi-ctor POJO when no hint is supplied'</sub>
+`ConstructorWriter` (name-matched when the names are known, positional fallback) and `computeAutoWriter` (the
+constructor is autoWriter's second rung, after a builder and before setters, guarded by known parameter names and a
+name-alignment check, with a loud error otherwise);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, the `WriteStrategy` enum (CONSTRUCTOR strategy
+docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the record↔record fixtures at the top of
+the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested record mapper), and the
+`WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip', 'autoWriter constructor
+fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws cleanly for ambiguous
+multi-ctor POJO when no hint is supplied'</sub>
 
 ## Policies & null handling
 
@@ -955,8 +960,8 @@ additionally null-short-circuit before the predicate) and whole-source predicate
 @Condition. What's missing is MapStruct's blanket application: one @Condition method automatically gates EVERY property
 of the matching type across the mapper, while telescope requires one row per gated field — real repetition on wide DTOs.
 Also: when(...) wraps only telescope-based rows (plain to(srcAcc, tgtAcc)/via/drop rejected at construction with a
-pointer to toOrElse), when(...) pins its predicate to the top-level source pair (not nested pairs), and there is no
-conditional analog on the patch/update path.
+pointer to toOrElse), when(...) is keyed to the type pair its inner row is keyed to, so its predicate receives the
+source converted at that pair, and there is no conditional analog on the patch/update path.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
 javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the
@@ -1153,11 +1158,14 @@ Function<Payment, PaymentDto> dispatch = Match.<Payment, PaymentDto>of(Payment.c
 
 For sealed hierarchies the coverage is real and in one way stronger — .exhaustive() names every uncovered permit, and
 the @Bridge codegen path refuses at compile time a sealed-to-sealed pair whose source permits do not each carry a
-@Bridge to a permit of the sealed target. Two genuine gaps versus @SubclassMapping: (1) Match.of() rejects non-sealed
-roots, so plain abstract-class hierarchies (common in legacy JPA models) have no dispatcher — closest workaround is a
-hand-rolled instanceof chain; (2) per-permit handlers are independent mappers with no automatic inheritance of shared
-parent-field config (mitigable by sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual). The
-project's own README names @SubclassMapping over open hierarchies as a reason to pick MapStruct.
+@Bridge to a permit of the sealed target. The runtime mapper dispatches the same way:
+`Telescope.mapper(Payment.class, PaymentDto.class)` pairs each permit through its own @Bridge, or through a
+`cases(CreditCard.class, CardDto.class)` row where there is no codegen, and refuses an unpaired permit by name when it
+is built. Two genuine gaps versus @SubclassMapping: (1) Match.of() rejects non-sealed roots, so plain abstract-class
+hierarchies (common in legacy JPA models) have no dispatcher — closest workaround is a hand-rolled instanceof chain; (2)
+per-permit handlers are independent mappers with no automatic inheritance of shared parent-field config (mitigable by
+sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual). The project's own README names
+@SubclassMapping over open hierarchies as a reason to pick MapStruct.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Match.java, `of` (rejects non-sealed roots),
 `when` (Prism.downcast-routed dispatch), `exhaustive()` (verifies coverage via Class.getPermittedSubclasses), and

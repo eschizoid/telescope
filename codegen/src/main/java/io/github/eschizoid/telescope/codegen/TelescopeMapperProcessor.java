@@ -11,8 +11,6 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
-import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
@@ -35,7 +33,6 @@ import javax.lang.model.util.ElementFilter;
     "io.github.eschizoid.telescope.annotations.TelescopeTransformer",
   }
 )
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private static final String MAPPER = "io.github.eschizoid.telescope.annotations.TelescopeMapper";

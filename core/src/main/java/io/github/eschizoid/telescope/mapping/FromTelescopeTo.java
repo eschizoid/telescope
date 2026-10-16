@@ -27,8 +27,8 @@ public record FromTelescopeTo<A, B, X>(
 ) implements Mapping<A, B> {
   /**
    * Returns {@code null} — the source side is a {@link Telescope}, which names no pair of its own.
-   * The engine pins the row to the outer mapper pair via {@code DeepMap.groupOverridesByPair}'s
-   * top-source substitution, and keys its target side there too.
+   * The engine keys the row's source side to the mapper's source and starts the path there, or
+   * refuses a path that cannot start there when the mapper is built.
    */
   @Override
   public Class<A> sourceClass() {

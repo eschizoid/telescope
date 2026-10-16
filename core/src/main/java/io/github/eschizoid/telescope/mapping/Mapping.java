@@ -429,7 +429,8 @@ public sealed interface Mapping<A, B>
    * <p>The mapper can be at <em>element-level</em> or at <em>accessor-level</em>; telescope detects
    * which one the user passed and lifts through {@code List} / {@code Set} / {@code Optional} /
    * {@code Map<K, V>} automatically when the accessor returns a container and the mapper's
-   * source/target classes are the element types.
+   * source/target classes are the element types. An element typed by a type variable counts when
+   * the variable's bound admits the mapper's class.
    *
    * <pre>{@code
    * via(UserEntity::address,  UserDto::address,  addressMapper)   // scalar pair, no lift
@@ -604,9 +605,13 @@ public sealed interface Mapping<A, B>
   /**
    * Predicate-gated wrapper around a telescope-based row — closes MapStruct's {@code @Condition}
    * for whole-source predicate gating. The inner row's forward effect applies only when {@code
-   * predicate.test(source)} returns {@code true}; otherwise it is skipped. Backward direction
-   * applies the inner row unconditionally — by the time we have a target, the original source is
-   * gone, so the predicate isn't checkable on the reverse leg.
+   * predicate.test(source)} returns {@code true}; otherwise it is skipped. The row is keyed to the
+   * type pair {@code inner} is keyed to, and {@code source} is the instance converted at that pair:
+   * the instance the source accessor reads for {@code to(srcAcc, targetTelescope)}, and an instance
+   * of the mapper's source for the other rows, which may be a nested one when the target accessor
+   * of {@code to(srcTelescope, tgtAcc)} names a nested pair. A row whose inner row is keyed to a
+   * pair the mapper never visits is refused when the mapper is built, as {@code inner} is
+   * unwrapped. The backward direction skips the row, as described below.
    *
    * <pre>{@code
    * Telescope.mapper(Order.class, OrderDto.class,

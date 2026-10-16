@@ -9,8 +9,8 @@ import io.github.eschizoid.telescope.Telescope;
  *
  * <p>With no hint, a bean is built through the first of these it offers: a static {@code
  * builder()}, then a public all-args constructor whose parameter names match the properties
- * (compiled with {@code -parameters}), then a no-arg constructor with setters. The generated
- * {@code @Bridge}, {@code @BeanFocus} and {@code @FromMap} code takes the same order.
+ * (compiled with {@code -parameters} or {@code -g}), then a no-arg constructor with setters. The
+ * generated {@code @Bridge}, {@code @BeanFocus} and {@code @FromMap} code takes the same order.
  *
  * <p>Closes the gap on immutable all-args-only POJOs (no builder, no no-arg constructor) by letting
  * the user pin {@link WriteStrategy#CONSTRUCTOR}. Also useful when several strategies apply and the
@@ -55,7 +55,12 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    *   <li>{@link #BUILDER} — requires a static {@code builder()} method on the target
    *   <li>{@link #SETTERS} — requires a no-arg constructor and public {@code setX(value)} setters
    *   <li>{@link #CONSTRUCTOR} — uses the all-args constructor; matches arguments by parameter name
-   *       when compiled with {@code -parameters}, otherwise positional
+   *       when the names are known, from {@code -parameters} or from {@code -g}, and every one
+   *       names a property; by position when the names are unknown or none names a property. A
+   *       constructor only some of whose known names are properties is refused when the mapper is
+   *       built, or on first conversion under a {@code writeBeans(...)} default. Inside a native
+   *       image the names {@code -g} keeps cannot be read, so compile with {@code -parameters} to
+   *       get this check there
    * </ul>
    */
   enum WriteStrategy {
@@ -94,6 +99,10 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * reaches that target, so a default strategy incompatible with a particular target (e.g., {@code
    * BUILDER} on a class with no static {@code builder()}) only throws when that target is actually
    * visited.
+   *
+   * <p>The default is a mapper-wide runtime-only setting. A mapper-wide runtime-only setting walks
+   * every pair, sealed cases included, so the settings of a nested pair's or a case's own bridge do
+   * not apply under it.
    */
   static WriteHint<?> writeBeans(final WriteStrategy strategy) {
     return new DefaultWriteHint(strategy);

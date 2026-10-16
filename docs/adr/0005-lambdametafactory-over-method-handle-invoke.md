@@ -37,6 +37,14 @@ Phased rollout (one PR per phase, all `:core`, all pure substrate swaps with no 
 - **Phase 5 (#14):** Rebuild paths — canonical record `Constructor` and the no-arg-ctor + `Field` writers, plus
   `Records.construct(...)`.
 
+> **Amendment (2026-10-10).** Discovery may read a class file as well as reflect on the class, and dispatch does
+> neither. A constructor's parameter names are kept by reflection only under `-parameters`, and in the constructor's
+> `LocalVariableTable` under `-g`, the debug level Gradle and Maven compile with by default. When reflection has no
+> names, `ParameterNames` reads the class's own bytes once per class, through the class's own loader, and takes the
+> names from that table. Nothing it reads is consulted per call: the writer it informs is built once and cached like
+> every other discovered member. Inside a native image there are no class bytes, so the names are unknown there unless
+> the class kept them under `-parameters`.
+
 ## Consequences
 
 - **Perf delta is real, not the marginal one ADR-0003 measured.** Cached LMF functional interfaces let the JIT inline

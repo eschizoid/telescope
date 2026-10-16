@@ -9,6 +9,7 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.time.temporal.Temporal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
@@ -86,6 +87,11 @@ public final class ReflectionProps implements PropertySystem<Type> {
   @Override
   public boolean isInterfaceType(final Type t) {
     return t instanceof Class<?> c && c.isInterface();
+  }
+
+  @Override
+  public boolean isSealedInterfaceType(final Type t) {
+    return rawType(t) instanceof Class<?> c && c.isInterface() && c.isSealed();
   }
 
   @Override
@@ -225,6 +231,18 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public Type componentType(final Type t) {
+    return componentOf(t);
+  }
+
+  @Override
+  public Type upperBound(final Type t) {
+    if (!(t instanceof WildcardType wildcard)) return null;
+    final var upper = wildcard.getUpperBounds()[0];
+    return upper == Object.class ? null : upper;
+  }
+
+  @Override
   public Type lowerBound(final Type t) {
     return t instanceof WildcardType wildcard && wildcard.getLowerBounds().length > 0
       ? wildcard.getLowerBounds()[0]
@@ -253,8 +271,19 @@ public final class ReflectionProps implements PropertySystem<Type> {
    * a pair sharing the superclass see the same variable, and the property copies as same-typed.
    */
   public Type memberOf(final Type type, final Class<?> declaring, final Class<?> owner) {
-    final var resolved = resolve(type, declaring, argumentsAs(owner, declaring));
+    final var resolved = resolvedMemberOf(type, declaring, owner);
     return mentionsTypeVariable(resolved) ? type : resolved;
+  }
+
+  /**
+   * {@code type}, read off a member {@code declaring} declares, with each type variable of {@code
+   * declaring} replaced by the argument {@code owner}'s superclass chain gives it, a variable
+   * {@code owner} declares included. A subclass {@code class Page<T extends Integer> extends
+   * Base<T>} reads {@code Base}'s {@code List<V>} as {@code List<T>}, whose bound says what the
+   * values it holds are.
+   */
+  public Type resolvedMemberOf(final Type type, final Class<?> declaring, final Class<?> owner) {
+    return resolve(type, declaring, argumentsAs(owner, declaring));
   }
 
   @Override
@@ -437,6 +466,89 @@ public final class ReflectionProps implements PropertySystem<Type> {
   public Type rawType(final Type t) {
     if (t instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> raw) return raw;
     return t;
+  }
+
+  @Override
+  public Type erasure(final Type t) {
+    final var erased = rawClass(t);
+    return erased == null ? Object.class : erased;
+  }
+
+  @Override
+  public boolean isTypeVariable(final Type t) {
+    return t instanceof TypeVariable<?>;
+  }
+
+  @Override
+  public List<Type> typeParameters(final Type t) {
+    return rawType(t) instanceof Class<?> cls ? List.of(cls.getTypeParameters()) : List.of();
+  }
+
+  @Override
+  public List<Type> typeParametersInUse(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls) || cls.getTypeParameters().length == 0) return List.of();
+    final var members = new ArrayList<Type>();
+    if (cls.isRecord()) {
+      for (final var component : cls.getRecordComponents()) members.add(component.getGenericType());
+    } else {
+      for (final var method : cls.getMethods()) {
+        if (Modifier.isStatic(method.getModifiers()) || method.getDeclaringClass() == Object.class) continue;
+        final var declaring = method.getDeclaringClass();
+        final var arguments = argumentsAs(cls, declaring);
+        if (method.getParameterCount() == 0 && method.getReturnType() != void.class) {
+          members.add(resolve(method.getGenericReturnType(), declaring, arguments));
+        } else if (method.getParameterCount() == 1) {
+          members.add(resolve(method.getGenericParameterTypes()[0], declaring, arguments));
+        }
+      }
+    }
+    return Arrays.stream(cls.getTypeParameters())
+      .<Type>map(variable -> variable)
+      .filter(variable -> members.stream().anyMatch(member -> mentions(member, variable)))
+      .toList();
+  }
+
+  /** Whether {@code type} names {@code variable} anywhere inside it. */
+  private static boolean mentions(final Type type, final Type variable) {
+    return switch (type) {
+      case TypeVariable<?> named -> named.equals(variable);
+      case GenericArrayType array -> mentions(array.getGenericComponentType(), variable);
+      case WildcardType wildcard -> (Arrays.stream(wildcard.getUpperBounds()).anyMatch(bound ->
+          mentions(bound, variable)
+        ) ||
+        Arrays.stream(wildcard.getLowerBounds()).anyMatch(bound -> mentions(bound, variable)));
+      case ParameterizedType parameterized -> (Arrays.stream(parameterized.getActualTypeArguments()).anyMatch(
+          argument -> mentions(argument, variable)
+        ) ||
+        (parameterized.getOwnerType() != null && mentions(parameterized.getOwnerType(), variable)));
+      default -> false;
+    };
+  }
+
+  @Override
+  public List<Type> upperBounds(final Type t) {
+    return t instanceof TypeVariable<?> variable ? List.of(variable.getBounds()) : List.of();
+  }
+
+  @Override
+  public List<Type> permittedSubclasses(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls) || !cls.isSealed()) return List.of();
+    return List.of(cls.getPermittedSubclasses());
+  }
+
+  @Override
+  public List<Type> declaredArgumentsAs(final Type t, final Type supertype) {
+    if (!(rawType(t) instanceof Class<?> cls) || !(rawType(supertype) instanceof Class<?> target)) return List.of();
+    return argumentsAs(cls, target);
+  }
+
+  @Override
+  public Type substitute(final Type type, final List<Type> variables, final List<Type> replacements) {
+    final var bindings = new HashMap<TypeVariable<?>, Type>();
+    for (int i = 0; i < variables.size() && i < replacements.size(); i++) {
+      if (variables.get(i) instanceof TypeVariable<?> variable) bindings.put(variable, replacements.get(i));
+    }
+    return substitute(type, bindings);
   }
 
   @Override

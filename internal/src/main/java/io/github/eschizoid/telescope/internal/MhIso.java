@@ -576,6 +576,16 @@ public final class MhIso {
     final MethodHandle isoDir,
     final Iso<Object, Object> identity
   ) {
+    // A value handed across unchanged into a side that fixes its class: the raw read, filtered by
+    // the check where the side written fixes one, so the slot stays on the composed handle.
+    if (slotIso instanceof FixedCheck check && sp >= 0) {
+      final MethodHandle filter = isoDir == ISO_TO ? check.forwardFilter() : check.backwardFilter();
+      final MethodHandle read = srcAccessors[sp];
+      if (filter == null) return read.asType(MethodType.methodType(slotType, srcCls));
+      return MethodHandles.filterReturnValue(read.asType(MethodType.methodType(Object.class, srcCls)), filter).asType(
+        MethodType.methodType(slotType, srcCls)
+      );
+    }
     final boolean isIdentity = slotIso == identity;
     if (isIdentity && sp >= 0) {
       // Plain passthrough: raw accessor straight into the slot, primitive-to-primitive, no box.
@@ -695,12 +705,14 @@ public final class MhIso {
 
   /**
    * Build {@code (beanCls, srcCls) -> void} — read the slot value from the source and apply {@code
-   * setter}. For a <b>primitive</b> setter fed by a <b>non-identity</b> Iso the value may be null
-   * (a user transform returning null), and unboxing null would NPE. The array leaf's {@code
-   * SettersWriter} instead <em>skips</em> the setter on null, leaving the JLS default; this mirrors
-   * that by reading the value boxed and guarding the setter with a null test. Identity primitive
-   * slots (source primitive, never null) keep the unboxed fast path; reference setters accept null
-   * as the array leaf does.
+   * setter}. A <b>primitive</b> setter can be handed null by a <b>non-identity</b> Iso (a user
+   * transform returning null) and by an identity slot whose source reads a reference (an {@code
+   * Integer} property behind {@code setX(int)}), and unboxing null would NPE. The array leaf's
+   * {@code SettersWriter} instead <em>skips</em> the setter on null, leaving the JLS default; this
+   * mirrors that by reading the value boxed and guarding the setter with a null test. Which slots
+   * need the guard is decided here, once, when the handle is built: an identity slot whose source
+   * reads a primitive cannot be null and keeps the unboxed fast path, and a reference setter takes
+   * null as the array leaf does.
    */
   private static MethodHandle setterFromSource(
     final Class<?> srcCls,
@@ -713,7 +725,8 @@ public final class MhIso {
     final MethodHandle isoDir,
     final Iso<Object, Object> identity
   ) {
-    if (slotType.isPrimitive() && slotIso != identity) {
+    final var referenceRead = sp >= 0 && !srcAccessors[sp].type().returnType().isPrimitive();
+    if (slotType.isPrimitive() && (slotIso != identity || referenceRead)) {
       final MethodHandle readBoxed = buildFilter(srcCls, Object.class, srcAccessors, sp, slotIso, isoDir, identity);
       final MethodType guardType = MethodType.methodType(void.class, beanCls, Object.class);
       final MethodHandle doSet = setter.asType(guardType); // unboxes the (non-null) Object into the primitive

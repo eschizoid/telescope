@@ -2,13 +2,16 @@ package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
+import java.util.ArrayList;
 import java.util.List;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.IntersectionType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -83,6 +86,18 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public TypeMirror componentType(final TypeMirror t) {
+    return t instanceof ArrayType array ? array.getComponentType() : null;
+  }
+
+  @Override
+  public TypeMirror upperBound(final TypeMirror t) {
+    if (!(t instanceof WildcardType wildcard) || wildcard.getExtendsBound() == null) return null;
+    final var upper = wildcard.getExtendsBound();
+    return types.erasure(upper).toString().equals("java.lang.Object") ? null : upper;
+  }
+
+  @Override
   public TypeMirror lowerBound(final TypeMirror t) {
     return t instanceof WildcardType wildcard ? wildcard.getSuperBound() : null;
   }
@@ -134,6 +149,12 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   @Override
   public boolean isInterfaceType(final TypeMirror t) {
     return t instanceof DeclaredType dt && dt.asElement().getKind().isInterface();
+  }
+
+  @Override
+  public boolean isSealedInterfaceType(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element != null && element.getKind().isInterface() && element.getModifiers().contains(Modifier.SEALED);
   }
 
   @Override
@@ -231,6 +252,136 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   @Override
   public TypeMirror rawType(final TypeMirror t) {
     return types.erasure(t);
+  }
+
+  @Override
+  public TypeMirror erasure(final TypeMirror t) {
+    return types.erasure(t);
+  }
+
+  @Override
+  public boolean isTypeVariable(final TypeMirror t) {
+    return t instanceof TypeVariable;
+  }
+
+  @Override
+  public List<TypeMirror> typeParameters(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null) return List.of();
+    return element.getTypeParameters().stream().map(Element::asType).toList();
+  }
+
+  @Override
+  public List<TypeMirror> typeParametersInUse(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null || element.getTypeParameters().isEmpty()) return List.of();
+    final var self = (DeclaredType) element.asType();
+    final var members = new ArrayList<TypeMirror>();
+    if (element.getKind() == ElementKind.RECORD) {
+      for (final var component : element.getRecordComponents()) members.add(component.asType());
+    } else {
+      for (final var method : ElementFilter.methodsIn(elements.getAllMembers(element))) {
+        if (
+          !method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)
+        ) continue;
+        if (((TypeElement) method.getEnclosingElement()).getQualifiedName().contentEquals("java.lang.Object")) continue;
+        final var member = (ExecutableType) types.asMemberOf(self, method);
+        if (member.getParameterTypes().isEmpty() && member.getReturnType().getKind() != TypeKind.VOID) {
+          members.add(member.getReturnType());
+        } else if (member.getParameterTypes().size() == 1) {
+          members.add(member.getParameterTypes().getFirst());
+        }
+      }
+    }
+    return element
+      .getTypeParameters()
+      .stream()
+      .map(Element::asType)
+      .filter(variable -> members.stream().anyMatch(member -> mentionsVariable(member, variable)))
+      .toList();
+  }
+
+  /** Whether {@code type} names {@code variable} anywhere inside it. */
+  static boolean mentionsVariable(final TypeMirror type, final TypeMirror variable) {
+    return switch (type) {
+      case TypeVariable named -> named.asElement().equals(((TypeVariable) variable).asElement());
+      case ArrayType array -> mentionsVariable(array.getComponentType(), variable);
+      case WildcardType wildcard -> ((wildcard.getExtendsBound() != null &&
+          mentionsVariable(wildcard.getExtendsBound(), variable)) ||
+        (wildcard.getSuperBound() != null && mentionsVariable(wildcard.getSuperBound(), variable)));
+      case DeclaredType declared -> (declared
+          .getTypeArguments()
+          .stream()
+          .anyMatch(argument -> mentionsVariable(argument, variable)) ||
+        mentionsVariable(declared.getEnclosingType(), variable));
+      default -> false;
+    };
+  }
+
+  @Override
+  public List<TypeMirror> upperBounds(final TypeMirror t) {
+    if (!(t instanceof TypeVariable variable)) return List.of();
+    final var upper = variable.getUpperBound();
+    return upper instanceof IntersectionType intersection ? List.copyOf(intersection.getBounds()) : List.of(upper);
+  }
+
+  @Override
+  public List<TypeMirror> permittedSubclasses(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null) return List.of();
+    return element.getPermittedSubclasses().stream().map(types::erasure).toList();
+  }
+
+  @Override
+  public List<TypeMirror> declaredArgumentsAs(final TypeMirror t, final TypeMirror supertype) {
+    final var element = elementOf(types.erasure(t));
+    final var target = elementOf(types.erasure(supertype));
+    if (element == null || target == null) return List.of();
+    return argumentsGivenTo((DeclaredType) element.asType(), target);
+  }
+
+  /** The arguments {@code type}, or the supertype it reaches {@code target} through, gives it. */
+  private List<TypeMirror> argumentsGivenTo(final DeclaredType type, final TypeElement target) {
+    if (type.asElement().equals(target)) return List.copyOf(type.getTypeArguments());
+    final var erasedTarget = types.erasure(target.asType());
+    for (final var parent : types.directSupertypes(type)) {
+      if (types.isSubtype(types.erasure(parent), erasedTarget)) return argumentsGivenTo((DeclaredType) parent, target);
+    }
+    return List.of();
+  }
+
+  @Override
+  public TypeMirror substitute(
+    final TypeMirror type,
+    final List<TypeMirror> variables,
+    final List<TypeMirror> replacements
+  ) {
+    if (type == null) return null;
+    return switch (type) {
+      case TypeVariable variable -> {
+        for (int i = 0; i < variables.size() && i < replacements.size(); i++) {
+          if (types.isSameType(variable, variables.get(i))) yield replacements.get(i);
+        }
+        yield variable;
+      }
+      case ArrayType array -> types.getArrayType(substitute(array.getComponentType(), variables, replacements));
+      case WildcardType wildcard -> types.getWildcardType(
+        substitute(wildcard.getExtendsBound(), variables, replacements),
+        substitute(wildcard.getSuperBound(), variables, replacements)
+      );
+      case DeclaredType declared -> {
+        final var element = (TypeElement) declared.asElement();
+        final var arguments = declared
+          .getTypeArguments()
+          .stream()
+          .map(argument -> substitute(argument, variables, replacements))
+          .toArray(TypeMirror[]::new);
+        yield declared.getEnclosingType() instanceof DeclaredType enclosing
+          ? types.getDeclaredType((DeclaredType) substitute(enclosing, variables, replacements), element, arguments)
+          : types.getDeclaredType(element, arguments);
+      }
+      default -> type;
+    };
   }
 
   @Override

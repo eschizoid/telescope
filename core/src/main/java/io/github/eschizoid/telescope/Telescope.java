@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
-import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
@@ -10,7 +9,6 @@ import io.github.eschizoid.telescope.conversion.MappingTraces;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
-import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
@@ -883,6 +881,23 @@ public sealed class Telescope<
    * Optional<User>}) terminate naturally — the recursion caches the in-progress type pair and
    * re-uses it instead of descending infinitely.
    *
+   * <p><b>A nested pair's own bridge.</b> A nested pair that carries its own {@code @Bridge},
+   * beside its source or on a carrier, converts through the bridge that annotation generated, so
+   * its transforms, leniency and renames apply here as they do inside a generated parent. The
+   * mapper walks the pair itself instead when a row is keyed to it or to a pair below it, when a
+   * {@code writeBean} hint names one of its classes or a class below it, or when it reaches back to
+   * a type being converted around it. A mapper given {@code nullSourceValues(DEFAULT)} or a {@code
+   * writeBeans(...)} default walks every pair. The pair the mapper is built for is always walked.
+   *
+   * <p><b>Two sealed interfaces.</b> Between two sealed interfaces, as the pair the mapper is built
+   * for or anywhere below it, a value converts through the pair its own case belongs to. A case
+   * pairs with the case a {@link io.github.eschizoid.telescope.mapping.Cases#cases cases} row names
+   * for it, and otherwise with the case its own {@code @Bridge} converts to, as the bridge a
+   * {@code @Bridge} on the sealed source generates pairs them. A case nothing pairs is refused by
+   * name when the mapper is built. The mapper's own cases convert through their own bridges, or are
+   * walked strictly, as the pair a mapper is built for is, and {@code patch} and {@code into}
+   * dispatch to them the same way.
+   *
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
@@ -1023,12 +1038,13 @@ public sealed class Telescope<
    * silently losing data).
    *
    * <p><b>Auto-discovery from {@code @Bridge}.</b> When {@code steps} is empty AND the {@code
-   * source} class has a sibling {@code <Source>Bridge.BRIDGE} (or {@code <Source>To<Target>Bridge.
-   * BRIDGE}) constant emitted by the {@code @Bridge} annotation processor, the forward direction
-   * routes through that bridge directly. The bridge's full configuration is surfaced in the result
-   * — {@code @Rename} (including {@code forwardOnly} fan-out), {@code @Transform},
-   * {@code @Constant}, {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the
-   * {@code writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
+   * source} class has a sibling {@code <Source>To<Target>Bridge.BRIDGE} or {@code
+   * <Source>Bridge.BRIDGE} constant emitted by the {@code @Bridge} annotation processor, tried in
+   * that order, or a carrier registered for the pair, the forward direction routes through that
+   * bridge directly. The bridge's full configuration is surfaced in the result — {@code @Rename}
+   * (including {@code forwardOnly} fan-out), {@code @Transform}, {@code @Constant},
+   * {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the {@code
+   * writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
    * encoded inside the bridge and apply to every {@code mapperForward(source, target)} call. The
    * annotation's defaults are NOT the same as this method's lenient-by-default —
    * {@code @Bridge(lenient = false)} (the annotation's default) produces a strict bijection bridge,
@@ -1052,21 +1068,13 @@ public sealed class Telescope<
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
     if (steps.length == 0) {
-      final var probed = BridgeHolderProbe.probeFor(source, target);
-      if (probed.isPresent()) {
+      // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
+      // declares the pair: the holder beside the source, then a carrier registered by (source,
+      // target), since a carrier lives in its own package.
+      final var own = DeepMap.ownBridge(source, target, true);
+      if (own.isPresent()) {
         @SuppressWarnings("unchecked")
-        final var bridge = (Telescope<A, B>) probed.get().bridge();
-        return ForwardMapper.create(bridge::read, source, target);
-      }
-      // The name-derived probe above only reaches a sibling <Source>Bridge in the source's package.
-      // A carrier-form @Bridge lives in the carrier's package, so fall back to the package-agnostic
-      // registry before the lenient same-name default — otherwise a declared carrier bridge (and
-      // its
-      // renames) would be silently dropped.
-      final var registered = BridgeRegistry.find(source, target, source.getClassLoader());
-      if (registered.isPresent()) {
-        @SuppressWarnings("unchecked")
-        final var bridge = (Telescope<A, B>) registered.get();
+        final var bridge = (Telescope<A, B>) own.get();
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
@@ -3049,6 +3057,33 @@ public sealed class Telescope<
     public Telescope<S, X> present() {
       return origin.descend(this, Traversals.eachOptional(), "whenPresent", "optional");
     }
+  }
+
+  /**
+   * The patch of the bridge behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, as a
+   * function; for any other telescope, one that refuses, since nothing records how to overlay its
+   * target onto its source.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B> BiFunction<A, B, A> bridgePatch(final Telescope<A, B> bridge) {
+    if (bridge instanceof BridgeTelescope<?, ?> generated) {
+      final var fn = (BridgeFn<A, B>) generated.fn;
+      return fn::patch;
+    }
+    return (base, partial) -> {
+      throw new UnsupportedOperationException(
+        "This bridge was not built by Telescope.bridge(BridgeFn), so it has no patch to overlay a" +
+          " partial target with. Re-run the @Bridge processor."
+      );
+    };
+  }
+
+  /**
+   * The {@link BridgeFn} behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, or
+   * null.
+   */
+  static BridgeFn<?, ?> bridgeFnOf(final Object bridge) {
+    return bridge instanceof BridgeTelescope<?, ?> generated ? generated.fn : null;
   }
 
   // Specialised Telescope for @Bridge-emitted constants. The parent's read/set terminals walk

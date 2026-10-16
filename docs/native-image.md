@@ -137,6 +137,35 @@ through rather than converting it into its own refusal that the class has no con
 refusal's advice — declare a constructor, or supply an explicit conversion row — is wrong here: the type is fine and the
 program works on the JVM. Only the image is missing something, and only the registration error says so.
 
+## A nested pair's own bridge
+
+A runtime mapper converts a nested pair that has its own `@Bridge` through the bridge that annotation generated, and a
+`mapperForward` with no steps does the same for its own pair. It finds the bridge by name: it loads
+`<Source>To<Target>Bridge`, the name each bridge of a source declaring several targets takes, and then `<Source>Bridge`
+from the source's package with `Class.forName`, and reads its `BRIDGE` field. Whether a long-form bridge is one a
+`@Bridge` declared is a method call on the bridge, which needs no registration. A carrier bridge is found through
+`ServiceLoader` instead.
+
+In an image, a holder class that is not registered reads as absent. The mapper then walks the pair by name, so the
+bridge's transforms, renames and other settings are not applied, and the result differs from the JVM's without an error.
+Register each `<Source>Bridge` and `<Source>To<Target>Bridge` a runtime mapper can reach: the class, and its `BRIDGE`
+field for reading. Keep the `META-INF/services` entries the processor writes for carrier bridges, as for any other
+service.
+
+The mapper looks up both names for every nested pair it reaches, and for most pairs neither class exists. Under
+GraalVM's strict missing-registration mode, a `Class.forName` of a name that is not registered throws an error rather
+than reporting the class absent, and the probe does not catch it, under either name. Run a runtime mapper's image
+without that mode, or register the names it can look up.
+
+## The order a bean's properties convert in
+
+A runtime mapper converts a bean's properties in the order of the fields that back them, read with `getDeclaredFields`,
+superclass fields first, and then the properties no field backs, by name. The generated bridge uses the same order. On
+the JVM, `getDeclaredFields` returns the class file's order, which javac writes in source order. In an image, the fields
+come from the reflection metadata registered for the bean, so their order is whatever the image builder recorded. The
+`:core:imageTest` gate checks this order on the accessor substrate an image uses, but it runs on the JVM. `NativeVerify`
+does not check the order, so a real image's order is not verified. It matters only to conversions with side effects.
+
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's

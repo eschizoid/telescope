@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -42,13 +43,13 @@ import java.util.stream.Collectors;
  *
  * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: same type
  * (identity, or a copy for a container) → primitive/wrapper → enum by constant name → same-kind
- * subtype copy → reflectable recursion → cross-{@code Optional} bridge → same-kind container lift →
- * incompatible. Subtype copy must precede reflectable recursion: a container subclass that declares
- * no type parameters of its own ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts as
- * reflectable, and bean-decomposing it would fail at the JDK boundary (private lookup into {@code
- * java.base} is rejected) — the copy branch intercepts those pairs first, and a pair of containers
- * it does not take never reaches recursion: it goes to the container lift, which converts each
- * element or refuses the pair by name.
+ * subtype copy → reflectable recursion → sealed-case dispatch → cross-{@code Optional} bridge →
+ * same-kind container lift → incompatible. Subtype copy must precede reflectable recursion: a
+ * container subclass that declares no type parameters of its own ({@code class ImageUrls extends
+ * ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail at the JDK
+ * boundary (private lookup into {@code java.base} is rejected) — the copy branch intercepts those
+ * pairs first, and a pair of containers it does not take never reaches recursion: it goes to the
+ * container lift, which converts each element or refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -82,6 +83,21 @@ public final class PairingRules<T> {
   ) {
     // (a) Same type → identity, or a copy for a container the allocation table can rebuild.
     if (props.sameType(srcType, tgtType)) return unchanged(srcType);
+
+    // (a.0) Two sealed interfaces given type arguments → dispatch on the case, where the arguments
+    // allow it. One with none on either side is a class type and takes (b.1) below.
+    if (sealedWithArgumentsPair(srcType, tgtType)) return sealedWithArguments(srcType, tgtType, componentName);
+
+    // (a.0b) Two records or beans given type arguments → recurse into the pair, where both give
+    // the same argument for every type variable a member uses. One with none on either side is a
+    // class type and takes (b) below.
+    if (genericClassPair(srcType, tgtType)) {
+      return argumentsInUseAgree(srcType, tgtType)
+        ? new PairDecision.RecursePair<>()
+        : new PairDecision.Incompatible<>(
+            PairingMessages.genericArgumentsDiffer(componentName, props.typeName(srcType), props.typeName(tgtType))
+          );
+    }
 
     if (props.isClassType(srcType) && props.isClassType(tgtType)) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
@@ -168,6 +184,13 @@ public final class PairingRules<T> {
         if (!bothContainers(srcType, tgtType) && reflectable(srcType) && reflectable(tgtType)) {
           return new PairDecision.RecursePair<>();
         }
+
+        // (b.1) Two sealed interfaces → dispatch on the case. Neither has properties of its own to
+        // walk, and its permitted subclasses are every value it can hold, so a value converts
+        // through the pair its case belongs to.
+        if (props.isSealedInterfaceType(srcType) && props.isSealedInterfaceType(tgtType)) {
+          return new PairDecision.DispatchCases<>();
+        }
       }
     }
 
@@ -234,6 +257,187 @@ public final class PairingRules<T> {
     );
   }
 
+  /** Whether both sides are sealed interfaces and at least one of them is given type arguments. */
+  private boolean sealedWithArgumentsPair(final T srcType, final T tgtType) {
+    if (!props.isSealedInterfaceType(srcType) || !props.isSealedInterfaceType(tgtType)) return false;
+    return !props.isClassType(srcType) || !props.isClassType(tgtType);
+  }
+
+  /**
+   * Whether both sides are records or beans, neither of them a container, and at least one of them
+   * is given type arguments.
+   *
+   * <p>Such a pair converts as its two classes pair with each other, which reads the target's type
+   * variables as the source's in the same position ({@link #alignedToSource}) and is the same
+   * conversion whatever arguments the component gives them. That is the conversion the component's
+   * arguments call for where both sides give the same argument for each variable a member passes
+   * across ({@link #argumentsInUseAgree}).
+   */
+  private boolean genericClassPair(final T srcType, final T tgtType) {
+    if (props.isClassType(srcType) && props.isClassType(tgtType)) return false;
+    // A wildcard or type variable names no class of its own to pair.
+    if (!namesClass(srcType) || !namesClass(tgtType)) return false;
+    if (containerViewOf(srcType) != null || containerViewOf(tgtType) != null) return false;
+    return reflectable(props.rawType(srcType)) && reflectable(props.rawType(tgtType));
+  }
+
+  /** Whether {@code type} is a class, or a class given type arguments. */
+  private boolean namesClass(final T type) {
+    return props.isClassType(type) || !props.typeArguments(type).isEmpty();
+  }
+
+  /**
+   * Whether two generic classes give the same argument for every type variable a member of either
+   * uses, position by position, which is the pairing {@link #alignedToSource} reads them in. A
+   * variable no member uses carries no value across, so its argument is not compared, and a pair
+   * whose members use none converts whatever arguments it is given, a side used raw included. A
+   * used variable with no counterpart in the same position on the other side, an argument a raw
+   * side does not give, and a wildcard, which names no one type, all refuse the pair.
+   */
+  private boolean argumentsInUseAgree(final T srcType, final T tgtType) {
+    final var srcVariables = props.typeParameters(srcType);
+    final var tgtVariables = props.typeParameters(tgtType);
+    final var srcInUse = props.typeParametersInUse(srcType);
+    final var tgtInUse = props.typeParametersInUse(tgtType);
+    final var srcArguments = props.typeArguments(srcType);
+    final var tgtArguments = props.typeArguments(tgtType);
+    for (int i = 0; i < Math.max(srcVariables.size(), tgtVariables.size()); i++) {
+      final var used =
+        (i < srcVariables.size() && srcInUse.contains(srcVariables.get(i))) ||
+        (i < tgtVariables.size() && tgtInUse.contains(tgtVariables.get(i)));
+      if (!used) continue;
+      if (i >= srcArguments.size() || i >= tgtArguments.size()) return false;
+      if (props.isWildcard(srcArguments.get(i)) || props.isWildcard(tgtArguments.get(i))) return false;
+      if (!props.sameType(srcArguments.get(i), tgtArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether two sides give the same type arguments, one by one, none of them a wildcard, which
+   * names no one type.
+   */
+  private boolean sameArguments(final T srcType, final T tgtType) {
+    final var srcArguments = props.typeArguments(srcType);
+    final var tgtArguments = props.typeArguments(tgtType);
+    if (srcArguments.size() != tgtArguments.size()) return false;
+    for (int i = 0; i < srcArguments.size(); i++) {
+      if (props.isWildcard(srcArguments.get(i)) || props.isWildcard(tgtArguments.get(i))) return false;
+      if (!props.sameType(srcArguments.get(i), tgtArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The decision for two sealed interfaces at least one of which is given type arguments.
+   *
+   * <p>A case converts as its class pairs with the other side's case, the same conversion whatever
+   * arguments the component gives the interfaces, and a type variable a case passes across is read
+   * as the paired case's variable in the same position ({@link #alignedToSource}). That conversion
+   * is the one the component's arguments call for only when both sides give the same arguments, one
+   * by one, so any other pair is refused, as is a wildcard argument, which names no one type.
+   *
+   * <p>Each case of either interface, and each case of a sealed case below it, then has to be able
+   * to hold the component's arguments. A case giving the interface its own type variable can; one
+   * giving it a type with no variable in it can when that type is the component's argument, and is
+   * refused otherwise, since no value of the component's type is of that case. A case giving it a
+   * type built over its own variable, such as {@code List<T>}, is refused too, because telling
+   * whether it fits would mean binding the variable inside that type.
+   */
+  private PairDecision<T> sealedWithArguments(final T srcType, final T tgtType, final String componentName) {
+    if (!sameArguments(srcType, tgtType)) {
+      return new PairDecision.Incompatible<>(
+        PairingMessages.sealedArgumentsDiffer(componentName, props.typeName(srcType), props.typeName(tgtType))
+      );
+    }
+    for (final var side : List.of(srcType, tgtType)) {
+      final var root = props.rawType(side);
+      final var arguments = props.typeArguments(side);
+      final var pending = new ArrayDeque<>(props.permittedSubclasses(root));
+      while (!pending.isEmpty()) {
+        final var caseType = pending.pop();
+        pending.addAll(props.permittedSubclasses(caseType));
+        final var gives = props.declaredArgumentsAs(caseType, root);
+        for (int i = 0; i < gives.size(); i++) {
+          final var given = gives.get(i);
+          if (props.isTypeVariable(given)) continue;
+          if (!props.mentionsTypeVariable(given) && props.sameType(given, arguments.get(i))) continue;
+          return new PairDecision.Incompatible<>(
+            PairingMessages.caseOutsideArguments(
+              componentName,
+              props.typeName(side),
+              props.sourceName(caseType),
+              argumentList(gives)
+            )
+          );
+        }
+      }
+    }
+    return new PairDecision.DispatchCases<>();
+  }
+
+  /** {@code arguments} as a type argument list is written: {@code <Integer, String>}. */
+  private String argumentList(final List<T> arguments) {
+    return "<" + String.join(", ", arguments.stream().map(props::typeName).toList()) + ">";
+  }
+
+  /**
+   * {@code targetType}, a member type read off {@code targetClass}, with each type variable that
+   * class declares read as the variable {@code sourceClass} declares in the same position. Two
+   * generic classes paired with each other pass a variable across by position, so {@code record
+   * BoxDto<U>(U v)} paired with {@code record Box<T>(T v)} reads its {@code v} as a {@code T} and
+   * converts it unchanged, which is what converting a {@code Box<Integer>}, or the case of a sealed
+   * {@code Res<Integer>}, needs. Nothing is read across between two classes that declare a
+   * different number of type variables, or where a variable's bounds, read the same way, are not
+   * its counterpart's. The target's member type is then returned as it is.
+   */
+  public T alignedToSource(final T targetType, final T sourceClass, final T targetClass) {
+    final var sourceVariables = props.typeParameters(sourceClass);
+    final var targetVariables = props.typeParameters(targetClass);
+    if (targetVariables.isEmpty() || sourceVariables.size() != targetVariables.size()) return targetType;
+    for (int i = 0; i < sourceVariables.size(); i++) {
+      final var sourceBounds = props.upperBounds(sourceVariables.get(i));
+      final var targetBounds = props.upperBounds(targetVariables.get(i));
+      if (sourceBounds.size() != targetBounds.size()) return targetType;
+      for (int b = 0; b < sourceBounds.size(); b++) {
+        final var read = props.substitute(targetBounds.get(b), targetVariables, sourceVariables);
+        if (!props.sameType(sourceBounds.get(b), read)) return targetType;
+      }
+    }
+    return props.substitute(targetType, targetVariables, sourceVariables);
+  }
+
+  /**
+   * Why a case of the sealed {@code sourceRoot} cannot convert through the case of {@code
+   * targetRoot} it pairs with, or null when it can. Two generic roots declaring the same number of
+   * type variables pass each across by position, so each case has to give its root the arguments
+   * the paired case gives the other, with the target case's variables read as the source case's
+   * ({@link #alignedToSource}). {@code record Ok<A, B>(A a, B b) implements Res<A, B>} paired with
+   * {@code record OkDto<A, B>(A a, B b) implements ResDto<B, A>} gives them in the other order, and
+   * a value converted through the pair would hold its {@code a} where its interface reads a {@code
+   * B}. Roots without type variables, or with a different number of them, carry none across, so any
+   * case pairing their cases make is left to the cases' own conversion.
+   */
+  public String caseArgumentsRefusal(final T sourceRoot, final T targetRoot, final T sourceCase, final T targetCase) {
+    final var rootVariables = props.typeParameters(sourceRoot);
+    if (rootVariables.isEmpty() || rootVariables.size() != props.typeParameters(targetRoot).size()) return null;
+    final var sourceGives = props.declaredArgumentsAs(sourceCase, sourceRoot);
+    final var targetGives = props.declaredArgumentsAs(targetCase, targetRoot);
+    var same = sourceGives.size() == targetGives.size();
+    for (int i = 0; same && i < sourceGives.size(); i++) {
+      same = props.sameType(sourceGives.get(i), alignedToSource(targetGives.get(i), sourceCase, targetCase));
+    }
+    if (same) return null;
+    return PairingMessages.caseArgumentsDiffer(
+      props.sourceName(sourceRoot),
+      props.sourceName(targetRoot),
+      props.sourceName(sourceCase),
+      props.sourceName(targetCase),
+      argumentList(sourceGives),
+      argumentList(targetGives)
+    );
+  }
+
   /**
    * Whether a pairing reads its two properties as declared rather than as members of their own
    * classes. Read as members, a property a generic superclass declares takes the type each subclass
@@ -244,6 +448,120 @@ public final class PairingRules<T> {
    */
   public boolean readsAsDeclared(final T sourceMember, final T targetMember) {
     return props.mentionsTypeVariable(sourceMember) || props.mentionsTypeVariable(targetMember);
+  }
+
+  /**
+   * What a value of a pair read as declared owes the side it is written into, given the type it has
+   * as a member of the side it is read from, {@code sendingMember}, and as a member of the side it
+   * is written into, {@code receivingMember}. Each member type keeps the variables its class passes
+   * through, so their bounds say what the side holds. Read as declared, the pair is one type on
+   * both sides and the value is handed across unchanged, so what the receiving side's class says
+   * about the property is the only thing that can refuse it.
+   *
+   * <p>A value fits where every value of the sending side's member type is one the receiving side's
+   * admits: a variable the receiving side passes through admits whatever its bound does, a type
+   * given arguments admits a value of its own class whose arguments fit its own, one by one, and an
+   * array admits an array whose component fits its own. A value that fits is not checked. Otherwise
+   * a type given arguments is refused, a container and any other generic class alike, since nothing
+   * checks a value's arguments as it is written, and so is an array whose component, once every
+   * array level is taken off, is given type arguments or is a variable: its class carries only the
+   * erasure of that component. Any other value is checked against the erasure of the receiving
+   * side's member type as it is written, unless every value of the sending side's is already of
+   * that class; that includes an array of a class with no type arguments, whose class carries its
+   * component whole.
+   */
+  public FixedFit<T> fixedFit(final T sendingMember, final T receivingMember, final String componentName) {
+    if (fitsFixed(sendingMember, receivingMember)) return new FixedFit.Fits<>();
+    if (
+      containerViewOf(receivingMember) != null ||
+      !props.typeArguments(receivingMember).isEmpty() ||
+      genericComponent(receivingMember)
+    ) {
+      return new FixedFit.Refused<>(
+        PairingMessages.fixedArgumentsDoNotFit(
+          componentName,
+          props.typeName(sendingMember),
+          props.typeName(receivingMember)
+        )
+      );
+    }
+    final var fixed = props.erasure(receivingMember);
+    return props.isAssignable(sendingMember, fixed) ? new FixedFit.Fits<>() : new FixedFit.Check<>(fixed);
+  }
+
+  /**
+   * Whether {@code type} is an array whose component, once every array level is taken off, is given
+   * type arguments or is a variable, so the array's class does not carry it whole.
+   */
+  private boolean genericComponent(final T type) {
+    var component = props.componentType(type);
+    if (component == null) return false;
+    while (props.componentType(component) != null) component = props.componentType(component);
+    return props.isTypeVariable(component) || !props.typeArguments(component).isEmpty();
+  }
+
+  /**
+   * Whether every value of {@code sending} fits {@code receiving}. A variable on the receiving side
+   * admits what its erasure does. An array fits an array whose component its own component fits.
+   * Where the two are the same class their type arguments are compared one by one ({@link
+   * #fitsArgument}).
+   */
+  private boolean fitsFixed(final T sending, final T receiving) {
+    if (props.isTypeVariable(receiving)) return props.isAssignable(sending, props.erasure(receiving));
+    if (props.isAssignable(sending, receiving)) return true;
+    final var receivingComponent = props.componentType(receiving);
+    if (receivingComponent != null) {
+      final var sendingComponent = props.componentType(sending);
+      return sendingComponent != null && fitsFixed(sendingComponent, receivingComponent);
+    }
+    final var receivingArguments = props.typeArguments(receiving);
+    final var sendingArguments = props.typeArguments(sending);
+    if (receivingArguments.isEmpty() || sendingArguments.size() != receivingArguments.size()) return false;
+    if (!props.sameType(props.rawType(sending), props.rawType(receiving))) return false;
+    for (int i = 0; i < receivingArguments.size(); i++) {
+      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether the type argument {@code receiving} contains what the type argument {@code sending}
+   * stands for, as Java's containment of type arguments decides it: an unbounded wildcard contains
+   * anything; {@code ? extends B} contains an argument whose values all fit {@code B}; {@code ?
+   * super B} contains an argument every {@code B} is a value of, which only one naming a type with
+   * no variable in it, or a wildcard bounded below by one, can show; and any other argument
+   * contains one whose values all fit it. A sending wildcard stands for values of its upper bound,
+   * {@code Object} where it declares none.
+   */
+  private boolean fitsArgument(final T sending, final T receiving) {
+    if (props.isWildcard(receiving)) {
+      final var lower = props.lowerBound(receiving);
+      if (lower != null) return everyValueIsOf(lower, sending);
+      final var upper = props.upperBound(receiving);
+      return upper == null || fitsFixed(valuesOf(sending), upper);
+    }
+    return fitsFixed(valuesOf(sending), receiving);
+  }
+
+  /** The type the values a type argument stands for are of: a wildcard's upper bound, or itself. */
+  private T valuesOf(final T argument) {
+    if (!props.isWildcard(argument)) return argument;
+    final var upper = props.upperBound(argument);
+    return upper == null ? props.typeNamed("java.lang.Object") : upper;
+  }
+
+  /**
+   * Whether every value of {@code lower} is a value of the type argument {@code sending}: a type
+   * that names no variable and that {@code lower} is assignable to, or a wildcard bounded below by
+   * one. A variable, or a wildcard bounded above, names no one type every value of {@code lower} is
+   * shown to be.
+   */
+  private boolean everyValueIsOf(final T lower, final T sending) {
+    if (props.isWildcard(sending)) {
+      final var sendingLower = props.lowerBound(sending);
+      return sendingLower != null && everyValueIsOf(lower, sendingLower);
+    }
+    return !props.mentionsTypeVariable(sending) && props.isAssignable(lower, sending);
   }
 
   /** Whether both sides are enums. A pair of one enum is the same type and passes through. */
@@ -505,6 +823,163 @@ public final class PairingRules<T> {
     if (props.isSubtypeOf(t, WellKnown.TEMPORAL)) return false;
     return !props.isSubtypeOf(t, WellKnown.UUID);
   }
+
+  /**
+   * How a value of {@code property}, a bean property's read type, reaches {@code parameter}, the
+   * write type its setter takes. Both are read by their erasure. See {@link SetterFit}.
+   */
+  public SetterFit setterFit(final T property, final T parameter) {
+    final var read = props.rawType(property);
+    final var write = props.rawType(parameter);
+    if (props.sameType(props.boxed(read), props.boxed(write))) return SetterFit.SAME;
+    if (props.isPrimitive(write)) {
+      final var scalar = props.isPrimitive(read) ? props.typeName(read) : UNBOXED.get(props.typeName(read));
+      if (scalar != null && WIDENS.getOrDefault(scalar, Set.of()).contains(props.typeName(write))) {
+        return SetterFit.CONVERTS;
+      }
+      // A reference read type that a boxed value of the parameter's type is an instance of, such
+      // as Number or Object, may hold a value the setter can take once unboxed.
+      return !props.isPrimitive(read) && props.isAssignable(props.boxed(write), read)
+        ? SetterFit.NARROWS
+        : SetterFit.DISJOINT;
+    }
+    // A boxed read value is an instance of its final wrapper class and of nothing narrower.
+    if (props.isPrimitive(read)) {
+      return props.isAssignable(props.boxed(read), write) ? SetterFit.CONVERTS : SetterFit.DISJOINT;
+    }
+    if (props.isAssignable(read, write)) return SetterFit.CONVERTS;
+    if (props.isAssignable(write, read) || props.isInterfaceType(read) || props.isInterfaceType(write)) {
+      return SetterFit.NARROWS;
+    }
+    return SetterFit.DISJOINT;
+  }
+
+  /**
+   * How a value of {@code property} reaches a setter taking {@code parameter} that is variable
+   * arity over {@code component}, or not when {@code component} is null. A variable-arity setter
+   * Java binds a single value to by its component, wrapping the value in a one-element array, takes
+   * that value as its component's fit; otherwise the fit is the parameter's own.
+   */
+  public SetterFit setterFit(final T property, final T parameter, final T component) {
+    final var direct = setterFit(property, parameter);
+    if (component == null || direct.compiles()) return direct;
+    final var spread = setterFit(property, component);
+    return spread.compiles() ? spread : direct;
+  }
+
+  /**
+   * Whether a value of {@code property} reaches a setter taking {@code parameter} only as the one
+   * element of its variable-arity {@code component} array, so a reflective call wraps the value in
+   * a one-element array and a generated call passes it as it is.
+   */
+  public boolean spreads(final T property, final T parameter, final T component) {
+    return (
+      component != null && !setterFit(property, parameter).compiles() && setterFit(property, component).compiles()
+    );
+  }
+
+  /** {@link #chooseSetter(Object, List, List)} over methods none of which is variable arity. */
+  public int chooseSetter(final T property, final List<T> parameters) {
+    return chooseSetter(property, parameters, Collections.nCopies(parameters.size(), null));
+  }
+
+  /**
+   * Which of the methods named after a property's setter is its setter, by its index in {@code
+   * parameters}, the parameter type of each; {@code -1} when none can be chosen. {@code components}
+   * holds, at the same index, the component type of a variable-arity method's array parameter, and
+   * null for any other method. A sole method is the setter whatever it takes. Among several, the
+   * choice is the overload Java binds a value of {@code property} to, so a generated call and a
+   * reflective one reach the same method: the methods that take the value without boxing or
+   * unboxing are asked first, then those that take it with either, then variable-arity methods
+   * whose component takes it, and among those asked the one whose parameter every other one's
+   * accepts. A parameter equal to the property's type is that one whenever it is present. None
+   * taking the value, or no single most specific one, is {@code -1}, and the paths refuse the
+   * property by name. The answer does not depend on the order the methods are listed in.
+   */
+  public int chooseSetter(final T property, final List<T> parameters, final List<T> components) {
+    if (parameters.size() == 1) return 0;
+    final var read = props.rawType(property);
+    final var strict = new ArrayList<Integer>();
+    final var loose = new ArrayList<Integer>();
+    final var variable = new ArrayList<Integer>();
+    for (var i = 0; i < parameters.size(); i++) {
+      final var write = props.rawType(parameters.get(i));
+      if (passesStrictly(read, write)) strict.add(i);
+      if (setterFit(read, write).compiles()) loose.add(i);
+      final var component = components.get(i);
+      if (component != null && setterFit(read, props.rawType(component)).compiles()) variable.add(i);
+    }
+    if (!strict.isEmpty()) return mostSpecific(strict, parameters);
+    if (!loose.isEmpty()) return mostSpecific(loose, parameters);
+    return variable.isEmpty() ? -1 : mostSpecific(variable, components);
+  }
+
+  /**
+   * The one index in {@code applicable} whose type in {@code types} every other one's accepts
+   * without boxing, or {@code -1} when there is no single one.
+   */
+  private int mostSpecific(final List<Integer> applicable, final List<T> types) {
+    var chosen = -1;
+    for (final var i : applicable) {
+      final var mine = props.rawType(types.get(i));
+      final var most = applicable
+        .stream()
+        .allMatch(j -> j.equals(i) || passesStrictly(mine, props.rawType(types.get(j))));
+      if (!most) continue;
+      if (chosen >= 0) return -1;
+      chosen = i;
+    }
+    return chosen;
+  }
+
+  /**
+   * Whether a value of {@code from} is passed to {@code to} without boxing or unboxing: the same
+   * type, a primitive widening, or a reference widening.
+   */
+  private boolean passesStrictly(final T from, final T to) {
+    if (props.sameType(from, to)) return true;
+    if (props.isPrimitive(from) != props.isPrimitive(to)) return false;
+    if (props.isPrimitive(from)) {
+      return WIDENS.getOrDefault(props.typeName(from), Set.of()).contains(props.typeName(to));
+    }
+    return props.isAssignable(from, to);
+  }
+
+  /** The primitive each wrapper unboxes to, by type name. */
+  private static final Map<String, String> UNBOXED = Map.of(
+    "java.lang.Boolean",
+    "boolean",
+    "java.lang.Byte",
+    "byte",
+    "java.lang.Short",
+    "short",
+    "java.lang.Character",
+    "char",
+    "java.lang.Integer",
+    "int",
+    "java.lang.Long",
+    "long",
+    "java.lang.Float",
+    "float",
+    "java.lang.Double",
+    "double"
+  );
+
+  /** The widening primitive conversions, by type name. */
+  private static final Map<String, Set<String>> WIDENS = Map.of(
+    "byte",
+    Set.of("short", "int", "long", "float", "double"),
+    "short",
+    Set.of("int", "long", "float", "double"),
+    "char",
+    Set.of("int", "long", "float", "double"),
+    "int",
+    Set.of("long", "float", "double"),
+    "long",
+    Set.of("float", "double"),
+    "float",
+    Set.of("double")
+  );
 
   /** Primitive ↔ wrapper pair over the same scalar, in either direction. */
   public boolean primitiveWrapperPair(final T src, final T tgt) {

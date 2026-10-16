@@ -98,6 +98,9 @@ public interface PropertySystem<T> {
 
   boolean isInterfaceType(T t);
 
+  /** Whether {@code t} is a sealed interface, whose permitted subclasses are its only cases. */
+  boolean isSealedInterfaceType(T t);
+
   /** Whether {@code t} is an interface or an abstract class: a type with no instance of its own. */
   boolean isAbstractType(T t);
 
@@ -142,6 +145,15 @@ public interface PropertySystem<T> {
   /** A wildcard's lower bound, or null when {@code t} has none or is not a wildcard. */
   T lowerBound(T t);
 
+  /** An array type's component, generic or not, or null when {@code t} is not an array. */
+  T componentType(T t);
+
+  /**
+   * A wildcard's upper bound, or null when {@code t} declares none other than {@code Object}, as
+   * {@code ?} and {@code ? super X} do, or is not a wildcard.
+   */
+  T upperBound(T t);
+
   /**
    * Whether {@code t} is a type variable or has one anywhere inside it: among its type arguments,
    * at any depth, in a wildcard's bounds, or as an array's component. {@code List<List<?>>} answers
@@ -160,6 +172,54 @@ public interface PropertySystem<T> {
 
   /** The raw/erased class handle of {@code t} ({@code List<X>} → {@code List}). */
   T rawType(T t);
+
+  /**
+   * The class every value of {@code t} is an instance of, as the language erases it: a type
+   * variable to the erasure of its first bound, a wildcard to its upper bound's, and an array to an
+   * array of its component's erasure.
+   */
+  T erasure(T t);
+
+  /** Whether {@code t} is a type variable. */
+  boolean isTypeVariable(T t);
+
+  /**
+   * The type variables the class {@code t} names declares, in declaration order. Empty for a class
+   * that declares none and for a type that names no class.
+   */
+  List<T> typeParameters(T t);
+
+  /**
+   * The type variables the class {@code t} names declares that a member uses: one named in the type
+   * of a record component, or, for any other class, in the return type of a public instance method
+   * taking no arguments or the parameter type of one taking one, each read as a member of that
+   * class, so a variable a superclass's member is given counts too. In declaration order.
+   */
+  List<T> typeParametersInUse(T t);
+
+  /** The upper bounds of the type variable {@code t}: {@code Object} when it declares none. */
+  List<T> upperBounds(T t);
+
+  /**
+   * The classes the sealed class or interface {@code t} names permits, each as its class with no
+   * type arguments. Empty for a class that is not sealed.
+   */
+  List<T> permittedSubclasses(T t);
+
+  /**
+   * The type arguments the class {@code t} names gives {@code supertype}, read in terms of the type
+   * variables that class declares, whatever arguments {@code t} itself carries. {@code record
+   * Ok<T>(T v) implements Res<T>} gives {@code Res} its own {@code T}, and {@code record IntOk(int
+   * v) implements Res<Integer>} gives it {@code Integer}. Empty when {@code supertype} takes no
+   * type arguments or is not a supertype of the class.
+   */
+  List<T> declaredArgumentsAs(T t, T supertype);
+
+  /**
+   * {@code type} with each type variable in {@code variables} replaced by the type at the same
+   * position in {@code replacements}, at any depth.
+   */
+  T substitute(T type, List<T> variables, List<T> replacements);
 
   /**
    * Whether a same-kind collection/map pair can actually be element-copied. An interface or

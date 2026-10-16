@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
 import java.lang.invoke.MethodHandles;
@@ -23,7 +24,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -42,8 +42,11 @@ import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -259,11 +262,13 @@ class CrossPathCorpusTest {
    * converting fails too.
    */
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
-    // Iterable is not a Collection subtype, so neither path's classifier gives it a shape.
+    // Agreement, not a difference: Iterable is not a Collection subtype, so neither path's
+    // classifier gives it a shape, and both refuse it in the shared rules' words.
     "iterable/record",
-    new Refusal("has incompatible types", "incompatible source/target shapes"),
-    // A sorted set whose elements are converted cannot carry the source's comparator, and the
-    // converted element does not implement Comparable, so both paths refuse the pairing.
+    new Refusal("incompatible source/target shapes", "incompatible source/target shapes"),
+    // Agreement, not a difference, in this entry and the three after it: a sorted set whose
+    // elements are converted cannot carry the source's comparator, and the converted
+    // element does not implement Comparable, so both paths refuse the pairing by name.
     "sortedset/iface/record",
     new Refusal("does not implement Comparable", "does not implement Comparable"),
     "navigableset/record",
@@ -318,7 +323,7 @@ class CrossPathCorpusTest {
         // links against the classes the first one already defined.
         final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
         assertTrue(plain.success(), () -> cell + " should compile without the processor: " + plain.errorMessages());
-        final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+        final var processed = bridged(sources);
 
         final Outcome generated;
         final Outcome reflective;
@@ -332,12 +337,15 @@ class CrossPathCorpusTest {
           // Resolved outside the attempt below, because a harness fault has to be an error rather
           // than an outcome: recorded as a refusal it would pair with the other path's refusal, and
           // the cell would report agreement having measured nothing.
-          final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+          final var nested = nestedBridgesFirst(processed, plain, prefix);
+          reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+          final var forward = processed.success()
+            ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+            : null;
           generated =
             forward == null
               ? Outcome.refused(processed.errorMessages().strip())
               : run(items, () -> forward.invoke(null, source));
-          reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
         } catch (final ReflectiveOperationException e) {
           throw new IllegalStateException(cell + " could not be built", e);
         }
@@ -400,6 +408,36 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * {@code sources} compiled with the bridge processor, failing the calling test on any warning
+   * javac reports in a file the processor wrote. The harness compiles with {@code -Xlint:all}, and
+   * a generated file is code its adopter cannot edit, so a build compiling it with {@code -Werror}
+   * passes only when the file raises nothing.
+   */
+  private static ProcessorHarness.Compilation bridged(final JavaFileObject... sources) {
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var warnings = warningsInGenerated(processed);
+    assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    return processed;
+  }
+
+  /** Every warning {@code compilation} reports in a source file a processor generated. */
+  private static List<String> warningsInGenerated(final ProcessorHarness.Compilation compilation) {
+    final var generatedFiles = compilation
+      .generated()
+      .keySet()
+      .stream()
+      .map(name -> "/" + name.replace('.', '/') + ".java")
+      .collect(Collectors.toSet());
+    final var warnings = new ArrayList<String>();
+    for (final var d : compilation.diagnostics()) {
+      if (d.getKind() != Diagnostic.Kind.WARNING && d.getKind() != Diagnostic.Kind.MANDATORY_WARNING) continue;
+      if (d.getSource() == null || !generatedFiles.contains(d.getSource().getName())) continue;
+      warnings.add(d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT));
+    }
+    return warnings;
+  }
+
+  /**
    * Define the classes the processor's compile added over the plain one, and hand back the cell's
    * own bridge, named.
    *
@@ -413,18 +451,73 @@ class CrossPathCorpusTest {
     final ProcessorHarness.Compilation plain,
     final String prefix
   ) {
+    return emitted(processed, plain, prefix, Set.of());
+  }
+
+  /**
+   * As {@link #emitted(ProcessorHarness.Compilation, ProcessorHarness.Compilation, String)}, past
+   * {@code done}.
+   */
+  private static Class<?> emitted(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix,
+    final Set<String> done
+  ) {
+    final var bridgeName = PACKAGE + "." + prefix + "SrcBridge";
+    final var defined = defineAdded(processed, plain, name -> !done.contains(name));
+    final var bridge = defined.get(bridgeName);
+    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
+    return bridge;
+  }
+
+  /**
+   * Define every bridge the processor's compile added except the cell's own, so a runtime mapper
+   * built next finds each nested pair's own bridge as it would in a real build, and hand back their
+   * names for {@link #emitted(ProcessorHarness.Compilation, ProcessorHarness.Compilation, String,
+   * Set)} to pass over. A compile the processor refused added nothing. The cell's own bridge comes
+   * after the runtime mapper, so a mapper that would route through a bridge beside its source
+   * cannot be the generated path a second time.
+   */
+  private static Set<String> nestedBridgesFirst(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix
+  ) {
+    return processed.success() ? definedExceptOwn(processed, plain, prefix) : Set.of();
+  }
+
+  /**
+   * Define every class the processor's compile added over the plain one except the cell's own
+   * bridge and the classes nested in it, and hand back the names defined.
+   */
+  private static Set<String> definedExceptOwn(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final String prefix
+  ) {
+    final var own = PACKAGE + "." + prefix + "SrcBridge";
+    return defineAdded(processed, plain, name -> !name.equals(own) && !name.startsWith(own + "$")).keySet();
+  }
+
+  /**
+   * Define the classes the processor's compile added over the plain one that {@code wanted} keeps.
+   */
+  private static Map<String, Class<?>> defineAdded(
+    final ProcessorHarness.Compilation processed,
+    final ProcessorHarness.Compilation plain,
+    final Predicate<String> wanted
+  ) {
     final var added = new LinkedHashMap<>(processed.classes());
     plain.classes().keySet().forEach(added::remove);
-    final var defined = new ProcessorHarness.Compilation(
+    added.keySet().removeIf(wanted.negate());
+    return new ProcessorHarness.Compilation(
       processed.success(),
       processed.diagnostics(),
       processed.generated(),
       processed.resources(),
       added
     ).define(MethodHandles.lookup());
-    final var bridge = defined.get(PACKAGE + "." + prefix + "SrcBridge");
-    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
-    return bridge;
   }
 
   /**
@@ -625,7 +718,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> shape.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -652,12 +745,15 @@ class CrossPathCorpusTest {
       final var source = src.getConstructors()[0].newInstance(container);
       final var items = tgt.getMethod("items");
 
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
       final var generated =
         forward == null
           ? Outcome.refused(processed.errorMessages().strip())
           : run(items, () -> forward.invoke(null, source));
-      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       final var owed = shape
         .owed()
@@ -748,7 +844,7 @@ class CrossPathCorpusTest {
       // processor had thrown is how a broken fixture reads as a product defect.
       final ProcessorHarness.Compilation processed;
       try {
-        processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+        processed = bridged(sources);
       } catch (final RuntimeException e) {
         failures.add(pairing.name() + ": the processor threw " + e.getCause());
         continue;
@@ -917,17 +1013,17 @@ class CrossPathCorpusTest {
     String owed
   ) {}
 
-  /** The refusal a sorted container gives an element it cannot order, with the cast underneath. */
-  private static String unorderable(final String container, final String implementing, final String castTo) {
+  /**
+   * The refusal a sorted container gives an element it cannot order, with the cast as its cause.
+   */
+  private static String unorderable(final String container, final String implementing) {
     return (
       "IllegalStateException: Deep map: " +
       container +
       " keeps its elements in order, and %sA could not be ordered there, " +
       implementing +
       ". Supply an ordering these elements accept through a Mapping.via(...) row, or declare the" +
-      " target as a set that keeps no order. The cause is the cast itself. <- ClassCastException:" +
-      " class %sA cannot be cast to class " +
-      castTo
+      " target as a set that keeps no order. The cause is the cast itself. <- ClassCastException"
     );
   }
 
@@ -956,7 +1052,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       false,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element ordered against another type",
@@ -968,7 +1064,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       false,
-      unorderable("java.util.SortedSet", "though its type implements Comparable", "java.lang.String")
+      unorderable("java.util.SortedSet", "though its type implements Comparable")
     ),
     // An element ordered against its own kind has said it can be ordered,
     // so a cast escaping its compareTo is its own and propagates as it is.
@@ -1000,7 +1096,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sA>",
       "A",
       false,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element copied unchanged whose own compareTo casts",
@@ -1024,7 +1120,7 @@ class CrossPathCorpusTest {
       "%sSortedDto",
       "B",
       false,
-      unorderable("%sSorted", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("%sSorted", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element converted one level down",
@@ -1033,7 +1129,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sB>",
       "B",
       true,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     ),
     new SortedBackward(
       "an element copied unchanged one level down",
@@ -1042,7 +1138,7 @@ class CrossPathCorpusTest {
       "java.util.Set<%sA>",
       "A",
       true,
-      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable")
     )
   );
 
@@ -1092,7 +1188,7 @@ class CrossPathCorpusTest {
       final var compiled = sources.toArray(JavaFileObject[]::new);
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), compiled);
       assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), compiled);
+      final var processed = bridged(compiled);
       assertTrue(processed.success(), () -> shape.name() + " should bridge: " + processed.errorMessages());
       // The refusal is built in generated code, which a consumer may compile with every lint on and
       // warnings as errors, so it has to raise none of its own.
@@ -1117,11 +1213,12 @@ class CrossPathCorpusTest {
         ? classes.get(PACKAGE + "." + prefix + "InnerDto").getConstructors()[0].newInstance(items)
         : items;
       final var target = tgt.getConstructors()[0].newInstance(held);
-      final var backward = emitted(processed, plain, prefix).getMethod("backward", tgt);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = thrown(() -> Telescope.mapper(cast(src), cast(tgt)).backward(target));
+      final var backward = emitted(processed, plain, prefix, nested).getMethod("backward", tgt);
 
       final var owed = shape.owed().replace("%s", PACKAGE + "." + prefix);
       final var generated = thrown(() -> backward.invoke(null, target));
-      final var reflective = thrown(() -> Telescope.mapper(cast(src), cast(tgt)).backward(target));
       if (!owed.equals(generated)) failures.add(shape.name() + ": generated threw " + generated);
       if (!owed.equals(reflective)) failures.add(shape.name() + ": reflective threw " + reflective);
     }
@@ -1388,7 +1485,7 @@ class CrossPathCorpusTest {
       };
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
@@ -1422,10 +1519,16 @@ class CrossPathCorpusTest {
       }
       final var source = src.getConstructors()[0].newInstance(input);
 
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(source));
+      });
       final Outcome generated;
       final Outcome generatedBack;
       if (processed.success()) {
-        final var bridge = emitted(processed, plain, prefix);
+        final var bridge = emitted(processed, plain, prefix, nested);
         final var forward = bridge.getMethod("forward", src);
         final var backward = bridge.getMethod("backward", tgt);
         generated = run(tgt.getMethod("items"), () -> forward.invoke(null, source));
@@ -1434,11 +1537,6 @@ class CrossPathCorpusTest {
         generated = Outcome.refused(processed.errorMessages().strip());
         generatedBack = generated;
       }
-      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
-      final var reflectiveBack = run(src.getMethod("items"), () -> {
-        final var mapper = Telescope.mapper(cast(src), cast(tgt));
-        return mapper.backward(mapper.forward(source));
-      });
 
       if (shape.refused() != null) {
         if (generated.refusal() == null || !generated.refusal().contains(shape.refused().generatedSays())) {
@@ -1767,17 +1865,23 @@ class CrossPathCorpusTest {
       final var sources = files.toArray(JavaFileObject[]::new);
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), () -> row.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
       final var input = src.getMethod("sample").invoke(null);
 
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(input));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(input));
+      });
       final Outcome generated;
       final Outcome generatedBack;
       if (processed.success()) {
-        final var bridge = emitted(processed, plain, prefix);
+        final var bridge = emitted(processed, plain, prefix, nested);
         final var forward = bridge.getMethod("forward", src);
         final var backward = bridge.getMethod("backward", tgt);
         generated = run(tgt.getMethod("items"), () -> forward.invoke(null, input));
@@ -1786,11 +1890,6 @@ class CrossPathCorpusTest {
         generated = Outcome.refused(processed.errorMessages().strip());
         generatedBack = generated;
       }
-      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(input));
-      final var reflectiveBack = run(src.getMethod("items"), () -> {
-        final var mapper = Telescope.mapper(cast(src), cast(tgt));
-        return mapper.backward(mapper.forward(input));
-      });
 
       if (row.refused() != null) {
         if (generated.refusal() == null || !generated.refusal().contains(row.refused().generatedSays())) {
@@ -1867,11 +1966,7 @@ class CrossPathCorpusTest {
         final var code = Files.readString(fixtures.resolve(fixture + ".java"));
         sources.add(ProcessorHarness.source(PACKAGE + "." + fixture.replace('/', '.'), code));
       }
-      final var generated = ProcessorHarness.compileFully(
-        List.of(new BridgeProcessor()),
-        List.of(),
-        sources.toArray(JavaFileObject[]::new)
-      );
+      final var generated = bridged(sources.toArray(JavaFileObject[]::new));
       final var refusal = GENERATED_PATH_LIMITS.get(limit.name());
       assertTrue(
         !generated.success() && generated.hasError(refusal),
@@ -1922,8 +2017,8 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * What an attempt throws, as its simple class name and message followed by its cause's after
-   * {@code <-}, or a note that it threw nothing.
+   * What an attempt throws, as its simple class name and message followed by the class of each
+   * cause after {@code <-}, or a note that it threw nothing.
    */
   private static String thrown(final Attempt attempt) {
     try {
@@ -1985,18 +2080,19 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), () -> "the pair should bridge: " + processed.errorMessages());
     final var classes = plain.define(MethodHandles.lookup());
     final var src = classes.get(PACKAGE + ".SsSrc");
     final var tgt = classes.get(PACKAGE + ".SsTgt");
     final var base = classes.get(PACKAGE + ".SsBase").getConstructor();
     final var sub = classes.get(PACKAGE + ".SsSub").getConstructor();
-    final var backward = emitted(processed, plain, "Ss").getMethod("backward", tgt);
+    final var nested = nestedBridgesFirst(processed, plain, "Ss");
     final var mapper = Telescope.mapper(cast(src), cast(tgt));
+    final var backward = emitted(processed, plain, "Ss", nested).getMethod("backward", tgt);
 
     final var refusal = "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and ";
-    final var cause = " <- ClassCastException: ";
+    final var cause = " <- ClassCastException";
     final var failures = new ArrayList<String>();
     final Map<String, List<List<Object>>> shapes = new LinkedHashMap<>();
     shapes.put("a source whose second pass yields nothing", List.of(List.of(base.newInstance()), List.of()));
@@ -2021,18 +2117,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A throwable and its causes, each as its simple class name and message. A JDK cast's message
-   * ends with a parenthesised account of the class loaders involved, which differ between the two
-   * paths, so it is cut there.
+   * A throwable as its simple class name and message, and each of its causes as its class alone.
+   * HotSpot replaces an implicit exception that compiled code throws often with a preallocated one
+   * whose message is null, so a cause's message can differ from one call to the next while its
+   * class cannot.
    */
   private static String rendered(final Throwable thrown) {
-    final var message = String.valueOf(thrown.getMessage());
-    final var loaders = message.indexOf(" (");
-    final var own =
-      thrown.getClass().getSimpleName() +
-      ": " +
-      (thrown instanceof ClassCastException && loaders >= 0 ? message.substring(0, loaders) : message);
-    return thrown.getCause() == null ? own : own + " <- " + rendered(thrown.getCause());
+    final var out = new StringBuilder(thrown.getClass().getSimpleName()).append(": ").append(thrown.getMessage());
+    for (var cause = thrown.getCause(); cause != null; cause = cause.getCause()) {
+      out.append(" <- ").append(cause.getClass().getSimpleName());
+    }
+    return out.toString();
   }
 
   private static JavaFileObject[] rawSources(final String prefix, final RawPairing pairing) {
@@ -2662,7 +2757,7 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> pairing.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(qualified + "Src");
@@ -2670,12 +2765,15 @@ class CrossPathCorpusTest {
       final var source = src.getConstructors()[0].newInstance(fixedInput(classes, prefix, srcField, pairing.input()));
       final var items = tgt.getMethod("items");
 
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
       final var generated =
         forward == null
           ? Outcome.refused(processed.errorMessages().strip())
           : run(items, () -> forward.invoke(null, source));
-      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
       // path refuses either while compiling, where only the processor's own diagnostic counts, or
@@ -2981,21 +3079,24 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> construction.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
 
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(qualified + "Src"));
       final Class<Object> tgt = cast(classes.get(qualified + "Tgt"));
       final var source = src.getConstructors()[0].newInstance("x");
-      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
-      final var generated =
-        forward == null ? REFUSED + processed.errorMessages().strip() : built(() -> forward.invoke(null, source));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var reflective = built(() ->
         (construction.strategy().equals("AUTO")
           ? Telescope.mapper(src, tgt)
           : Telescope.mapper(src, tgt, WriteHint.writeBean(tgt, WriteStrategy.valueOf(construction.strategy())))
         ).forward(source)
       );
+      final var forward = processed.success()
+        ? emitted(processed, plain, prefix, nested).getMethod("forward", src)
+        : null;
+      final var generated =
+        forward == null ? REFUSED + processed.errorMessages().strip() : built(() -> forward.invoke(null, source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
       // path's refusal has to be the processor's own diagnostic, so a javac error inside a
@@ -3432,13 +3533,14 @@ class CrossPathCorpusTest {
       };
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
       assertTrue(plain.success(), plain::errorMessages);
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), processed::errorMessages);
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(cast(src), cast(tgt));
+      final var bridge = emitted(processed, plain, prefix, nested);
       final var srcItems = src.getMethod("items");
       final var tgtItems = tgt.getMethod("items");
       final var forwardIn = row.input().get();
@@ -3876,8 +3978,183 @@ class CrossPathCorpusTest {
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
       "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")"
+    ),
+    new Cycle(
+      "a subclass that refers to itself through a property typed by its superclass",
+      List.of(
+        // A superclass is defined before the classes that extend or hold it.
+        bean("%1$sNode", "", "String n", "%1$sNode next"),
+        "public class %1$sSub extends %1$sNode {}\n",
+        bean("%1$sNodeDto", "", "String n", "%1$sNodeDto next"),
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sSub s) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var sub = new %1$sSub();\n" +
+          "    sub.setN(\"s\");\n" +
+          "    sub.setNext(sub);\n" +
+          "    return new %1$sSrc(sub);\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(%1$sNodeDto s) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var node = new %1$sNodeDto();\n" +
+          "    node.setN(\"t\");\n" +
+          "    node.setNext(node);\n" +
+          "    return new %1$sTgt(node);\n" +
+          "  }\n" +
+          "}\n"
+      ),
+      "#0(s=#1(n=\"s\", next=#2(n=\"s\", next=null)))",
+      "#0(s=#1(n=\"t\", next=#2(n=\"t\", next=null)))",
+      "#0(s=#1(n=\"t\", next=#2(n=\"t\", next=null)))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge renames the property leading back",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", group("%1$sSrc", "%1$sGroup", "%1$sHolder", "Node"), "%1$sGroup g"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sGroupDto.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"node\", target = \"child\"))\n" +
+          bean("%1$sGroup", "", "%1$sHolder node"),
+        bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sTgt", group("%1$sTgt", "%1$sGroupDto", "%1$sHolderDto", "Child"), "%1$sGroupDto g"),
+        bean("%1$sGroupDto", "", "%1$sHolderDto child"),
+        bean("%1$sHolderDto", "", "%1$sTgt back")
+      ),
+      "#0(g=#1(child=#2(back=null)))",
+      "#0(g=#1(node=#2(back=null)))",
+      "#0(g=#1(node=#2(back=#3(g=null))))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge fills a constant",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, constants =" +
+          " @io.github.eschizoid.telescope.annotations.Constant(field = \"tag\", value = \"k\"))\n" +
+          bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
+        bean("%1$sHolderDto", "", "String tag", "%1$sTgt back")
+      ),
+      "#0(h=#1(back=null, tag=\"k\"))",
+      "#0(h=#1(back=null))",
+      "#0(h=#1(back=#2(h=null)))"
+    ),
+    new Cycle(
+      "a nested pair on the cycle whose own bridge computes a value",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, computes =" +
+          " @io.github.eschizoid.telescope.annotations.Compute(field = \"tag\", using = %1$sTagFn.class))\n" +
+          bean("%1$sHolder", "", "%1$sSrc back"),
+        "public class %1$sTagFn implements java.util.function.Supplier<String> {\n" +
+          "  public String get() { return \"c\"; }\n" +
+          "}\n",
+        bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
+        bean("%1$sHolderDto", "", "String tag", "%1$sTgt back")
+      ),
+      "#0(h=#1(back=null, tag=\"c\"))",
+      "#0(h=#1(back=null))",
+      "#0(h=#1(back=#2(h=null)))"
+    ),
+    new Cycle(
+      "a nested pair whose own bridge transforms a property, on a cycle closing at a walked pair around it",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", walkedBetween("%1$sSrc", "%1$sA", "%1$sMid"), "%1$sA a"),
+        bean("%1$sA", "", "%1$sMid m"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"label\", using = %1$sUpFn.class))\n" +
+          bean("%1$sMid", "", "String label", "%1$sA back"),
+        "public class %1$sUpFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+          "  public String forward(final String s) { return s == null ? null : s.toUpperCase(); }\n" +
+          "  public String backward(final String s) { return s == null ? null : s.toLowerCase(); }\n" +
+          "}\n",
+        bean("%1$sTgt", walkedBetween("%1$sTgt", "%1$sADto", "%1$sMidDto"), "%1$sADto a"),
+        bean("%1$sADto", "", "%1$sMidDto m"),
+        bean("%1$sMidDto", "", "String label", "%1$sADto back")
+      ),
+      "#0(a=#1(m=#2(back=null, label=\"M\")))",
+      "#0(a=#1(m=#2(back=null, label=\"m\")))",
+      "#0(a=#1(m=#2(back=null, label=\"m\")))"
     )
   );
+
+  /**
+   * A {@code sample()} building {@code type} whose {@code g}, a {@code groupType}, holds a {@code
+   * holderType} under {@code set<property>} that leads back to the sample.
+   */
+  private static String group(
+    final String type,
+    final String groupType,
+    final String holderType,
+    final String property
+  ) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var group = new " +
+      groupType +
+      "();\n" +
+      "    final var holder = new " +
+      holderType +
+      "();\n" +
+      "    holder.setBack(root);\n" +
+      "    group.set" +
+      property +
+      "(holder);\n" +
+      "    root.setG(group);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
+
+  /** A {@code sample()} building {@code type} whose {@code h}, a {@code holderType}, leads back. */
+  private static String held(final String type, final String holderType) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var holder = new " +
+      holderType +
+      "();\n" +
+      "    holder.setBack(root);\n" +
+      "    root.setH(holder);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
+
+  /**
+   * A {@code sample()} building {@code type} whose {@code a}, an {@code aType}, holds a {@code
+   * midType} labelled {@code m} that leads back to the {@code a}.
+   */
+  private static String walkedBetween(final String type, final String aType, final String midType) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var root = new " +
+      type +
+      "();\n" +
+      "    final var a = new " +
+      aType +
+      "();\n" +
+      "    final var mid = new " +
+      midType +
+      "();\n" +
+      "    mid.setLabel(\"m\");\n" +
+      "    mid.setBack(a);\n" +
+      "    a.setM(mid);\n" +
+      "    root.setA(a);\n" +
+      "    return root;\n" +
+      "  }\n"
+    );
+  }
 
   @Test
   @DisplayName("an object graph that leads back to an object being converted maps to the same shape on both paths")
@@ -3898,13 +4175,14 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cycle.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), () -> cycle.name() + " should compile: " + processed.errorMessages());
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = List.of(
@@ -3953,9 +4231,7 @@ class CrossPathCorpusTest {
     // The @ViaMapper names a bridge the processor writes in the same compilation, so the source
     // cannot compile without the processor and every class comes from the processed compilation.
     final var head = "package " + PACKAGE + ";\n";
-    final var processed = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
+    final var processed = bridged(
       source(
         "VmAddress",
         head +
@@ -4043,13 +4319,14 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> "the pair should compile without the processor: " + plain.errorMessages());
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), () -> "the pair should compile: " + processed.errorMessages());
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".TvSrc"));
     final Class<Object> tgt = cast(classes.get(PACKAGE + ".TvTgt"));
-    final var bridge = emitted(processed, plain, "Tv");
+    final var nested = nestedBridgesFirst(processed, plain, "Tv");
     final var mapper = Telescope.mapper(src, tgt);
+    final var bridge = emitted(processed, plain, "Tv", nested);
     // Two nodes that name each other as next, so the field is both inherited and part of a cycle.
     final Attempt srcSample = () -> chain(src, "alice", "bob");
     final Attempt tgtSample = () -> chain(tgt, "carol", "dave");
@@ -4118,35 +4395,25 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), () -> prefix + ": the pair should compile: " + plain.errorMessages());
-    return List.of(plain, ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources));
+    return List.of(plain, bridged(sources));
   }
 
   @Test
   @DisplayName(
-    "a property a generic subclass passes through to its superclass converts the same way on both paths, with no unchecked warning"
+    "a property a generic subclass passes through to its superclass converts the same way on both paths, with no warning"
   )
   void aPropertyASubclassPassesThroughConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
     // Seen from a subclass that passes its own variable through, first and items are typed by that
     // variable, which no static method of the bridge can name. Both paths read them as the
     // superclass declares them: one V, so first passes through and items is copied into a fresh
-    // list. In each row one side passes its own variable through, and the other passes its own
-    // through as well or fixes the variable to String. The bridge names a generic class raw, so
-    // the key, which every row fixes to String, reads back from a generic side as Object.
+    // list. Both sides pass their own variable through, so neither fixes a class a value must
+    // fit. The bridge names a generic class raw, so the key, which both fix to String, reads back
+    // as Object.
     final var pairs = List.of(
       List.of(
         "Ptv",
         "public class PtvSrc<X> extends PtvBase<String, X> {}\n",
         "public class PtvTgt<Y> extends PtvBase<String, Y> {}\n"
-      ),
-      List.of(
-        "Ptx",
-        "public class PtxSrc<X> extends PtxBase<String, X> {}\n",
-        "public class PtxTgt extends PtxBase<String, String> {}\n"
-      ),
-      List.of(
-        "Pts",
-        "public class PtsSrc extends PtsBase<String, String> {}\n",
-        "public class PtsTgt<Y> extends PtsBase<String, Y> {}\n"
       )
     );
     final var owed = List.of(
@@ -4164,12 +4431,12 @@ class CrossPathCorpusTest {
         failures.add(prefix + ": the generated bridge should compile: " + processed.errorMessages());
         continue;
       }
-      failures.addAll(warningsInBridgeMethods(prefix, processed));
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(processed, plain, prefix, nested);
       for (final var operation : owed) {
         for (final var side : List.of("generated", "reflective")) {
           final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
@@ -4196,14 +4463,12 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a dropped property a generic subclass passes through compiles with no unchecked warning")
-  void aDroppedPassedThroughPropertyCompilesWithNoUncheckedWarning() {
+  @DisplayName("a dropped property a generic subclass passes through compiles with no warning")
+  void aDroppedPassedThroughPropertyCompilesWithNoWarning() {
     final var head = "package " + PACKAGE + ";\n";
     // Backward fills the dropped property with a default and patch copies it from base, both
     // through the raw source, whose setter takes the erasure of List<T>.
-    final var processed = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
+    final var processed = bridged(
       source(
         "PtdBase",
         head +
@@ -4233,48 +4498,153 @@ class CrossPathCorpusTest {
       )
     );
     assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
-    final var warnings = warningsInBridgeMethods("Ptd", processed);
-    assertTrue(warnings.isEmpty(), () -> String.join("\n  ", warnings));
   }
 
-  /**
-   * The warnings a build compiling {@code processed} would show for the bridge: any unchecked or
-   * redundant-cast warning, and a raw-type warning on a line of the bridge's {@code forward},
-   * {@code backward} or {@code patch}, which name both classes raw.
-   */
-  private static List<String> warningsInBridgeMethods(
-    final String prefix,
-    final ProcessorHarness.Compilation processed
-  ) {
-    final var bridge = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
-    if (bridge == null) return List.of(prefix + ": no bridge was generated");
-    final var methodLines = new HashSet<Long>();
-    final var lines = bridge.split("\n", -1);
-    var inMethod = false;
-    for (int i = 0; i < lines.length; i++) {
-      final var line = lines[i];
-      if (
-        line.startsWith("  public static ") &&
-        (line.contains(" forward(") || line.contains(" backward(") || line.contains(" patch("))
-      ) {
-        inMethod = true;
+  /** A bean declaring {@code %s}, with one {@code String} property. */
+  private static final String NAMED_BEAN =
+    "public class %s {\n" +
+    "  private String name;\n" +
+    "  public String getName() { return name; }\n" +
+    "  public void setName(final String name) { this.name = name; }\n" +
+    "}\n";
+
+  @Test
+  @DisplayName(
+    "a bridge over a generic class compiles with no warning and converts as the runtime does, in every form a bridge takes"
+  )
+  void aBridgeOverAGenericClassCompilesWithNoWarning() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
+    final var pairs = List.of(
+      List.of("GwsSrc<X>", "GwsTgt"),
+      List.of("GwtSrc", "GwtTgt<Y>"),
+      List.of("GwbSrc<X>", "GwbTgt<Y>")
+    );
+    final var failures = new ArrayList<String>();
+    for (final var pair : pairs) {
+      final var src = pair.get(0).replaceAll("<.*", "");
+      final var tgt = pair.get(1).replaceAll("<.*", "");
+      final var sources = new JavaFileObject[] {
+        source(src, head + bridge + tgt + ".class)\n" + NAMED_BEAN.formatted(pair.get(0))),
+        source(tgt, head + NAMED_BEAN.formatted(pair.get(1))),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> src + ": the pair should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      assertTrue(processed.success(), () -> src + ": the bridge should compile: " + processed.errorMessages());
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + src));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + tgt));
+      final var sample = source.getConstructor().newInstance();
+      source.getMethod("setName", String.class).invoke(sample, "a");
+      final var cellPrefix = src.replace("Src", "");
+      final var nested = nestedBridgesFirst(processed, plain, cellPrefix);
+      final var getName = target.getMethod("getName");
+      final var viaRuntime = getName.invoke(Telescope.mapper(source, target).forward(sample));
+      final var generated = emitted(processed, plain, cellPrefix, nested).getMethod("forward", source);
+      final var viaBridge = getName.invoke(generated.invoke(null, sample));
+      if (!"a".equals(viaBridge) || !"a".equals(viaRuntime)) {
+        failures.add(src + ": the bridge gave " + viaBridge + ", the runtime " + viaRuntime);
       }
-      if (inMethod) methodLines.add((long) i + 1);
-      if (inMethod && line.equals("  }")) inMethod = false;
     }
-    final var warnings = new ArrayList<String>();
-    for (final var d : processed.diagnostics()) {
-      final var message = d.getMessage(Locale.ROOT);
-      final var inBridge = d.getSource() != null && d.getSource().getName().contains(prefix + "SrcBridge");
-      if (
-        message.contains("unchecked") ||
-        message.contains("redundant cast") ||
-        (message.contains("raw type") && inBridge && methodLines.contains(d.getLineNumber()))
-      ) {
-        warnings.add(prefix + ": the bridge warns at line " + d.getLineNumber() + ": " + message);
-      }
-    }
-    return warnings;
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+
+    // The carrier form and a sealed root reach the same emission through their own paths.
+    final var carried = bridged(
+      source("GwcSrc", head + NAMED_BEAN.formatted("GwcSrc<X>")),
+      source("GwcTgt", head + NAMED_BEAN.formatted("GwcTgt<Y>")),
+      source(
+        "GwcCarrier",
+        head + bridge + "source = GwcSrc.class, target = GwcTgt.class)\npublic final class GwcCarrier {}\n"
+      )
+    );
+    assertTrue(carried.success(), () -> "the carrier bridge should compile: " + carried.errorMessages());
+    final var sealed = bridged(
+      source(
+        "GwrSrc",
+        head + bridge + "GwrTgt.class)\npublic sealed interface GwrSrc<T> permits GwrCase, GwrFixed {}\n"
+      ),
+      source(
+        "GwrCase",
+        head + bridge + "GwrCaseDto.class)\npublic record GwrCase<T>(String name) implements GwrSrc<T> {}\n"
+      ),
+      source(
+        "GwrFixed",
+        head + bridge + "GwrFixedDto.class)\npublic record GwrFixed(String name) implements GwrSrc<String> {}\n"
+      ),
+      source("GwrTgt", head + "public sealed interface GwrTgt<U> permits GwrCaseDto, GwrFixedDto {}\n"),
+      source("GwrCaseDto", head + "public record GwrCaseDto<U>(String name) implements GwrTgt<U> {}\n"),
+      source("GwrFixedDto", head + "public record GwrFixedDto(String name) implements GwrTgt<String> {}\n")
+    );
+    assertTrue(sealed.success(), () -> "the sealed bridge should compile: " + sealed.errorMessages());
+    // A root declaring no type parameters can still permit a generic case, which its patch names.
+    final var genericCase = bridged(
+      source("GwkSrc", head + bridge + "GwkTgt.class)\npublic sealed interface GwkSrc permits GwkCase {}\n"),
+      source(
+        "GwkCase",
+        head + bridge + "GwkCaseDto.class)\npublic record GwkCase<T>(String name) implements GwkSrc {}\n"
+      ),
+      source("GwkTgt", head + "public sealed interface GwkTgt permits GwkCaseDto {}\n"),
+      source("GwkCaseDto", head + "public record GwkCaseDto<U>(String name) implements GwkTgt {}\n")
+    );
+    assertTrue(genericCase.success(), () -> "the sealed bridge should compile: " + genericCase.errorMessages());
+    // Only the source's case is generic, and the patch names it in its case tests.
+    final var genericSourceCase = bridged(
+      source("BsSrc", head + bridge + "BsTgt.class)\npublic sealed interface BsSrc permits BsCase {}\n"),
+      source("BsCase", head + bridge + "BsCaseDto.class)\npublic record BsCase<T>(String name) implements BsSrc {}\n"),
+      source("BsTgt", head + "public sealed interface BsTgt permits BsCaseDto {}\n"),
+      source("BsCaseDto", head + "public record BsCaseDto(String name) implements BsTgt {}\n")
+    );
+    assertTrue(
+      genericSourceCase.success(),
+      () -> "the sealed bridge should compile: " + genericSourceCase.errorMessages()
+    );
+    // Only the target's case is generic, and the patch names it in its case tests.
+    final var genericTargetCase = bridged(
+      source("BcSrc", head + bridge + "BcTgt.class)\npublic sealed interface BcSrc permits BcCase {}\n"),
+      source("BcCase", head + bridge + "BcCaseDto.class)\npublic record BcCase(String name) implements BcSrc {}\n"),
+      source("BcTgt", head + "public sealed interface BcTgt permits BcCaseDto {}\n"),
+      source("BcCaseDto", head + "public record BcCaseDto<U>(String name) implements BcTgt {}\n")
+    );
+    assertTrue(
+      genericTargetCase.success(),
+      () -> "the sealed bridge should compile: " + genericTargetCase.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a caller holding a generic class with or without arguments uses each member of its bridge")
+  void aCallerUsesEveryMemberOfABridgeOverAGenericClass() {
+    final var head = "package " + PACKAGE + ";\n";
+    // Each member names both classes raw, which a caller can assign from and pass a value of either
+    // form to. A wildcard in a field's type or a method's return type would refuse a line below.
+    final var caller =
+      head +
+      "import io.github.eschizoid.telescope.Telescope;\n" +
+      "import io.github.eschizoid.telescope.conversion.BridgeFn;\n" +
+      "@SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "public class GwuCaller {\n" +
+      "  static void use(final GwuSrc<String> typed, final GwuSrc raw, final GwuTgt<Integer> dto) {\n" +
+      "    final BridgeFn<GwuSrc, GwuTgt> fn = GwuSrcBridge.BRIDGE_FN;\n" +
+      "    final Telescope<GwuSrc, GwuTgt> path = GwuSrcBridge.BRIDGE;\n" +
+      "    final GwuTgt<Integer> forward = GwuSrcBridge.forward(typed);\n" +
+      "    final GwuTgt rawForward = GwuSrcBridge.forward(raw);\n" +
+      "    final GwuSrc<String> backward = GwuSrcBridge.backward(dto);\n" +
+      "    final GwuSrc<String> patched = GwuSrcBridge.patch(typed, dto);\n" +
+      "    final java.util.function.Function<GwuSrc<String>, GwuTgt<Integer>> ref = GwuSrcBridge::forward;\n" +
+      "    final GwuTgt<Integer> read = path.read(typed);\n" +
+      "    final GwuTgt<Integer> applied = fn.forward(typed);\n" +
+      "  }\n" +
+      "}\n";
+    final var compilation = bridged(
+      source(
+        "GwuSrc",
+        head + "@io.github.eschizoid.telescope.annotations.Bridge(GwuTgt.class)\n" + NAMED_BEAN.formatted("GwuSrc<X>")
+      ),
+      source("GwuTgt", head + NAMED_BEAN.formatted("GwuTgt<Y>")),
+      source("GwuCaller", caller)
+    );
+    assertTrue(compilation.success(), () -> "the caller should compile: " + compilation.errorMessages());
   }
 
   /**
@@ -4317,61 +4687,940 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Inputs on which the two paths convert a pass-through pair differently, each with what the
-   * generated path and then the runtime give. Neither path checks a value against the class the
-   * receiving side fixes the variable to. The generated path writes through a cast to that class,
-   * which throws a bare {@code ClassCastException}; the runtime writes the value as it is, and the
-   * property then holds a value of a class its type does not admit.
-   *
-   * <p>An entry no row exercises, or whose row both paths start to agree on, fails the test.
+   * A superclass whose key is a type variable every row fixes to {@code String} and whose first is
+   * typed by a variable the subclasses pass through or fix. {@code %s} is the row's prefix.
    */
-  private static final Map<String, List<String>> UNCHECKED_WRITE_DIVERGENCES = Map.of(
-    // A defect still to close: neither path names the property when the value does not fit.
-    "an Integer into a property the target fixes to String",
-    List.of(REFUSED + "ClassCastException", "first=42, a java.lang.Integer")
-  );
+  private static final String FIXED_SCALAR_BASE =
+    "public class %sBase<K, V> {\n" +
+    "  private K key;\n" +
+    "  private V first;\n" +
+    "  public K getKey() { return key; }\n" +
+    "  public void setKey(final K key) { this.key = key; }\n" +
+    "  public V getFirst() { return first; }\n" +
+    "  public void setFirst(final V first) { this.first = first; }\n" +
+    "}\n";
 
-  @Test
-  @DisplayName("a value that does not fit the class a side fixes the variable to is a registered divergence")
-  void aValueThatDoesNotFitTheFixedClassIsARegisteredDivergence() throws ReflectiveOperationException {
-    final var compiled = passThroughPair(
-      "Ptw",
-      "public class PtwSrc<X> extends PtwBase<String, X> {}\n",
-      "public class PtwTgt extends PtwBase<String, String> {}\n"
-    );
-    final var plain = compiled.get(0);
-    final var processed = compiled.get(1);
-    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
-    final var classes = plain.define(MethodHandles.lookup());
-    final Class<Object> source = cast(classes.get(PACKAGE + ".PtwSrc"));
-    final Class<Object> target = cast(classes.get(PACKAGE + ".PtwTgt"));
-    final var bridge = emitted(processed, plain, "Ptw");
-    final var mapper = Telescope.mapper(source, target);
-    final var name = "an Integer into a property the target fixes to String";
-    final Attempt generated = () ->
-      bridge.getMethod("forward", source).invoke(null, passThroughSample(source, "k", 42, List.of()));
-    final Attempt reflective = () -> mapper.forward(passThroughSample(source, "k", 42, List.of()));
-    final var seen = List.of(firstHeld(generated), firstHeld(reflective));
-    assertTrue(
-      UNCHECKED_WRITE_DIVERGENCES.keySet().equals(Set.of(name)),
-      () -> "registered divergences with no row: " + UNCHECKED_WRITE_DIVERGENCES.keySet()
-    );
-    assertTrue(
-      seen.equals(UNCHECKED_WRITE_DIVERGENCES.get(name)),
-      () -> name + ": generated and runtime gave " + seen + ", registered " + UNCHECKED_WRITE_DIVERGENCES.get(name)
+  /**
+   * One value handed across unchanged into a side that fixes the variable its property is declared
+   * with: the source and target declarations, any classes they name, each with {@code %s} as the
+   * row's prefix, whether the value goes forward or backward, the value the sending side holds as
+   * first, and what both paths owe. A refusal is owed as {@code REFUSED} and the exception's simple
+   * name and message; a conversion as what {@link #firstHeld} reads back.
+   */
+  private record FixedScalar(
+    String name,
+    String srcDecl,
+    String tgtDecl,
+    List<String> others,
+    boolean forward,
+    Function<Map<String, Class<?>>, Object> first,
+    Function<Map<String, Class<?>>, String> owed
+  ) {}
+
+  /**
+   * The refusal both paths owe for a value of class {@code found} written into {@code owner}'s
+   * first.
+   */
+  private static String fixedRefusal(final Class<?> owner, final String found, final String fixed) {
+    return (
+      REFUSED + "ClassCastException: " + PairingMessages.fixedClassMismatch(owner.getTypeName(), "first", found, fixed)
     );
   }
 
-  /** What {@code attempt}'s result holds as first, with that value's class, or the refusal. */
+  /** The constant {@code name} of the enum {@code type}. */
+  private static Object constant(final Class<?> type, final String name) {
+    return Arrays.stream(type.getEnumConstants())
+      .filter(c -> ((Enum<?>) c).name().equals(name))
+      .findFirst()
+      .orElseThrow();
+  }
+
+  private static final List<FixedScalar> FIXED_SCALARS = List.of(
+    new FixedScalar(
+      "a String into a property the target fixes to String",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String> {}\n",
+      List.of(),
+      true,
+      classes -> "a",
+      classes -> "first=a, a java.lang.String"
+    ),
+    new FixedScalar(
+      "an Integer into a property the target fixes to String",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String> {}\n",
+      List.of(),
+      true,
+      classes -> 42,
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Integer", "java.lang.String")
+    ),
+    new FixedScalar(
+      "a Long into a property the target fixes to Integer",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, Integer> {}\n",
+      List.of(),
+      true,
+      classes -> 42L,
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Long", "java.lang.Integer")
+    ),
+    new FixedScalar(
+      "a constant of another enum into a property the target fixes to an enum",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, %sColor> {}\n",
+      List.of("public enum %sColor { RED }\n", "public enum %sShade { RED }\n"),
+      true,
+      classes -> constant(classes.get("Shade"), "RED"),
+      classes -> fixedRefusal(classes.get("Tgt"), classes.get("Shade").getName(), classes.get("Color").getName())
+    ),
+    // The value's class has a bridge to the class the target fixes, which neither path
+    // applies: the
+    // pair is planned as one declared type, which names no class to convert from.
+    new FixedScalar(
+      "a value whose own bridge goes to the class the target fixes",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, %sChildDto> {}\n",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(%sChildDto.class)\npublic record %sChild(String name) {}\n",
+        "public record %sChildDto(String name) {}\n"
+      ),
+      true,
+      classes -> {
+        try {
+          return classes.get("Child").getConstructor(String.class).newInstance("c");
+        } catch (final ReflectiveOperationException e) {
+          throw new IllegalStateException(e);
+        }
+      },
+      classes -> fixedRefusal(classes.get("Tgt"), classes.get("Child").getName(), classes.get("ChildDto").getName())
+    ),
+    new FixedScalar(
+      "an Object[] into a property the target fixes to String[]",
+      "public class %sSrc<X> extends %sBase<String, X> {}\n",
+      "public class %sTgt extends %sBase<String, String[]> {}\n",
+      List.of(),
+      true,
+      classes -> new Object[] { "a" },
+      classes -> fixedRefusal(classes.get("Tgt"), "java.lang.Object[]", "java.lang.String[]")
+    ),
+    new FixedScalar(
+      "an Integer the target passes through into a property the source fixes to String",
+      "public class %sSrc extends %sBase<String, String> {}\n",
+      "public class %sTgt<Y> extends %sBase<String, Y> {}\n",
+      List.of(),
+      false,
+      classes -> 42,
+      classes -> fixedRefusal(classes.get("Src"), "java.lang.Integer", "java.lang.String")
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a value handed into a side that fixes its variable converts when it fits and is refused by name on both paths otherwise"
+  )
+  void aValueThatDoesNotFitTheFixedClassIsRefusedByNameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : FIXED_SCALARS) {
+      final var prefix = "Fcw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var files = new ArrayList<JavaFileObject>();
+      files.add(source(prefix + "Base", head + FIXED_SCALAR_BASE.replace("%s", prefix)));
+      for (final var other : row.others()) {
+        final var named = Pattern.compile("(?:record|enum) (\\w+)").matcher(other.replace("%s", prefix));
+        if (!named.find()) throw new IllegalStateException(row.name() + " declares nothing it names");
+        files.add(source(named.group(1), head + other.replace("%s", prefix)));
+      }
+      files.add(
+        source(
+          prefix + "Src",
+          head +
+            "@io.github.eschizoid.telescope.annotations.Bridge(" +
+            prefix +
+            "Tgt.class)\n" +
+            row.srcDecl().replace("%s", prefix)
+        )
+      );
+      files.add(source(prefix + "Tgt", head + row.tgtDecl().replace("%s", prefix)));
+      final var sources = files.toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var defined = plain.define(MethodHandles.lookup());
+      final var classes = new LinkedHashMap<String, Class<?>>();
+      defined.forEach((name, cls) -> classes.put(name.substring(PACKAGE.length() + 1 + prefix.length()), cls));
+      final Class<Object> source = cast(classes.get("Src"));
+      final Class<Object> target = cast(classes.get("Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final var sender = row.forward() ? source : target;
+      final Attempt generated = () ->
+        row.forward()
+          ? bridge.getMethod("forward", source).invoke(null, fixedSample(sender, row.first().apply(classes)))
+          : bridge.getMethod("backward", target).invoke(null, fixedSample(sender, row.first().apply(classes)));
+      final Attempt reflective = () ->
+        row.forward()
+          ? mapper.forward(fixedSample(sender, row.first().apply(classes)))
+          : mapper.backward(fixedSample(sender, row.first().apply(classes)));
+      final var owed = row.owed().apply(classes);
+      final var viaBridge = firstHeld(generated);
+      final var viaRuntime = firstHeld(reflective);
+      if (!owed.equals(viaBridge)) failures.add(row.name() + ": generated gave " + viaBridge + ", owed " + owed);
+      if (!owed.equals(viaRuntime)) failures.add(row.name() + ": runtime gave " + viaRuntime + ", owed " + owed);
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A fresh {@code type} holding {@code "k"} as key and {@code first}, set through the setters. */
+  private static Object fixedSample(final Class<?> type, final Object first) throws ReflectiveOperationException {
+    final var sample = type.getConstructor().newInstance();
+    type.getMethod("setKey", Object.class).invoke(sample, "k");
+    type.getMethod("setFirst", Object.class).invoke(sample, first);
+    return sample;
+  }
+
+  @Test
+  @DisplayName(
+    "a container a side fixes the element type of is refused by name on both paths when nothing shows the elements fit"
+  )
+  void aContainerWhoseElementsCannotBeShownToFitIsRefusedWhenPlanned() {
+    // Each pair hands items across unchanged, one way from a side that passes its variable through
+    // into one that fixes it to String: forward for the first pair, backward for the second. The
+    // side passing its variable through holds items as a list of that variable.
+    final var pairs = List.of(
+      List.of(
+        "Ptx",
+        "public class PtxSrc<X> extends PtxBase<String, X> {}\n",
+        "public class PtxTgt extends PtxBase<String, String> {}\n",
+        "java.util.List<X>"
+      ),
+      List.of(
+        "Pts",
+        "public class PtsSrc extends PtsBase<String, String> {}\n",
+        "public class PtsTgt<Y> extends PtsBase<String, Y> {}\n",
+        "java.util.List<Y>"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var pair : pairs) {
+      final var prefix = pair.get(0);
+      final var owed = PairingMessages.fixedArgumentsDoNotFit("items", pair.get(3), "java.util.List<java.lang.String>");
+      final var compiled = passThroughPair(prefix, pair.get(1), pair.get(2));
+      final var plain = compiled.get(0);
+      final var processed = compiled.get(1);
+      if (processed.success() || !processed.hasError(owed)) {
+        failures.add(prefix + ": the generated path should refuse it by name; saw " + processed.errorMessages());
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      try {
+        Telescope.mapper(source, target);
+        failures.add(prefix + ": the runtime should refuse it by name, and built the mapper");
+      } catch (final IllegalStateException e) {
+        if (!owed.equals(e.getMessage())) failures.add(prefix + ": the runtime refused it with " + e.getMessage());
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A bean superclass holding one value of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String ONE_VALUE_BASE =
+    "public class %sBase<V> {\n" +
+    "  private V v;\n" +
+    "  public V getV() { return v; }\n" +
+    "  public void setV(final V v) { this.v = v; }\n" +
+    "}\n";
+
+  /** A bean superclass holding a list of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String LIST_VALUE_BASE =
+    "public class %sBase<V> {\n" +
+    "  private java.util.List<V> v;\n" +
+    "  public java.util.List<V> getV() { return v; }\n" +
+    "  public void setV(final java.util.List<V> v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * A bean superclass holding a list of values that fit its variable as {@code v}. {@code %s} is
+   * the prefix.
+   */
+  private static final String WILDCARD_LIST_BASE =
+    "public class %sBase<V> {\n" +
+    "  private java.util.List<? extends V> v;\n" +
+    "  public java.util.List<? extends V> getV() { return v; }\n" +
+    "  public void setV(final java.util.List<? extends V> v) { this.v = v; }\n" +
+    "}\n";
+
+  /** A bean superclass holding an array of its variable as {@code v}. {@code %s} is the prefix. */
+  private static final String ARRAY_BASE =
+    "public class %sBase<V> {\n" +
+    "  private V[] v;\n" +
+    "  public V[] getV() { return v; }\n" +
+    "  public void setV(final V[] v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * A bean superclass holding as {@code v} an array of the type {@code %2$s} names, given its
+   * variable. {@code %1$s} is the prefix.
+   */
+  private static final String GENERIC_ARRAY_BASE =
+    "public class %1$sBase<V> {\n" +
+    "  private %2$s[] v;\n" +
+    "  public %2$s[] getV() { return v; }\n" +
+    "  public void setV(final %2$s[] v) { this.v = v; }\n" +
+    "}\n";
+
+  /**
+   * The base, the classes in {@code others}, the source {@code srcDecl} bridged to the target
+   * {@code tgtDecl}, leniently when {@code lenient}, compiled without the processor and with it.
+   * Each declaration has {@code %s} as the row's prefix.
+   */
+  private static List<ProcessorHarness.Compilation> valuePair(
+    final String prefix,
+    final String base,
+    final String srcDecl,
+    final String tgtDecl,
+    final List<String> others,
+    final boolean lenient
+  ) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var files = new ArrayList<JavaFileObject>();
+    files.add(source(prefix + "Base", head + base.replace("%1$s", prefix).replace("%s", prefix)));
+    for (final var other : others) {
+      final var named = Pattern.compile("(?:record|class) (\\w+)").matcher(other.replace("%s", prefix));
+      if (!named.find()) throw new IllegalStateException(prefix + " declares nothing it names");
+      files.add(source(named.group(1), head + other.replace("%s", prefix)));
+    }
+    files.add(
+      source(
+        prefix + "Src",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = " +
+          prefix +
+          "Tgt.class, lenient = " +
+          lenient +
+          ")\n" +
+          srcDecl.replace("%s", prefix)
+      )
+    );
+    files.add(source(prefix + "Tgt", head + tgtDecl.replace("%s", prefix)));
+    final var sources = files.toArray(JavaFileObject[]::new);
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> prefix + ": the pair should compile: " + plain.errorMessages());
+    return List.of(plain, bridged(sources));
+  }
+
+  /** What {@code attempt}'s result holds as {@code v}, or the refusal with its message. */
+  private static String valueHeld(final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var v = out.getClass().getMethod("getV").invoke(out);
+      return "v=" + (v instanceof Object[] array ? Arrays.deepToString(array) : v);
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
+  }
+
+  /** What {@code value} gives, with a checked failure rethrown as a reflective one. */
+  private static Object call(final Callable<Object> value) throws ReflectiveOperationException {
+    try {
+      return value.call();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new ReflectiveOperationException(e);
+    }
+  }
+
+  /** A fresh {@code type} holding {@code v}. */
+  private static Object holding(final Class<?> type, final Object v) throws ReflectiveOperationException {
+    final var sample = type.getConstructor().newInstance();
+    for (final var method : type.getMethods()) {
+      if (method.getName().equals("setV")) method.invoke(sample, v);
+    }
+    return sample;
+  }
+
+  @Test
+  @DisplayName(
+    "a value given type arguments a side fixes is refused by name on both paths when nothing shows its arguments fit"
+  )
+  void aValueGivenArgumentsThatCannotBeShownToFitIsRefusedWhenPlanned() {
+    // A generic class other than a container is held to its arguments as a container is: nothing
+    // checks a value's arguments as it is written. A wildcard argument contains only what fits its
+    // bound. A row that refuses forward is refused by a forward-only mapper and a lenient bridge
+    // too; the others refuse only backward, where a Number is handed into a variable bound by
+    // Integer.
+    record Row(String prefix, String base, String src, String tgt, List<String> others, boolean forward, String owed) {}
+    final var rows = List.of(
+      new Row(
+        "Fga",
+        ONE_VALUE_BASE,
+        "public class FgaSrc<X> extends FgaBase<X> {}\n",
+        "public class FgaTgt extends FgaBase<FgaBox<String>> {}\n",
+        List.of("public record %sBox<B>(B b) {}\n"),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "X", PACKAGE + ".FgaBox<java.lang.String>")
+      ),
+      new Row(
+        "Fgq",
+        LIST_VALUE_BASE,
+        "public class FgqSrc<T extends Integer> extends FgqBase<T> {}\n",
+        "public class FgqTgt extends FgqBase<Number> {}\n",
+        List.of(),
+        false,
+        PairingMessages.fixedArgumentsDoNotFit("v", "java.util.List<java.lang.Number>", "java.util.List<T>")
+      ),
+      new Row(
+        "Fwe",
+        WILDCARD_LIST_BASE,
+        "public class FweSrc<T> extends FweBase<T> {}\n",
+        "public class FweTgt extends FweBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends T>",
+          "java.util.List<? extends java.lang.String>"
+        )
+      ),
+      new Row(
+        "Fae",
+        GENERIC_ARRAY_BASE.replace("%2$s", "java.util.List<? extends V>"),
+        "public class FaeSrc<T> extends FaeBase<T> {}\n",
+        "public class FaeTgt extends FaeBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends T>[]",
+          "java.util.List<? extends java.lang.String>[]"
+        )
+      ),
+      new Row(
+        "Fax",
+        ARRAY_BASE,
+        "public class FaxSrc<T> extends FaxBase<T> {}\n",
+        "public class FaxTgt extends FaxBase<java.util.List<String>> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "T[]", "java.util.List<java.lang.String>[]")
+      ),
+      new Row(
+        "Fan",
+        GENERIC_ARRAY_BASE.replace("%2$s", "java.util.List<V>"),
+        "public class FanSrc<T> extends FanBase<T> {}\n",
+        "public class FanTgt extends FanBase<String> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "java.util.List<T>[]", "java.util.List<java.lang.String>[]")
+      ),
+      new Row(
+        "Fws",
+        WILDCARD_LIST_BASE,
+        "public class FwsSrc<T extends Integer> extends FwsBase<T> {}\n",
+        "public class FwsTgt extends FwsBase<Number> {}\n",
+        List.of(),
+        false,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<? extends java.lang.Number>",
+          "java.util.List<? extends T>"
+        )
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), false);
+      final var processed = compiled.get(1);
+      if (processed.success() || !processed.hasError(row.owed())) {
+        failures.add(row.prefix() + ": the generated path should refuse it by name; saw " + processed.errorMessages());
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var builds = new ArrayList<Callable<Object>>();
+      builds.add(() -> Telescope.mapper(source, target));
+      if (row.forward()) builds.add(() -> Telescope.mapperForward(source, target));
+      for (final var build : builds) {
+        try {
+          build.call();
+          failures.add(row.prefix() + ": the runtime should refuse it by name, and built the mapper");
+        } catch (final IllegalStateException e) {
+          if (!row.owed().equals(e.getMessage())) failures.add(
+            row.prefix() + ": the runtime refused it with " + e.getMessage()
+          );
+        } catch (final Exception e) {
+          failures.add(row.prefix() + ": the runtime failed with " + e);
+        }
+      }
+      if (row.forward()) {
+        final var lenient = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), true).get(1);
+        if (lenient.success() || !lenient.hasError(row.owed())) {
+          failures.add(row.prefix() + ": a lenient bridge should refuse it by name; saw " + lenient.errorMessages());
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a variable whose bound fits the class the target fixes converts forward with no check, on both paths")
+  void aBoundThatFitsTheFixedClassConvertsForwardWithNoCheck() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    // A list of a variable bound by Integer into a list of Number, held as itself or through a
+    // wildcard: forward fits, and a forward-only mapper and a lenient bridge, which plan nothing
+    // backward, convert it.
+    for (final var shape : List.of(List.of("Fgl", LIST_VALUE_BASE), List.of("Fwl", WILDCARD_LIST_BASE))) {
+      final var prefix = shape.get(0);
+      final var list = valuePair(
+        prefix,
+        shape.get(1),
+        "public class %sSrc<T extends Integer> extends %sBase<T> {}\n",
+        "public class %sTgt extends %sBase<Number> {}\n",
+        List.of(),
+        true
+      );
+      if (!list.get(1).success()) {
+        failures.add(prefix + ": the lenient bridge should compile: " + list.get(1).errorMessages());
+        continue;
+      }
+      final var classes = list.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(list.get(1), list.get(0), prefix);
+      final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
+      final var bridge = emitted(list.get(1), list.get(0), prefix, nested);
+      final var viaBridge = valueHeld(() ->
+        bridge.getMethod("forward", source).invoke(null, holding(source, new ArrayList<>(List.of(1))))
+      );
+      final var viaRuntime = valueHeld(() -> mapper.forward(holding(source, new ArrayList<>(List.of(1)))));
+      for (final var seen : List.of(viaBridge, viaRuntime)) {
+        if (!"v=[1]".equals(seen)) failures.add(prefix + ": forward gave " + seen + ", owed v=[1]");
+      }
+    }
+    // A single value of a variable bound by Integer into a property fixed to Number: forward fits
+    // and checks nothing, while backward checks a Number against the bound.
+    final var single = valuePair(
+      "Fgr",
+      ONE_VALUE_BASE,
+      "public class FgrSrc<T extends Integer> extends FgrBase<T> {}\n",
+      "public class FgrTgt extends FgrBase<Number> {}\n",
+      List.of(),
+      false
+    );
+    assertTrue(single.get(1).success(), () -> "Fgr: the bridge should compile: " + single.get(1).errorMessages());
+    final var generated = single
+      .get(1)
+      .generated()
+      .entrySet()
+      .stream()
+      .filter(e -> e.getKey().endsWith("FgrSrcBridge"))
+      .map(Map.Entry::getValue)
+      .findFirst()
+      .orElseThrow();
+    final var forwardStart = generated.indexOf("forward(final ");
+    final var forwardBody = generated.substring(forwardStart, generated.indexOf("backward(final ", forwardStart));
+    if (forwardBody.contains("FixedClass")) failures.add("Fgr: the generated forward checks a value its bound proves");
+    final var classes = single.get(0).define(MethodHandles.lookup());
+    final Class<Object> source = cast(classes.get(PACKAGE + ".FgrSrc"));
+    final Class<Object> target = cast(classes.get(PACKAGE + ".FgrTgt"));
+    final var nested = nestedBridgesFirst(single.get(1), single.get(0), "Fgr");
+    final var mapper = Telescope.mapper(source, target);
+    final var bridge = emitted(single.get(1), single.get(0), "Fgr", nested);
+    final var forwardOwed = "v=1";
+    final var backwardOwed =
+      REFUSED +
+      "ClassCastException: " +
+      PairingMessages.fixedClassMismatch(source.getTypeName(), "v", "java.lang.Double", "java.lang.Integer");
+    final var seen = List.of(
+      valueHeld(() -> bridge.getMethod("forward", source).invoke(null, holding(source, 1))),
+      valueHeld(() -> mapper.forward(holding(source, 1))),
+      valueHeld(() -> bridge.getMethod("backward", target).invoke(null, holding(target, 2.5))),
+      valueHeld(() -> mapper.backward(holding(target, 2.5)))
+    );
+    final var owed = List.of(forwardOwed, forwardOwed, backwardOwed, backwardOwed);
+    if (!seen.equals(owed)) failures.add("Fgr: generated, runtime, then both backward gave " + seen + ", owed " + owed);
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a value given type arguments that provably fit converts both ways on both paths")
+  void aValueGivenArgumentsThatFitConvertsBothWays() throws ReflectiveOperationException {
+    // A variable bounded by the parameterized class the other side fixes, two sides that both pass
+    // their variable through, a list of values that fit a variable bound by the class the other
+    // side fixes, held through a wildcard on both, and an array of lists, given by a bounded
+    // variable or fixed on both sides: none is refused, and nothing is lost either way.
+    record Row(String prefix, String base, String src, String tgt) {}
+    final var rows = List.of(
+      new Row(
+        "Fgb",
+        ONE_VALUE_BASE,
+        "public class FgbSrc<T extends FgbBox<String>> extends FgbBase<T> {}\n",
+        "public class FgbTgt extends FgbBase<FgbBox<String>> {}\n"
+      ),
+      new Row(
+        "Fgu",
+        ONE_VALUE_BASE,
+        "public class FguSrc<X> extends FguBase<X> {}\n",
+        "public class FguTgt<Y> extends FguBase<Y> {}\n"
+      ),
+      new Row(
+        "Fwk",
+        WILDCARD_LIST_BASE,
+        "public class FwkSrc<T extends Integer> extends FwkBase<T> {}\n",
+        "public class FwkTgt extends FwkBase<Integer> {}\n"
+      ),
+      new Row(
+        "Fas",
+        ARRAY_BASE,
+        "public class FasSrc<T extends java.util.List<String>> extends FasBase<T> {}\n",
+        "public class FasTgt extends FasBase<java.util.List<String>> {}\n"
+      ),
+      new Row(
+        "Faf",
+        ARRAY_BASE,
+        "public class FafSrc extends FafBase<java.util.List<String>> {}\n",
+        "public class FafTgt extends FafBase<java.util.List<String>> {}\n"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(
+        row.prefix(),
+        row.base(),
+        row.src(),
+        row.tgt(),
+        List.of("public record %sBox<B>(B b) {}\n"),
+        false
+      );
+      if (!compiled.get(1).success()) {
+        failures.add(row.prefix() + ": the bridge should compile: " + compiled.get(1).errorMessages());
+        continue;
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var box = classes.get(PACKAGE + "." + row.prefix() + "Box").getConstructor(Object.class);
+      final var listed = row.base().equals(WILDCARD_LIST_BASE);
+      final var arrayed = row.base().equals(ARRAY_BASE);
+      final Callable<Object> value = () ->
+        listed ? new ArrayList<>(List.of(1)) : arrayed ? new List<?>[] { List.of("a") } : box.newInstance("a");
+      final var nested = nestedBridgesFirst(compiled.get(1), compiled.get(0), row.prefix());
+      final var mapper = Telescope.mapper(source, target);
+      final var bridge = emitted(compiled.get(1), compiled.get(0), row.prefix(), nested);
+      final var owed = listed ? "v=[1]" : arrayed ? "v=[[a]]" : "v=" + row.prefix() + "Box[b=a]";
+      final var seen = List.of(
+        valueHeld(() -> bridge.getMethod("forward", source).invoke(null, holding(source, call(value)))),
+        valueHeld(() -> mapper.forward(holding(source, call(value)))),
+        valueHeld(() -> bridge.getMethod("backward", target).invoke(null, holding(target, call(value)))),
+        valueHeld(() -> mapper.backward(holding(target, call(value))))
+      );
+      if (!seen.stream().allMatch(owed::equals)) {
+        failures.add(row.prefix() + ": gave " + seen + ", owed " + owed + " four times");
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a container only the backward direction cannot fit converts forward, on both paths")
+  void aContainerOnlyBackwardCannotFitConvertsForward() throws ReflectiveOperationException {
+    // A forward-only mapper and a lenient bridge have no backward to plan, so a pair that only the
+    // backward direction refuses converts forward.
+    final var head = "package " + PACKAGE + ";\n";
+    final var sources = new JavaFileObject[] {
+      source("PtfBase", head + PASS_THROUGH_BASE.replace("%s", "Ptf")),
+      source(
+        "PtfSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtfTgt.class, lenient = true)\n" +
+          "public class PtfSrc extends PtfBase<String, String> {}\n"
+      ),
+      source("PtfTgt", head + "public class PtfTgt<Y> extends PtfBase<String, Y> {}\n"),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    final var processed = bridged(sources);
+    assertTrue(processed.success(), () -> "the lenient bridge should compile: " + processed.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> source = cast(classes.get(PACKAGE + ".PtfSrc"));
+    final Class<Object> target = cast(classes.get(PACKAGE + ".PtfTgt"));
+    final var nested = nestedBridgesFirst(processed, plain, "Ptf");
+    final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
+    final var bridge = emitted(processed, plain, "Ptf", nested);
+    final var owed = "key=k, first=a, items=[b, c] in a fresh ArrayList";
+    final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
+    final var viaBridge = passedThrough(() -> bridge.getMethod("forward", source).invoke(null, srcSample), srcSample);
+    final var viaRuntime = passedThrough(() -> mapper.forward(srcSample), srcSample);
+    assertTrue(owed.equals(viaBridge), () -> "generated gave " + viaBridge + ", owed " + owed);
+    assertTrue(owed.equals(viaRuntime), () -> "runtime gave " + viaRuntime + ", owed " + owed);
+  }
+
+  /**
+   * A bean {@code %1$s<name>} whose {@code value} is read as {@code String} and has two setters,
+   * one for {@code String} and one for {@code Object}, each recording which one wrote it. Its
+   * {@code sample()} holds {@code held}, set without either setter.
+   */
+  private static String overloadedValueBean(final String name, final String held) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n" +
+      "  private String value;\n" +
+      "  public %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public void setValue(final String v) { this.value = \"String:\" + v; }\n" +
+      "  public void setValue(final Object v) { this.value = \"Object:\" + v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var b = new %1$s" +
+      name +
+      "(); b.value = \"" +
+      held +
+      "\"; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A transform result of a type wider than the property's, written into a bean whose setters are
+   * overloaded for the property's type and for the result's: the declarations, each with {@code
+   * %1$s} as the row's prefix and the last of them the runtime row, and what both paths owe.
+   */
+  private static final List<VariableTransform> SETTER_TRANSFORMS = List.of(
+    new VariableTransform(
+      "a forward result wider than the target property's type",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        overloadedValueBean("Tgt", "q"),
+        transformFn("String", "Object", "a", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "Object")
+      ),
+      "#0(value=\"String:x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a backward result wider than the source property's type",
+      false,
+      List.of(
+        transformedValue(false) + overloadedValueBean("Src", "x"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"String:q\")",
+      "#0(value=\"String:q\")"
+    ),
+    // The bridge names a generic class raw, where the inherited setValue(T) takes Object; a
+    // String
+    // argument would bind setValue(CharSequence) there instead.
+    new VariableTransform(
+      "a forward result wider than the property's type, into a generic target whose setter is inherited",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        "public class %1$sBase<T> {\n" +
+          "  protected String value;\n" +
+          "  public void setValue(final T v) { this.value = \"T:\" + v; }\n}\n",
+        "public class %1$sTgt<Y> extends %1$sBase<String> {\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public void setValue(final CharSequence v) { this.value = \"CharSequence:\" + v; }\n" +
+          "  public static %1$sTgt<Object> sample() { final var t = new %1$sTgt<Object>(); t.value = \"q\"; return t; }\n}\n",
+        transformFn("String", "CharSequence", "a", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "CharSequence")
+      ),
+      "#0(value=\"T:x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a forward result wider than a property whose type has type arguments",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        "public class %1$sTgt {\n" +
+          "  private java.util.List<String> value;\n" +
+          "  public %1$sTgt() {}\n" +
+          "  public java.util.List<String> getValue() { return value; }\n" +
+          "  public void setValue(final java.util.List<String> v) { this.value = v; }\n" +
+          "  public void setValue(final Object v) {" +
+          " this.value = java.util.List.of(\"Object:\" + v); }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        transformFn("String", "Object", "java.util.List.of(a)", "String.valueOf(b)"),
+        runtimeRow(true, "getValue", "String", "Object")
+      ),
+      "#0(value=[\"x\"])",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName("a transform result is written through the setter the property's type chooses, on both paths")
+  void aTransformResultIsWrittenThroughTheSetterThePropertysTypeChooses() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : SETTER_TRANSFORMS) {
+      final var prefix = "Ts" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
+        ? (ForwardMapper<Object, Object>) runtime
+        : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardMapper != null
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * Shapes only the generated path can express, each with what the generated bridge writes. A
+   * runtime row's function returns a type the property's own type reaches, so a result of any other
+   * type has no runtime row to agree with; the row's test also holds javac to refusing that row.
+   *
+   * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
+   */
+  private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
+    // Inherent to the runtime row's typing: an accessor reading a String property cannot be
+    // typed
+    // to an Integer, so no runtime row returns one. The bridge passes the Integer as it is,
+    // and
+    // javac binds the setter overload that takes it.
+    "a transform result of a type the property's type does not reach",
+    "Object:7"
+  );
+
+  @Test
+  @DisplayName("a generated-only capability gives what its register records, and no runtime row can be typed for it")
+  void aGeneratedOnlyCapabilityGivesWhatItsRegisterRecords() throws ReflectiveOperationException {
+    final var name = "a transform result of a type the property's type does not reach";
+    final var prefix = "Goc";
+    final var head = "package " + PACKAGE + ";\n";
+    final var declarations = List.of(
+      transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+      overloadedValueBean("Tgt", "q"),
+      transformFn("String", "Integer", "7", "String.valueOf(b)")
+    );
+    final var sources = declarations
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toList();
+    final var compilation = bridged(sources.toArray(JavaFileObject[]::new));
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    final var source = classes.get(PACKAGE + ".GocSrc");
+    final var target = classes.get(PACKAGE + ".GocTgt");
+    final var built = classes
+      .get(PACKAGE + ".GocSrcBridge")
+      .getMethod("forward", source)
+      .invoke(null, source.getMethod("sample").invoke(null));
+    final var written = String.valueOf(target.getMethod("getValue").invoke(built));
+    assertTrue(
+      GENERATED_ONLY_CAPABILITIES.keySet().equals(Set.of(name)),
+      () -> "registered capabilities with no row: " + GENERATED_ONLY_CAPABILITIES.keySet()
+    );
+    assertTrue(
+      written.equals(GENERATED_ONLY_CAPABILITIES.get(name)),
+      () -> name + ": the bridge wrote " + written + ", registered " + GENERATED_ONLY_CAPABILITIES.get(name)
+    );
+    final var withRow = new ArrayList<>(sources);
+    withRow.add(source("GocRuntime", head + runtimeRow(true, "getValue", "String", "Integer").formatted(prefix)));
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), withRow.toArray(JavaFileObject[]::new));
+    assertTrue(
+      !runtime.success() &&
+        runtime
+          .errors()
+          .stream()
+          .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith("GocRuntime.java")),
+      () -> name + ": javac owed a refusal of the runtime row alone, saw " + describe(runtime)
+    );
+  }
+
+  /**
+   * What {@code attempt}'s result holds as first, with that value's class, or the refusal with its
+   * message.
+   */
   private static String firstHeld(final Attempt attempt) {
     try {
       final var out = attempt.get();
       final var first = out.getClass().getMethod("getFirst").invoke(out);
       return "first=" + first + ", a " + first.getClass().getName();
     } catch (final InvocationTargetException e) {
-      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName() + ": " + cause.getMessage();
     } catch (final ReflectiveOperationException | RuntimeException e) {
-      return REFUSED + e.getClass().getSimpleName();
+      return REFUSED + e.getClass().getSimpleName() + ": " + e.getMessage();
     }
   }
 
@@ -4418,7 +5667,9 @@ class CrossPathCorpusTest {
 
   /** The simple name of the one top-level type {@code code} declares. */
   private static String declaredName(final String code) {
-    final var matcher = Pattern.compile("public (?:class|record|enum|@interface) (\\w+)").matcher(code);
+    final var matcher = Pattern.compile(
+      "public (?:sealed interface|interface|class|record|enum|@interface) (\\w+)"
+    ).matcher(code);
     if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
     return matcher.group(1);
   }
@@ -4473,10 +5724,8 @@ class CrossPathCorpusTest {
         properties.put(String.format("%03d", properties.size()) + component.getName(), component.getAccessor());
       }
     } else {
-      for (final var method : value.getClass().getDeclaredMethods()) {
-        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
-          properties.put(Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4), method);
-        }
+      for (final var method : beanGetters(value.getClass())) {
+        properties.put(Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4), method);
       }
     }
     final var parts = new ArrayList<String>();
@@ -4655,13 +5904,14 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       assertTrue(processed.success(), () -> cell.name() + " should compile: " + processed.errorMessages());
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var bridge = emitted(processed, plain, prefix);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
       final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
       final var patch = bridge.getMethod("patch", src, tgt);
       final Map<String, Patch> sides = Map.of(
         "generated",
@@ -4684,7 +5934,7 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a sealed patch returns a new object on the generated path and is refused by name on the runtime one")
+  @DisplayName("a sealed patch overlays only a partial of the same case, and returns a new object, on both paths")
   void aSealedPatchReturnsANewObjectWhenThePartialOverlaysNothing() throws ReflectiveOperationException {
     final var head = "package " + PACKAGE + ";\n";
     final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
@@ -4698,24 +5948,24 @@ class CrossPathCorpusTest {
     };
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
     assertTrue(plain.success(), plain::errorMessages);
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    final var processed = bridged(sources);
     assertTrue(processed.success(), processed::errorMessages);
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> src = cast(classes.get(PACKAGE + ".SpSrc"));
     final Class<Object> tgt = cast(classes.get(PACKAGE + ".SpTgt"));
-    final var patch = emitted(processed, plain, "Sp").getMethod("patch", src, tgt);
+    final var nested = nestedBridgesFirst(processed, plain, "Sp");
     final var mapper = Telescope.mapper(src, tgt);
+    final var patch = emitted(processed, plain, "Sp", nested).getMethod("patch", src, tgt);
     final var cardDto = classes.get(PACKAGE + ".SpCardDto").getConstructors()[0];
     final var bank = classes.get(PACKAGE + ".SpBankDto").getConstructors()[0].newInstance("DE89");
     // A partial of the same case overlays; another case or a null partial is ignored and the base
-    // is rebuilt. The runtime mapper has no rule pairing the cases of two sealed roots, so it
-    // refuses every one of them in the same words.
+    // is rebuilt.
     final var partials = new LinkedHashMap<String, Object>();
     partials.put("the same case", cardDto.newInstance("5500"));
     partials.put("the same case, every field null", cardDto.newInstance((Object) null));
     partials.put("another case", bank);
     partials.put("null", null);
-    final var owedGenerated = Map.of(
+    final var owed = Map.of(
       "the same case",
       "#0(pan=\"5500\"), a new object",
       "the same case, every field null",
@@ -4725,28 +5975,997 @@ class CrossPathCorpusTest {
       "null",
       "#0(pan=\"4111\"), a new object"
     );
-    final var owedReflective = "refused: UnsupportedOperationException, names " + src.getName();
     final var failures = new ArrayList<String>();
+    final Map<String, Patch> sides = Map.of(
+      "generated",
+      (base, partial) -> patch.invoke(null, base, partial),
+      "reflective",
+      mapper::patch
+    );
     for (final var partial : partials.entrySet()) {
-      final var card = classes.get(PACKAGE + ".SpCard").getConstructors()[0].newInstance("4111");
-      final var result = patch.invoke(null, card, partial.getValue());
-      final var generated =
-        shape(result, new IdentityHashMap<>()) + (result == card ? ", the base itself" : ", a new object");
-      if (!generated.equals(owedGenerated.get(partial.getKey()))) failures.add(
-        "generated, " + partial.getKey() + ": " + generated
-      );
-      String reflective;
-      try {
-        reflective = "returned " + mapper.patch(card, partial.getValue());
-      } catch (final RuntimeException e) {
-        reflective =
-          "refused: " +
-          e.getClass().getSimpleName() +
-          (e.getMessage().contains(src.getName()) ? ", names " + src.getName() : ", " + e.getMessage());
+      for (final var side : sides.entrySet()) {
+        final var card = classes.get(PACKAGE + ".SpCard").getConstructors()[0].newInstance("4111");
+        String outcome;
+        try {
+          final var result = side.getValue().apply(card, partial.getValue());
+          outcome = shape(result, new IdentityHashMap<>()) + (result == card ? ", the base itself" : ", a new object");
+        } catch (final InvocationTargetException | RuntimeException e) {
+          outcome = REFUSED + e;
+        }
+        if (!outcome.equals(owed.get(partial.getKey()))) failures.add(
+          side.getKey() + ", " + partial.getKey() + ": " + outcome
+        );
       }
-      if (!reflective.equals(owedReflective)) failures.add("reflective, " + partial.getKey() + ": " + reflective);
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
+  }
+
+  /**
+   * A conversion between two sealed interfaces, at the root or below it: each declaration with
+   * {@code %1$s} as the cell's prefix, and what both paths owe, rendered by {@link #shape}, for
+   * {@code forward(Src.sample())}, {@code backward(Tgt.sample())} and {@code patch(Src.sample(),
+   * Tgt.partial())}. Every case carries a {@code @Bridge} to the case it converts to, which is how
+   * both paths pair the cases.
+   */
+  private record SealedCell(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  private static final String SEALED_HEAD = "@io.github.eschizoid.telescope.annotations.Bridge(";
+
+  /** The two cases of a sealed source {@code root} and their bridges to the target's cases. */
+  private static List<String> sealedCases(final String root, final String bankBridge, final String bankDto) {
+    return List.of(
+      SEALED_HEAD + "%1$sCardDto.class)\npublic record %1$sCard(String pan) implements " + root + " {}\n",
+      SEALED_HEAD + bankBridge + ")\npublic record %1$sBank(String iban, int rank) implements " + root + " {}\n",
+      "public record %1$sCardDto(String pan) implements " + root + "Dto {}\n",
+      "public record %1$sBankDto(" + bankDto + ", int rank) implements " + root + "Dto {}\n"
+    );
+  }
+
+  /** A sealed source root and target root over {@link #sealedCases}, under the given names. */
+  private static List<String> sealedRoots(final String source, final String target, final String extra) {
+    return List.of(
+      "public sealed interface " + source + " permits %1$sCard, %1$sBank {" + extra + "}\n",
+      "public sealed interface " + target + " permits %1$sCardDto, %1$sBankDto {}\n"
+    );
+  }
+
+  private static List<String> concat(final List<String> first, final List<String> second) {
+    final var all = new ArrayList<>(first);
+    all.addAll(second);
+    return all;
+  }
+
+  private static final String BANK = "#0(iban=\"DE89\", rank=2)";
+
+  /**
+   * Two generic sealed interfaces {@code Res<T>} and {@code ResDto<T>}, each permitting a case that
+   * passes its variable across, one that declares the variable and holds none of it, and one that
+   * fixes it to {@code Integer}.
+   */
+  private static final List<String> GENERIC_CASES = List.of(
+    "public sealed interface %1$sRes<T> permits %1$sOk, %1$sNone, %1$sCount {}\n",
+    "public sealed interface %1$sResDto<T> permits %1$sOkDto, %1$sNoneDto, %1$sCountDto {}\n",
+    SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+    "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+    SEALED_HEAD + "%1$sNoneDto.class)\npublic record %1$sNone<T>(String why) implements %1$sRes<T> {}\n",
+    "public record %1$sNoneDto<T>(String why) implements %1$sResDto<T> {}\n",
+    SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sRes<Integer> {}\n",
+    "public record %1$sCountDto(Integer n) implements %1$sResDto<Integer> {}\n"
+  );
+
+  private static final List<SealedCell> SEALED_CELLS = List.of(
+    new SealedCell(
+      "two sealed roots whose cases each carry a bridge to a case",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sCardDto(\"5500\"); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(null, 7); }\n}\n"
+        ),
+        sealedCases("%1$sSrc", "%1$sBankDto.class", "String iban")
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      BANK,
+      "#0(pan=\"5500\")",
+      "#0(iban=\"DE89\", rank=7)"
+    ),
+    new SealedCell(
+      "two sealed roots, one case renaming a property through its own bridge",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sBankDto(\"NL01\", 1); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n"
+        ),
+        sealedCases(
+          "%1$sSrc",
+          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
+            "source = \"iban\", target = \"account\")",
+          "String account"
+        )
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      "#0(account=\"DE89\", rank=2)",
+      "#0(iban=\"NL01\", rank=1)",
+      "#0(iban=\"NL02\", rank=7)"
+    ),
+    new SealedCell(
+      "two sealed roots, one case renaming a property through the bridge it declares beside one to another target",
+      concat(
+        List.of(
+          SEALED_HEAD +
+            "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sCard, %1$sBank {\n" +
+            "  static %1$sSrc sample() { return new %1$sBank(\"DE89\", 2); }\n}\n",
+          "public sealed interface %1$sTgt permits %1$sCardDto, %1$sBankDto {\n" +
+            "  static %1$sTgt sample() { return new %1$sBankDto(\"NL01\", 1); }\n" +
+            "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n",
+          "public record %1$sBankView(String iban, int rank) {}\n"
+        ),
+        sealedCases(
+          "%1$sSrc",
+          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
+            "source = \"iban\", target = \"account\"))\n" +
+            SEALED_HEAD +
+            "%1$sBankView.class",
+          "String account"
+        )
+          .stream()
+          .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
+          .toList()
+      ),
+      "#0(account=\"DE89\", rank=2)",
+      "#0(iban=\"NL01\", rank=1)",
+      "#0(iban=\"NL02\", rank=7)"
+    ),
+    new SealedCell(
+      "a sealed root in a field",
+      concat(
+        concat(
+          sealedRoots("%1$sShape", "%1$sShapeDto", ""),
+          sealedCases("%1$sShape", "%1$sBankDto.class", "String iban")
+        ),
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(String title, %1$sShape main) {\n" +
+            "  public static %1$sSrc sample() { return new %1$sSrc(\"t\", new %1$sBank(\"DE89\", 2)); }\n}\n",
+          "public record %1$sTgt(String title, %1$sShapeDto main) {\n" +
+            "  public static %1$sTgt sample() { return new %1$sTgt(\"u\", new %1$sCardDto(\"5500\")); }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(null, new %1$sBankDto(\"NL01\", 1)); }\n}\n"
+        )
+      ),
+      "#0(title=\"t\", main=#1(iban=\"DE89\", rank=2))",
+      "#0(title=\"u\", main=#1(pan=\"5500\"))",
+      "#0(title=\"t\", main=#1(iban=\"NL01\", rank=1))"
+    ),
+    new SealedCell(
+      "sealed values in a List, an Optional and a Map",
+      concat(
+        concat(
+          sealedRoots("%1$sShape", "%1$sShapeDto", ""),
+          sealedCases("%1$sShape", "%1$sBankDto.class", "String iban")
+        ),
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.List<%1$sShape> items, java.util.Optional<%1$sShape> spare," +
+            " java.util.Map<String, %1$sShape> named) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.List.of(new %1$sBank(\"DE89\", 2), new %1$sCard(\"4111\"))," +
+            " java.util.Optional.of(new %1$sCard(\"4222\")), java.util.Map.of(\"k\", new %1$sBank(\"FR76\", 3)));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.List<%1$sShapeDto> items, java.util.Optional<%1$sShapeDto> spare," +
+            " java.util.Map<String, %1$sShapeDto> named) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sCardDto(\"5500\")), java.util.Optional.empty()," +
+            " java.util.Map.of(\"k\", new %1$sBankDto(\"NL01\", 1)));\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sBankDto(\"BE68\", 4)), null, null);\n" +
+            "  }\n}\n"
+        )
+      ),
+      "#0(items=[#1(iban=\"DE89\", rank=2), #2(pan=\"4111\")], spare=of #3(pan=\"4222\")," +
+        " named={k=#4(iban=\"FR76\", rank=3)})",
+      "#0(items=[#1(pan=\"5500\")], spare=empty, named={k=#2(iban=\"NL01\", rank=1)})",
+      "#0(items=[#1(iban=\"BE68\", rank=4)], spare=of #2(pan=\"4222\"), named={k=#3(iban=\"FR76\", rank=3)})"
+    ),
+    new SealedCell(
+      "a cycle through a case of a sealed field",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sGroup, %1$sDot {}\n",
+        "public sealed interface %1$sShapeDto permits %1$sGroupDto, %1$sDotDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sGroupDto.class)\npublic final class %1$sGroup implements %1$sShape {\n  private %1$sSrc doc;\n  public %1$sSrc getDoc() { return doc; }\n  public void setDoc(final %1$sSrc doc) { this.doc = doc; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sDotDto.class)\npublic record %1$sDot(int x) implements %1$sShape {}\n",
+        "public final class %1$sGroupDto implements %1$sShapeDto {\n  private %1$sTgt doc;\n  public %1$sTgt getDoc() { return doc; }\n  public void setDoc(final %1$sTgt doc) { this.doc = doc; }\n}\n",
+        "public record %1$sDotDto(int x) implements %1$sShapeDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\npublic class %1$sSrc {\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n  public static %1$sSrc sample() {\n    final var d = new %1$sSrc();\n    final var g = new %1$sGroup();\n    g.setDoc(d);\n    d.setS(g);\n    return d;\n  }\n}\n",
+        "public class %1$sTgt {\n  private %1$sShapeDto s;\n  public %1$sShapeDto getS() { return s; }\n  public void setS(final %1$sShapeDto s) { this.s = s; }\n  public static %1$sTgt sample() {\n    final var d = new %1$sTgt();\n    final var g = new %1$sGroupDto();\n    g.setDoc(d);\n    d.setS(g);\n    return d;\n  }\n  public static %1$sTgt partial() { return new %1$sTgt(); }\n}\n"
+      ),
+      "#0(s=#1(doc=null))",
+      "#0(s=#1(doc=null))",
+      "#0(s=#1(doc=#2(s=@1)))"
+    ),
+    new SealedCell(
+      "a cycle through a case of a sealed field held by a nested pair with its own bridge",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sBack, %1$sDot {}\n",
+        "public sealed interface %1$sShapeDto permits %1$sBackDto, %1$sDotDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sBackDto.class)\npublic final class %1$sBack implements %1$sShape {\n  private %1$sSrc top;\n  public %1$sSrc getTop() { return top; }\n  public void setTop(final %1$sSrc top) { this.top = top; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sDotDto.class)\npublic record %1$sDot(int x) implements %1$sShape {}\n",
+        "public final class %1$sBackDto implements %1$sShapeDto {\n  private %1$sTgt top;\n  public %1$sTgt getTop() { return top; }\n  public void setTop(final %1$sTgt top) { this.top = top; }\n}\n",
+        "public record %1$sDotDto(int x) implements %1$sShapeDto {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sXDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(source = \"s\", target = \"shape\"))\npublic class %1$sX {\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n}\n",
+        "public class %1$sXDto {\n  private %1$sShapeDto shape;\n  public %1$sShapeDto getShape() { return shape; }\n  public void setShape(final %1$sShapeDto shape) { this.shape = shape; }\n}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\npublic class %1$sSrc {\n  private %1$sX x;\n  public %1$sX getX() { return x; }\n  public void setX(final %1$sX x) { this.x = x; }\n  public static %1$sSrc sample() {\n    final var top = new %1$sSrc();\n    final var x = new %1$sX();\n    final var back = new %1$sBack();\n    back.setTop(top);\n    x.setS(back);\n    top.setX(x);\n    return top;\n  }\n}\n",
+        "public class %1$sTgt {\n  private %1$sXDto x;\n  public %1$sXDto getX() { return x; }\n  public void setX(final %1$sXDto x) { this.x = x; }\n  public static %1$sTgt sample() {\n    final var top = new %1$sTgt();\n    final var x = new %1$sXDto();\n    final var back = new %1$sBackDto();\n    back.setTop(top);\n    x.setShape(back);\n    top.setX(x);\n    return top;\n  }\n  public static %1$sTgt partial() { return new %1$sTgt(); }\n}\n"
+      ),
+      "#0(x=#1(shape=#2(top=null)))",
+      "#0(x=#1(s=#2(top=null)))",
+      "#0(x=#1(s=#2(top=#3(x=@1))))"
+    ),
+    new SealedCell(
+      "a case holding its own sealed root",
+      List.of(
+        SEALED_HEAD +
+          "%1$sTgt.class)\npublic sealed interface %1$sSrc permits %1$sLit, %1$sAdd {\n" +
+          "  static %1$sSrc sample() {\n" +
+          "    return new %1$sAdd(new %1$sLit(1), new %1$sAdd(new %1$sLit(2), new %1$sLit(3)));\n" +
+          "  }\n}\n",
+        "public sealed interface %1$sTgt permits %1$sLitDto, %1$sAddDto {\n" +
+          "  static %1$sTgt sample() { return new %1$sAddDto(new %1$sLitDto(4), new %1$sLitDto(5)); }\n" +
+          "  static %1$sTgt partial() { return new %1$sAddDto(new %1$sLitDto(9), null); }\n}\n",
+        SEALED_HEAD + "%1$sLitDto.class)\npublic record %1$sLit(int value) implements %1$sSrc {}\n",
+        SEALED_HEAD + "%1$sAddDto.class)\npublic record %1$sAdd(%1$sSrc left, %1$sSrc right) implements %1$sSrc {}\n",
+        "public record %1$sLitDto(int value) implements %1$sTgt {}\n",
+        "public record %1$sAddDto(%1$sTgt left, %1$sTgt right) implements %1$sTgt {}\n"
+      ),
+      "#0(left=#1(value=1), right=#2(left=#3(value=2), right=#4(value=3)))",
+      "#0(left=#1(value=4), right=#2(value=5))",
+      "#0(left=#1(value=9), right=#2(left=#3(value=2), right=#4(value=3)))"
+    ),
+    new SealedCell(
+      "a sealed field given type arguments, with a case passing the variable across, one ignoring it and one fixing it",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(%1$sRes<Integer> r) {\n" +
+            "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sOk<>(3)); }\n}\n",
+          "public record %1$sTgt(%1$sResDto<Integer> r) {\n" +
+            "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sCountDto(5)); }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sOkDto<>(9)); }\n}\n"
+        )
+      ),
+      "#0(r=#1(v=3))",
+      "#0(r=#1(n=5))",
+      "#0(r=#1(v=9))"
+    ),
+    new SealedCell(
+      "a List of sealed values given type arguments",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.List<%1$sRes<Integer>> rs) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.List.of(new %1$sOk<>(3), new %1$sNone<>(\"gone\"), new %1$sCount(4)));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.List<%1$sResDto<Integer>> rs) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.List.of(new %1$sNoneDto<>(\"late\"), new %1$sOkDto<>(6)));\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(java.util.List.of(new %1$sCountDto(8))); }\n}\n"
+        )
+      ),
+      "#0(rs=[#1(v=3), #2(why=\"gone\"), #3(n=4)])",
+      "#0(rs=[#1(why=\"late\"), #2(v=6)])",
+      "#0(rs=[#1(n=8)])"
+    ),
+    new SealedCell(
+      "sealed values given type arguments in a Set, a Map and an Optional",
+      concat(
+        GENERIC_CASES,
+        List.of(
+          BRIDGE_TO_TGT +
+            "public record %1$sSrc(java.util.Set<%1$sRes<Integer>> s, java.util.Map<String, %1$sRes<Integer>> m," +
+            " java.util.Optional<%1$sRes<Integer>> o) {\n" +
+            "  public static %1$sSrc sample() {\n" +
+            "    return new %1$sSrc(java.util.Set.of(new %1$sOk<>(3)), java.util.Map.of(\"k\", new %1$sCount(4))," +
+            " java.util.Optional.of(new %1$sNone<>(\"gone\")));\n" +
+            "  }\n}\n",
+          "public record %1$sTgt(java.util.Set<%1$sResDto<Integer>> s, java.util.Map<String, %1$sResDto<Integer>> m," +
+            " java.util.Optional<%1$sResDto<Integer>> o) {\n" +
+            "  public static %1$sTgt sample() {\n" +
+            "    return new %1$sTgt(java.util.Set.of(new %1$sCountDto(5)), java.util.Map.of(\"j\", new %1$sOkDto<>(6))," +
+            " java.util.Optional.empty());\n" +
+            "  }\n" +
+            "  public static %1$sTgt partial() { return new %1$sTgt(null, null, java.util.Optional.of(new %1$sOkDto<>(7))); }\n}\n"
+        )
+      ),
+      "#0(s=[#1(v=3)], m={k=#2(n=4)}, o=of #3(why=\"gone\"))",
+      "#0(s=[#1(n=5)], m={j=#2(v=6)}, o=empty)",
+      "#0(s=[#1(v=3)], m={k=#2(n=4)}, o=of #3(v=7))"
+    ),
+    new SealedCell(
+      "a generic sealed root whose case passes its type variable across",
+      List.of(
+        SEALED_HEAD +
+          "%1$sTgt.class)\npublic sealed interface %1$sSrc<T> permits %1$sOk, %1$sCount {\n" +
+          "  static %1$sSrc<Integer> sample() { return new %1$sOk<>(3); }\n}\n",
+        "public sealed interface %1$sTgt<T> permits %1$sOkDto, %1$sCountDto {\n" +
+          "  static %1$sTgt<Integer> sample() { return new %1$sOkDto<>(4); }\n" +
+          "  static %1$sTgt<Integer> partial() { return new %1$sOkDto<>(null); }\n}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sSrc<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sTgt<T> {}\n",
+        SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sSrc<Integer> {}\n",
+        "public record %1$sCountDto(Integer n) implements %1$sTgt<Integer> {}\n"
+      ),
+      "#0(v=3)",
+      "#0(v=4)",
+      "#0(v=3)"
+    ),
+    new SealedCell(
+      "a sealed field given type arguments, its case bounding the variable and holding it in an array and a" +
+        " wildcard",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD +
+          "%1$sOkDto.class)\npublic record %1$sOk<T extends Number & Comparable<T>>(T v, T[] vs," +
+          " java.util.List<? extends T> ws) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T extends Number & Comparable<T>>(T v, T[] vs, java.util.List<? extends T> ws)" +
+          " implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sRes<Integer> r) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(new %1$sOk<>(3, new Integer[] { 4 }, java.util.List.of(5)));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(new %1$sOkDto<>(6, new Integer[] { 7 }, java.util.List.of(8)));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sOkDto<>(null, null, null)); }\n}\n"
+      ),
+      "#0(r=#1(v=3, vs=#2(), ws=[5]))",
+      "#0(r=#1(v=6, vs=#2(), ws=[8]))",
+      "#0(r=#1(v=null, vs=null, ws=null))"
+    )
+  );
+
+  @Test
+  @DisplayName("two sealed interfaces convert case by case to the same result on both paths, at the root and below it")
+  void twoSealedInterfacesConvertTheSameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = cellFailures(SEALED_CELLS, "Sd");
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " sealed cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * Generic records and beans given type arguments, in a field, in containers and below another
+   * record, in the shape of {@link SealedCell}. Each pair converts as its raw classes, with the
+   * target's type variables read as the source's in the same position, where both sides give the
+   * same arguments.
+   */
+  private static final List<SealedCell> GENERIC_RECORD_CELLS = List.of(
+    new SealedCell(
+      "a generic record field passing its variable across",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<U>(U v) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(5)); }\n}\n"
+      ),
+      "#0(b=#1(v=3))",
+      "#0(b=#1(v=4))",
+      "#0(b=#1(v=5))"
+    ),
+    new SealedCell(
+      "a generic record field holding none of its variable",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(null); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"x\"))"
+    ),
+    new SealedCell(
+      "a generic record field against a record declaring no type variables",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sFixedDto(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sFixedDto b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sFixedDto(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sFixedDto(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic records in a List, an Optional and a Map value",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(java.util.List<%1$sBox<Integer>> bs, java.util.Optional<%1$sBox<Integer>> o," +
+          " java.util.Map<String, %1$sBox<Integer>> m) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(java.util.List.of(new %1$sBox<>(1), new %1$sBox<>(2))," +
+          " java.util.Optional.of(new %1$sBox<>(3)), java.util.Map.of(\"k\", new %1$sBox<>(4)));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(java.util.List<%1$sBoxDto<Integer>> bs, java.util.Optional<%1$sBoxDto<Integer>> o," +
+          " java.util.Map<String, %1$sBoxDto<Integer>> m) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(java.util.List.of(new %1$sBoxDto<>(5)), java.util.Optional.empty()," +
+          " java.util.Map.of(\"j\", new %1$sBoxDto<>(6)));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() {\n" +
+          "    return new %1$sTgt(null, java.util.Optional.of(new %1$sBoxDto<>(7)), null);\n" +
+          "  }\n}\n"
+      ),
+      "#0(bs=[#1(v=1), #2(v=2)], o=of #3(v=3), m={k=#4(v=4)})",
+      "#0(bs=[#1(v=5)], o=empty, m={j=#2(v=6)})",
+      "#0(bs=[#1(v=1), #2(v=2)], o=of #3(v=7), m={k=#4(v=4)})"
+    ),
+    new SealedCell(
+      "a generic record holding another of its variable, two records deep",
+      List.of(
+        "public record %1$sInner<T>(T v) {}\n",
+        "public record %1$sInnerDto<T>(T v) {}\n",
+        "public record %1$sBox<T>(%1$sInner<T> in, String tag) {}\n",
+        "public record %1$sBoxDto<T>(%1$sInnerDto<T> in, String tag) {}\n",
+        "public record %1$sMid(%1$sBox<Integer> b) {}\n",
+        "public record %1$sMidDto(%1$sBoxDto<Integer> b) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sMid m) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(new %1$sMid(new %1$sBox<>(new %1$sInner<>(3), \"a\")));\n" +
+          "  }\n}\n",
+        "public record %1$sTgt(%1$sMidDto m) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    return new %1$sTgt(new %1$sMidDto(new %1$sBoxDto<>(new %1$sInnerDto<>(4), \"b\")));\n" +
+          "  }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(null); }\n}\n"
+      ),
+      "#0(m=#1(b=#2(in=#3(v=3), tag=\"a\")))",
+      "#0(m=#1(b=#2(in=#3(v=4), tag=\"b\")))",
+      "#0(m=#1(b=#2(in=#3(v=3), tag=\"a\")))"
+    ),
+    new SealedCell(
+      "a generic record field whose record carries its own bridge",
+      List.of(
+        SEALED_HEAD + "%1$sBoxDto.class)\npublic record %1$sBox<T>(T v, String s) {}\n",
+        "public record %1$sBoxDto<T>(T v, String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(3, \"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(4, \"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(null, \"z\")); }\n}\n"
+      ),
+      "#0(b=#1(v=3, s=\"x\"))",
+      "#0(b=#1(v=4, s=\"y\"))",
+      "#0(b=#1(v=null, s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic record fields holding none of their variable, given different type arguments",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "a generic record field holding none of its variable, used raw against one given type arguments",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT +
+          "@SuppressWarnings(\"rawtypes\")\npublic record %1$sSrc(%1$sBox b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(new %1$sBox<>(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(new %1$sBoxDto<>(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(new %1$sBoxDto<>(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic bean fields holding none of their variable, given different type arguments",
+      List.of(
+        "public class %1$sBox<T> {\n  private String s;\n  public String getS() { return s; }\n" +
+          "  public void setS(final String s) { this.s = s; }\n" +
+          "  public static <T> %1$sBox<T> of(final String s) { final var b = new %1$sBox<T>(); b.setS(s); return b; }\n}\n",
+        "public class %1$sBoxDto<T> {\n  private String s;\n  public String getS() { return s; }\n" +
+          "  public void setS(final String s) { this.s = s; }\n" +
+          "  public static <T> %1$sBoxDto<T> of(final String s) { final var b = new %1$sBoxDto<T>(); b.setS(s); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(\"x\")); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(\"y\")); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(\"z\")); }\n}\n"
+      ),
+      "#0(b=#1(s=\"x\"))",
+      "#0(b=#1(s=\"y\"))",
+      "#0(b=#1(s=\"z\"))"
+    ),
+    new SealedCell(
+      "generic bean fields passing their variable to a superclass's property",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {\n" +
+          "  public static <X> %1$sBox<X> of(final X item) { final var b = new %1$sBox<X>(); b.setItem(item); return b; }\n}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBase<Y> {\n" +
+          "  public static <Y> %1$sBoxDto<Y> of(final Y item) { final var b = new %1$sBoxDto<Y>(); b.setItem(item); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(5)); }\n}\n"
+      ),
+      "#0(b=#1(item=3))",
+      "#0(b=#1(item=4))",
+      "#0(b=#1(item=5))"
+    ),
+    new SealedCell(
+      "a generic bean field passing its variable across",
+      List.of(
+        "public class %1$sBox<T> {\n  private T v;\n  public T getV() { return v; }\n" +
+          "  public void setV(final T v) { this.v = v; }\n" +
+          "  public static <T> %1$sBox<T> of(final T v) { final var b = new %1$sBox<T>(); b.setV(v); return b; }\n}\n",
+        "public class %1$sBoxDto<T> {\n  private T v;\n  public T getV() { return v; }\n" +
+          "  public void setV(final T v) { this.v = v; }\n" +
+          "  public static <T> %1$sBoxDto<T> of(final T v) { final var b = new %1$sBoxDto<T>(); b.setV(v); return b; }\n}\n",
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(%1$sBox<Integer> b) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(%1$sBox.of(3)); }\n}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(%1$sBoxDto.of(4)); }\n" +
+          "  public static %1$sTgt partial() { return new %1$sTgt(%1$sBoxDto.of(5)); }\n}\n"
+      ),
+      "#0(b=#1(v=3))",
+      "#0(b=#1(v=4))",
+      "#0(b=#1(v=5))"
+    )
+  );
+
+  @Test
+  @DisplayName("a generic record or bean given type arguments converts to the same result on both paths")
+  void aGenericRecordGivenArgumentsConvertsTheSameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = cellFailures(GENERIC_RECORD_CELLS, "Gr");
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " generic record cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * What each of {@code cells} gives on each path that it does not owe, prefixed {@code
+   * prefixBase}.
+   */
+  private static List<String> cellFailures(final List<SealedCell> cells, final String prefixBase)
+    throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cell : cells) {
+      final var prefix = prefixBase + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(sealedName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = bridged(sources);
+      if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var refusal = refusalOf(() -> Telescope.mapper(src, tgt));
+      if (refusal != null) {
+        failures.add(cell.name() + ": the runtime owed a mapper, saw " + refusal);
+        continue;
+      }
+      final var mapper = Telescope.mapper(src, tgt);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final Attempt partial = () -> tgt.getMethod("partial").invoke(null);
+      final var operations = List.of(
+        Map.entry("forward", cell.forward()),
+        Map.entry("backward", cell.backward()),
+        Map.entry("patch", cell.patch())
+      );
+      for (final var operation : operations) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), partial.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), partial.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              cell.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    return failures;
+  }
+
+  /**
+   * A pair given type arguments that both paths refuse by name, two sealed interfaces or two
+   * generic records: its declarations with {@code %1$s} as the prefix, the parent pair's two last,
+   * and the words the generated path's refusal and then the runtime's have to contain, with {@code
+   * %2$s} as the package.
+   */
+  private record SealedRefusal(String name, List<String> declarations, String generated, String runtime) {}
+
+  private static final List<SealedRefusal> GENERIC_SEALED_REFUSALS = List.of(
+    new SealedRefusal(
+      "a case whose type argument is not the field's",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sCount {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sCountDto {}\n",
+        SEALED_HEAD + "%1$sCountDto.class)\npublic record %1$sCount(Integer n) implements %1$sRes<Integer> {}\n",
+        "public record %1$sCountDto(Integer n) implements %1$sResDto<String> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sResDto<java.lang.Integer>, and its" +
+        " case %2$s.%1$sCountDto gives the interface the type arguments <java.lang.String>",
+      "Deep map: component 'r' is a %2$s.%1$sResDto<java.lang.Integer>, and its case %2$s.%1$sCountDto gives" +
+        " the interface the type arguments <java.lang.String>"
+    ),
+    new SealedRefusal(
+      "sealed fields given different type arguments",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(java.util.List<%1$sRes<Integer>> rs) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sResDto<String>> rs) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'rs' pairs %2$s.%1$sRes<java.lang.Integer> with" +
+        " %2$s.%1$sResDto<java.lang.String>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'rs[*]' pairs %2$s.%1$sRes<java.lang.Integer> with %2$s.%1$sResDto<java.lang.String>," +
+        " sealed interfaces whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "paired cases giving the interfaces their type arguments in another order",
+      List.of(
+        "public sealed interface %1$sRes<A, B> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<A, B> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<A, B>(A a, B b) implements %1$sRes<A, B> {}\n",
+        "public record %1$sOkDto<A, B>(A a, B b) implements %1$sResDto<B, A> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer, String> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer, String> r) {}\n"
+      ),
+      "case %2$s.%1$sOk gives %2$s.%1$sRes the type arguments <A, B>, and the case %2$s.%1$sOkDto it pairs" +
+        " with gives %2$s.%1$sResDto <B, A>",
+      "case %2$s.%1$sOk gives %2$s.%1$sRes the type arguments <A, B>, and the case %2$s.%1$sOkDto it pairs" +
+        " with gives %2$s.%1$sResDto <B, A>"
+    ),
+    new SealedRefusal(
+      "a generic record field given a generic record pair as its argument",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<%1$sBox<Integer>> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<%1$sBoxDto<Integer>> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<%2$s.%1$sBox<java.lang.Integer>>" +
+        " with %2$s.%1$sBoxDto<%2$s.%1$sBoxDto<java.lang.Integer>>, generic classes whose type arguments are not" +
+        " the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<%2$s.%1$sBox<java.lang.Integer>> with" +
+        " %2$s.%1$sBoxDto<%2$s.%1$sBoxDto<java.lang.Integer>>, generic classes whose type arguments are not" +
+        " the same"
+    ),
+    new SealedRefusal(
+      "generic record fields passing their variable across, given different type arguments",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sBoxDto<java.lang.String>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sBoxDto<java.lang.String>," +
+        " generic classes whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "generic beans passing their variable to a superclass's property, given different type arguments",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBase<Y> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<String> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sBoxDto<java.lang.String>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sBoxDto<java.lang.String>," +
+        " generic classes whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a generic record whose component the other fills with its variable",
+      List.of(
+        "public record %1$sBox<T>(Integer v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: Deep map: component 'v' has incompatible source/target shapes \u2014" +
+        " java.lang.Integer vs T",
+      "Deep map: component 'v' has incompatible source/target shapes \u2014 java.lang.Integer vs T"
+    ),
+    new SealedRefusal(
+      "generic beans whose property two different generic superclasses declare",
+      List.of(
+        "public class %1$sBase<T> {\n  private T item;\n  public T getItem() { return item; }\n" +
+          "  public void setItem(final T item) { this.item = item; }\n}\n",
+        "public class %1$sBaseDto<U> {\n  private U item;\n  public U getItem() { return item; }\n" +
+          "  public void setItem(final U item) { this.item = item; }\n}\n",
+        "public class %1$sBox<X> extends %1$sBase<X> {}\n",
+        "public class %1$sBoxDto<Y> extends %1$sBaseDto<Y> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: field 'item' has incompatible types (X vs Y)",
+      "Deep map: component 'item' has incompatible source/target shapes \u2014 T vs U"
+    ),
+    new SealedRefusal(
+      "a generic record passing its variable into a record declaring none",
+      List.of(
+        "public record %1$sBox<T>(T v) {}\n",
+        "public record %1$sFixedDto(Integer v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sFixedDto b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with" +
+        " %2$s.%1$sFixedDto, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sBox<java.lang.Integer> with %2$s.%1$sFixedDto, generic classes" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a record declaring no variables against a generic record passing its variable across",
+      List.of(
+        "public record %1$sIntBox(Integer v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sIntBox b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' pairs %2$s.%1$sIntBox with" +
+        " %2$s.%1$sBoxDto<java.lang.Integer>, generic classes whose type arguments are not the same",
+      "Deep map: component 'b' pairs %2$s.%1$sIntBox with %2$s.%1$sBoxDto<java.lang.Integer>, generic classes" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a generic record whose variables the other declares in the other order",
+      List.of(
+        "public record %1$sPair<A, B>(A a, B b) {}\n",
+        "public record %1$sPairDto<B, A>(A a, B b) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sPair<String, Integer> p) {}\n",
+        "public record %1$sTgt(%1$sPairDto<String, Integer> p) {}\n"
+      ),
+      "@Bridge %1$sPair -> %1$sPairDto: Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B",
+      "Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B"
+    ),
+    new SealedRefusal(
+      "a generic record whose components hold the other's variables swapped",
+      List.of(
+        "public record %1$sPair<A, B>(A a, B b) {}\n",
+        "public record %1$sPairDto<A, B>(B a, A b) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sPair<String, Integer> p) {}\n",
+        "public record %1$sTgt(%1$sPairDto<String, Integer> p) {}\n"
+      ),
+      "@Bridge %1$sPair -> %1$sPairDto: Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B",
+      "Deep map: component 'a' has incompatible source/target shapes \u2014 A vs B"
+    ),
+    new SealedRefusal(
+      "generic records bounding their variable differently",
+      List.of(
+        "public record %1$sBox<T extends Number>(T v) {}\n",
+        "public record %1$sBoxDto<T>(T v) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(%1$sBoxDto<Integer> b) {}\n"
+      ),
+      "@Bridge %1$sBox -> %1$sBoxDto: Deep map: component 'v' has incompatible source/target shapes \u2014 T vs T",
+      "Deep map: component 'v' has incompatible source/target shapes \u2014 T vs T"
+    ),
+    new SealedRefusal(
+      "a generic record field against an array",
+      List.of(
+        "public record %1$sBox<T>(String s) {}\n",
+        "public record %1$sBoxDto<T>(String s) {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sBox<Integer> b) {}\n",
+        "public record %1$sTgt(String[] b) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'b' has incompatible source/target shapes \u2014" +
+        " %2$s.%1$sBox<java.lang.Integer> vs java.lang.String[]",
+      "Deep map: component 'b' has incompatible source/target shapes \u2014 %2$s.%1$sBox<java.lang.Integer> vs" +
+        " java.lang.String[]"
+    ),
+    new SealedRefusal(
+      "a sealed field used raw against one given type arguments",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "@SuppressWarnings(\"rawtypes\")\npublic record %1$sSrc(%1$sRes r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' pairs %2$s.%1$sRes with" +
+        " %2$s.%1$sResDto<java.lang.Integer>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'r' pairs %2$s.%1$sRes with %2$s.%1$sResDto<java.lang.Integer>, sealed interfaces" +
+        " whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "sealed fields given a wildcard",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<? extends Number> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<? extends Number> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' pairs %2$s.%1$sRes<? extends java.lang.Number> with" +
+        " %2$s.%1$sResDto<? extends java.lang.Number>, sealed interfaces whose type arguments are not the same",
+      "Deep map: component 'r' pairs %2$s.%1$sRes<? extends java.lang.Number> with" +
+        " %2$s.%1$sResDto<? extends java.lang.Number>, sealed interfaces whose type arguments are not the same"
+    ),
+    new SealedRefusal(
+      "a case giving the interface a type built over its own variable",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sMany {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sManyDto {}\n",
+        SEALED_HEAD +
+          "%1$sManyDto.class)\npublic record %1$sMany<T>(java.util.List<T> vs) implements" +
+          " %1$sRes<java.util.List<T>> {}\n",
+        "public record %1$sManyDto<T>(java.util.List<T> vs) implements %1$sResDto<java.util.List<T>> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<java.util.List<Integer>> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<java.util.List<Integer>> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sRes<java.util.List<java.lang.Integer>>," +
+        " and its case %2$s.%1$sMany gives the interface the type arguments <java.util.List<T>>",
+      "Deep map: component 'r' is a %2$s.%1$sRes<java.util.List<java.lang.Integer>>, and its case %2$s.%1$sMany" +
+        " gives the interface the type arguments <java.util.List<T>>"
+    ),
+    new SealedRefusal(
+      "a case of a sealed case giving the interface another type argument",
+      List.of(
+        "public sealed interface %1$sRes<T> permits %1$sOk, %1$sSub {}\n",
+        "public sealed interface %1$sResDto<T> permits %1$sOkDto, %1$sSubDto {}\n",
+        SEALED_HEAD + "%1$sOkDto.class)\npublic record %1$sOk<T>(T v) implements %1$sRes<T> {}\n",
+        "public record %1$sOkDto<T>(T v) implements %1$sResDto<T> {}\n",
+        SEALED_HEAD + "%1$sSubDto.class)\npublic sealed interface %1$sSub<T> extends %1$sRes<T> permits %1$sWord {}\n",
+        "public sealed interface %1$sSubDto<T> extends %1$sResDto<T> permits %1$sWordDto {}\n",
+        SEALED_HEAD + "%1$sWordDto.class)\npublic record %1$sWord(String w) implements %1$sSub<String> {}\n",
+        "public record %1$sWordDto(String w) implements %1$sSubDto<String> {}\n",
+        BRIDGE_TO_TGT + "public record %1$sSrc(%1$sRes<Integer> r) {}\n",
+        "public record %1$sTgt(%1$sResDto<Integer> r) {}\n"
+      ),
+      "@Bridge %1$sSrc -> %1$sTgt: Deep map: component 'r' is a %2$s.%1$sRes<java.lang.Integer>, and its case" +
+        " %2$s.%1$sWord gives the interface the type arguments <java.lang.String>",
+      "Deep map: component 'r' is a %2$s.%1$sRes<java.lang.Integer>, and its case %2$s.%1$sWord gives the" +
+        " interface the type arguments <java.lang.String>"
+    )
+  );
+
+  @Test
+  @DisplayName("a pair given type arguments a conversion cannot hold is refused by name on both paths, sealed or not")
+  void aGenericSealedPairACaseCannotHoldIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var refusal : GENERIC_SEALED_REFUSALS) {
+      final var prefix = "Sgr" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = refusal
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(sealedName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> refusal.name() + " should compile: " + plain.errorMessages());
+      final var processed = bridged(sources);
+      final var generated = refusal.generated().formatted(prefix, PACKAGE);
+      if (!processed.hasError(generated)) {
+        failures.add(
+          refusal.name() + ": the generated path owed a refusal naming '" + generated + "', saw " + describe(processed)
+        );
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // The cases' own bridges, compiled without the parent pair the processor refuses, are what
+      // the runtime pairs the cases through.
+      final var cases = bridged(Arrays.copyOf(sources, sources.length - 2));
+      if (!cases.success()) {
+        failures.add(refusal.name() + ": the cases should bridge, saw " + describe(cases));
+        continue;
+      }
+      defineAdded(cases, plain, name -> true);
+      final var runtime = refusal.runtime().formatted(prefix, PACKAGE);
+      final var refused = refusalOf(() -> Telescope.mapper(src, tgt));
+      if (refused == null || !refused.contains(runtime)) {
+        failures.add(refusal.name() + ": the runtime owed a refusal naming '" + runtime + "', saw " + refused);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** The name of the type {@code code} declares, a sealed interface or a record. */
+  private static String sealedName(final String code) {
+    final var matcher = Pattern.compile("public (?:sealed interface|record|final class|class) (\\w+)").matcher(code);
+    if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
+    return matcher.group(1);
   }
 
   /** One path's {@code patch}, called with a base and a partial. */
@@ -4808,14 +7027,24 @@ class CrossPathCorpusTest {
         children.put(component.getName(), component.getAccessor().invoke(value));
       }
     } else {
-      for (final var method : value.getClass().getDeclaredMethods()) {
-        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
-          final var name = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
-          children.put(name, method.invoke(value));
-        }
+      for (final var method : beanGetters(value.getClass())) {
+        final var name = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
+        children.put(name, method.invoke(value));
       }
     }
     return children;
+  }
+
+  /**
+   * The public getters of {@code type}, a superclass's included and {@code Object}'s left out, by
+   * name, so a bean renders the same properties whichever class declares them.
+   */
+  private static List<Method> beanGetters(final Class<?> type) {
+    return Arrays.stream(type.getMethods())
+      .filter(method -> method.getDeclaringClass() != Object.class)
+      .filter(method -> method.getName().startsWith("get") && method.getParameterCount() == 0)
+      .sorted(Comparator.comparing(Method::getName))
+      .toList();
   }
 
   /**
@@ -5151,6 +7380,54 @@ class CrossPathCorpusTest {
       "#0(x=#1(i=#2(status=Ea.A)))"
     ),
     new EnumCell(
+      "an enum pair below a sub-pair whose source declares a bridge to two targets, one with a transform",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sInner i", "new %1$sSrc(new %1$sInner(%1$sEa.A))"),
+        sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(%1$sEb.C))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "@io.github.eschizoid.telescope.annotations.Bridge(%1$sOtherDto.class)\n" +
+          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        "public record %1$sOtherDto(%1$sEa status) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(i=#1(status=Eb.A))",
+      "#0(i=#1(status=Ea.A))",
+      "#0(i=#1(status=Ea.A))"
+    ),
+    new EnumCell(
+      "an enum pair below a sub-pair whose own bridge transforms it, where the sub-pair reaches back to the parent",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sMid m", "new %1$sSrc(new %1$sMid(%1$sEa.A, java.util.List.of()))"),
+        sampled("%1$sTgt", "%1$sMidDto m", "new %1$sTgt(new %1$sMidDto(%1$sEb.C, java.util.List.of()))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "public record %1$sMid(%1$sEa status, java.util.List<%1$sSrc> back) {}\n",
+        "public record %1$sMidDto(%1$sEb status, java.util.List<%1$sTgt> back) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(m=#1(status=Eb.A, back=[]))",
+      "#0(m=#1(status=Ea.A, back=[]))",
+      "#0(m=#1(status=Ea.A, back=[]))"
+    ),
+    new EnumCell(
       "a target enum with a constant the source lacks, both ways",
       Directions.BOTH,
       List.of(
@@ -5231,25 +7508,11 @@ class CrossPathCorpusTest {
 
   /**
    * Enum cells where the runtime owes a refusal, by the words it has to contain, while the
-   * generated path owes the cell's shapes. A sub-pair's own {@code @Bridge} decides its fields on
-   * the generated path, through a {@code @Transform} or its own {@code lenient}, and the runtime
-   * mapper has no counterpart for either unless it is given a row naming the nested pair. A cell
-   * cannot write one: a row's accessors are method references to the cell's types, which exist only
-   * once the cell is compiled.
+   * generated path owes the cell's shapes.
    *
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
-  private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair below a sub-pair whose own bridge converts it with a transform, under a strict parent",
-    "%1$sEa has no constant named C, which the backward direction needs",
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair two levels below a sub-pair a lenient bridge shares, where the lower pair's own bridge converts it",
-    "%1$sEa has no constant named C, which the backward direction needs",
-    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
-    "an enum pair below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
-    "%1$sEa has no constant named C, which the backward direction needs"
-  );
+  private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of();
 
   @Test
   @DisplayName("an enum maps to an enum by constant name on both paths, and both refuse the same mismatches")
@@ -5271,13 +7534,16 @@ class CrossPathCorpusTest {
         plain.success(),
         () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
       );
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = bridged(sources);
       final var classes = plain.define(MethodHandles.lookup());
       final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
       final var forwardOnly = cell.directions() == Directions.FORWARD;
-      // Built before the bridge is defined: a forward-only mapper given no rows routes through a
-      // bridge it finds beside the source, and would then be the generated path a second time.
+      // Every bridge but the cell's own is defined before the mapper is built, so a nested pair's
+      // own bridge is there for the runtime to find. The cell's own bridge comes after: a
+      // forward-only mapper given no rows routes through a bridge it finds beside the source, and
+      // would then be the generated path a second time.
+      final var subBridges = nestedBridgesFirst(processed, plain, prefix);
       final Attempt build = () -> forwardOnly ? Telescope.mapperForward(src, tgt) : Telescope.mapper(src, tgt);
       final var refusal = refusalOf(build);
       final var built = refusal == null;
@@ -5315,7 +7581,7 @@ class CrossPathCorpusTest {
         failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
         continue;
       }
-      final var bridge = emitted(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, subBridges);
       final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
       final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
       final var owed = new ArrayList<Map.Entry<String, String>>();
@@ -5363,6 +7629,2599 @@ class CrossPathCorpusTest {
       exercised.equals(ENUM_RUNTIME_REFUSALS.keySet()),
       () -> "registered runtime refusals no cell exercised: " + ENUM_RUNTIME_REFUSALS.keySet()
     );
+  }
+
+  /**
+   * {@code @Bridge} to {@code %1$sTgt} with a transform on {@code value} through {@code %1$sFn}.
+   */
+  private static String transformedValue(final boolean forwardOnly) {
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"value\", using = %1$sFn.class" +
+      (forwardOnly ? ", forwardOnly = true" : "") +
+      "))\n"
+    );
+  }
+
+  /**
+   * {@code %1$sFn}, a {@code BridgeFn<from, to>} whose forward returns the expression {@code
+   * forward} of its argument {@code a}, and whose backward returns {@code backward} of {@code b}.
+   */
+  private static String transformFn(final String from, final String to, final String forward, final String backward) {
+    return (
+      "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<" +
+      from +
+      ", " +
+      to +
+      "> {\n" +
+      "  public " +
+      to +
+      " forward(final " +
+      from +
+      " a) { return " +
+      forward +
+      "; }\n" +
+      "  public " +
+      from +
+      " backward(final " +
+      to +
+      " b) { return " +
+      backward +
+      "; }\n}\n"
+    );
+  }
+
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} builds the runtime mapper for the pair with the
+   * typed-transform row that agrees with the {@code @Transform}, reading {@code value} through
+   * {@code accessor} on both sides. A method reference to a member of a generic class names it raw,
+   * so the row is typed by what the raw members return, {@code srcType} and {@code tgtType}.
+   */
+  private static String runtimeRow(
+    final boolean forwardOnly,
+    final String accessor,
+    final String srcType,
+    final String tgtType
+  ) {
+    return witnessedRow(forwardOnly, accessor, "%1$sSrc, %1$sTgt, " + srcType + ", " + tgtType);
+  }
+
+  /**
+   * As {@link #runtimeRow}, with the row's four type arguments, {@code witness}, given whole: the
+   * source and target classes, possibly with arguments of their own, then the types the row reads
+   * {@code value} as on each side.
+   */
+  private static String witnessedRow(final boolean forwardOnly, final String accessor, final String witness) {
+    final var src = "%1$sSrc::" + accessor;
+    final var tgt = "%1$sTgt::" + accessor;
+    final var row = forwardOnly
+      ? "<" + witness + ">toOneWay(" + src + ", " + tgt + ", fn::forward)"
+      : "<" + witness + ">to(" + src + ", " + tgt + ", fn::forward, fn::backward)";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      (forwardOnly ? "mapperForward" : "mapper") +
+      "(%1$sSrc.class, %1$sTgt.class, io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      ");\n  }\n}\n"
+    );
+  }
+
+  /**
+   * As {@link #sampled}, for a record declared {@code header} with type parameters, whose static
+   * {@code sample()} cannot name them and returns the record with a wildcard.
+   */
+  private static String sampledGeneric(final String header, final String components, final String sample) {
+    final var name = header.replaceAll("<.*", "");
+    return (
+      "public record " +
+      header +
+      "(" +
+      components +
+      ") {\n  public static " +
+      name +
+      "<?> sample() { return " +
+      sample +
+      "; }\n}\n"
+    );
+  }
+
+  /**
+   * A bean declared {@code header} with one property, {@code value}, of {@code type}, and a static
+   * {@code sample()} holding {@code sample}. A generic bean's sample has the argument {@code
+   * Object}.
+   */
+  private static String valueBean(final String header, final String type, final String sample) {
+    final var name = header.replaceAll("<.*", "");
+    final var held = header.contains("<") ? name + "<Object>" : name;
+    return (
+      "public class " +
+      header +
+      " {\n" +
+      "  private " +
+      type +
+      " value;\n" +
+      "  public " +
+      type +
+      " getValue() { return value; }\n" +
+      "  public void setValue(final " +
+      type +
+      " value) { this.value = value; }\n" +
+      "  public static " +
+      held +
+      " sample() { final " +
+      held +
+      " s = new " +
+      held +
+      "(); s.setValue(" +
+      sample +
+      "); return s; }\n}\n"
+    );
+  }
+
+  /**
+   * {@code header}, then a bean {@code name} declaring no type parameters, whose one property,
+   * {@code property}, is read and written through generic methods, {@code <T> T getP()} and {@code
+   * <T> void setP(T)}, and whose static {@code sample()} holds {@code sample}.
+   */
+  private static String genericAccessorBean(
+    final String header,
+    final String name,
+    final String property,
+    final String sample
+  ) {
+    final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
+    return (
+      header +
+      "public class " +
+      name +
+      " {\n" +
+      "  private Object " +
+      property +
+      ";\n" +
+      "  @SuppressWarnings(\"unchecked\") public <T> T get" +
+      cap +
+      "() { return (T) " +
+      property +
+      "; }\n" +
+      "  public <T> void set" +
+      cap +
+      "(final T " +
+      property +
+      ") { this." +
+      property +
+      " = " +
+      property +
+      "; }\n" +
+      "  public static " +
+      name +
+      " sample() { final var s = new " +
+      name +
+      "(); s.set" +
+      cap +
+      "(" +
+      sample +
+      "); return s; }\n}\n"
+    );
+  }
+
+  /**
+   * A {@code @Transform} on a property typed by its class's own type variable: the declarations,
+   * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
+   * paths owe for {@code Src.sample()} forward and {@code Tgt.sample()} backward and laid over
+   * {@code Src.sample()}. A forward-only row owes no backward or patch.
+   */
+  private record VariableTransform(
+    String name,
+    boolean forwardOnly,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  private static final List<VariableTransform> VARIABLE_TRANSFORMS = List.of(
+    new VariableTransform(
+      "a source property typed by the source's variable, forward only",
+      true,
+      List.of(
+        transformedValue(true) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b"),
+        runtimeRow(true, "value", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a source property typed by the source's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "value", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    ),
+    new VariableTransform(
+      "a target property typed by the target's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"abc\")"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(5)"),
+        transformFn("String", "Object", "a.length()", "\"#\" + b"),
+        runtimeRow(false, "value", "String", "Object")
+      ),
+      "#0(value=3)",
+      "#0(value=\"#5\")",
+      "#0(value=\"#5\")"
+    ),
+    new VariableTransform(
+      "a source property typed by a variable bounded by Number, both ways",
+      false,
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"41\")"),
+        transformFn("Number", "String", "String.valueOf(a.intValue() + 1)", "Integer.valueOf(b)"),
+        runtimeRow(false, "value", "Number", "String")
+      ),
+      "#0(value=\"8\")",
+      "#0(value=41)",
+      "#0(value=41)"
+    ),
+    new VariableTransform(
+      "a source list of the source's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) +
+          sampledGeneric("%1$sSrc<X>", "java.util.List<X> value", "new %1$sSrc<>(java.util.List.of(1, 2))"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("java.util.List<Object>", "String", "a.size() + \":\" + a", "java.util.List.of(b, b)"),
+        runtimeRow(false, "value", "java.util.List", "String")
+      ),
+      "#0(value=\"2:[1, 2]\")",
+      "#0(value=[\"q\", \"q\"])",
+      "#0(value=[\"q\", \"q\"])"
+    ),
+    // The list is held raw, which an overload for List<Object> takes by unchecked
+    // conversion and is then the most specific: the call binds that overload, and
+    // the setter is handed what it returns.
+    new VariableTransform(
+      "a source list of the source's variable, through the transform's overload for a list",
+      true,
+      List.of(
+        transformedValue(true) + valueBean("%1$sSrc<X>", "java.util.List<X>", "java.util.List.of(1, 2)"),
+        valueBean("%1$sTgt", "Object", "\"q\""),
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<Object, String> {\n" +
+          "  public String forward(final Object a) { return \"any\"; }\n" +
+          "  public Integer forward(final java.util.List<Object> a) { return a.size(); }\n" +
+          "  public Object backward(final String b) { return b; }\n}\n",
+        runtimeRow(true, "getValue", "java.util.List", "Object")
+      ),
+      "#0(value=2)",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a bean property typed by the bean's variable, both ways",
+      false,
+      List.of(
+        transformedValue(false) + valueBean("%1$sSrc<X>", "X", "7"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    ),
+    new VariableTransform(
+      "a bean property read and written through generic methods, both ways",
+      false,
+      List.of(
+        genericAccessorBean(transformedValue(false), "%1$sSrc", "value", "7"),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
+        runtimeRow(false, "getValue", "Object", "String")
+      ),
+      "#0(value=\"<7>\")",
+      "#0(value=\"q!\")",
+      "#0(value=\"q!\")"
+    )
+  );
+
+  @Test
+  @DisplayName("a transform on a property typed by its class's own type variable converts the same way on both paths")
+  void aTransformOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : VARIABLE_TRANSFORMS) {
+      final var prefix = "Vt" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      // The runtime row is compiled with the pair but not handed to the processor, so the classes
+      // the processor's compile adds are its bridges alone.
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // Built before the cell's own bridge is defined, so the runtime converts through its own row.
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
+        ? (ForwardMapper<Object, Object>) runtime
+        : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardMapper != null
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a transform that does not fit the erasure of a type-variable property is refused by name, and by javac on a row typed as the raw members"
+  )
+  void aTransformThatDoesNotFitATypeVariablePropertyIsRefusedByName() {
+    // Each row: the prefix, the pair and its transform, the runtime row typed by what the raw
+    // members return, and two fragments the processor's refusal has to contain.
+    final var rows = List.of(
+      List.of(
+        "Vr0",
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("String", "String", "a", "b"),
+        runtimeRow(false, "value", "Object", "String"),
+        "@Transform field=\"value\" does not fit forward",
+        "X (held as its erasure java.lang.Object) -> java.lang.String"
+      ),
+      List.of(
+        "Vr1",
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        runtimeRow(false, "value", "Number", "String"),
+        "@Transform field=\"value\" does not fit backward",
+        "java.lang.String -> T (held as its erasure java.lang.Number)"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var prefix = row.get(0);
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .subList(1, 5)
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var processed = bridged(all.subList(0, 3).toArray(JavaFileObject[]::new));
+      if (processed.success() || !processed.hasError(row.get(5)) || !processed.hasError(row.get(6))) {
+        failures.add(prefix + ": the processor owed a refusal naming the property, saw " + describe(processed));
+      }
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      final var rowRefused = plain
+        .errors()
+        .stream()
+        .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "Runtime.java"));
+      if (plain.success() || !rowRefused) {
+        failures.add(prefix + ": javac owed a refusal of the runtime row alone, saw " + describe(plain));
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** {@code @Bridge} to {@code %1$sTgt} converting {@code child} through {@code %1$sChMap}. */
+  private static final String VIA_CHILD =
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
+    " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = %1$sChMap.class))\n";
+
+  /**
+   * The child pair, {@code %1$sCh} and {@code %1$sChDto}, and {@code %1$sChMap}, whose static
+   * methods convert one to the other with the name upper-cased forward and lower-cased backward.
+   */
+  private static final List<String> CHILD_PAIR = List.of(
+    "public record %1$sCh(String name) {}\n",
+    "public record %1$sChDto(String name) {}\n",
+    "public class %1$sChMap {\n" +
+      "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+      "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n"
+  );
+
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} builds the runtime mapper for the pair with a
+   * {@code via} row reading {@code child} through {@code accessor} on both sides, over a child
+   * mapper that converts as {@code %1$sChMap} does.
+   */
+  private static String viaRow(final String accessor) {
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sCh::name, %1$sChDto::name," +
+      " String::toUpperCase, String::toLowerCase));\n" +
+      "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::" +
+      accessor +
+      ", %1$sTgt::" +
+      accessor +
+      ", child));\n  }\n}\n"
+    );
+  }
+
+  /** A generic bean {@code %1$sBase<T>} with one property, {@code child}, of type {@code T}. */
+  private static final String CHILD_BASE =
+    "public class %1$sBase<T> {\n" +
+    "  private T child;\n" +
+    "  public T getChild() { return child; }\n" +
+    "  public void setChild(final T child) { this.child = child; }\n}\n";
+
+  /**
+   * A subclass of {@code %1$sBase} declared {@code header extends %1$sBase<argument>}, whose static
+   * {@code sample()}, typed {@code sampleType}, holds {@code child}.
+   */
+  private static String childBean(
+    final String header,
+    final String argument,
+    final String sampleType,
+    final String child
+  ) {
+    return (
+      "public class " +
+      header +
+      " extends %1$sBase<" +
+      argument +
+      "> {\n" +
+      "  public static " +
+      sampleType +
+      " sample() { final " +
+      sampleType +
+      " s = new " +
+      sampleType +
+      "(); s.setChild(" +
+      child +
+      "); return s; }\n}\n"
+    );
+  }
+
+  /**
+   * A generic bean {@code %1$sBase<T bound>} whose one property, {@code value}, is declared {@code
+   * declared}, a type naming {@code T}; a source {@code %1$sSrc<X bound>} with a transform on it
+   * that passes its own variable through; and a target {@code %1$sTgt} that fixes the variable to
+   * {@code fixed}. Each side's {@code sample()} holds the given value.
+   */
+  private static List<String> fixedByTarget(
+    final String bound,
+    final String declared,
+    final String fixed,
+    final String srcSample,
+    final String tgtSample
+  ) {
+    return List.of(
+      "public class %1$sBase<T" +
+        bound +
+        "> {\n" +
+        "  private " +
+        declared +
+        " value;\n" +
+        "  public " +
+        declared +
+        " getValue() { return value; }\n" +
+        "  public void setValue(final " +
+        declared +
+        " value) { this.value = value; }\n}\n",
+      transformedValue(false) +
+        "public class %1$sSrc<X" +
+        bound +
+        "> extends %1$sBase<X> {\n" +
+        "  public static %1$sSrc<" +
+        fixed +
+        "> sample() { final %1$sSrc<" +
+        fixed +
+        "> s = new %1$sSrc<>(); s.setValue(" +
+        srcSample +
+        "); return s; }\n}\n",
+      "public class %1$sTgt extends %1$sBase<" +
+        fixed +
+        "> {\n" +
+        "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setValue(" +
+        tgtSample +
+        "); return t; }\n}\n"
+    );
+  }
+
+  /**
+   * A transform or a {@code @ViaMapper} on {@code property} that the processor refuses by the
+   * property's name and a runtime row still runs: the declarations, each with {@code %1$s} as the
+   * row's prefix and the last of them the runtime row.
+   */
+  private record UncheckedConversion(String name, String property, List<String> declarations) {}
+
+  private static final List<UncheckedConversion> UNCHECKED_CONVERSIONS = List.of(
+    new UncheckedConversion(
+      "a target that fixes the variable to String, with a transform returning Object",
+      "value",
+      concat(
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\""),
+        transformFn("Object", "Object", "\"<\" + a + \">\"", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object")
+      )
+    ),
+    new UncheckedConversion(
+      "a target that fixes a variable bounded by Number to Integer, with a transform on Number",
+      "value",
+      concat(
+        fixedByTarget(" extends Number", "T", "Integer", "7", "41"),
+        transformFn("Number", "Number", "a.intValue() + 1", "b.intValue() - 1"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Number, Number")
+      )
+    ),
+    new UncheckedConversion(
+      "a target that fixes the variable in a Map to String, with a transform on any Map",
+      "value",
+      concat(
+        fixedByTarget(
+          "",
+          "java.util.Map<String, T>",
+          "String",
+          "java.util.Map.of(\"k\", \"a\")",
+          "java.util.Map.of(\"k\", \"q\")"
+        ),
+        transformFn(
+          "java.util.Map<?, ?>",
+          "java.util.Map<?, ?>",
+          "java.util.Map.of(\"n\", String.valueOf(a.size()))",
+          "b"
+        ),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.Map, java.util.Map")
+      )
+    ),
+    new UncheckedConversion(
+      "a target that fixes the variable in an Optional to String, with a transform on any Optional",
+      "value",
+      concat(
+        fixedByTarget(
+          "",
+          "java.util.Optional<T>",
+          "String",
+          "java.util.Optional.of(\"a\")",
+          "java.util.Optional.of(\"q\")"
+        ),
+        transformFn("java.util.Optional<?>", "java.util.Optional<?>", "a.map(v -> \"<\" + v + \">\")", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.Optional, java.util.Optional")
+      )
+    ),
+    new UncheckedConversion(
+      "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
+      "value",
+      List.of(
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(0),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(1),
+        "public class %1$sTgt {\n" +
+          "  private final String value;\n" +
+          "  %1$sTgt(final String value) { this.value = value; }\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public static %1$sMaker<String> builder() { return new %1$sMaker<>(); }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"q\"); }\n}\n",
+        "public class %1$sMaker<T> {\n" +
+          "  private T value;\n" +
+          "  public %1$sMaker<T> value(final T value) { this.value = value; return this; }\n" +
+          "  public %1$sTgt build() { return new %1$sTgt((String) value); }\n}\n",
+        transformFn("Object", "Object", "\"<\" + a + \">\"", "b"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object")
+      )
+    ),
+    new UncheckedConversion(
+      "a row typed by both classes' arguments, with a transform on String",
+      "value",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(\"a\")"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(\"q\")"),
+        transformFn("String", "String", "a + \"!\"", "b + \"?\""),
+        witnessedRow(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String")
+      )
+    ),
+    new UncheckedConversion(
+      "a row typed by the source's argument under Number, with a transform on Integer",
+      "value",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "Integer value", "new %1$sTgt(41)"),
+        transformFn("Integer", "Integer", "a + 1", "b - 1"),
+        witnessedRow(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer")
+      )
+    ),
+    new UncheckedConversion(
+      "a row reading a variable bounded by Number as Object, with a backward returning Object",
+      "value",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+        transformFn("Object", "String", "String.valueOf(a)", "b"),
+        witnessedRow(false, "value", "%1$sSrc, %1$sTgt, Object, String")
+      )
+    ),
+    new UncheckedConversion(
+      "a @ViaMapper whose forward returns a class the target's fixed property does not take",
+      "child",
+      List.of(
+        "public record %1$sCh(String name) {}\n",
+        "public record %1$sOtherDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sOtherDto forward(final %1$sCh c) { return new %1$sOtherDto(c.name()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        "public record %1$sChDto(String name) {}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sOtherDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      )
+    ),
+    new UncheckedConversion(
+      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      "child",
+      List.of(
+        "public record %1$sCh(String name) {}\n",
+        "public record %1$sChDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sCh::name, %1$sChDto::name, n -> \"f:\" + n, n -> n));\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      )
+    ),
+    new UncheckedConversion(
+      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      "child",
+      List.of(
+        "public record %1$sCh(String name) {}\n",
+        "public record %1$sChDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sCh::name, %1$sChDto::name, n -> \"f:\" + n, n -> n));\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      )
+    )
+  );
+
+  /**
+   * What {@code attempt}'s result holds as {@code property}, read through its record accessor or
+   * its getter, inherited or not, with the value's class, each without the row's {@code prefix}; or
+   * the refusal.
+   */
+  private static String propertyHeld(final String prefix, final String property, final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var type = out.getClass();
+      final var getter = type.isRecord()
+        ? type.getMethod(property)
+        : type.getMethod("get" + Character.toUpperCase(property.charAt(0)) + property.substring(1));
+      final var value = getter.invoke(out);
+      final var held = property + "=" + value + ", a " + (value == null ? "null" : value.getClass().getSimpleName());
+      return held.replace(prefix, "");
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  /**
+   * The direction a transform on {@code value} was refused in, and the member type the refusal
+   * names where it names one; the call and the reason a {@code @ViaMapper} on {@code child} was
+   * refused for; or the compilation, where nothing refused the row.
+   */
+  private static String refusalOfConversion(final ProcessorHarness.Compilation processed) {
+    for (final var direction : List.of("forward", "backward")) {
+      for (final var reason : List.of("takes no value", "returns", "has several overloads")) {
+        if (processed.hasError("@ViaMapper field=\"child\"") && processed.hasError("'s " + direction + " " + reason)) {
+          return REFUSED + "@ViaMapper " + direction + " " + reason;
+        }
+      }
+    }
+    for (final var direction : List.of("forward", "backward")) {
+      if (!processed.hasError("@Transform field=\"value\" does not fit " + direction)) continue;
+      final var member = Pattern.compile("the member it is written through takes (\\S+)").matcher(
+        processed.errorMessages()
+      );
+      return (
+        REFUSED + "does not fit " + direction + (member.find() ? ", through a member taking " + member.group(1) : "")
+      );
+    }
+    return describe(processed);
+  }
+
+  /** {@code head} followed by {@code tail}. */
+  private static List<String> concat(final List<String> head, final String... tail) {
+    final var all = new ArrayList<>(head);
+    all.addAll(List.of(tail));
+    return List.copyOf(all);
+  }
+
+  /**
+   * Shapes the processor refuses by the property's name while a runtime row still runs, each with
+   * the generated path's refusal and then what the runtime gives forward and backward. Neither path
+   * checks a value against the type of the property it is read from or written to: the runtime row
+   * hands its functions, or a {@code via} row its mapper, whatever it reads, and writes whatever
+   * they return. A value that happens to fit is converted; one that does not is written as it is,
+   * or throws a bare {@code ClassCastException} where the code it reaches checks its class.
+   *
+   * <p>An entry no row exercises, or whose row either path stops giving, fails the test.
+   */
+  private static final Map<String, List<String>> UNCHECKED_CONVERSION_DIVERGENCES = Map.ofEntries(
+    // A defect still to close, in this entry and the four after it: the runtime writes a
+    // transform's result into a property a target fixes to a narrower type without checking
+    // it, where the processor refuses the transform.
+    Map.entry(
+      "a target that fixes the variable to String, with a transform returning Object",
+      List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
+    ),
+    Map.entry(
+      "a target that fixes a variable bounded by Number to Integer, with a transform on Number",
+      List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
+    ),
+    Map.entry(
+      "a target that fixes the variable in a Map to String, with a transform on any Map",
+      List.of(REFUSED + "does not fit forward", "value={n=1}, a Map1", "value={k=q}, a Map1")
+    ),
+    Map.entry(
+      "a target that fixes the variable in an Optional to String, with a transform on any Optional",
+      List.of(REFUSED + "does not fit forward", "value=Optional[<a>], a Optional", "value=Optional[q], a Optional")
+    ),
+    Map.entry(
+      "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
+      List.of(REFUSED + "does not fit forward", "value=<a>, a String", "value=q, a String")
+    ),
+    // A defect still to close, in this entry and the next: a runtime row typed by a class's
+    // arguments reads the property as that argument without checking it, where the
+    // processor holds it as the erasure and refuses a transform narrower than that.
+    Map.entry(
+      "a row typed by both classes' arguments, with a transform on String",
+      List.of(REFUSED + "does not fit forward", "value=a!, a String", "value=q?, a String")
+    ),
+    Map.entry(
+      "a row typed by the source's argument under Number, with a transform on Integer",
+      List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
+    ),
+    // A defect still to close: the runtime writes a backward result into a property bounded
+    // by Number without checking it, and throws a bare ClassCastException where the
+    // processor refuses the transform by name.
+    Map.entry(
+      "a row reading a variable bounded by Number as Object, with a backward returning Object",
+      List.of(REFUSED + "does not fit backward", "value=7, a String", REFUSED + "ClassCastException")
+    ),
+    // A defect still to close: the runtime writes the via mapper's result into a property
+    // the target fixes to another class without checking it, where the processor refuses
+    // the row.
+    Map.entry(
+      "a @ViaMapper whose forward returns a class the target's fixed property does not take",
+      List.of(
+        REFUSED + "@ViaMapper forward returns",
+        "child=OtherDto[name=a], a OtherDto",
+        REFUSED + "ClassCastException"
+      )
+    ),
+    // A defect still to close, in this entry and the next: the processor refuses an
+    // overloaded mapper method on a value it holds only as Object, since the overload javac
+    // picks for Object need not be the one the value's class calls for, while the runtime
+    // row converts through the one mapper it has.
+    Map.entry(
+      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      List.of(
+        REFUSED + "@ViaMapper forward has several overloads",
+        "child=ChDto[name=f:a], a ChDto",
+        "child=Ch[name=q], a Ch"
+      )
+    ),
+    Map.entry(
+      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      List.of(
+        REFUSED + "@ViaMapper forward has several overloads",
+        "child=ChDto[name=f:a], a ChDto",
+        "child=Ch[name=q], a Ch"
+      )
+    )
+  );
+
+  @Test
+  @DisplayName("a conversion the processor refuses by name and a runtime row still runs is a registered divergence")
+  void aConversionOnlyTheRuntimeRunsIsARegisteredDivergence() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var exercised = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var row : UNCHECKED_CONVERSIONS) {
+      final var prefix = "Ud" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var generated = refusalOfConversion(processed);
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var seen = List.of(
+        generated,
+        propertyHeld(prefix, row.property(), () -> mapper.forward(src.getMethod("sample").invoke(null))),
+        propertyHeld(prefix, row.property(), () -> mapper.backward(tgt.getMethod("sample").invoke(null)))
+      );
+      final var registered = UNCHECKED_CONVERSION_DIVERGENCES.get(row.name());
+      if (registered != null) exercised.add(row.name());
+      if (!seen.equals(registered)) {
+        failures.add(row.name() + ": generated and runtime gave " + seen + ", registered " + registered);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+    assertTrue(
+      exercised.equals(UNCHECKED_CONVERSION_DIVERGENCES.keySet()),
+      () -> "registered divergences with no row: " + UNCHECKED_CONVERSION_DIVERGENCES.keySet()
+    );
+  }
+
+  /**
+   * A {@code @ViaMapper} on a property typed by a type variable: the declarations other than the
+   * child pair, each with {@code %1$s} as the row's prefix and the last of them the runtime row,
+   * and what both paths owe for {@code Src.sample()} forward, {@code Tgt.sample()} backward, and
+   * {@code Tgt.sample()} laid over {@code Src.sample()}.
+   */
+  private record ViaVariable(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  private static final List<ViaVariable> VIA_VARIABLES = List.of(
+    new ViaVariable(
+      "a source record typed by its own variable bounded by the child",
+      List.of(
+        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a target record typed by its own variable",
+      List.of(
+        VIA_CHILD + sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        sampledGeneric("%1$sTgt<Y>", "Y child", "new %1$sTgt<>(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property both sides pass through to a generic superclass",
+      List.of(
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    // The bridge casts the value to the mapper's parameter class, and the runtime mapper
+    // reads it
+    // as that class, so a value of another class is refused at the call on both paths.
+    new ViaVariable(
+      "a property both sides pass through, holding a value that is not the child",
+      List.of(
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<Object>", "\"a\""),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<Object>", "\"Q\""),
+        viaRow("getChild")
+      ),
+      REFUSED + "ClassCastException",
+      REFUSED + "ClassCastException",
+      REFUSED + "ClassCastException"
+    ),
+    new ViaVariable(
+      "a property the source passes through and the target fixes to the child's counterpart",
+      List.of(
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"Q\")"),
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property the source fixes to the child and the target passes through",
+      List.of(
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property read and written through generic methods",
+      List.of(
+        genericAccessorBean(VIA_CHILD, "%1$sSrc", "child", "new %1$sCh(\"a\")"),
+        "public class %1$sTgt {\n" +
+          "  private %1$sChDto child;\n" +
+          "  public %1$sChDto getChild() { return child; }\n" +
+          "  public void setChild(final %1$sChDto child) { this.child = child; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setChild(new %1$sChDto(\"Q\")); return t; }\n}\n",
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    // A variable with a bound is held as the bound, and javac picks among the
+    // mapper's overloads by it, as a method reference typed by the bound does.
+    new ViaVariable(
+      "a source record typed by a variable bounded by the child, to a mapper overloaded for Object",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a source record typed by a variable bounded by the child, to a mapper overloaded for String",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
+        viaRow("child")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property read through a generic method bounded by the child, to a mapper overloaded for Object",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+          "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        VIA_CHILD +
+          "public class %1$sSrc {\n" +
+          "  private %1$sCh child;\n" +
+          "  @SuppressWarnings(\"unchecked\") public <T extends %1$sCh> T getChild() { return (T) child; }\n" +
+          "  public <T extends %1$sCh> void setChild(final T child) { this.child = child; }\n" +
+          "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.setChild(new %1$sCh(\"a\")); return s; }\n}\n",
+        "public class %1$sTgt {\n" +
+          "  private %1$sChDto child;\n" +
+          "  public %1$sChDto getChild() { return child; }\n" +
+          "  public void setChild(final %1$sChDto child) { this.child = child; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setChild(new %1$sChDto(\"Q\")); return t; }\n}\n",
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    // A mapper parameter typed by the method's own variable erases to the type the
+    // bridge holds the value as, and takes it as it is.
+    new ViaVariable(
+      "a property both sides pass through, to a mapper whose forward takes its own variable",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static <T> %1$sChDto forward(final T c) {" +
+          " return new %1$sChDto(((%1$sCh) c).name().toUpperCase()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
+        viaRow("getChild")
+      ),
+      "child=ChDto:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    )
+  );
+
+  /**
+   * A {@code @ViaMapper} whose mapper method takes a class narrower than the property's own type,
+   * which no type variable names: a value of the property may still be an instance of it, so the
+   * bridge casts the value to the method's parameter, and a value that is not one fails at the call
+   * on both paths. The declarations other than the child pair, the last of them the runtime row,
+   * with a runtime mapper built from the same two functions.
+   */
+  private static final List<ViaVariable> VIA_CASTS = List.of(
+    new ViaVariable(
+      "a property of a class that is not final, to a mapper of an interface a subclass implements",
+      viaCastRow(
+        "public interface %1$sNamed { String name(); }\n",
+        "public class %1$sSub {\n" +
+          "  private final String name;\n" +
+          "  public %1$sSub(final String name) { this.name = name; }\n" +
+          "  public String name() { return name; }\n}\n",
+        "public class %1$sNamedSub extends %1$sSub implements %1$sNamed {\n" +
+          "  public %1$sNamedSub(final String name) { super(name); }\n}\n",
+        "%1$sSub",
+        "new %1$sNamedSub(\"a\")",
+        "%1$sNamed",
+        "new %1$sNamedSub(d.name())"
+      ),
+      "child=ChDto:f:a",
+      "child=NamedSub:q",
+      "child=NamedSub:q"
+    ),
+    new ViaVariable(
+      "a property of a class that is not final holding a value the mapper's interface is not",
+      viaCastRow(
+        "public interface %1$sNamed { String name(); }\n",
+        "public class %1$sSub {\n" +
+          "  private final String name;\n" +
+          "  public %1$sSub(final String name) { this.name = name; }\n" +
+          "  public String name() { return name; }\n}\n",
+        "public class %1$sNamedSub extends %1$sSub implements %1$sNamed {\n" +
+          "  public %1$sNamedSub(final String name) { super(name); }\n}\n",
+        "%1$sSub",
+        "new %1$sSub(\"a\")",
+        "%1$sNamed",
+        "new %1$sNamedSub(d.name())"
+      ),
+      REFUSED + "ClassCastException",
+      "child=NamedSub:q",
+      "child=NamedSub:q"
+    ),
+    new ViaVariable(
+      "an Object target property, to a mapper whose backward takes a class",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        VIA_CHILD + sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        sampled("%1$sTgt", "Object child", "new %1$sTgt(new %1$sChDto(\"q\"))"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+          "      (%1$sCh c) -> new %1$sChDto(\"f:\" + c.name()), (%1$sChDto d) -> new %1$sCh(d.name())," +
+          " %1$sCh.class, %1$sChDto.class, java.util.Map.of());\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+          " child));\n  }\n}\n"
+      ),
+      "child=ChDto:f:a",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "an Object property, to a mapper of a class",
+      viaCastRow(
+        "public record %1$sLabel(String name) {}\n",
+        "",
+        "",
+        "Object",
+        "new %1$sLabel(\"a\")",
+        "%1$sLabel",
+        "new %1$sLabel(d.name())"
+      ),
+      "child=ChDto:f:a",
+      "child=Label:q",
+      "child=Label:q"
+    )
+  );
+
+  /**
+   * The declarations of a {@link #VIA_CASTS} row: {@code extras}, empty ones skipped; a source
+   * record whose {@code child} is {@code held} and holds {@code sample}; a target holding a child
+   * named {@code q}; a mapper class whose {@code forward} takes {@code takes} and whose {@code
+   * backward} builds {@code back}; and the runtime row, whose mapper is built from the same
+   * functions.
+   */
+  private static List<String> viaCastRow(
+    final String first,
+    final String second,
+    final String third,
+    final String held,
+    final String sample,
+    final String takes,
+    final String back
+  ) {
+    final var rows = new ArrayList<String>();
+    for (final var extra : List.of(first, second, third)) if (!extra.isEmpty()) rows.add(extra);
+    rows.add(
+      "public class %1$sChMap {\n" +
+        "  public static %1$sChDto forward(final " +
+        takes +
+        " c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
+        "  public static " +
+        held +
+        " backward(final %1$sChDto d) { return " +
+        back +
+        "; }\n}\n"
+    );
+    rows.add(VIA_CHILD + sampled("%1$sSrc", held + " child", "new %1$sSrc(" + sample + ")"));
+    rows.add(sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"q\"))"));
+    rows.add(
+      "public class %1$sRuntime {\n" +
+        "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+        "  public static Object mapper() {\n" +
+        "    final var child = io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+        "      (" +
+        takes +
+        " c) -> new %1$sChDto(\"f:\" + c.name()), (%1$sChDto d) -> " +
+        back +
+        ", " +
+        takes +
+        ".class, %1$sChDto.class, java.util.Map.of());\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+        " child));\n  }\n}\n"
+    );
+    return rows;
+  }
+
+  @Test
+  @DisplayName(
+    "a @ViaMapper whose method takes a class narrower than the property casts to it, as the runtime row converts"
+  )
+  void aViaMapperOnAPropertyWiderThanItsParameterConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = viaConversionFailures(VIA_CASTS, "Vk");
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a @ViaMapper on a property typed by a type variable converts the same way on both paths")
+  void aViaMapperOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = viaConversionFailures(VIA_VARIABLES, "Vm");
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code rows} owe and do not give: each row's generated bridge and runtime mapper, each
+   * named with {@code prefixBase} and the row's index, run forward, backward and laid over the
+   * source, and held to the row's {@code child} results on both paths.
+   */
+  private static List<String> viaConversionFailures(final List<ViaVariable> rows, final String prefixBase)
+    throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : rows) {
+      final var prefix = prefixBase + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var ownMapper = row
+        .declarations()
+        .stream()
+        .anyMatch(d -> d.contains("class %1$sChMap "));
+      final var all = concat(
+        ownMapper ? CHILD_PAIR.subList(0, 2) : CHILD_PAIR,
+        row.declarations().toArray(String[]::new)
+      )
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      // A warning fails this row and the others still run, so each row reports on its own.
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      // Built before the cell's own bridge is defined, so the runtime converts through its own row.
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = List.of(
+        Map.entry("forward", row.forward()),
+        Map.entry("backward", row.backward()),
+        Map.entry("patch", row.patch())
+      );
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var held = childHeld(prefix, side.getValue());
+          if (!held.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                held +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    return failures;
+  }
+
+  /**
+   * What {@code attempt}'s result holds as {@code child}, read through its record accessor or its
+   * getter, inherited or not: the child's class without the row's prefix and its name; or the
+   * refusal.
+   */
+  private static String childHeld(final String prefix, final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var type = out.getClass();
+      final var child = (type.isRecord() ? type.getMethod("child") : type.getMethod("getChild")).invoke(out);
+      if (child == null) return "child=null";
+      final var name = child.getClass().getMethod("name").invoke(child);
+      return "child=" + child.getClass().getSimpleName().replace(prefix, "") + ":" + name;
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  /** {@code @Bridge} to {@code %1$sTgt} converting {@code children} through {@code %1$sChMap}. */
+  private static final String VIA_CHILDREN =
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
+    " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = %1$sChMap.class))\n";
+
+  /**
+   * A {@code @ViaMapper} on a container property: the mapper class, null for the child pair's own,
+   * the source and target declarations, each with {@code %1$s} as the row's prefix, and what each
+   * path owes for {@code Src.sample()} forward, and for {@code Tgt.sample()} backward and laid over
+   * {@code Src.sample()}: the runtime first, then the generated bridge.
+   */
+  private record ViaContainer(
+    String name,
+    String mapper,
+    String source,
+    String target,
+    String forward,
+    String backward,
+    String generatedForward,
+    String generatedBackward
+  ) {
+    /** A row both paths owe the same results for, through the child pair's own mapper. */
+    ViaContainer(
+      final String name,
+      final String source,
+      final String target,
+      final String forward,
+      final String backward
+    ) {
+      this(name, null, source, target, forward, backward, forward, backward);
+    }
+  }
+
+  /**
+   * A mapper class with the child pair's element methods and an overload of each that converts a
+   * whole list, marking what it builds with {@code W} forward and {@code WB} backward.
+   */
+  private static final String WHOLE_LIST_OVERLOADS =
+    "public class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static java.util.List<%1$sChDto> forward(final java.util.List<%1$sCh> l) {" +
+    " return l.stream().map(c -> new %1$sChDto(\"W\" + c.name())).toList(); }\n" +
+    "  public static java.util.List<%1$sCh> backward(final java.util.List<%1$sChDto> l) {" +
+    " return l.stream().map(d -> new %1$sCh(\"WB\" + d.name())).toList(); }\n}\n";
+
+  /**
+   * As {@link #WHOLE_LIST_OVERLOADS}, with each whole-list overload typed by its own result
+   * variable, which the call site infers, and marking what it builds with {@code GW} and {@code
+   * GWB}.
+   */
+  private static final String WHOLE_LIST_INFERRED =
+    "@SuppressWarnings(\"unchecked\")\npublic class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static <R> R forward(final java.util.List<%1$sCh> l) {" +
+    " return (R) l.stream().map(c -> new %1$sChDto(\"GW\" + c.name())).toList(); }\n" +
+    "  public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
+    " return (R) l.stream().map(d -> new %1$sCh(\"GWB\" + d.name())).toList(); }\n}\n";
+
+  /**
+   * A whole-list forward with a declared result, and a whole-list backward with an inferred one.
+   */
+  private static final String WHOLE_LIST_HALF_INFERRED =
+    "@SuppressWarnings(\"unchecked\")\npublic class %1$sChMap {\n" +
+    "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+    "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n" +
+    "  public static java.util.List<%1$sChDto> forward(final java.util.List<%1$sCh> l) {" +
+    " return l.stream().map(c -> new %1$sChDto(\"W\" + c.name())).toList(); }\n" +
+    "  public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
+    " return (R) l.stream().map(d -> new %1$sCh(\"GWB\" + d.name())).toList(); }\n}\n";
+
+  /** A container row's source, generic over its element or not, holding {@code sample}. */
+  private static String containerSource(final boolean generic, final String declared, final String sample) {
+    return generic
+      ? VIA_CHILDREN +
+        sampledGeneric("%1$sSrc<X>", declared.replace("%1$sCh", "X") + " children", "new %1$sSrc<>(" + sample + ")")
+      : VIA_CHILDREN + sampled("%1$sSrc", declared + " children", "new %1$sSrc(" + sample + ")");
+  }
+
+  private static List<ViaContainer> viaContainers() {
+    final var rows = new ArrayList<ViaContainer>();
+    for (final var generic : List.of(false, true)) {
+      final var kind = generic ? "a source generic over its element" : "a source fixed to the child";
+      rows.add(
+        new ViaContainer(
+          "a List property, " + kind,
+          containerSource(generic, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.List<%1$sChDto> children",
+            "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "a Set property, " + kind,
+          containerSource(generic, "java.util.Set<%1$sCh>", "java.util.Set.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Set<%1$sChDto> children",
+            "new %1$sTgt(java.util.Set.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "an Optional property, " + kind,
+          containerSource(generic, "java.util.Optional<%1$sCh>", "java.util.Optional.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Optional<%1$sChDto> children",
+            "new %1$sTgt(java.util.Optional.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=Optional[ChDto:A]",
+          "children=Optional[Ch:q]"
+        )
+      );
+      rows.add(
+        new ViaContainer(
+          "a Map property's values, " + kind,
+          containerSource(generic, "java.util.Map<String, %1$sCh>", "java.util.Map.of(\"k\", new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.Map<String, %1$sChDto> children",
+            "new %1$sTgt(java.util.Map.of(\"k\", new %1$sChDto(\"Q\")))"
+          ),
+          "children={k=ChDto:A}",
+          "children={k=Ch:q}"
+        )
+      );
+    }
+    rows.add(
+      new ViaContainer(
+        "a List property both sides type by a variable",
+        containerSource(true, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampledGeneric(
+          "%1$sTgt<Y>",
+          "java.util.List<Y> children",
+          "new %1$sTgt<>(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]"
+      )
+    );
+    // A mapper class that also converts the whole list keeps converting the whole property on the
+    // generated path, as it did before element mappers were lifted. A runtime via row's Mapper has
+    // one pair of classes and no overloads, so it can only express the element methods, which it
+    // lifts: the two paths are owed different results, and each holds its own.
+    for (final var generic : List.of(false, true)) {
+      rows.add(
+        new ViaContainer(
+          "a List property whose mapper class also converts the whole list, " +
+            (generic ? "a source generic over its element" : "a source fixed to the child"),
+          WHOLE_LIST_OVERLOADS,
+          containerSource(generic, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+          sampled(
+            "%1$sTgt",
+            "java.util.List<%1$sChDto> children",
+            "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+          ),
+          "children=[ChDto:A]",
+          "children=[Ch:q]",
+          "children=[ChDto:Wa]",
+          "children=[Ch:WBQ]"
+        )
+      );
+    }
+    // A whole-list overload whose result is the method's own variable gives what the call site
+    // infers, so it counts as converting the whole property where the bridge reads the property
+    // as declared. On a source generic over its element the bridge holds the property raw, and a
+    // call handed a raw argument erases its result, so nothing is inferred: the element methods
+    // are lifted, as the runtime lifts its mapper.
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class also converts the whole list into an inferred result, a source generic over its element",
+        WHOLE_LIST_INFERRED,
+        containerSource(true, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:A]",
+        "children=[Ch:q]"
+      )
+    );
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class also converts the whole list into an inferred result",
+        WHOLE_LIST_INFERRED,
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:GWa]",
+        "children=[Ch:GWBQ]"
+      )
+    );
+    rows.add(
+      new ViaContainer(
+        "a List property whose mapper class converts the whole list one way declared and back inferred",
+        WHOLE_LIST_HALF_INFERRED,
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:Wa]",
+        "children=[Ch:GWBQ]"
+      )
+    );
+    // A null element is not handed to the mapper on either path: it stays null.
+    rows.add(
+      new ViaContainer(
+        "a List property holding a null element",
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.Arrays.asList(new %1$sCh(\"a\"), null)"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.Arrays.asList(null, new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A, null]",
+        "children=[null, Ch:q]"
+      )
+    );
+    return rows;
+  }
+
+  @Test
+  @DisplayName("a @ViaMapper on a List, Set, Optional or Map property converts each element the same way on both paths")
+  void aViaMapperOnAContainerPropertyConvertsEachElementTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : viaContainers()) {
+      final var prefix = "Vc" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var pair = row.mapper() == null ? CHILD_PAIR : List.of(CHILD_PAIR.get(0), CHILD_PAIR.get(1), row.mapper());
+      final var all = concat(pair, row.source(), row.target(), viaRow("children"))
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final Attempt runtime = () -> classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      for (final var operation : List.of("forward", "backward", "patch")) {
+        final Attempt generated = switch (operation) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        @SuppressWarnings("unchecked")
+        final Attempt reflective = switch (operation) {
+          case "forward" -> () -> ((Mapper<Object, Object>) runtime.get()).forward(srcSample.get());
+          case "backward" -> () -> ((Mapper<Object, Object>) runtime.get()).backward(tgtSample.get());
+          default -> () -> ((Mapper<Object, Object>) runtime.get()).patch(srcSample.get(), tgtSample.get());
+        };
+        final var forward = "forward".equals(operation);
+        final var sides = List.of(
+          List.of("generated", forward ? row.generatedForward() : row.generatedBackward()),
+          List.of("reflective", forward ? row.forward() : row.backward())
+        );
+        for (final var side : sides) {
+          final var held = childrenHeld(prefix, "generated".equals(side.get(0)) ? generated : reflective);
+          if (!held.equals(side.get(1))) {
+            failures.add(
+              row.name() + ", " + operation + ": " + side.get(0) + " gave " + held + ", owed " + side.get(1)
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code attempt}'s result holds as {@code children}, each element written as its class
+   * without the row's prefix and its name: a list or set as {@code [..]}, an optional as {@code
+   * Optional[..]}, and a map as {@code {key=..}}; or the refusal.
+   */
+  private static String childrenHeld(final String prefix, final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var children = out.getClass().getMethod("children").invoke(out);
+      return "children=" + described(prefix, children);
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  private static String described(final String prefix, final Object value) throws ReflectiveOperationException {
+    if (value == null) return "null";
+    if (value instanceof Optional<?> optional) {
+      return optional.isEmpty() ? "Optional.empty" : "Optional[" + described(prefix, optional.get()) + "]";
+    }
+    if (value instanceof Collection<?> collection) {
+      final var parts = new ArrayList<String>();
+      for (final var element : collection) parts.add(described(prefix, element));
+      return "[" + String.join(", ", parts) + "]";
+    }
+    if (value instanceof Map<?, ?> map) {
+      final var parts = new ArrayList<String>();
+      for (final var entry : map.entrySet()) parts.add(entry.getKey() + "=" + described(prefix, entry.getValue()));
+      return "{" + String.join(", ", parts) + "}";
+    }
+    return (
+      value.getClass().getSimpleName().replace(prefix, "") + ":" + value.getClass().getMethod("name").invoke(value)
+    );
+  }
+
+  /**
+   * A {@code @ViaMapper} and the runtime {@code via} row over the same pair, whose mapper is handed
+   * a property no value of which it can take: the declarations other than the child pair, each with
+   * {@code %1$s} as the row's prefix and the last of them the runtime row, and the refusal both
+   * paths owe when the bridge and the mapper are built.
+   */
+  private record ViaNeverFits(String name, List<String> declarations, String refusal) {}
+
+  /** The refusal of a via row over {@code children} whose source holds no child. */
+  private static String childrenNeverChild() {
+    return PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh");
+  }
+
+  private static final List<ViaNeverFits> VIA_NEVER_FITS = List.of(
+    new ViaNeverFits(
+      "a List of a variable bounded by a class the mapper does not take",
+      List.of(
+        "public record %1$sOther(String name) {}\n",
+        VIA_CHILDREN + "public record %1$sSrc<X extends %1$sOther>(java.util.List<X> children) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a Map whose keys are a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.Map<X, String> children) {}\n",
+        "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a Map whose keys are the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(java.util.Map<%1$sCh, String> children) {}\n",
+        "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "an array of a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(X[] children) {}\n",
+        "public record %1$sTgt(%1$sChDto[] children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "an array of the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(%1$sCh[] children) {}\n",
+        "public record %1$sTgt(%1$sChDto[] children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a List of Lists of a variable",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.List<java.util.List<X>> children) {}\n",
+        "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a List of Lists of the child",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(java.util.List<java.util.List<%1$sCh>> children) {}\n",
+        "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a property typed by a variable bounded by the child, to a mapper of another class",
+      List.of(
+        "public record %1$sOther(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sOther c) { return new %1$sChDto(c.name()); }\n" +
+          "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
+        VIA_CHILD + "public record %1$sSrc<X extends %1$sCh>(X child) {}\n",
+        "public record %1$sTgt(%1$sChDto child) {}\n",
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sOther.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child, %1$sTgt::child," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "child", "%1$sOther")
+    ),
+    new ViaNeverFits(
+      "a child source into a List target",
+      List.of(
+        VIA_CHILDREN + "public record %1$sSrc(%1$sCh children) {}\n",
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "target", "children", "%1$sChDto")
+    ),
+    new ViaNeverFits(
+      "an interface the child, a record, does not implement",
+      List.of(
+        "public interface %1$sNamed { String name(); }\n",
+        VIA_CHILDREN + "public record %1$sSrc(%1$sNamed children) {}\n",
+        "public record %1$sTgt(%1$sChDto children) {}\n",
+        viaRow("children")
+      ),
+      childrenNeverChild()
+    ),
+    new ViaNeverFits(
+      "a sealed interface none of whose cases is the mapper's class, which is not final",
+      List.of(
+        "public sealed interface %1$sShape permits %1$sCircle {}\n",
+        "public record %1$sCircle(String name) implements %1$sShape {}\n",
+        "public class %1$sPlain {\n" +
+          "  private String name;\n" +
+          "  public %1$sPlain() {}\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sPlain p) { return new %1$sChDto(p.getName()); }\n" +
+          "  public static %1$sPlain backward(final %1$sChDto d) { final var p = new %1$sPlain(); p.setName(d.name()); return p; }\n}\n",
+        VIA_CHILDREN + "public record %1$sSrc(%1$sShape children) {}\n",
+        "public record %1$sTgt(%1$sChDto children) {}\n",
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sPlain.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::children, %1$sTgt::children," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sPlain")
+    )
+  );
+
+  @Test
+  @DisplayName("a via row whose mapper no value of the property fits is refused by name on both paths")
+  void aViaRowWhoseMapperNoValueFitsIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : VIA_NEVER_FITS) {
+      final var prefix = "Vn" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var ownMapper = row
+        .declarations()
+        .stream()
+        .anyMatch(d -> d.contains("class %1$sChMap "));
+      final var all = concat(
+        ownMapper ? CHILD_PAIR.subList(0, 2) : CHILD_PAIR,
+        row.declarations().toArray(String[]::new)
+      )
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var refusal = row.refusal().formatted(prefix);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (processed.success() || !processed.hasError(refusal)) {
+        failures.add(row.name() + ": the processor owed the refusal, saw " + describe(processed));
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      String built;
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        built = "a mapper";
+      } catch (final InvocationTargetException e) {
+        built = String.valueOf(e.getCause());
+      }
+      if (!("java.lang.IllegalArgumentException: " + refusal).equals(built)) {
+        failures.add(row.name() + ": the runtime owed the refusal, saw " + built);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} is the two-way runtime mapper the pair has no rows
+   * for.
+   */
+  private static final String PLAIN_RUNTIME =
+    "public class %1$sRuntime {\n" +
+    "  public static Object mapper() {\n" +
+    "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class);\n" +
+    "  }\n}\n";
+
+  /**
+   * A generic bean {@code %1$s<name><Y>} extending {@code %1$sBase<fixed>}, which declares {@code
+   * set<Cap>(T)}, recording {@code T:} and the value, and an empty {@code Marker} interface. The
+   * bean reads the property as {@code fixed} and adds its own {@code set<Cap>(other)}, which writes
+   * {@code otherWrites} instead. Its {@code sample()} holds {@code held}.
+   */
+  private static List<String> inheritedSetter(
+    final String name,
+    final String property,
+    final String fixed,
+    final String other,
+    final String otherWrites,
+    final String held,
+    final String header
+  ) {
+    final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
+    return List.of(
+      "public class %1$sBase<T> {\n" +
+        "  public interface Marker {}\n" +
+        "  protected Object " +
+        property +
+        ";\n" +
+        "  public void set" +
+        cap +
+        "(final T v) { this." +
+        property +
+        " = v instanceof String text ? \"T:\" + text : v; }\n}\n",
+      header +
+        "public class %1$s" +
+        name +
+        "<Y> extends %1$sBase<" +
+        fixed +
+        "> {\n" +
+        "  public " +
+        fixed +
+        " get" +
+        cap +
+        "() { return (" +
+        fixed +
+        ") " +
+        property +
+        "; }\n" +
+        "  public void set" +
+        cap +
+        "(final " +
+        other +
+        " v) { this." +
+        property +
+        " = " +
+        otherWrites +
+        "; }\n" +
+        "  public static %1$s" +
+        name +
+        "<Object> sample() { final var b = new %1$s" +
+        name +
+        "<Object>(); b." +
+        property +
+        " = " +
+        held +
+        "; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A write into a generic class the bridge names raw: the declarations, each with {@code %1$s} as
+   * the row's prefix and the last of them the runtime mapper, and what both paths owe forward,
+   * backward and through patch. A row owing no backward is forward only.
+   */
+  private record RawWrite(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  private static final List<RawWrite> RAW_WRITES = List.of(
+    // The inherited setValue(T) takes Object on the raw class, where a String argument would
+    // bind
+    // setValue(CharSequence); the runtime writes through setValue(T), chosen from the String
+    // the
+    // property is read as.
+    new RawWrite(
+      "a plain write into a generic target whose setter is inherited",
+      concat(
+        List.of(BRIDGE_TO_TGT + valueBean("%1$sSrc", "String", "\"x\"")),
+        concat(
+          inheritedSetter("Tgt", "value", "String", "CharSequence", "\"CharSequence:\" + v", "\"q\"", ""),
+          PLAIN_RUNTIME
+        ).toArray(String[]::new)
+      ),
+      "#0(value=\"T:x\")",
+      "#0(value=\"q\")",
+      "#0(value=\"q\")"
+    ),
+    new RawWrite(
+      "a plain write backward and through patch into a generic source whose setter is inherited",
+      concat(
+        inheritedSetter("Src", "value", "String", "CharSequence", "\"CharSequence:\" + v", "\"x\"", BRIDGE_TO_TGT),
+        valueBean("%1$sTgt", "String", "\"q\""),
+        PLAIN_RUNTIME
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"T:q\")",
+      "#0(value=\"T:q\")"
+    ),
+    // A nested pair's own bridge converts the child; its result is written through the setter
+    // the
+    // child's type chooses, setChild(T), rather than setChild(Marker), which writes nothing.
+    new RawWrite(
+      "a nested bridge's result into a generic target whose setter is inherited",
+      concat(
+        List.of(
+          "@io.github.eschizoid.telescope.annotations.Bridge(%1$sChDto.class)\npublic record %1$sCh(String name) {}\n",
+          "public record %1$sChDto(String name) implements %1$sBase.Marker {}\n",
+          BRIDGE_TO_TGT +
+            "public class %1$sSrc {\n" +
+            "  private %1$sCh child;\n" +
+            "  public %1$sCh getChild() { return child; }\n" +
+            "  public void setChild(final %1$sCh child) { this.child = child; }\n" +
+            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n"
+        ),
+        concat(
+          inheritedSetter("Tgt", "child", "%1$sChDto", "%1$sBase.Marker", "null", "new %1$sChDto(\"q\")", ""),
+          PLAIN_RUNTIME
+        ).toArray(String[]::new)
+      ),
+      "#0(child=#1(name=\"a\"))",
+      "#0(child=#1(name=\"q\"))",
+      "#0(child=#1(name=\"q\"))"
+    ),
+    new RawWrite(
+      "a @ViaMapper result into a generic target whose setter is inherited",
+      concat(
+        List.of(
+          "public record %1$sCh(String name) {}\n",
+          "public record %1$sChDto(String name) implements %1$sBase.Marker {}\n",
+          "public class %1$sChMap {\n" +
+            "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+            "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+          VIA_CHILD +
+            "public class %1$sSrc {\n" +
+            "  private %1$sCh child;\n" +
+            "  public %1$sCh getChild() { return child; }\n" +
+            "  public void setChild(final %1$sCh child) { this.child = child; }\n" +
+            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n"
+        ),
+        concat(
+          inheritedSetter("Tgt", "child", "%1$sChDto", "%1$sBase.Marker", "null", "new %1$sChDto(\"q\")", ""),
+          "public class %1$sRuntime {\n" +
+            "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+            "  public static Object mapper() {\n" +
+            "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class);\n" +
+            "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+            "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+            " child));\n  }\n}\n"
+        ).toArray(String[]::new)
+      ),
+      "#0(child=#1(name=\"a\"))",
+      "#0(child=#1(name=\"q\"))",
+      "#0(child=#1(name=\"q\"))"
+    ),
+    // The raw record's canonical constructor takes Object, where a CharSequence argument
+    // would bind
+    // the other constructor of one argument; the runtime calls the canonical one.
+    new RawWrite(
+      "a transform result into a generic record with a second constructor of the same arity",
+      List.of(
+        transformedValue(true) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y value) {\n" +
+          "  public %1$sTgt(final CharSequence c) { this((Y) (\"CharSequence:\" + c)); }\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\"); }\n}\n",
+        transformFn("String", "CharSequence", "a", "String.valueOf(b)"),
+        "public class %1$sRuntime {\n" +
+          "  public static Object mapper() {\n" +
+          "    final var fn = new %1$sFn();\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapperForward(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt, String, Object>toOneWay(" +
+          "%1$sSrc::value, %1$sTgt::value, fn::forward));\n  }\n}\n"
+      ),
+      "#0(value=\"x\")",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName("a write into a generic class the bridge names raw goes through the setter the property's type chooses")
+  void aWriteIntoARawGenericClassBindsTheSetterThePropertysTypeChooses() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : RAW_WRITES) {
+      final var prefix = "Pw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var forwardOnly = row.backward() == null;
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = forwardOnly ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = forwardOnly ? (ForwardMapper<Object, Object>) runtime : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** {@code %1$sLog}, a log every conversion of an order row appends to as it runs. */
+  private static final String ORDER_LOG =
+    "public class %1$sLog { public static final StringBuilder LOG = new StringBuilder(); }\n";
+
+  /**
+   * A child pair whose own bridge converts its one component through a transform that logs {@code
+   * c;} each way.
+   */
+  private static final List<String> LOGGED_CHILD = List.of(
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sCDto.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"n\", using = %1$sCFn.class))\n" +
+      "public record %1$sC(String n) {}\n",
+    "public record %1$sCDto(String n) {}\n",
+    "public class %1$sCFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+      "  public String forward(final String a) { %1$sLog.LOG.append(\"c;\"); return a; }\n" +
+      "  public String backward(final String b) { %1$sLog.LOG.append(\"c;\"); return b; }\n}\n"
+  );
+
+  /**
+   * {@code %1$sVFn}, a transform from {@code String} to {@code to} that logs {@code v;} each way.
+   */
+  private static String loggedValueFn(final String to) {
+    return (
+      "public class %1$sVFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, " +
+      to +
+      "> {\n" +
+      "  public " +
+      to +
+      " forward(final String a) { %1$sLog.LOG.append(\"v;\"); return a; }\n" +
+      "  public String backward(final " +
+      to +
+      " b) { %1$sLog.LOG.append(\"v;\"); return String.valueOf(b); }\n}\n"
+    );
+  }
+
+  /**
+   * A pair whose conversions log the order they run in: the declarations, each with {@code %1$s} as
+   * the row's prefix and the last of them the runtime row, and what both paths owe forward,
+   * backward and through patch, each as the log followed by the result. A row owing no backward is
+   * forward only, and one owing no patch leaves it out.
+   */
+  private record OrderRow(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  /** {@code @Bridge} to {@code %1$sTgt} with a transform on {@code v} through {@code %1$sVFn}. */
+  private static String loggedTransform(final boolean forwardOnly) {
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
+      " @io.github.eschizoid.telescope.annotations.Transform(field = \"v\", using = %1$sVFn.class" +
+      (forwardOnly ? ", forwardOnly = true" : "") +
+      "))\n"
+    );
+  }
+
+  /**
+   * {@code %1$sRuntime} over a typed-transform row on {@code v}, reading it through {@code
+   * accessor}.
+   */
+  private static String loggedRuntime(final boolean forwardOnly, final String accessor, final String to) {
+    final var row = forwardOnly
+      ? "toOneWay(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", fn::forward)"
+      : "to(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", fn::forward, b -> fn.backward((" + to + ") b))";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sVFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      (forwardOnly ? "mapperForward" : "mapper") +
+      "(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt, String, Object>" +
+      row +
+      ");\n  }\n}\n"
+    );
+  }
+
+  /**
+   * {@code %1$sLFn}, a transform from {@code String} to {@code String} that logs the value it
+   * converts, each way.
+   */
+  private static final String LOGGING_FN =
+    "public class %1$sLFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+    "  public String forward(final String a) { %1$sLog.LOG.append(a + \";\"); return a; }\n" +
+    "  public String backward(final String b) { %1$sLog.LOG.append(b + \";\"); return b; }\n}\n";
+
+  /**
+   * {@code @Bridge} to {@code %1$sTgt} converting {@code first%1$s} and {@code second%1$s} through
+   * {@code %1$sLFn}.
+   */
+  private static String twoLoggedTransforms(final boolean forwardOnly) {
+    final var only = forwardOnly ? ", forwardOnly = true" : "";
+    return (
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms = {\n" +
+      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"first%1$s\", using = %1$sLFn.class" +
+      only +
+      "),\n" +
+      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"second%1$s\", using = %1$sLFn.class" +
+      only +
+      ")})\n"
+    );
+  }
+
+  /**
+   * {@code %1$sIntern}, which declares the getters and setters of {@code first%1$s} and {@code
+   * second%1$s} the other way round. Loaded ahead of the bean, it fixes the order HotSpot lists the
+   * bean's methods in, which follows the order their names were first seen in the JVM, so the
+   * bean's methods come back second first whatever ran before.
+   */
+  private static final String REVERSED_NAMES =
+    "public class %1$sIntern {\n" +
+    "  public String getSecond%1$s() { return null; }\n" +
+    "  public void setSecond%1$s(final String v) {}\n" +
+    "  public String getFirst%1$s() { return null; }\n" +
+    "  public void setFirst%1$s(final String v) {}\n}\n";
+
+  /**
+   * {@code %1$sRuntime} over two logged typed-transform rows, reading {@code first%1$s} through
+   * {@code srcFirst} and {@code tgtFirst} and {@code second%1$s} through {@code srcSecond} and
+   * {@code tgtSecond}.
+   */
+  private static String twoLoggedRows(
+    final boolean forwardOnly,
+    final String srcFirst,
+    final String tgtFirst,
+    final String srcSecond,
+    final String tgtSecond
+  ) {
+    final var factory = forwardOnly ? "mapperForward" : "mapper";
+    final var row = forwardOnly ? "toOneWay" : "to";
+    final var fns = forwardOnly ? "fn::forward" : "fn::forward, fn::backward";
+    return (
+      "public class %1$sRuntime {\n" +
+      "  public static Object mapper() {\n" +
+      "    final var fn = new %1$sLFn();\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      factory +
+      "(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      "(%1$sSrc::" +
+      srcFirst +
+      ", %1$sTgt::" +
+      tgtFirst +
+      ", " +
+      fns +
+      "),\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping." +
+      row +
+      "(%1$sSrc::" +
+      srcSecond +
+      ", %1$sTgt::" +
+      tgtSecond +
+      ", " +
+      fns +
+      "));\n  }\n}\n"
+    );
+  }
+
+  /** A record {@code %1$sSrc(String first%1$s, String second%1$s)} holding 1 and 2. */
+  private static final String FIRST_SECOND_RECORD =
+    "public record %1$sSrc(String first%1$s, String second%1$s) {\n" +
+    "  public static %1$sSrc sample() { return new %1$sSrc(\"1\", \"2\"); }\n}\n";
+
+  /**
+   * A bean {@code %1$s<name>} with {@code first%1$s} and {@code second%1$s}, written through
+   * setters, whose {@code sample()} holds 3 and 4.
+   */
+  private static String setterPair(final String name, final String header) {
+    return (
+      header +
+      "public class %1$s" +
+      name +
+      " {\n" +
+      "  private String first%1$s;\n" +
+      "  private String second%1$s;\n" +
+      "  public String getFirst%1$s() { return first%1$s; }\n" +
+      "  public void setFirst%1$s(final String v) { this.first%1$s = v; }\n" +
+      "  public String getSecond%1$s() { return second%1$s; }\n" +
+      "  public void setSecond%1$s(final String v) { this.second%1$s = v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var b = new %1$s" +
+      name +
+      "(); b.first%1$s = \"3\"; b.second%1$s = \"4\"; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$sTgt} with {@code first%1$s} and {@code second%1$s}, built through a builder.
+   * It declares the getters the other way round from the fields, which decide the order.
+   */
+  private static final String BUILDER_PAIR =
+    "public class %1$sTgt {\n" +
+    "  private final String first%1$s;\n" +
+    "  private final String second%1$s;\n" +
+    "  private %1$sTgt(final Builder b) { this.first%1$s = b.first; this.second%1$s = b.second; }\n" +
+    "  public String getSecond%1$s() { return second%1$s; }\n" +
+    "  public String getFirst%1$s() { return first%1$s; }\n" +
+    "  public static Builder builder() { return new Builder(); }\n" +
+    "  public static %1$sTgt sample() { return builder().first%1$s(\"3\").second%1$s(\"4\").build(); }\n" +
+    "  public static final class Builder {\n" +
+    "    private String first;\n" +
+    "    private String second;\n" +
+    "    public Builder first%1$s(final String v) { this.first = v; return this; }\n" +
+    "    public Builder second%1$s(final String v) { this.second = v; return this; }\n" +
+    "    public %1$sTgt build() { return new %1$sTgt(this); }\n" +
+    "  }\n}\n";
+
+  /**
+   * A bean {@code %1$sTgt} with {@code first%1$s} and {@code second%1$s}, built through a
+   * constructor whose parameters name them.
+   */
+  private static final String CONSTRUCTOR_PAIR =
+    "public class %1$sTgt {\n" +
+    "  private final String first%1$s;\n" +
+    "  private final String second%1$s;\n" +
+    "  public %1$sTgt(final String first%1$s, final String second%1$s) {\n" +
+    "    this.first%1$s = first%1$s;\n" +
+    "    this.second%1$s = second%1$s;\n" +
+    "  }\n" +
+    "  public String getFirst%1$s() { return first%1$s; }\n" +
+    "  public String getSecond%1$s() { return second%1$s; }\n" +
+    "  public static %1$sTgt sample() { return new %1$sTgt(\"3\", \"4\"); }\n}\n";
+
+  private static final List<OrderRow> ORDER_ROWS = List.of(
+    // The transform's result is typed by Tgt's variable, which a local in the static
+    // method can name only as its erasure; the child's conversion is a nested bridge's.
+    new OrderRow(
+      "a transform on a type-variable component ahead of a nested pair, in a generic record",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        loggedValueFn("Object"),
+        loggedTransform(false) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        "public record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<>(\"q\", new %1$sCDto(\"b\")); }\n}\n",
+        loggedRuntime(false, "v", "Object")
+      ),
+      "v;c; #0(v=\"x\", c=#1(n=\"a\"))",
+      "v;c; #0(v=\"q\", c=#1(n=\"b\"))",
+      null
+    ),
+    // A second constructor of the same arity takes a CharSequence; the transform's result
+    // is one, and the canonical constructor still has to be the one called.
+    new OrderRow(
+      "a transform on a type-variable component ahead of a nested pair, in a generic record with a second constructor",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        loggedValueFn("CharSequence"),
+        loggedTransform(true) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
+          "  public %1$sTgt(final CharSequence v, final %1$sCDto c) { this((Y) (\"CharSequence:\" + v), c); }\n" +
+          "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\", new %1$sCDto(\"b\")); }\n}\n",
+        loggedRuntime(true, "v", "CharSequence")
+      ),
+      "v;c; #0(v=\"x\", c=#1(n=\"a\"))",
+      null,
+      null
+    ),
+    // HotSpot lists a class's methods in the order their names were first seen in the JVM, so
+    // loading %1$sIntern first makes the bean's methods come back second first. Both paths
+    // convert in the order the bean declares its fields.
+    new OrderRow(
+      "two transformed properties of a bean written through setters, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(false) + FIRST_SECOND_RECORD,
+        setterPair("Tgt", ""),
+        twoLoggedRows(false, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")",
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")"
+    ),
+    new OrderRow(
+      "two transformed properties of a bean built through a builder, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        BUILDER_PAIR,
+        twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      null,
+      null
+    ),
+    new OrderRow(
+      "two transformed properties of a bean built through its constructor, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        CONSTRUCTOR_PAIR,
+        twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
+      ),
+      "1;2; #0(first%1$s=\"1\", second%1$s=\"2\")",
+      null,
+      null
+    ),
+    new OrderRow(
+      "two transformed properties written backward and through patch into a bean, its method names seen the other way round",
+      List.of(
+        REVERSED_NAMES,
+        ORDER_LOG,
+        LOGGING_FN,
+        setterPair("Src", twoLoggedTransforms(false)),
+        "public record %1$sTgt(String first%1$s, String second%1$s) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"5\", \"6\"); }\n}\n",
+        twoLoggedRows(false, "getFirst%1$s", "first%1$s", "getSecond%1$s", "second%1$s")
+      ),
+      "3;4; #0(first%1$s=\"3\", second%1$s=\"4\")",
+      "5;6; #0(first%1$s=\"5\", second%1$s=\"6\")",
+      "5;6; #0(first%1$s=\"5\", second%1$s=\"6\")"
+    ),
+    // Patch converts each property the partial supplies, a row's and a walked one's alike, in
+    // the
+    // source's component order.
+    new OrderRow(
+      "two transformed components either side of a nested pair, through patch",
+      concat(
+        LOGGED_CHILD,
+        ORDER_LOG,
+        LOGGING_FN,
+        twoLoggedTransforms(false) +
+          "public record %1$sSrc(String first%1$s, %1$sC c, String second%1$s) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"1\", new %1$sC(\"a\"), \"2\"); }\n}\n",
+        "public record %1$sTgt(String first%1$s, %1$sCDto c, String second%1$s) {\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"3\", new %1$sCDto(\"b\"), \"4\"); }\n}\n",
+        twoLoggedRows(false, "first%1$s", "first%1$s", "second%1$s", "second%1$s")
+      ),
+      "1;c;2; #0(first%1$s=\"1\", c=#1(n=\"a\"), second%1$s=\"2\")",
+      "3;c;4; #0(first%1$s=\"3\", c=#1(n=\"b\"), second%1$s=\"4\")",
+      "3;c;4; #0(first%1$s=\"3\", c=#1(n=\"b\"), second%1$s=\"4\")"
+    )
+  );
+
+  @Test
+  @DisplayName("a rebuild runs its conversions in the same order on both paths")
+  void aRebuildRunsItsConversionsInTheSameOrderOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : ORDER_ROWS) {
+      final var prefix = "Ao" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      // Compiled with its parameter names, which the runtime reads to call a name-matched
+      // constructor.
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": the pair should compile: " + plain.errorMessages());
+      final ProcessorHarness.Compilation processed;
+      try {
+        processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      } catch (final AssertionError warned) {
+        failures.add(row.name() + ": " + warned.getMessage());
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      // A transform on a type-variable component is evaluated into a local of the variable's
+      // erasure, ahead of the constructor call, as an argument of a nameable type is.
+      final var text = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
+      final var local = text.indexOf("final java.lang.Object __cv_v = ");
+      final var call = text.indexOf("new " + PACKAGE + "." + prefix + "Tgt(");
+      if (row.name().contains("type-variable") && (local < 0 || local > call)) {
+        failures.add(row.name() + ": forward owed the transform's result in a local of its erasure before the call");
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var log = (StringBuilder) classes.get(PACKAGE + "." + prefix + "Log").getField("LOG").get(null);
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var forwardOnly = row.backward() == null;
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = forwardOnly ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = forwardOnly ? (ForwardMapper<Object, Object>) runtime : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          log.setLength(0);
+          final var shape = shapeOf(side.getValue());
+          final var seen = log + " " + shape;
+          final var owedText = operation.getValue().formatted(prefix);
+          if (!seen.equals(owedText)) {
+            failures.add(
+              row.name() + ", " + operation.getKey() + ": " + side.getKey() + " gave " + seen + ", owed " + owedText
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   /** Whether a compilation succeeded, or the errors it reported. */

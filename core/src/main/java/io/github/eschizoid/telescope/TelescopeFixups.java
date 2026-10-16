@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
@@ -16,6 +17,7 @@ import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
@@ -37,6 +39,19 @@ import java.util.function.Predicate;
 final class TelescopeFixups {
 
   private TelescopeFixups() {}
+
+  /**
+   * A {@code when} row's predicate behind the check its inner row's source path runs on each source
+   * it is given. The check runs first and outside the predicate's diagnostic, so a source the path
+   * cannot read fails with the path's own message, as the bare row does, before a predicate typed
+   * by the path's root class sees it.
+   */
+  record SourceChecked(Function<Object, Object> given, Predicate<Object> predicate) implements Predicate<Object> {
+    @Override
+    public boolean test(final Object source) {
+      return predicate.test(source);
+    }
+  }
 
   /**
    * Compose post-fixups on top of the base {@link Iso} produced by {@code DeepMap}'s structural
@@ -82,12 +97,12 @@ final class TelescopeFixups {
     for (final var rawFx : fixups) {
       // Conditional<A, B>(predicate, inner) gates the inner row's forward effect by the source
       // predicate. When the predicate rejects the source, skip the row entirely — the target
-      // field keeps whatever the base structural Iso produced. Predicate cast widens the
-      // upper-bound wildcard `? super A` against the type-erased source `s`; safe because the
-      // mapper's Class<A> verifies s at runtime through the surrounding forward(...) entry.
+      // field keeps whatever the base structural Iso produced. The row is keyed to the pair its
+      // inner row is keyed to, so the predicate receives the same `s` the inner row reads.
       final Mapping<?, ?> fx;
       if (rawFx instanceof Conditional<?, ?> cond) {
         final var predicate = (Predicate<Object>) cond.predicate();
+        if (predicate instanceof SourceChecked checked) checked.given().apply(s);
         final boolean accepted;
         try {
           accepted = predicate.test(s);
@@ -105,7 +120,7 @@ final class TelescopeFixups {
           // navigation, where getMessage() returns null and "Predicate failure: null" tells the
           // user nothing. The class name (NullPointerException, ClassCastException, etc.) carries
           // the actionable signal even when the message is null.
-          final var failureType = predicateFailure.getClass().getSimpleName();
+          final var failureType = PairingMessages.className(predicateFailure.getClass());
           final var failureMsg = predicateFailure.getMessage();
           throw new IllegalStateException(
             "Mapping.when(...) predicate threw — inner=" +

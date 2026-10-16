@@ -38,6 +38,12 @@ public sealed interface PairDecision<T> {
   /** Both sides reflectable (record or bean) — recurse into the nested pair. */
   record RecursePair<T>() implements PairDecision<T> {}
 
+  /**
+   * Both sides sealed interfaces — each case of the source pairs with one case of the target, and a
+   * value converts through the pair its own case belongs to.
+   */
+  record DispatchCases<T>() implements PairDecision<T> {}
+
   /** Source {@code Optional<X>} to nullable target — element pair {@code (X, target)}. */
   record OptionalToNullable<T>(T elementSrc, T elementTgt) implements PairDecision<T> {}
 

@@ -1,18 +1,26 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.BridgeProvider;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.conversion.Match;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
+import io.github.eschizoid.telescope.internal.FixedCheck;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
@@ -28,20 +36,29 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -111,6 +128,7 @@ public final class DeepMap {
     // Pass the leaf Iso straight through (Mapper.ofIso) rather than re-wrapping it in a second
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
     // trail rides along so explain() can surface the field decisions this resolution just made.
+    if (r.cases != null) return Mapper.ofCases(r.iso, source, target, r.cases, r.trail);
     return Mapper.ofIso(r.iso, source, target, r.patchTable, r.trail);
   }
 
@@ -152,10 +170,14 @@ public final class DeepMap {
     final var overrides = new ArrayList<Mapping<?, ?>>();
     final var hints = new ArrayList<WriteHint<?>>();
     final var nullHints = new ArrayList<NullHint>();
+    final var caseRows = new ArrayList<Cases>();
     for (final var step : steps) {
-      if (step instanceof Mapping<?, ?> m) overrides.add(m);
-      else if (step instanceof WriteHint<?> h) hints.add(h);
-      else if (step instanceof NullHint nh) nullHints.add(nh);
+      switch (step) {
+        case Mapping<?, ?> m -> overrides.add(m);
+        case WriteHint<?> h -> hints.add(h);
+        case NullHint nh -> nullHints.add(nh);
+        case Cases c -> caseRows.add(c);
+      }
     }
     final var nullStrategy = extractNullStrategy(nullHints);
     final var hintMap = buildHintMap(hints);
@@ -174,7 +196,42 @@ public final class DeepMap {
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
     final var trail = new ArrayList<OpticNode>();
-    populateIso(
+    final var ownBridges = new OwnBridges(
+      overrideTable,
+      caseRows,
+      hintMap.keySet(),
+      beanRefl,
+      nullStrategy == NullHint.NullStrategy.DEFAULT
+        ? "the mapper's nullSourceValues(DEFAULT) reaches every pair, and a bridge has no counterpart for it"
+        : defaultStrategy != null
+          ? "the mapper's writeBeans(...) default reaches every pair, and a bridge has no counterpart for it"
+          : null,
+      cyclicPairs
+    );
+    final var sealedCases = new SealedCases(caseRows);
+    // A mapper between two sealed interfaces dispatches on the case, and each case's own mapper is
+    // what patch and into reach; any other pair is walked by property.
+    final var rootCases =
+      PAIRING.decidePair(source, target, "", lenient) instanceof PairDecision.DispatchCases
+        ? new ArrayList<Mapper.CaseEntry>()
+        : null;
+    if (rootCases != null) populateSealed(
+      source,
+      target,
+      overrideTable,
+      beanRefl,
+      cache,
+      nullStrategy,
+      cyclicPairs,
+      inProgress,
+      ownBridges,
+      sealedCases,
+      lenient,
+      lenient,
+      rootCases,
+      trail
+    );
+    else populateIso(
       source,
       target,
       overrideTable,
@@ -184,25 +241,56 @@ public final class DeepMap {
       nullStrategy,
       cyclicPairs,
       inProgress,
+      ownBridges,
+      sealedCases,
       lenient,
       lenient,
       trail
     );
     validateAllHintsConsumed(hintMap, cache);
     validateAllOverridesConsumed(overrideTable, cache, source, target);
+    sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
-    final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
-    topSteps.forEach((tgtName, step) ->
-      patchTable.put(tgtName, new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v)))
-    );
-    final var rootKey = new TypePair(source, target);
+    final var patchTable = patchTableOf(topSteps, source);
     final Iso<A, B> guarded = cyclicPairs.isEmpty()
       ? iso
       : Iso.of(
-          value -> inInvocation(FORWARD_SEEN, rootKey, value, iso::to),
-          value -> inInvocation(BACKWARD_SEEN, rootKey, value, iso::from)
+          value -> inInvocation(FORWARD_SEEN, ownBridges, source, target, value, iso::to),
+          value -> inInvocation(BACKWARD_SEEN, ownBridges, target, source, value, iso::from)
         );
-    return new Resolution<>(guarded, patchTable, List.copyOf(trail));
+    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail));
+  }
+
+  /**
+   * The patch table for a pair whose fields {@code steps} resolved, keyed by target field, in the
+   * order {@code source} declares the fields they write. Patch converts the entries in table order,
+   * so a row's field and a walked one convert in the source's own order, as forward and backward
+   * convert them, rather than in the order the steps were resolved. A step writing no source field,
+   * a constant or a computed value, comes after the rest, in the order it was resolved.
+   */
+  @SuppressWarnings("unchecked")
+  private static Map<String, Mapper.PatchEntry> patchTableOf(
+    final Map<String, FieldStep> steps,
+    final Class<?> source
+  ) {
+    final var order = List.of((source.isRecord() ? Reflective.RECORDS : Reflective.BEANS).names(source));
+    final var entries = new ArrayList<>(steps.entrySet());
+    entries.sort(
+      Comparator.comparingInt(entry -> {
+        final var sourceName = entry.getValue().sourceName;
+        final var index = sourceName == null ? -1 : order.indexOf(sourceName);
+        return index < 0 ? Integer.MAX_VALUE : index;
+      })
+    );
+    final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
+    for (final var entry : entries) {
+      final var step = entry.getValue();
+      patchTable.put(
+        entry.getKey(),
+        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v))
+      );
+    }
+    return patchTable;
   }
 
   // ---------- Hint validation + writer eager construction ----------
@@ -346,20 +434,13 @@ public final class DeepMap {
       // target. Only rows that promise a mapping effect can be silently lost.
       final var rows = new ArrayList<String>();
       for (final var r : entry.getValue()) {
-        if (!(r instanceof Drop)) rows.add(r.sourceField() + " -> " + r.targetField());
+        if (!(r instanceof Drop)) rows.add(PairingMessages.unvisitedRow(r.sourceField(), r.targetField()));
       }
       if (rows.isEmpty()) continue;
-      dead.add("(" + pair.source.getName() + " -> " + pair.target.getName() + "): [" + String.join(", ", rows) + "]");
+      dead.add(PairingMessages.unvisitedPair(pair.source.getName(), pair.target.getName(), rows));
     }
     if (!dead.isEmpty()) throw new IllegalArgumentException(
-      "Mapping rows bound to a type pair the mapper (" +
-        topSource.getName() +
-        " -> " +
-        topTarget.getName() +
-        ") never visits — they would be silently ignored: " +
-        String.join("; ", dead) +
-        ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove" +
-        " them."
+      PairingMessages.rowsNeverVisited(topSource.getName(), topTarget.getName(), dead)
     );
   }
 
@@ -370,44 +451,42 @@ public final class DeepMap {
     final Class<?> topSource,
     final Class<?> topTarget
   ) {
-    final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
+    // In the order each pair's first row was given, which is the order a refusal names them in.
+    final var grouped = new LinkedHashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
-      // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
-      // Telescope.mapper(...). Two reasons a class field comes back null:
-      //   - Drop(srcAcc) — single-arg form, no explicit target.
-      //   - TelescopeTo / FromTelescopeTo / TelescopeToTelescope — the side that's a
-      //     Telescope<X, ?> names no pair of its own: a path started at a lens, an iso or a bridge
-      //     records no root class at all.
-      // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
-      // populateIso picks it up at the outermost (source, target) recursion frame only. A
-      // FromTelescopeTo row whose target accessor is applied to a superclass or interface of the
-      // top-level target lands there too: that pair is never visited, and the row writes the
-      // property by name on the target's own class. Every other FromTelescopeTo row keys by its
-      // accessor's class, which may name a nested pair the recursion reaches.
-      final Class<?> effectiveSource = row.sourceClass() == null ? topSource : row.sourceClass();
+      // A row is keyed to the classes its accessors are applied to. A side that names no class
+      // keys to the mapper's own class on that side: drop(srcAcc) has no target, and a side given
+      // as a telescope path is read or written on the mapper's own source or target, so the path
+      // is started there, checked against it, or refused by rootedRow. A to(path, tgtAcc) row
+      // whose target accessor is applied to a superclass or interface of the mapper's target keys
+      // to the mapper's target too: that pair is never visited, and the row writes the property by
+      // name on the target's own class. A when(...) row is keyed exactly as the row it wraps, so
+      // its predicate receives the source of the pair that row is applied at.
+      final Mapping<?, ?> keyed = row instanceof Conditional<?, ?> c ? c.inner() : row;
+      final Class<?> effectiveSource = keyed.sourceClass() == null ? topSource : keyed.sourceClass();
       final Class<?> effectiveTarget =
-        row.targetClass() == null ||
-        (row instanceof FromTelescopeTo<?, ?, ?> && row.targetClass().isAssignableFrom(topTarget))
+        keyed.targetClass() == null ||
+        (keyed instanceof FromTelescopeTo<?, ?, ?> && keyed.targetClass().isAssignableFrom(topTarget))
           ? topTarget
-          : row.targetClass();
+          : keyed.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
-      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(writtenOnTarget(row, topSource, topTarget));
+      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(rootedRow(row, topSource, topTarget));
     }
     return grouped;
   }
 
   /**
-   * A row that writes the top-level target through a path, bare or under {@code when}, with that
-   * path started at the mapper's target, checked against it, or checked on each write, through
-   * {@link #targetRooted}: {@code constant}, {@code compute}, {@code to} onto a target telescope,
-   * and {@code zip}. Every other row is returned unchanged.
+   * A row that reads the top-level source or writes the top-level target through a path, bare or
+   * under {@code when}, with each path started at the mapper's own class on its side, checked
+   * against it, or refused: the source path of {@code to} or {@code zip} through {@link
+   * #sourceRooted}, and the target path of {@code constant}, {@code compute}, {@code to} and {@code
+   * zip} through {@link #targetRooted}. A row with both is checked on its source path first. A
+   * {@code when} row whose source path is checked on each call runs that check before its
+   * predicate, so a source the path cannot read fails as it does on the bare row rather than inside
+   * a predicate typed by the path's root. Every other row is returned unchanged.
    */
   @SuppressWarnings("unchecked")
-  private static Mapping<?, ?> writtenOnTarget(
-    final Mapping<?, ?> row,
-    final Class<?> topSource,
-    final Class<?> topTarget
-  ) {
+  private static Mapping<?, ?> rootedRow(final Mapping<?, ?> row, final Class<?> topSource, final Class<?> topTarget) {
     return switch (row) {
       case Constant<?, ?, ?> c -> new Constant<>(
         targetRooted(c.targetTelescope(), "constant", topSource, topTarget, true, c.value()),
@@ -421,26 +500,176 @@ public final class DeepMap {
         (Telescope.Accessor<Object, Object>) t.srcAccessor(),
         targetRooted(t.targetTelescope(), "to", topSource, topTarget, false, null)
       );
-      case TelescopeToTelescope<?, ?, ?> t -> new TelescopeToTelescope<>(
-        (Telescope<Object, Object>) t.sourceTelescope(),
-        targetRooted(
-          t.targetTelescope(),
-          t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
-          topSource,
-          topTarget,
-          false,
-          null
-        ),
-        t.kind()
+      case FromTelescopeTo<?, ?, ?> t -> new FromTelescopeTo<>(
+        sourceRooted(t.sourceTelescope(), "to", topSource, topTarget).path(),
+        (Telescope.Accessor<Object, Object>) t.tgtAccessor()
       );
+      case TelescopeToTelescope<?, ?, ?> t -> {
+        final var name = t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to";
+        final var source = sourceRooted(t.sourceTelescope(), name, topSource, topTarget).path();
+        yield new TelescopeToTelescope<>(
+          source,
+          targetRooted(t.targetTelescope(), name, topSource, topTarget, false, null),
+          t.kind()
+        );
+      }
       case Conditional<?, ?> c -> {
-        final var inner = writtenOnTarget(c.inner(), topSource, topTarget);
-        yield inner == c.inner()
-          ? c
-          : new Conditional<>((Predicate<Object>) c.predicate(), (Mapping<Object, Object>) inner);
+        final var inner = rootedRow(c.inner(), topSource, topTarget);
+        final var given = switch (c.inner()) {
+          case FromTelescopeTo<?, ?, ?> t -> sourceRooted(t.sourceTelescope(), "to", topSource, topTarget).given();
+          case TelescopeToTelescope<?, ?, ?> t -> sourceRooted(
+            t.sourceTelescope(),
+            t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
+            topSource,
+            topTarget
+          ).given();
+          default -> null;
+        };
+        final var predicate = (Predicate<Object>) c.predicate();
+        yield new Conditional<>(
+          given == null ? predicate : new TelescopeFixups.SourceChecked(given, predicate),
+          (Mapping<Object, Object>) inner
+        );
       }
       default -> row;
     };
+  }
+
+  /**
+   * A source path as a row reads it, and the check it runs on each source it is given before
+   * reading it, or null when it runs none.
+   */
+  private record SourceRoot(Telescope<Object, Object> path, Function<Object, Object> given) {}
+
+  /**
+   * Whether one object can be an instance of both {@code a} and {@code b}: one extends the other;
+   * one is sealed and one of its permitted cases can be such an instance, since every instance of a
+   * sealed type is an instance of one of its cases; or one is an interface and the other is a type
+   * a subclass can still extend to implement it.
+   */
+  private static boolean mayBeInstance(final Class<?> a, final Class<?> b) {
+    if (a.isAssignableFrom(b) || b.isAssignableFrom(a)) return true;
+    if (a.isSealed()) return Arrays.stream(a.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(c, b));
+    if (b.isSealed()) return Arrays.stream(b.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(a, c));
+    if (a.isInterface()) return extendable(b);
+    return b.isInterface() && extendable(a);
+  }
+
+  /**
+   * Whether a type that is not sealed can gain a subclass that implements another interface. An
+   * interface or a non-final class can. A final class cannot, and a record is final, as is the
+   * anonymous class of an enum constant's body. Neither can an enum: one whose constants declare
+   * bodies is not marked final, but its only subclasses are those bodies, and a body cannot
+   * implement an interface its enum does not.
+   */
+  private static boolean extendable(final Class<?> type) {
+    return !Modifier.isFinal(type.getModifiers()) && !type.isEnum();
+  }
+
+  /**
+   * {@code path}, which a row reads the top-level source through, started at that source, checked
+   * against it, or refused when it cannot read there.
+   *
+   * <p>The hops before the path's first step off its root value keep the focus on that value. A
+   * filter or an observer is kept whatever its class. A narrowing to a class the source is or
+   * extends always matches and is kept. A narrowing to another class a source may be an instance
+   * of, such as a subclass of the source, matches only such a source, which is what a narrowing is
+   * for, so the path is kept as it is. A narrowing to a class no source can be an instance of never
+   * matches and is refused.
+   *
+   * <p>A first step that reads a component through an accessor is read again on the source when its
+   * class is the source or a type the source extends, since a write through a hop rebuilds the
+   * class that hop reads. A component of an interface the source does not implement, but that a
+   * source may, is kept and each source it is given is checked to implement it. A component of any
+   * other class is refused: a component of a subclass is read from a source of that subclass by
+   * narrowing to it first. A first step by {@code fieldByName} reads the property on whatever class
+   * it is given and is kept as it is.
+   *
+   * <p>Any other path cannot be started again: one that starts at a lens, reaches its first
+   * property through an iso or a bridge, or reads the root value itself. Such a path is kept when
+   * its root class is the source, and refused when no source can be an instance of its root class.
+   * A path rooted at another class a source may be an instance of reads only a source of that
+   * class, so each source it is given is checked to be one before it is read or written. A path
+   * rooted at a supertype reads any source, and one whose root class is unknown, as for a lambda
+   * lens, an iso or a bridge, may, so each is kept and each write's result is checked to be a
+   * source instance or null.
+   */
+  @SuppressWarnings("unchecked")
+  private static SourceRoot sourceRooted(
+    final Telescope<?, ?> path,
+    final String row,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    final var hops = path.hops;
+    final var kept = (Telescope<Object, Object>) path;
+    final Class<?> focus = path.rootClass;
+    final var step = path.rootStepIndex();
+    final var leading = hops == null ? 0 : step < 0 ? hops.size() : step;
+    final var source = topSource.getSimpleName();
+    final var target = topTarget.getSimpleName();
+    for (var i = 0; i < leading; i++) {
+      final var narrowed = hops.get(i).narrowedTo();
+      if (narrowed == null || narrowed.isAssignableFrom(topSource)) continue;
+      if (!mayBeInstance(topSource, narrowed)) throw new IllegalArgumentException(
+        PairingMessages.sourcePathNarrowsOffSource(source, target, row, narrowed.getSimpleName())
+      );
+      return new SourceRoot(kept, null);
+    }
+    if (step >= 0) {
+      final var first = hops.get(step);
+      final var owner = first.owner();
+      if (owner != null) {
+        if (owner.isAssignableFrom(topSource)) {
+          return new SourceRoot(kept.rootedAt((Class<Object>) topSource), null);
+        }
+        if (owner.isInterface() && mayBeInstance(topSource, owner)) return givenOnly(kept, owner, row, source, target);
+        throw new IllegalArgumentException(
+          PairingMessages.sourceRowOffSource(source, target, row, owner.getSimpleName(), first.component())
+        );
+      }
+      if (first.kind() == Fusion.Hop.Kind.BY_NAME) return new SourceRoot(kept, null);
+    }
+    if (focus == topSource) return new SourceRoot(kept, null);
+    if (focus != null && !focus.isAssignableFrom(topSource)) {
+      if (!mayBeInstance(topSource, focus)) throw new IllegalArgumentException(
+        PairingMessages.sourcePathNotOnSource(source, target, row, PairingMessages.className(focus))
+      );
+      return givenOnly(kept, focus, row, source, target);
+    }
+    final Function<Object, Object> checked = written -> {
+      if (written == null || topSource.isInstance(written)) return written;
+      throw new IllegalStateException(
+        PairingMessages.sourcePathWroteOffSource(source, target, row, PairingMessages.className(written.getClass()))
+      );
+    };
+    return new SourceRoot(Telescope.<Object, Object>iso(Function.identity(), checked).then(kept), null);
+  }
+
+  /**
+   * {@code path}, given only a source that is an instance of {@code root}. A row never receives a
+   * null source: a null converts to null before any row runs.
+   */
+  private static SourceRoot givenOnly(
+    final Telescope<Object, Object> path,
+    final Class<?> root,
+    final String row,
+    final String source,
+    final String target
+  ) {
+    final Function<Object, Object> given = value -> {
+      if (root.isInstance(value)) return value;
+      throw new IllegalStateException(
+        PairingMessages.sourcePathGivenOffRoot(
+          source,
+          target,
+          row,
+          PairingMessages.className(root),
+          PairingMessages.className(value.getClass())
+        )
+      );
+    };
+    return new SourceRoot(Telescope.<Object, Object>iso(given, Function.identity()).then(path), given);
   }
 
   /**
@@ -516,7 +745,7 @@ public final class DeepMap {
       );
       if (hops != null && step < 0 && constantRow) {
         if (constantValue != null && !topTarget.isInstance(constantValue)) throw new IllegalArgumentException(
-          PairingMessages.targetValueOffTarget(source, target, row, constantValue.getClass().getSimpleName())
+          PairingMessages.targetValueOffTarget(source, target, row, PairingMessages.className(constantValue.getClass()))
         );
         return (Telescope<Object, Object>) path;
       }
@@ -524,7 +753,7 @@ public final class DeepMap {
     final Function<Object, Object> checked = written -> {
       if (written == null || topTarget.isInstance(written)) return written;
       throw new IllegalStateException(
-        PairingMessages.targetPathWroteOffTarget(source, target, row, written.getClass().getSimpleName())
+        PairingMessages.targetPathWroteOffTarget(source, target, row, PairingMessages.className(written.getClass()))
       );
     };
     return Telescope.<Object, Object>iso(Function.identity(), checked).then((Telescope<Object, Object>) path);
@@ -548,6 +777,27 @@ public final class DeepMap {
   }
 
   /**
+   * One {@link OpticNode.Dispatched} per case pairing when {@code (srcType, tgtType)} is a pair of
+   * sealed interfaces the walk dispatched on, under {@code path}.
+   */
+  private static void addDispatched(
+    final List<OpticNode> out,
+    final String path,
+    final Type srcType,
+    final Type tgtType,
+    final SealedCases sealedCases
+  ) {
+    final var srcCls = rawClassOf(srcType);
+    final var tgtCls = rawClassOf(tgtType);
+    if (srcCls == null || tgtCls == null) return;
+    final var pairs = sealedCases.decided(new TypePair(srcCls, tgtCls));
+    if (pairs == null) return;
+    for (final var pair : pairs) {
+      out.add(new OpticNode.Dispatched(path, pair.source, pair.target));
+    }
+  }
+
+  /**
    * The name a report gives a type. Shared with the fromMap trail so the two cannot drift apart.
    */
   static String simpleTypeName(final Type t) {
@@ -558,15 +808,19 @@ public final class DeepMap {
    * True when {@code (srcType, tgtType)} recurses into a nested record/bean pair AND carries no
    * explicit override rows — the pure-auto nesting the introspection trail can safely descend into
    * with dotted paths. A nested pair WITH rows is left as a single node (conservative): its rows
-   * are resolved by {@code populateIso}, not re-walked here.
+   * are resolved by {@code populateIso}, not re-walked here. A pair converted by its own bridge is
+   * a single node too, because the bridge decides its fields and the walk would describe others.
    */
   private static boolean isNestedAutoPair(
     final Type srcType,
     final Type tgtType,
-    final Map<TypePair, List<Mapping<?, ?>>> overrides
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final OwnBridges ownBridges
   ) {
+    if (!(srcType instanceof Class<?> srcCls) || !(tgtType instanceof Class<?> tgtCls)) return false;
     if (!(PAIRING.decidePair(srcType, tgtType, "") instanceof PairDecision.RecursePair)) return false;
-    return overrides.getOrDefault(new TypePair((Class<?>) srcType, (Class<?>) tgtType), List.of()).isEmpty();
+    final var pair = new TypePair(srcCls, tgtCls);
+    return overrides.getOrDefault(pair, List.of()).isEmpty() && !ownBridges.converts(pair);
   }
 
   /**
@@ -581,6 +835,7 @@ public final class DeepMap {
     final Class<?> tgtCls,
     final String prefix,
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final OwnBridges ownBridges,
     final Reflective beanRefl,
     final List<OpticNode> out,
     final Set<TypePair> seen
@@ -603,10 +858,10 @@ public final class DeepMap {
       if (
         st instanceof Class<?> sc &&
         tt instanceof Class<?> tc &&
-        isNestedAutoPair(st, tt, overrides) &&
+        isNestedAutoPair(st, tt, overrides, ownBridges) &&
         seen.add(new TypePair(sc, tc))
       ) {
-        collectNested(sc, tc, prefix + name + ".", overrides, beanRefl, out, seen);
+        collectNested(sc, tc, prefix + name + ".", overrides, ownBridges, beanRefl, out, seen);
         seen.remove(new TypePair(sc, tc));
       } else out.add(fieldNode(prefix + name, prefix + name, st, tt));
     }
@@ -630,6 +885,8 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
     final boolean lenient,
     // True for a mapper with no backward direction, at every depth: it decides which enum pairs
     // convert. `lenient` differs because it applies to the pair the user named and nowhere below.
@@ -652,15 +909,19 @@ public final class DeepMap {
       if (cache.get(key) == null) {
         cyclicPairs.add(key);
         cyclicPairs.addAll(inProgress);
+        return;
       }
-      return;
+      // A finished pair asked for again with its fields wanted, which is a case of a sealed root
+      // first met below another case, is walked again so its own fields are recorded.
+      if (topStepsOut == null) return;
     }
     cache.put(key, null); // reserve slot so cycle-re-entry short-circuits
     inProgress.push(key);
     // The pop lives in finally (at the end of this method) so a thrown IllegalStateException —
     // the strict-bijection guard at the top-level pair — doesn't corrupt the `inProgress` stack.
-    // `inProgress.size() > 1` is the lenient-nested gate; a leaked pre-pop frame would silently
-    // flip future top-level calls in the same cache into "nested" mode.
+    // `inProgress` holds the pairs being converted around a pair as it is met, which decide cycle
+    // marking and whether a pair's own bridge may stand in for its walk; a leaked frame would
+    // count as an ancestor of every pair met afterwards.
     try {
       final var srcRefl = pickReflective(source, beanRefl);
       final var tgtRefl = pickReflective(target, beanRefl);
@@ -819,19 +1080,27 @@ public final class DeepMap {
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
-            ? autoIso(
-                srcType,
-                tgtType,
+            ? checkedAgainstFixed(
+                autoIso(
+                  srcType,
+                  tgtType,
+                  srcField + " → " + tgtField,
+                  overrides,
+                  beanRefl,
+                  cache,
+                  nullStrategy,
+                  cyclicPairs,
+                  inProgress,
+                  ownBridges,
+                  sealedCases,
+                  forwardOnly
+                ),
+                paired,
+                new RowSides(source, target, srcField, tgtField),
                 srcField + " → " + tgtField,
-                overrides,
-                beanRefl,
-                cache,
-                nullStrategy,
-                cyclicPairs,
-                inProgress,
                 forwardOnly
               )
-            : fieldIsoOf(row, srcType, tgtType);
+            : fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
@@ -856,14 +1125,14 @@ public final class DeepMap {
         // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
         // every nested write. Without any telescope row, the strict same-name check still fires.
         if (!srcNameSet.contains(name)) {
-          // Lenient on nested auto-recursed pairs: when the current call is recursed from
-          // computeAutoIso (inProgress has more than just the current pair on the stack), the
-          // user never explicitly configured this pair — it was visited because a parent field's
-          // genericType is reflectable. An unmatched target field there should stay at its JLS
-          // default rather than abort the top-level construction. Strictness is preserved at the
-          // TOP-LEVEL pair (`inProgress.size() == 1`) where the user explicitly asked for the
-          // mapper; missing fields there ARE a configuration mistake worth surfacing.
-          final var isNested = inProgress.size() > 1;
+          // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
+          // topStepsOut) was never explicitly configured by the user — it was visited because a
+          // parent field's genericType is reflectable. An unmatched target field there should stay
+          // at its JLS default rather than abort the top-level construction. Strictness is kept
+          // where the mapper's own fields are decided (topStepsOut present): the pair the user
+          // asked for, or a case of the two sealed interfaces the user asked for. Missing fields
+          // there ARE a configuration mistake worth surfacing.
+          final var isNested = topStepsOut == null;
           // `lenient` is set by `resolveForward` — forward-only mappers don't run `backward()`,
           // so the bijection invariant doesn't apply and unmatched target fields silently take
           // the JLS default rather than abort construction. Matches MapStruct's default behaviour
@@ -911,23 +1180,31 @@ public final class DeepMap {
         final var step = new FieldStep(
           name,
           name,
-          autoIso(
-            autoSrcType,
-            autoTgtType,
+          checkedAgainstFixed(
+            autoIso(
+              autoSrcType,
+              autoTgtType,
+              name,
+              overrides,
+              beanRefl,
+              cache,
+              nullStrategy,
+              cyclicPairs,
+              inProgress,
+              ownBridges,
+              sealedCases,
+              forwardOnly
+            ),
+            autoPaired,
+            new RowSides(source, target, name, name),
             name,
-            overrides,
-            beanRefl,
-            cache,
-            nullStrategy,
-            cyclicPairs,
-            inProgress,
             forwardOnly
           )
         );
         byTargetName.put(name, step);
         bySourceName.put(name, step);
         claimedSrc.add(name);
-        if (trailOut != null && isNestedAutoPair(autoSrcType, autoTgtType, overrides)) {
+        if (trailOut != null && isNestedAutoPair(autoSrcType, autoTgtType, overrides, ownBridges)) {
           final var seen = new HashSet<TypePair>();
           seen.add(new TypePair((Class<?>) autoSrcType, (Class<?>) autoTgtType));
           collectNested(
@@ -935,11 +1212,15 @@ public final class DeepMap {
             (Class<?>) autoTgtType,
             name + ".",
             overrides,
+            ownBridges,
             beanRefl,
             trailOut,
             seen
           );
-        } else if (trailOut != null) trailOut.add(fieldNode(name, name, autoSrcType, autoTgtType));
+        } else if (trailOut != null) {
+          trailOut.add(fieldNode(name, name, autoSrcType, autoTgtType));
+          addDispatched(trailOut, name, autoSrcType, autoTgtType, sealedCases);
+        }
       }
 
       for (final var name : srcNames) {
@@ -954,7 +1235,7 @@ public final class DeepMap {
         // Same permissive mode as the target side: when telescope rows are present, this is a
         // nested auto-recursed pair, OR the resolution is forward-only (lenient), source fields
         // with no consumer fall back to a NULLING placeholder rather than failing.
-        if (!telescopeFixups.isEmpty() || inProgress.size() > 1 || lenient) {
+        if (!telescopeFixups.isEmpty() || topStepsOut == null || lenient) {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           if (trailOut != null) trailOut.add(new OpticNode.UnusedSource(name));
           continue;
@@ -970,6 +1251,11 @@ public final class DeepMap {
         );
       }
 
+      // A value converted for a bean property's own type is written through its setter, so a
+      // setter that cannot take that type refuses the pair here, on the side each direction the
+      // mapper runs writes.
+      refuseUnwritableSetters(target, tgtRefl.writerFor(target), byTargetName, true);
+      if (!forwardOnly) refuseUnwritableSetters(source, srcRefl.writerFor(source), bySourceName, false);
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
       cache.put(
         key,
@@ -979,6 +1265,237 @@ public final class DeepMap {
     } finally {
       inProgress.pop();
     }
+  }
+
+  /**
+   * Build the {@link Iso} between two sealed interfaces and store it in {@code cache}: each case of
+   * the source pairs with a case of the target, as {@link SealedCases#pairsOf} decides, and a value
+   * converts through the conversion of its own case, chosen through {@link Match}.
+   *
+   * <p>{@code casesOut} is non-null for the pair a mapper is built for. Its cases are then the
+   * mapper's own: a case converted through its own bridge keeps that bridge's patch, and any other
+   * is walked with its fields recorded, strictly, as the pair a mapper is built for is. Each case's
+   * mapper is added to {@code casesOut}, and each pairing to {@code trailOut}. Below the mapper's
+   * own pair, a case converts as any nested pair does.
+   */
+  @SuppressWarnings("unchecked")
+  private static void populateSealed(
+    final Class<?> source,
+    final Class<?> target,
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
+    final Map<TypePair, Iso<?, ?>> cache,
+    final NullHint.NullStrategy nullStrategy,
+    final Set<TypePair> cyclicPairs,
+    final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
+    final boolean lenient,
+    final boolean forwardOnly,
+    final List<Mapper.CaseEntry> casesOut,
+    final List<OpticNode> trailOut
+  ) {
+    final var key = new TypePair(source, target);
+    if (cache.containsKey(key)) {
+      if (cache.get(key) == null) {
+        cyclicPairs.add(key);
+        cyclicPairs.addAll(inProgress);
+        return;
+      }
+      // A finished pair asked for again with its cases wanted, which is a sealed case of the
+      // mapper's own pair first met below another case, is built again so its cases are recorded.
+      if (casesOut == null) return;
+    }
+    cache.put(key, null);
+    inProgress.push(key);
+    try {
+      var forward = Match.<Object, Object>of((Class<Object>) source);
+      var backward = Match.<Object, Object>of((Class<Object>) target);
+      final var backwardCases = new HashSet<Class<?>>();
+      for (final var pair : sealedCases.pairsOf(key, forwardOnly)) {
+        final Iso<Object, Object> caseIso;
+        try {
+          if (casesOut == null) caseIso = eraseIso(
+            autoIso(
+              pair.source,
+              pair.target,
+              pair.source.getSimpleName(),
+              overrides,
+              beanRefl,
+              cache,
+              nullStrategy,
+              cyclicPairs,
+              inProgress,
+              ownBridges,
+              sealedCases,
+              forwardOnly
+            )
+          );
+          else {
+            final var entry = ownCase(
+              pair,
+              overrides,
+              beanRefl,
+              cache,
+              nullStrategy,
+              cyclicPairs,
+              inProgress,
+              ownBridges,
+              sealedCases,
+              lenient,
+              forwardOnly
+            );
+            casesOut.add(entry.getKey());
+            caseIso = entry.getValue();
+          }
+        } catch (final IllegalStateException | IllegalArgumentException refused) {
+          throw passedOverRefusal(key, pair, refused, ownBridges, sealedCases, inProgress);
+        }
+        forward = forward.when((Class<Object>) pair.source, caseIso::to);
+        // A mapper with no backward direction may pair two cases with one case of the target; the
+        // first stands for it in the backward table, which nothing reads.
+        if (backwardCases.add(pair.target)) backward = backward.when((Class<Object>) pair.target, caseIso::from);
+        if (trailOut != null) trailOut.add(new OpticNode.Dispatched("", pair.source, pair.target));
+      }
+      final var to = forward.exhaustive();
+      final var from = forwardOnly ? backward.partial() : backward.exhaustive();
+      cache.put(
+        key,
+        Iso.of(value -> value == null ? null : to.apply(value), value -> value == null ? null : from.apply(value))
+      );
+    } finally {
+      inProgress.pop();
+    }
+  }
+
+  /**
+   * {@code refused}, from converting a case paired through its own bridge, said again with the
+   * bridge the walk passed over and why, since the walk then matched the case's properties by name
+   * where the bridge would have converted them its own way. Any other refusal is returned as it is.
+   */
+  private static RuntimeException passedOverRefusal(
+    final TypePair roots,
+    final TypePair pair,
+    final RuntimeException refused,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
+    final Deque<TypePair> inProgress
+  ) {
+    if (!sealedCases.pairedThroughBridge(pair)) return refused;
+    final var reason = ownBridges.passedOver(pair, inProgress);
+    if (reason == null) return refused;
+    return new IllegalStateException(
+      PairingMessages.caseBridgePassedOver(
+        roots.source.getSimpleName(),
+        roots.target.getSimpleName(),
+        pair.source.getSimpleName(),
+        pair.target.getSimpleName(),
+        reason,
+        refused.getMessage()
+      ),
+      refused
+    );
+  }
+
+  /**
+   * One case of the sealed pair a mapper is built for: the mapper the case's values reach through
+   * {@code patch} and {@code into}, and the conversion its values take.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Map.Entry<Mapper.CaseEntry, Iso<Object, Object>> ownCase(
+    final TypePair pair,
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
+    final Map<TypePair, Iso<?, ?>> cache,
+    final NullHint.NullStrategy nullStrategy,
+    final Set<TypePair> cyclicPairs,
+    final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
+    final boolean lenient,
+    final boolean forwardOnly
+  ) {
+    final Class source = pair.source;
+    final Class target = pair.target;
+    final var decision = PAIRING.decidePair(source, target, source.getSimpleName(), forwardOnly);
+    final var bridge = decision instanceof PairDecision.RecursePair ? ownBridges.bridgeFor(pair, inProgress) : null;
+    final Mapper<?, ?> mapper;
+    final Iso<Object, Object> iso;
+    if (decision instanceof PairDecision.DispatchCases) {
+      final var cases = new ArrayList<Mapper.CaseEntry>();
+      populateSealed(
+        source,
+        target,
+        overrides,
+        beanRefl,
+        cache,
+        nullStrategy,
+        cyclicPairs,
+        inProgress,
+        ownBridges,
+        sealedCases,
+        lenient,
+        forwardOnly,
+        cases,
+        null
+      );
+      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
+      mapper = Mapper.ofCases((Iso) cache.get(pair), source, target, cases, List.of());
+    } else if (bridge != null) {
+      iso = eraseIso(isoOf(pair, bridge, ownBridges));
+      mapper = Mapper.ofPatcher(
+        (Iso) iso,
+        source,
+        target,
+        Telescope.bridgePatch((Telescope) bridge),
+        List.of(pickReflective(target, beanRefl).names(target))
+      );
+    } else if (decision instanceof PairDecision.RecursePair) {
+      final var steps = new LinkedHashMap<String, FieldStep>();
+      populateIso(
+        source,
+        target,
+        overrides,
+        beanRefl,
+        cache,
+        steps,
+        nullStrategy,
+        cyclicPairs,
+        inProgress,
+        ownBridges,
+        sealedCases,
+        lenient,
+        forwardOnly,
+        null
+      );
+      iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
+      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of());
+    } else {
+      // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
+      // decision says and has no fields to patch.
+      iso = eraseIso(
+        autoIso(
+          source,
+          target,
+          source.getSimpleName(),
+          overrides,
+          beanRefl,
+          cache,
+          nullStrategy,
+          cyclicPairs,
+          inProgress,
+          ownBridges,
+          sealedCases,
+          forwardOnly
+        )
+      );
+      // An enum constant is its own rebuild, and has no fields a partial could overlay.
+      final BiFunction<Object, Object, Object> rebuild = (base, partial) -> base;
+      mapper = source.isEnum()
+        ? Mapper.ofPatcher((Iso) iso, source, target, rebuild, List.of())
+        : Mapper.ofIso((Iso) iso, source, target, Map.of(), List.of());
+    }
+    return Map.entry(new Mapper.CaseEntry(source, target, mapper), iso);
   }
 
   // ---------- Per-component auto resolution ----------
@@ -993,6 +1510,8 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
     final boolean forwardOnly
   ) {
     final var raw = computeAutoIso(
@@ -1005,6 +1524,8 @@ public final class DeepMap {
       nullStrategy,
       cyclicPairs,
       inProgress,
+      ownBridges,
+      sealedCases,
       forwardOnly
     );
     // DEFAULT strategy wraps EVERY auto-recursed per-component Iso uniformly: scalar identity,
@@ -1013,6 +1534,45 @@ public final class DeepMap {
     // bean-side targets see a usable value rather than null. Non-DEFAULT strategy short-circuits
     // to the raw Iso for a no-op cost.
     return nullStrategy == NullHint.NullStrategy.DEFAULT ? wrapDefaultOnNull(raw, tgtType) : raw;
+  }
+
+  /**
+   * {@code iso}, or a slot checking the value written into each side against the class that side
+   * fixes the property's type variable to, where the pairing hands the value across unchanged and
+   * the shared rules call for it ({@link PairingRules#fixedFit}). A value given type arguments that
+   * cannot be shown to fit is refused here, while the mapper is built. {@code iso} itself is
+   * returned where nothing is checked, so an identity slot keeps the identity short-circuit.
+   */
+  private static Iso<?, ?> checkedAgainstFixed(
+    final Iso<?, ?> iso,
+    final Reflective.PairedTypes paired,
+    final RowSides sides,
+    final String componentName,
+    final boolean forwardOnly
+  ) {
+    if (!paired.handedAcross()) return iso;
+    final var intoTarget = fixedClass(PAIRING.fixedFit(paired.sourceMember(), paired.targetMember(), componentName));
+    final var intoSource = forwardOnly
+      ? null
+      : fixedClass(PAIRING.fixedFit(paired.targetMember(), paired.sourceMember(), componentName));
+    if (intoTarget == null && intoSource == null) return iso;
+    // Only a single value is checked, and a single value handed across unchanged is the identity
+    // slot: its declared type names a variable, which no default-on-null wrapper has a value for,
+    // and a type given arguments is either shown to fit or refused above. The check takes the
+    // slot's place, and the composed rebuild reads it as an identity read with a check on it.
+    return new FixedCheck(intoTarget, sides.target(), sides.tgtField(), intoSource, sides.source(), sides.srcField());
+  }
+
+  /**
+   * The class {@code fit} checks a value against, or null where it checks none; a refusal is thrown
+   * as the shared rules word it.
+   */
+  private static Class<?> fixedClass(final FixedFit<Type> fit) {
+    return switch (fit) {
+      case FixedFit.Fits<Type> __ -> null;
+      case FixedFit.Refused<Type> refused -> throw new IllegalStateException(refused.message());
+      case FixedFit.Check<Type> check -> (Class<?>) check.fixed();
+    };
   }
 
   private static Iso<?, ?> computeAutoIso(
@@ -1025,6 +1585,8 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
+    final OwnBridges ownBridges,
+    final SealedCases sealedCases,
     final boolean forwardOnly
   ) {
     // Every branch DECISION routes through the shared pairing spec — this method only maps each
@@ -1070,9 +1632,17 @@ public final class DeepMap {
 
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (decision instanceof PairDecision.RecursePair) {
-      final var srcCls = (Class<?>) srcType;
-      final var tgtCls = (Class<?>) tgtType;
-      // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
+      // A pair given type arguments converts as its raw classes, which read each other's type
+      // variables by position, so the arguments name no pair of their own.
+      final var srcCls = rawClassOf(srcType);
+      final var tgtCls = rawClassOf(tgtType);
+      final var subKey = new TypePair(srcCls, tgtCls);
+      // A bridge is decided where the pair is met, from the pairs being converted around it, and is
+      // never stored in the cache: a walked pair on a cycle reads the cache when it runs, so a
+      // bridge stored there would stand in for the walk on the cycle too.
+      final var own = ownBridges.isoFor(subKey, inProgress);
+      if (own != null) return own;
+      // Nested recursion — `isNested` (no topStepsOut) already triggers the lenient gate
       // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
       // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
       populateIso(
@@ -1085,12 +1655,38 @@ public final class DeepMap {
         nullStrategy,
         cyclicPairs,
         inProgress,
+        ownBridges,
+        sealedCases,
         false,
         forwardOnly,
         null
       );
+      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey), ownBridges);
+    }
+
+    // (b.1) Two sealed interfaces → each value converts through the pair its case belongs to. The
+    //       dispatch is cached like a walked pair, so a case that holds its own root reads it back.
+    if (decision instanceof PairDecision.DispatchCases) {
+      final var srcCls = rawClassOf(srcType);
+      final var tgtCls = rawClassOf(tgtType);
+      populateSealed(
+        srcCls,
+        tgtCls,
+        overrides,
+        beanRefl,
+        cache,
+        nullStrategy,
+        cyclicPairs,
+        inProgress,
+        ownBridges,
+        sealedCases,
+        false,
+        forwardOnly,
+        null,
+        null
+      );
       final var subKey = new TypePair(srcCls, tgtCls);
-      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
+      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey), ownBridges);
     }
 
     // (c.1) Cross-paradigm Optional bridge — one side is Optional<X>, the other is a possibly-null
@@ -1115,6 +1711,8 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
+        sealedCases,
         forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
@@ -1130,6 +1728,8 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
+        sealedCases,
         forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
@@ -1150,6 +1750,8 @@ public final class DeepMap {
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
         inProgress,
+        ownBridges,
+        sealedCases,
         forwardOnly
       );
       // The lifts consult MhIso.liftCollection/liftMap, which sharpen to a MethodHandle loop when
@@ -1209,7 +1811,12 @@ public final class DeepMap {
    * {@code Map} values). Otherwise the element Iso is used as-is.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row, final Type srcType, final Type tgtType) {
+  private static Iso<?, ?> fieldIsoOf(
+    final Mapping<?, ?> row,
+    final Type srcType,
+    final Type tgtType,
+    final RowSides sides
+  ) {
     // Inline the contributed leaf-level Iso for each row variant. Reading the public components
     // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
     // types stay portable across packages without needing @SuppressWarnings("exports").
@@ -1242,7 +1849,7 @@ public final class DeepMap {
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides);
       // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
       // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
       // called. The cases exist only because the sealed switch must stay exhaustive — if a future
@@ -1274,7 +1881,12 @@ public final class DeepMap {
    * element-level Iso flows through unchanged (scalar / record-pair case).
    */
   @SuppressWarnings("unchecked")
-  private static Iso<?, ?> liftViaIfNeeded(final Via<?, ?> row, final Type srcType, final Type tgtType) {
+  private static Iso<?, ?> liftViaIfNeeded(
+    final Via<?, ?> row,
+    final Type srcType,
+    final Type tgtType,
+    final RowSides sides
+  ) {
     // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
     // pull the source/target classes from the same Mapper. Reading the public components inline
     // keeps Iso / Class accessors off Via's public surface.
@@ -1318,11 +1930,69 @@ public final class DeepMap {
         );
       };
     }
+    refuseUnfit(sides, "source", sides.srcField(), srcType, mapperSrc);
+    refuseUnfit(sides, "target", sides.tgtField(), tgtType, mapperTgt);
     return elementIso;
   }
 
+  /** The pair a row converts at and the two properties it reads and writes, named for a refusal. */
+  private record RowSides(Class<?> source, Class<?> target, String srcField, String tgtField) {}
+
+  /**
+   * Refuses a {@code via} row whose mapper is handed {@code property} as it is when no value of
+   * that property can be an instance of {@code mapperClass}: every call would throw a {@code
+   * ClassCastException}. A primitive on either side counts as its wrapper.
+   */
+  private static void refuseUnfit(
+    final RowSides sides,
+    final String side,
+    final String property,
+    final Type propertyType,
+    final Class<?> mapperClass
+  ) {
+    final var held = heldClassOf(propertyType);
+    if (mayBeInstance(boxed(held), boxed(mapperClass))) return;
+    throw new IllegalArgumentException(
+      PairingMessages.viaMapperNeverFits(
+        sides.source().getSimpleName(),
+        sides.target().getSimpleName(),
+        side,
+        property,
+        mapperClass.getSimpleName()
+      )
+    );
+  }
+
+  /** {@code type}'s wrapper class when it is a primitive, and {@code type} otherwise. */
+  private static Class<?> boxed(final Class<?> type) {
+    return MethodType.methodType(type).wrap().returnType();
+  }
+
+  /**
+   * The class every value of {@code type}, a property's type, is an instance of: a type variable's
+   * bound, followed through any variable that bound names, and an array of the class its component
+   * is held as.
+   */
+  private static Class<?> heldClassOf(final Type type) {
+    if (type instanceof TypeVariable<?> variable) return boundOf(variable);
+    if (type instanceof GenericArrayType array) return heldClassOf(array.getGenericComponentType()).arrayType();
+    return rawClassOf(type);
+  }
+
+  /**
+   * Whether a container's {@code elementType} is what the element mapper converts: the mapper's own
+   * class, or a type variable whose bound admits it, since such a container may hold the mapper's
+   * class.
+   */
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
-    return elementType instanceof Class<?> cls && cls.equals(mapperClass);
+    if (elementType instanceof Class<?> cls) return cls.equals(mapperClass);
+    return elementType instanceof TypeVariable<?> variable && boundOf(variable).isAssignableFrom(mapperClass);
+  }
+
+  /** The class a type variable's first bound erases to, following a bound that is a variable. */
+  private static Class<?> boundOf(final TypeVariable<?> variable) {
+    final var bound = variable.getBounds()[0];
+    return bound instanceof TypeVariable<?> next ? boundOf(next) : rawClassOf(bound);
   }
 
   /**
@@ -1606,16 +2276,25 @@ public final class DeepMap {
 
   // ---------- Cycle-safe cache reader ----------
 
-  /** Active identities per type pair, scoped to one public mapping invocation and direction. */
-  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> FORWARD_SEEN = new ThreadLocal<>();
+  /**
+   * The path of the public mapping invocation running on this thread, one per direction, by the
+   * pair of classes each object is converted between, as {@link ActivePath} keys them. A generated
+   * bridge that {@linkplain BridgeFn#takesActivePath() takes the active path} keys it the same way,
+   * so a path handed to such a bridge runs on through it. A bridge is handed the path only by the
+   * walk that opened it, so a mapper called from inside another one, through a row's function or a
+   * transform, starts a path of its own.
+   */
+  private static final ThreadLocal<ActivePath> FORWARD_SEEN = new ThreadLocal<>();
 
-  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> BACKWARD_SEEN = new ThreadLocal<>();
+  private static final ThreadLocal<ActivePath> BACKWARD_SEEN = new ThreadLocal<>();
 
+  /** {@code owner} is the walk the pair belongs to. */
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> lazyCacheIso(
     final Map<TypePair, Iso<?, ?>> cache,
     final TypePair key,
-    final boolean acyclic
+    final boolean acyclic,
+    final Object owner
   ) {
     // Acyclic-bypass: when the static type graph has no path from this pair back to itself, the
     // value-level cycle guard cannot fire. Skip the ThreadLocal probe + IdentityHashMap insert
@@ -1637,42 +2316,53 @@ public final class DeepMap {
       );
     }
     return Iso.of(
-      v -> cycleSafe(FORWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
-      v -> cycleSafe(BACKWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
+      v -> cycleSafe(FORWARD_SEEN, owner, key.source, key.target, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
+      v ->
+        cycleSafe(BACKWARD_SEEN, owner, key.target, key.source, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
     );
   }
 
-  /** Reentrant public calls get independent paths; restore the caller even after an exception. */
+  /**
+   * Converts {@code value} from {@code from} into {@code into} on a path of its own, for the walk
+   * {@code owner}. Reentrant public calls get independent paths; the caller's is restored even
+   * after an exception.
+   */
   private static <X, Y> Y inInvocation(
-    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
-    final TypePair key,
+    final ThreadLocal<ActivePath> ref,
+    final Object owner,
+    final Class<?> from,
+    final Class<?> into,
     final X value,
     final Function<X, Y> body
   ) {
     if (value == null) return null;
     final var previous = ref.get();
-    ref.set(new HashMap<>());
+    ref.set(new ActivePath(owner));
     try {
-      return cycleSafe(ref, key, value, body);
+      return cycleSafe(ref, owner, from, into, value, body);
     } finally {
       if (previous == null) ref.remove();
       else ref.set(previous);
     }
   }
 
-  /** Only an identity already on the active path is a cycle; siblings map independently. */
+  /**
+   * Only an identity already on the active path is a cycle; siblings map independently. A pair met
+   * with no path open, as a patch entry meets it, starts one for the walk {@code owner}.
+   */
   private static <X, Y> Y cycleSafe(
-    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
-    final TypePair key,
+    final ThreadLocal<ActivePath> ref,
+    final Object owner,
+    final Class<?> from,
+    final Class<?> into,
     final X value,
     final Function<X, Y> body
   ) {
     if (value == null) return null;
-    final var context = ref.get();
-    // A patch entry can invoke a nested Iso without going through the public root.
-    if (context == null) return inInvocation(ref, key, value, body);
-    final var active = context.computeIfAbsent(key, ignored -> new IdentityHashMap<>());
-    if (active.put(value, Boolean.TRUE) != null) return null;
+    final var path = ref.get();
+    if (path == null) return inInvocation(ref, owner, from, into, value, body);
+    final var active = path.objects(from, into);
+    if (active.putIfAbsent(value, Boolean.TRUE) != null) return null;
     try {
       return body.apply(value);
     } finally {
@@ -1690,9 +2380,505 @@ public final class DeepMap {
   private record TypePair(Class<?> source, Class<?> target) {}
 
   /**
+   * The {@code cases} rows of one mapper, and how each pair of sealed interfaces the mapper meets
+   * pairs its cases.
+   *
+   * <p>A case of the source pairs with the case of the target a row names for it, and otherwise
+   * with the case of the target its own {@code @Bridge} converts to, found by {@link #ownBridge}:
+   * the pairing a {@code @Bridge} on the sealed source generates. A case neither pairs is refused,
+   * and on a mapper that converts backward so is a case of the target that no case or several cases
+   * pair with, since the backward direction has to build it from exactly one.
+   */
+  private static final class SealedCases {
+
+    private final List<Cases> rows;
+    private final boolean[] taken;
+    private final Map<TypePair, List<TypePair>> paired = new HashMap<>();
+    private final Set<TypePair> throughBridge = new HashSet<>();
+
+    SealedCases(final List<Cases> rows) {
+      this.rows = List.copyOf(rows);
+      this.taken = new boolean[rows.size()];
+    }
+
+    /**
+     * The case pairs of {@code roots}, one per case of the source, in the order it permits them.
+     */
+    List<TypePair> pairsOf(final TypePair roots, final boolean forwardOnly) {
+      final var known = paired.get(roots);
+      if (known != null) return known;
+      final var source = roots.source.getSimpleName();
+      final var target = roots.target.getSimpleName();
+      final var sourceCases = List.of(roots.source.getPermittedSubclasses());
+      final var targetCases = List.of(roots.target.getPermittedSubclasses());
+      final var named = new HashMap<Class<?>, Class<?>>();
+      for (var i = 0; i < rows.size(); i++) {
+        final var row = rows.get(i);
+        if (!sourceCases.contains(row.sourceCase()) || !targetCases.contains(row.targetCase())) continue;
+        taken[i] = true;
+        if (named.putIfAbsent(row.sourceCase(), row.targetCase()) != null) throw new IllegalArgumentException(
+          PairingMessages.caseRowPairedTwice(source, target, row.sourceCase().getSimpleName())
+        );
+      }
+      final var pairs = new ArrayList<TypePair>();
+      for (final var sourceCase : sourceCases) {
+        var targetCase = named.get(sourceCase);
+        if (targetCase == null) {
+          final var bridged = new ArrayList<Class<?>>();
+          for (final var candidate : targetCases) {
+            if (ownBridge(sourceCase, candidate, false).isPresent()) bridged.add(candidate);
+          }
+          if (bridged.isEmpty()) {
+            // A holder the lookup above passed over is a long-form one whose bridge does not
+            // declare its pair, which the runtime does not pair cases through.
+            for (final var candidate : targetCases) {
+              final var undeclared = BridgeHolderProbe.longFormFor(sourceCase, candidate);
+              if (undeclared.isPresent()) throw new IllegalStateException(
+                PairingMessages.undeclaredCaseBridge(
+                  source,
+                  target,
+                  sourceCase.getSimpleName(),
+                  candidate.getSimpleName(),
+                  undeclared.get().bridgeClass().getSimpleName()
+                )
+              );
+            }
+            throw new IllegalStateException(PairingMessages.unpairedCase(source, target, sourceCase.getSimpleName()));
+          }
+          if (bridged.size() > 1) throw new IllegalStateException(
+            PairingMessages.ambiguousCase(
+              source,
+              target,
+              sourceCase.getSimpleName(),
+              bridged.stream().map(Class::getSimpleName).toList()
+            )
+          );
+          targetCase = bridged.getFirst();
+          throughBridge.add(new TypePair(sourceCase, targetCase));
+        }
+        final var crossed = PAIRING.caseArgumentsRefusal(roots.source, roots.target, sourceCase, targetCase);
+        if (crossed != null) throw new IllegalStateException(crossed);
+        pairs.add(new TypePair(sourceCase, targetCase));
+      }
+      if (!forwardOnly) for (final var targetCase : targetCases) {
+        final var from = pairs
+          .stream()
+          .filter(pair -> pair.target == targetCase)
+          .map(pair -> pair.source.getSimpleName())
+          .toList();
+        if (from.isEmpty()) throw new IllegalStateException(
+          PairingMessages.targetCaseUnpaired(source, target, targetCase.getSimpleName())
+        );
+        if (from.size() > 1) throw new IllegalStateException(
+          PairingMessages.targetCasePairedTwice(source, target, targetCase.getSimpleName(), from)
+        );
+      }
+      final var decided = List.copyOf(pairs);
+      paired.put(roots, decided);
+      return decided;
+    }
+
+    /** Whether {@code pair} was paired through the source case's own bridge, not by a row. */
+    boolean pairedThroughBridge(final TypePair pair) {
+      return throughBridge.contains(pair);
+    }
+
+    /** The case pairs already decided for {@code roots}, or null when the mapper never met it. */
+    List<TypePair> decided(final TypePair roots) {
+      return paired.get(roots);
+    }
+
+    /** Refuse the rows no sealed pair the mapper dispatched on took. */
+    void refuseUntaken(final Class<?> topSource, final Class<?> topTarget) {
+      final var untaken = new ArrayList<String>();
+      for (var i = 0; i < rows.size(); i++) {
+        if (taken[i]) continue;
+        final var row = rows.get(i);
+        untaken.add(PairingMessages.caseRow(row.sourceCase().getSimpleName(), row.targetCase().getSimpleName()));
+      }
+      if (!untaken.isEmpty()) throw new IllegalArgumentException(
+        PairingMessages.caseRowsNeverDispatched(topSource.getSimpleName(), topTarget.getSimpleName(), untaken)
+      );
+    }
+  }
+
+  /**
+   * The generated bridge each nested pair converts through, for one walk.
+   *
+   * <p>A nested pair converts through the bridge its own {@code @Bridge} generated, found by {@link
+   * #ownBridge}, so that bridge's transforms, leniency, renames and write strategy decide the
+   * pair's fields on this path as they do on the generated one. The walk converts the pair itself
+   * instead when the bridge would pass over something the mapper says:
+   *
+   * <ul>
+   *   <li>a row keyed to the pair, or to a pair its classes reach, or a {@code cases} row pairing
+   *       two cases its classes reach;
+   *   <li>a write hint naming one of its classes, or a class they reach;
+   *   <li>a type the pair reaches that is an ancestor on the walk's path, when the bridge does not
+   *       {@linkplain BridgeFn#takesActivePath() take the active path}, because the walk's guard
+   *       against an object reaching itself would not pass through it.
+   * </ul>
+   *
+   * <p>A bridge that takes the active path converts a pair on a cycle along the walk's own path, so
+   * the reference that closes the cycle converts to null where it does on the generated path.
+   *
+   * <p>A mapper-wide {@code nullSourceValues(DEFAULT)} or {@code writeBeans(...)} default reaches
+   * every pair, and a bridge has no counterpart for either, so such a mapper walks every pair.
+   */
+  private static final class OwnBridges {
+
+    private final Map<TypePair, List<Mapping<?, ?>>> rows;
+    private final Set<Class<?>> hinted;
+    private final Reflective beanRefl;
+    // Why every pair is walked, for a mapper whose settings reach every pair; null otherwise.
+    private final String everyPair;
+    private final Map<Reach, Set<Class<?>>> reached = new HashMap<>();
+    private final Set<TypePair> converted = new HashSet<>();
+    // The walk's pairs whose objects are kept on the active path while they convert.
+    private final Set<TypePair> cyclicPairs;
+    private final List<Cases> caseRows;
+
+    OwnBridges(
+      final Map<TypePair, List<Mapping<?, ?>>> rows,
+      final List<Cases> caseRows,
+      final Set<Class<?>> hinted,
+      final Reflective beanRefl,
+      final String everyPair,
+      final Set<TypePair> cyclicPairs
+    ) {
+      this.rows = rows;
+      this.caseRows = List.copyOf(caseRows);
+      this.hinted = hinted;
+      this.beanRefl = beanRefl;
+      this.everyPair = everyPair;
+      this.cyclicPairs = cyclicPairs;
+    }
+
+    /**
+     * The pair's own bridge as an {@link Iso}, or null when the walk converts it. {@code ancestors}
+     * are the pairs being converted around it.
+     */
+    Iso<?, ?> isoFor(final TypePair pair, final Collection<TypePair> ancestors) {
+      final var bridge = bridgeFor(pair, ancestors);
+      return bridge == null ? null : isoOf(pair, bridge, this);
+    }
+
+    /** As {@link #isoFor}, the generated bridge itself. */
+    Object bridgeFor(final TypePair pair, final Collection<TypePair> ancestors) {
+      if (settingReason(pair, ancestors) != null) return null;
+      final var found = ownBridge(pair.source, pair.target, false);
+      if (found.isEmpty() || reachReason(pair, ancestors, found.get()) != null) return null;
+      markCycle(pair, ancestors, found.get());
+      converted.add(pair);
+      return found.get();
+    }
+
+    /**
+     * Marks as cyclic the pairs around {@code pair} that lie on a cycle running through its bridge:
+     * the outermost ancestor the bridge reaches, and every ancestor inside it. Their objects then
+     * stay on the active path while they convert, which is what the bridge reads to cut the cycle.
+     * {@code ancestors} runs from the innermost pair out.
+     */
+    private void markCycle(final TypePair pair, final Collection<TypePair> ancestors, final Object bridge) {
+      final var fn = Telescope.bridgeFnOf(bridge);
+      if (fn == null || !fn.takesActivePath()) return;
+      final var fromSource = reachedFrom(pair.source, fn.unwalkedSourceProperties(), fn.declaresUnwalkedProperties());
+      final var fromTarget = reachedFrom(pair.target, fn.unwalkedTargetProperties(), fn.declaresUnwalkedProperties());
+      final var around = List.copyOf(ancestors);
+      for (var i = around.size() - 1; i >= 0; i--) {
+        final var ancestor = around.get(i);
+        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
+          cyclicPairs.addAll(around.subList(0, i + 1));
+          return;
+        }
+      }
+    }
+
+    /**
+     * Why the walk converts {@code pair} although it has a bridge of its own, or null when that
+     * bridge converts it.
+     */
+    String passedOver(final TypePair pair, final Collection<TypePair> ancestors) {
+      final var setting = settingReason(pair, ancestors);
+      if (setting != null) return setting;
+      final var found = ownBridge(pair.source, pair.target, false);
+      return found.isEmpty() ? null : reachReason(pair, ancestors, found.get());
+    }
+
+    /** A reason read from the pair itself, before its bridge is looked up. */
+    private String settingReason(final TypePair pair, final Collection<TypePair> ancestors) {
+      if (everyPair != null) return everyPair;
+      if (!rows.getOrDefault(pair, List.of()).isEmpty()) return "a row is keyed to the pair";
+      for (final var cls : List.of(pair.source, pair.target)) {
+        if (hinted.contains(cls)) return "a writeBean hint names " + cls.getSimpleName();
+      }
+      // A pair met again inside itself, such as the mapper's own pair, keeps the walk it is in.
+      if (ancestors.contains(pair)) return "the pair is met again inside itself";
+      return null;
+    }
+
+    /**
+     * A reason read from the classes the pair reaches through the properties {@code bridge} itself
+     * walks: a property it converts by a conversion of its own, or drops, leads nowhere the walk
+     * would go. A bridge that does not list those properties is read as walking every property, and
+     * no sealed interface is read through to its cases.
+     */
+    private String reachReason(final TypePair pair, final Collection<TypePair> ancestors, final Object bridge) {
+      final var fn = Telescope.bridgeFnOf(bridge);
+      final var listed = fn != null && fn.declaresUnwalkedProperties();
+      final var fromSource = reachedFrom(pair.source, listed ? fn.unwalkedSourceProperties() : Set.of(), listed);
+      final var fromTarget = reachedFrom(pair.target, listed ? fn.unwalkedTargetProperties() : Set.of(), listed);
+      for (final var configured : rows.keySet()) {
+        if (fromSource.contains(configured.source) && fromTarget.contains(configured.target)) {
+          return (
+            "a row is keyed to (" +
+            configured.source.getSimpleName() +
+            ", " +
+            configured.target.getSimpleName() +
+            "), a pair it reaches"
+          );
+        }
+      }
+      for (final var row : caseRows) {
+        if (fromSource.contains(row.sourceCase()) && fromTarget.contains(row.targetCase())) {
+          return (
+            "a cases row pairs " +
+            row.sourceCase().getSimpleName() +
+            " with " +
+            row.targetCase().getSimpleName() +
+            ", a pair it reaches"
+          );
+        }
+      }
+      for (final var hint : hinted) {
+        if (fromSource.contains(hint) || fromTarget.contains(hint)) {
+          return "a writeBean hint names " + hint.getSimpleName() + ", a class it reaches";
+        }
+      }
+      // A bridge taking the active path cuts a cycle through it at the reference the walk would.
+      if (fn != null && fn.takesActivePath()) return null;
+      for (final var ancestor : ancestors) {
+        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
+          return (
+            "it reaches (" +
+            ancestor.source.getSimpleName() +
+            ", " +
+            ancestor.target.getSimpleName() +
+            "), a pair being converted around it"
+          );
+        }
+      }
+      return null;
+    }
+
+    boolean converts(final TypePair pair) {
+      return converted.contains(pair);
+    }
+
+    /**
+     * Every class a value of {@code start} can hold at any depth, leaving out what it holds in the
+     * properties named in {@code skipped}: the classes and type arguments of its properties' types,
+     * and the type arguments its class passes to the classes it extends, which is where a container
+     * class of its own names its elements. Read through each record or bean on the way. {@code
+     * skipped} applies to {@code start}'s own properties only.
+     *
+     * <p>With {@code throughCases}, a sealed interface a value holds is read through to its cases,
+     * and the sealed interface a case implements is not counted as one it holds. That is asked only
+     * for a bridge that lists the properties it does not walk; for any other bridge, what lies
+     * beyond a sealed interface cannot be told from what the bridge looks at, so it is not read.
+     */
+    private Set<Class<?>> reachedFrom(final Class<?> start, final Set<String> skipped, final boolean throughCases) {
+      final var key = new Reach(start, skipped, throughCases);
+      final var known = reached.get(key);
+      if (known != null) return known;
+      final var seen = new HashSet<Class<?>>();
+      final var pending = new ArrayDeque<Class<?>>();
+      pending.add(start);
+      while (!pending.isEmpty()) {
+        final var cls = pending.poll();
+        final var mentioned = new ArrayList<Class<?>>();
+        final var visited = new HashSet<Type>();
+        classesIn(cls.getGenericSuperclass(), mentioned, visited);
+        for (final var implemented : cls.getGenericInterfaces()) classesIn(implemented, mentioned, visited);
+        if (throughCases) {
+          // A case is a value of the sealed interface it belongs to, not a
+          // holder of one, so that interface is no class the case reaches.
+          mentioned.removeIf(type -> type.isInterface() && type.isSealed() && type.isAssignableFrom(cls));
+        }
+        if (cls.isInterface()) {
+          // A sealed interface a value holds holds one of its cases.
+          if (cls.isSealed()) mentioned.addAll(List.of(cls.getPermittedSubclasses()));
+        } else {
+          final var refl = pickReflective(cls, beanRefl);
+          for (final var name : refl.names(cls)) {
+            if (cls == start && skipped.contains(name)) continue;
+            // Both types the walk can read a property as: as a member of this
+            // class, which resolves a type variable a bean inherits, and as
+            // declared.
+            classesIn(Reflective.pairedTypes(refl, cls, name, refl, cls, name).source(), mentioned, visited);
+            classesIn(refl.genericType(cls, name), mentioned, visited);
+          }
+        }
+        for (final var next : mentioned) if (seen.add(next) && readable(next, throughCases)) pending.add(next);
+      }
+      reached.put(key, seen);
+      return seen;
+    }
+
+    /**
+     * A class whose reach is asked for, the properties of its own left out, and how far it reads.
+     */
+    private record Reach(Class<?> start, Set<String> skipped, boolean throughCases) {}
+
+    /**
+     * A record or bean whose properties the walk reads, or, {@code throughCases}, a sealed
+     * interface whose cases it reads; no JDK class is either.
+     */
+    private static boolean readable(final Class<?> cls, final boolean throughCases) {
+      return (
+        (PAIRING.reflectable(cls) || (throughCases && cls.isInterface() && cls.isSealed())) &&
+        !cls.getName().startsWith("java.")
+      );
+    }
+
+    /**
+     * The classes {@code type} names, at any depth of its arguments and bounds. {@code visited}
+     * stops a type variable bounded by itself, such as {@code T extends Comparable<T>}.
+     */
+    private static void classesIn(final Type type, final List<Class<?>> out, final Set<Type> visited) {
+      if (type == null || !visited.add(type)) return;
+      switch (type) {
+        case Class<?> cls -> out.add(cls.isArray() ? cls.getComponentType() : cls);
+        case ParameterizedType parameterized -> {
+          classesIn(parameterized.getRawType(), out, visited);
+          for (final var argument : parameterized.getActualTypeArguments()) classesIn(argument, out, visited);
+        }
+        case GenericArrayType array -> classesIn(array.getGenericComponentType(), out, visited);
+        case WildcardType wildcard -> {
+          for (final var bound : wildcard.getUpperBounds()) classesIn(bound, out, visited);
+          for (final var bound : wildcard.getLowerBounds()) classesIn(bound, out, visited);
+        }
+        case TypeVariable<?> variable -> {
+          for (final var bound : variable.getBounds()) classesIn(bound, out, visited);
+        }
+        default -> {
+        }
+      }
+    }
+  }
+
+  /** Each pair's bridge, or its absence, by source class. A malformed bridge is not kept. */
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> NESTED_BRIDGES = cacheBySource();
+
+  /** The same, for a mapper's own pair, where a long-form holder is read too. */
+  private static final ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> ROOT_BRIDGES = cacheBySource();
+
+  private static ClassValue<ConcurrentHashMap<Class<?>, Optional<Object>>> cacheBySource() {
+    return new ClassValue<>() {
+      @Override
+      protected ConcurrentHashMap<Class<?>, Optional<Object>> computeValue(final Class<?> type) {
+        return new ConcurrentHashMap<>();
+      }
+    };
+  }
+
+  /**
+   * The bridge {@code @Bridge} generated for {@code (source, target)}, found by the one lookup a
+   * mapper with no steps and a nested pair share: a holder beside the source, then a carrier
+   * registered as a {@link BridgeProvider}.
+   *
+   * <p>Beside the source, the {@code <Source>To<Target>Bridge} holder comes first, then {@code
+   * <Source>Bridge}. The long name goes both to the bridges of a source declaring several targets
+   * and to a bridge the processor derived for a pair with no {@code @Bridge} of its own, which
+   * carries the configuration of whichever bridges reached that pair rather than the pair's own.
+   * With {@code longForm}, for the pair a mapper with no steps is built for, either is read.
+   * Without it, for a nested pair or a case of a sealed interface, a long-form holder is read only
+   * when its bridge {@linkplain BridgeFn#declaresPair() declares the pair}, and a class under the
+   * long name with no {@code BRIDGE} field reads as absent, as one under the short name does.
+   */
+  static Optional<Object> ownBridge(final Class<?> source, final Class<?> target, final boolean longForm) {
+    final var known = (longForm ? ROOT_BRIDGES : NESTED_BRIDGES).get(source);
+    final var cached = known.get(target);
+    if (cached != null) return cached;
+    // Read outside the table's update: reading a bridge initialises its class, and that can build a
+    // mapper which looks a bridge up in this table.
+    final var holder = longForm
+      ? BridgeHolderProbe.probeFor(source, target)
+      : BridgeHolderProbe.longFormFor(source, target)
+          .filter(DeepMap::declaresPair)
+          .or(() -> BridgeHolderProbe.shortFormFor(source, target));
+    final Optional<Object> found = holder
+      .map(BridgeHolderProbe.BridgeRef::bridge)
+      .or(() -> BridgeRegistry.find(source, target, source.getClassLoader()));
+    final var raced = known.putIfAbsent(target, found);
+    return raced == null ? found : raced;
+  }
+
+  /** Whether the bridge {@code holder} holds declares its pair. */
+  private static boolean declaresPair(final BridgeHolderProbe.BridgeRef holder) {
+    final var fn = Telescope.bridgeFnOf(holder.bridge());
+    return fn != null && fn.declaresPair();
+  }
+
+  /**
+   * A nested pair's own bridge as the pair's leaf: a generated bridge converts null to null in both
+   * directions. A bridge that {@linkplain BridgeFn#takesActivePath() takes the active path} is
+   * handed the path of the walk {@code owner} when that walk has one open, so an object the walk is
+   * converting is one the bridge finds on it; met outside that walk, the bridge starts its own.
+   *
+   * @throws IllegalStateException when the bridge is not a two-way conversion
+   */
+  @SuppressWarnings("unchecked")
+  private static Iso<?, ?> isoOf(final TypePair pair, final Object bridge, final Object owner) {
+    if (Telescope.bridgeFnOf(bridge) instanceof BridgeFn<?, ?> raw && raw.takesActivePath()) {
+      final var fn = (BridgeFn<Object, Object>) raw;
+      return Iso.of(
+        v -> {
+          final var path = FORWARD_SEEN.get();
+          return path == null || path.owner() != owner ? fn.forward(v) : fn.forward(v, path);
+        },
+        v -> {
+          final var path = BACKWARD_SEEN.get();
+          return path == null || path.owner() != owner ? fn.backward(v) : fn.backward(v, path);
+        }
+      );
+    }
+    if (bridge instanceof Telescope<?, ?> telescope && telescope.optic instanceof Iso<?, ?> iso) return iso;
+    throw new IllegalStateException(
+      "The bridge generated for (" +
+        pair.source.getName() +
+        ", " +
+        pair.target.getName() +
+        ") is not a two-way conversion, so a mapper reaching that pair cannot convert it through" +
+        " the bridge. Re-run the @Bridge processor."
+    );
+  }
+
+  /**
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
   private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
+
+  /**
+   * Refuses a bean side whose setter cannot take a value of the property's own type, for every
+   * property of {@code cls} a step fills from the other side: the target's properties when {@code
+   * target} is true, and otherwise the source's, which the backward direction writes.
+   */
+  private static void refuseUnwritableSetters(
+    final Class<?> cls,
+    final Beans.BeanWriter<?> writer,
+    final Map<String, FieldStep> steps,
+    final boolean target
+  ) {
+    if (writer == null) return;
+    for (final var step : steps.values()) {
+      final var written = target ? step.targetName() : step.sourceName();
+      final var from = target ? step.sourceName() : step.targetName();
+      if (written == null || from == null) continue;
+      final var refusal = Beans.setterRefusal(writer, cls, written);
+      if (refusal != null) throw new IllegalStateException(refusal);
+    }
+  }
 
   /**
    * Strip generics from a {@link Type} to the raw {@link Class}, returning {@code null} for
@@ -1705,10 +2891,16 @@ public final class DeepMap {
   }
 
   /**
-   * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso and the
-   * patch table.
+   * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso, the patch
+   * table, and, for a pair of two sealed interfaces, each source case's mapper; {@code cases} is
+   * null for any other pair.
    */
-  private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable, List<OpticNode> trail) {}
+  private record Resolution<A, B>(
+    Iso<A, B> iso,
+    Map<String, Mapper.PatchEntry> patchTable,
+    List<Mapper.CaseEntry> cases,
+    List<OpticNode> trail
+  ) {}
 
   /**
    * Shape of a container-typed component: kind (list / map values / optional), value/element {@link

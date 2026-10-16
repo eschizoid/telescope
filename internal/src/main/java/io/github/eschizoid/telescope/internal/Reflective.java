@@ -111,13 +111,34 @@ public record Reflective(
     return genericType.apply(cls, name);
   }
 
-  /** The types one pairing reads its source and target property as. */
-  public record PairedTypes(Type source, Type target) {}
+  /**
+   * The types one pairing reads its source and target property as, and the types each has as a
+   * member of its own class. The two pairs differ only where the pairing reads as declared.
+   *
+   * @param source the type the pairing reads the source property as
+   * @param target the type the pairing reads the target property as
+   * @param sourceMember the source property's type as a member of the source class; read as
+   *     declared, with each variable the class passes through kept as that variable
+   * @param targetMember the target property's type as a member of the target class, read the same
+   *     way
+   * @param asDeclared whether the pairing reads both properties as declared
+   */
+  public record PairedTypes(Type source, Type target, Type sourceMember, Type targetMember, boolean asDeclared) {
+    /**
+     * Whether the pairing reads as declared and both sides declare one type, so a value is handed
+     * across unchanged and only a class one side fixes a type variable to can refuse it ({@link
+     * PairingRules#fixedFit}).
+     */
+    public boolean handedAcross() {
+      return asDeclared && PROPS.sameType(source, target);
+    }
+  }
 
   /**
    * The types of a source property and the target property it pairs with, decided once for the pair
    * by {@link PairingRules#readsAsDeclared}: each as a member of its own class, or both as
-   * declared.
+   * declared. Read as declared, the target's type reads each type variable its class declares as
+   * the source class's variable in the same position ({@link PairingRules#alignedToSource}).
    */
   public static PairedTypes pairedTypes(
     final Reflective sourceRefl,
@@ -130,9 +151,24 @@ public record Reflective(
     final var asSourceMember = memberType(sourceRefl, source, sourceName);
     final var asTargetMember = memberType(targetRefl, target, targetName);
     if (!RULES.readsAsDeclared(asSourceMember, asTargetMember)) {
-      return new PairedTypes(asSourceMember, asTargetMember);
+      return new PairedTypes(asSourceMember, asTargetMember, asSourceMember, asTargetMember, false);
     }
-    return new PairedTypes(sourceRefl.genericType(source, sourceName), targetRefl.genericType(target, targetName));
+    return new PairedTypes(
+      sourceRefl.genericType(source, sourceName),
+      RULES.alignedToSource(targetRefl.genericType(target, targetName), source, target),
+      resolvedMemberType(sourceRefl, source, sourceName),
+      resolvedMemberType(targetRefl, target, targetName),
+      true
+    );
+  }
+
+  /**
+   * A record component's type, or a bean property's type with each variable its superclass chain
+   * passes through read as the variable the class gives it, whose bound says what the property
+   * holds.
+   */
+  private static Type resolvedMemberType(final Reflective refl, final Class<?> cls, final String name) {
+    return cls.isRecord() ? refl.genericType(cls, name) : Beans.resolvedPropertyType(cls, name);
   }
 
   /** A record component's type, which nothing inherits, or a bean property's type as a member. */

@@ -284,6 +284,11 @@ A source that declares more than one target, with repeated `@Bridge` or `@Bridge
 per target, because the short name can belong to only one pair. A sealed source and target are bridged case by case, and
 the bridge for the sealed root is named by the same rules.
 
+A runtime mapper converts a nested pair, or pairs a case of a sealed interface, through the bridge the pair's own
+`@Bridge` generated, under either name. A sub-bridge the processor derived for a pair with no `@Bridge` of its own
+shares the long name but carries the configuration of the bridges that reached it, so the runtime does not use it. Each
+generated bridge says which kind it is through `BridgeFn.declaresPair()`.
+
 ## Binders: `@FromMap`
 
 `@FromMap` on a record or POJO generates a `<X>FromMap` class that builds the type from a `Map<String, Object>` without
@@ -326,6 +331,16 @@ It never rejects a call that the runtime would build:
 - A `constant` or `compute` row turns off the completeness check, because the runtime also skips the completeness check
   for such a mapper.
 - `mapperForward` checks the rows it is given and does not require every field to be covered.
+- A bean property whose setter cannot take its getter's type is reported only where the runtime writes it through that
+  setter: the bean has no static `builder()` and no public constructor taking every property, the call has no
+  `writeBean` or `writeBeans` hint, and the pair has no `@Bridge` of its own that the verifier can see.
+
+A carrier `@Bridge` declared in a module compiled separately counts as a bridge of the pair's own when that module is on
+the class path or the module path: the bridge processor leaves a marker for each carrier pair under
+`telescope/carriers/default/`, and the verifier reads it. A shaded jar that relocates packages renames the classes but
+not the class names inside the marker files, so the verifier does not see a carrier shaded that way and checks its pair
+as if it had no bridge. Mark such a call, or an element enclosing it, `@UncheckedMapping`, or pass
+`-Atelescope.verify=warn`.
 
 The verifier is on whenever the processor is on the path, and it takes the options below:
 

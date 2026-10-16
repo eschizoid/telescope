@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -2383,6 +2384,38 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("a case missing @Bridge below a sealed field is reported on the bridge that holds the field")
+    void caseMissingBridgeBelowASealedFieldIsReportedOnTheParent() {
+      final var compilation = compile(
+        source(
+          "demo.P",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(PDto.class)
+          public record P(A a) {}
+          """
+        ),
+        source("demo.PDto", "package demo;\npublic record PDto(B a) {}\n"),
+        source("demo.A", "package demo;\npublic sealed interface A permits Aa {}\n"),
+        source("demo.Aa", "package demo;\npublic record Aa(String x) implements A {}\n"),
+        source("demo.B", "package demo;\npublic sealed interface B permits Bb {}\n"),
+        source("demo.Bb", "package demo;\npublic record Bb(String x) implements B {}\n")
+      );
+      final var owed =
+        "Subtype Aa of sealed A, which @Bridge P converts case by case, must itself be @Bridge-annotated.";
+      final var reported = compilation
+        .errors()
+        .stream()
+        .filter(d -> d.getMessage(Locale.ROOT).equals(owed))
+        .toList();
+      assertEquals(1, reported.size(), compilation::errorMessages);
+      assertTrue(reported.getFirst().getSource().getName().endsWith("P.java"), () ->
+        reported.getFirst().getSource().getName()
+      );
+    }
+
+    @Test
     @DisplayName("permit case's @Bridge target is not a permit of the sealed target — error")
     void caseTargetNotInPermitsIsRejected() {
       final var compilation = compile(
@@ -3695,8 +3728,8 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a computed argument into a type-variable slot stays inline, since the bridge cannot declare it")
-    void computeIntoTypeVariableSlotStaysInline() {
+    @DisplayName("a computed argument into a type-variable slot is evaluated into a local of the variable's erasure")
+    void computeIntoTypeVariableSlotIsHoistedAsItsErasure() {
       final var compilation = compileAttributed(
         source(
           "demo.NowSupplier",
@@ -3731,8 +3764,8 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ABridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
-      assertTrue(bridge.contains("new demo.B(__fs_id, __cp_createdAt.get())"), bridge);
-      assertFalse(bridge.contains("__cv_createdAt"), bridge);
+      assertTrue(bridge.contains("final java.lang.Object __cv_createdAt = __cp_createdAt.get();"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cv_createdAt)"), bridge);
     }
 
     @Test

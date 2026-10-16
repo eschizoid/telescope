@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -31,7 +32,6 @@ import java.util.stream.Stream;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
@@ -83,7 +83,6 @@ import javax.tools.StandardLocation;
 @SupportedAnnotationTypes(
   { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
 )
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /** The shared pairing spec, over the mirror world, consulted for container classification. */
@@ -278,11 +277,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> threadedRefs = new HashSet<>();
 
   /**
+   * For a pair of sealed interfaces the processor plans a bridge for because a field or element of
+   * another bridge holds it, the source of the first such bridge, which a refusal is reported on.
+   */
+  private final Map<TypePair, TypeElement> sealedSubPairParents = new HashMap<>();
+
+  /**
    * The expression passed as the active path to a call that takes one, or {@code null} while
    * emitting code that passes none. A guarded bridge's {@code forward} and {@code backward} pass
    * their own path; its {@code patch} passes a fresh one per call.
    */
   private String pathArg;
+
+  /**
+   * The bridge being emitted, which a constructor argument names to reach its {@code __erased}
+   * helper, and whether one did; reset for each bridge.
+   */
+  private String erasingBridge;
+
+  private boolean erasedArgumentUsed;
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
@@ -1429,6 +1442,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy, bridgePackage);
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
+    // The properties the bridge converts by a conversion of its own, drops, or fills without
+    // reading the source: a runtime mapper looks below the rest only, when it decides whether the
+    // bridge may convert this pair for it.
+    final var unwalkedSource = new TreeSet<String>(drops);
+    unwalkedSource.addAll(transforms.keySet());
+    unwalkedSource.addAll(viaMappers.keySet());
+    final var unwalkedTarget = new TreeSet<String>(rawConstants.keySet());
+    unwalkedTarget.addAll(computes.keySet());
+    for (final var converted : List.of(transforms.keySet(), viaMappers.keySet())) {
+      for (final var field : converted) unwalkedTarget.add(renames.getOrDefault(field, field));
+    }
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
@@ -1507,8 +1531,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          final var fwdRes = resolvedFn(usingEl, "forward", sfType, bridgePackage);
-          final var bwdRes = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          //
+          // A property typed by its class's type variable is read and written through the raw
+          // class, so the call sites see the erasure of its type, and the check compares that.
+          final var sfHeld = heldAs(sfType);
+          final var tfHeld = heldAs(tfType);
+          final var fwdRes = resolvedFn(usingEl, "forward", sfHeld, bridgePackage);
+          final var bwdRes = resolvedFn(usingEl, "backward", tfHeld, bridgePackage);
           // An ambiguous call is one Java refuses outright rather than resolving, so neither a
           // bound member nor the interface's arguments describe what the emitted call site does.
           // Only for a direction that is emitted, though: a forward-only row writes a literal
@@ -1583,14 +1612,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // about does carry. Asking a slot about that hands a null to the resolver, which is a
           // crash inside the processor rather than a refusal from it. Forward has no such arm --
           // past that guard it always has either a bound member or the arguments it required.
-          final var targetSlot = writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
+          final var targetSlot = heldAs(writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage));
           final var sourceSlot =
-            bwdGives == null ? null : writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
-          final var storesInto = targetSlot == null ? tfType : targetSlot;
-          final var storesBack = sourceSlot == null ? sfType : sourceSlot;
-          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
+            bwdGives == null ? null : heldAs(writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
+          final var storesInto = targetSlot == null ? tfHeld : targetSlot;
+          final var storesBack = sourceSlot == null ? sfHeld : sourceSlot;
+          final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
           final var backwardFits =
-            forwardOnly || (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
+            forwardOnly || (types.isAssignable(tfHeld, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message
@@ -1605,7 +1634,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             // String -> String" -- because the type that actually refused is the member's, and it
             // appears nowhere.
             final var slot = forwardFits ? sourceSlot : targetSlot;
-            final var declared = forwardFits ? sfType : tfType;
+            final var declared = forwardFits ? sfHeld : tfHeld;
             // Named only where the store is what refused. A row can fail on the read alone -- the
             // transform will not take what the getter gives -- and a member that accepts the value
             // perfectly well had no part in that, so printing it points at the wrong thing.
@@ -1631,7 +1660,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 ") -> " +
                 gives +
                 ", which does not carry " +
-                (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
+                (forwardFits
+                  ? heldPhrase(tfType, tfHeld) + " -> " + heldPhrase(sfType, sfHeld)
+                  : heldPhrase(sfType, sfHeld) + " -> " + heldPhrase(tfType, tfHeld)) +
                 into +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
@@ -2021,7 +2052,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) return;
     // The types each pair of properties is planned and read as, decided by the rule the runtime
     // pairs them by, and the casts that reading them through raw classes needs.
-    final var paired = pairedFields(source, target, sourceFields, nonDroppedSourceFields, targetFields, renames);
+    final var ownConversions = new HashSet<>(transforms.keySet());
+    ownConversions.addAll(viaMappers.keySet());
+    final var viaLifts = viaLifts(source, sourceFields, targetFields, renames, viaMappers, bridgePackage);
+    if (viaLifts == null) return;
+    final var paired = pairedFields(
+      source,
+      target,
+      sourceFields,
+      nonDroppedSourceFields,
+      targetFields,
+      renames,
+      ownConversions,
+      viaLifts.keySet(),
+      lenient
+    );
+    if (paired == null) return;
+    final var viaCasts = viaCalls(
+      source,
+      target,
+      sourceFields,
+      targetFields,
+      paired,
+      renames,
+      viaMappers,
+      viaLifts,
+      sourceRebuild,
+      targetRebuild,
+      bridgePackage
+    );
+    if (viaCasts == null) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -2036,6 +2096,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       transforms,
       cfg.transformMethods(),
       viaMappers,
+      viaLifts,
       pending,
       seen,
       lenient,
@@ -2048,6 +2109,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // the sub-bridges on the same cycle; every other pair is emitted with no trace of it.
     final var guarded = guardsCycles(source, target);
     pathArg = guarded ? "__path" : null;
+    erasingBridge = bridgeName;
+    erasedArgumentUsed = false;
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -2090,9 +2153,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // A primitive local is skipped: it cannot hold null, and `int == null` is not legal Java,
       // so emitting the gate there produces a generated file that does not compile.
       if (plan.userSuppliedBridge() && !sf.type().getKind().isPrimitive()) {
-        return "(" + local + " == null ? null : " + applyForward(srcName, plan, read) + ")";
+        final var handed = paired.castInto(viaCasts.forwardCasts(), srcName, read);
+        return "(" + local + " == null ? null : " + applyForward(srcName, plan, handed) + ")";
       }
-      return paired.castInto(paired.forwardCasts(), targetName, applyForward(srcName, plan, read));
+      return paired.castInto(
+        paired.forwardCasts(),
+        targetName,
+        paired.checkedInto(paired.forwardChecks(), targetName, applyForward(srcName, plan, read))
+      );
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be
@@ -2119,16 +2187,95 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var plan = fieldPlans.get(sourceName);
       // Same user-bridge null gate as readForward, skipped for a primitive for the same reason.
       if (plan.userSuppliedBridge() && !tf.type().getKind().isPrimitive()) {
-        return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, local) + ")";
+        final var handed = paired.castInto(viaCasts.backwardCasts(), sourceName, local);
+        return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, handed) + ")";
       }
-      return paired.castInto(paired.backwardCasts(), sourceName, applyBackward(sourceName, plan, local));
+      return paired.castInto(
+        paired.backwardCasts(),
+        sourceName,
+        paired.checkedInto(paired.backwardChecks(), sourceName, applyBackward(sourceName, plan, local))
+      );
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild, pkg);
+    // A transformed field's value is what its transform returns, which the transform check has
+    // already held to the member it is written through; every other value has the field's own type.
+    final var transformedTargets = new HashSet<String>();
+    for (final var t : transforms.keySet()) transformedTargets.add(renames.getOrDefault(t, t));
+    final var transformedSources = new HashSet<>(transforms.keySet());
+    transformedSources.removeAll(forwardOnlyTransforms);
+    // What each transform hands the setter it writes through, by the field written: the target's
+    // field forward, the source's backward. A transform whose result type this cannot read is left
+    // out, and its call binds by that result as it is.
+    final var forwardGives = new HashMap<String, TypeMirror>();
+    final var backwardGives = new HashMap<String, TypeMirror>();
+    // Fields whose value reaches the setter as a reference that may be null although the field's
+    // own type is primitive: a @ViaMapper result, which the read gates on a null source.
+    final var referenceTargets = new HashSet<String>();
+    final var referenceSources = new HashSet<String>();
+    for (final var entry : fieldPlans.entrySet()) {
+      if (!entry.getValue().userSuppliedBridge()) continue;
+      final var sourceName = entry.getKey();
+      final var targetName = renames.getOrDefault(sourceName, sourceName);
+      if (!fieldByName(sourceFields, sourceName).type().getKind().isPrimitive()) referenceTargets.add(targetName);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      if (tf != null && !tf.type().getKind().isPrimitive()) referenceSources.add(sourceName);
+    }
+    for (final var t : transforms.keySet()) {
+      final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
+      if (usingEl == null) continue;
+      final var targetName = renames.getOrDefault(t, t);
+      final var sf = fieldByName(sourceFields, t);
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(targetName))
+        .findFirst()
+        .orElse(null);
+      final var method = cfg.transformMethods().get(t);
+      final var qualified = method != null && !method.isEmpty();
+      final var forward = transformGives(
+        usingEl,
+        qualified ? method : "forward",
+        heldAs(sf.type()),
+        bridgePackage,
+        !qualified,
+        1
+      );
+      if (forward != null) forwardGives.put(targetName, forward);
+      if (qualified || forwardOnlyTransforms.contains(t) || tf == null) continue;
+      final var backward = transformGives(usingEl, "backward", heldAs(tf.type()), bridgePackage, true, 0);
+      if (backward != null) backwardGives.put(t, backward);
+    }
+    final var builtForward = buildExpr(
+      target,
+      readForward,
+      targetFields,
+      writeStrategy,
+      source,
+      targetRebuild,
+      pkg,
+      transformedTargets,
+      forwardGives,
+      referenceTargets
+    );
     if (builtForward == null) return;
-    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild, pkg);
+    final var builtBackward = buildExpr(
+      source,
+      readBackward,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      pkg,
+      transformedSources,
+      backwardGives,
+      referenceSources
+    );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
     final var backwardBody = withPrelude(backwardLocals, builtBackward);
@@ -2167,20 +2314,57 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // sub-patch. Mapper#patch documents whole-value writes for nested components, and a
       // sub-patch would both deep-merge and — because its base == null guard returns base —
       // silently drop the partial's value whenever the base slot is null.
-      final var partialRead = applyBackward(sourceName, plan, pLocal);
+      final var partialRead = applyBackward(
+        sourceName,
+        plan,
+        plan.userSuppliedBridge() ? paired.castInto(viaCasts.backwardCasts(), sourceName, pLocal) : pLocal
+      );
       // @Default is a forward-direction null-coalesce and is never applied here: a slot null in
       // both partial and base stays null rather than resurrecting the default on a field the
       // caller never wrote.
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
-        "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")"
+        "(" +
+          pLocal +
+          " != null ? " +
+          paired.checkedInto(paired.backwardChecks(), sourceName, partialRead) +
+          " : " +
+          baseRead +
+          ")"
       );
     };
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
     pathArg = guarded ? FRESH_PATH : null;
-    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild, null);
+    // Patch writes a conditional between the backward result and the base's own value, whose type
+    // is the backward result's where the property's type widens to it. Where that result is wider
+    // than the setter chosen from the property's type, patch casts to that setter as backward
+    // does; every other value is written as it is.
+    final var patchCasts = new HashMap<String, TypeMirror>();
+    if (sourceRebuild.kind() == Rebuild.Kind.SETTERS) {
+      for (final var entry : backwardGives.entrySet()) {
+        if (!transformedSources.contains(entry.getKey()) || !hasField(sourceFields, entry.getKey())) continue;
+        final var property = fieldByName(sourceFields, entry.getKey()).type();
+        final var parameter = setterChoice(source, entry.getKey()).argument();
+        final var assignable = processingEnv.getTypeUtils().isAssignable(property, entry.getValue());
+        if (assignable && castsToChosen(entry.getValue(), parameter)) {
+          patchCasts.put(entry.getKey(), entry.getValue());
+        }
+      }
+    }
+    final var patchInner = buildExpr(
+      source,
+      readPatch,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      null,
+      patchCasts.keySet(),
+      patchCasts,
+      Set.of()
+    );
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
@@ -2211,7 +2395,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
-    if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
+    if (carrierEl != null) {
+      emitBridgeProvider(source, target, bridgeName, pkg);
+      emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
+    }
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.Telescope");
@@ -2247,6 +2434,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Per-field @Compute: one static instance of each user-declared Supplier implementation,
         // named `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward
         // slot.
+        // A constructor argument typed by the target's type variable is passed through this
+        // identity, which hands javac the erasure the raw class's constructor takes.
+        if (erasedArgumentUsed) {
+          out.println("  private static <V> V __erased(final V value) {");
+          out.println("    return value;");
+          out.println("  }");
+          out.println();
+        }
         if (!computes.isEmpty()) {
           for (final var e : computes.entrySet()) {
             out.println(
@@ -2273,13 +2468,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var rawFields = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
           mentionsRawUse(f.type())
         );
+        final var namesRaw = rawNameSuppression(List.of(source, target));
+        // A sealed interface, record or bean given type arguments converts through a sub-bridge
+        // that names it raw, so the value it returns is held as the property's parameterized type
+        // unchecked.
+        final var bridgedArguments = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
+          givesBridgedArguments(f.type())
+        );
         // A member reached through a class the bridge names raw has its type erased, so a read or
         // a write through one whose erasure differs is unchecked.
-        final var suppressRaw = paired.rawAccess()
-          ? RAW_SUPPRESSION + "\n"
-          : rawFields
-            ? "  @SuppressWarnings(\"rawtypes\")\n"
-            : "";
+        final var suppressRaw =
+          paired.rawAccess() || bridgedArguments
+            ? RAW_SUPPRESSION + "\n"
+            : rawFields
+              ? RAW_TYPES_SUPPRESSION + "\n"
+              : namesRaw;
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
@@ -2300,23 +2503,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
-        out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
-        out.println("  private static final class Fn implements BridgeFn<" + sourceFq + ", " + targetFq + "> {");
-        out.println("    @Override");
-        out.println("    public " + targetFq + " forward(final " + sourceFq + " s) {");
-        out.println("      return " + bridgeName + ".forward(s);");
-        out.println("    }");
-        out.println();
-        out.println("    @Override");
-        out.println("    public " + sourceFq + " backward(final " + targetFq + " t) {");
-        out.println("      return " + bridgeName + ".backward(t);");
-        out.println("    }");
-        out.println("  }");
-        out.println();
-        emitBridgeFnJavadoc(out);
-        out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
-        out.println(
-          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
+        emitBridgeHandles(
+          out,
+          namesRaw,
+          bridgeName,
+          sourceFq,
+          targetFq,
+          declares(thisPair),
+          unwalkedSource,
+          unwalkedTarget,
+          guarded
         );
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
@@ -2349,6 +2545,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(source, "@Bridge on a sealed interface requires an explicit permits clause.");
       return;
     }
+    // A sealed pair with no @Bridge of its own is planned for the bridge whose
+    // field holds it, so a refusal is reported there.
+    final var ownPair = new TypePair(source.getQualifiedName().toString(), target.getQualifiedName().toString());
+    final var heldBy = configsByPair.containsKey(ownPair) ? null : sealedSubPairParents.get(ownPair);
+    final Element reportOn = heldBy == null ? source : heldBy;
+    final var sealedName =
+      heldBy == null
+        ? "@Bridge sealed " + source.getSimpleName()
+        : "sealed " + source.getSimpleName() + ", which @Bridge " + heldBy.getSimpleName() + " converts case by case,";
     final var targetPermitsFq = new HashSet<String>();
     for (final var tp : target.getPermittedSubclasses()) {
       if (tp.getKind() == TypeKind.DECLARED) {
@@ -2378,12 +2583,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (caseTarget == null) {
         if (caseBridges.isEmpty()) {
           error(
-            source,
-            "Subtype " +
-              sourceCaseEl.getSimpleName() +
-              " of @Bridge sealed " +
-              source.getSimpleName() +
-              " must itself be @Bridge-annotated."
+            reportOn,
+            "Subtype " + sourceCaseEl.getSimpleName() + " of " + sealedName + " must itself be @Bridge-annotated."
           );
         } else if (caseBridges.size() == 1) {
           // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
@@ -2391,7 +2592,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (!(only instanceof DeclaredType decl)) continue;
           final var onlyEl = (TypeElement) decl.asElement();
           error(
-            source,
+            reportOn,
             "Subtype " +
               sourceCaseEl.getSimpleName() +
               "'s @Bridge target " +
@@ -2403,7 +2604,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         } else {
           // Multi-target — none of the @Bridge targets matched the sealed-target permits.
           error(
-            source,
+            reportOn,
             "Subtype " +
               sourceCaseEl.getSimpleName() +
               " has multiple @Bridge targets, none of which is a permits of sealed target " +
@@ -2415,6 +2616,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var targetCaseEl = (TypeElement) ((DeclaredType) caseTarget).asElement();
       final var targetCaseFq = targetCaseEl.getQualifiedName().toString();
+      final var crossed = rules.caseArgumentsRefusal(
+        source.asType(),
+        target.asType(),
+        sourceCaseEl.asType(),
+        targetCaseEl.asType()
+      );
+      if (crossed != null) {
+        error(reportOn, crossed);
+        return;
+      }
       final var caseBridgeFq = bridgeNameOf(sourceCaseEl, targetCaseEl).qualified();
       entries.add(new CaseEntry(sourceCaseEl, targetCaseEl, caseBridgeFq));
       // Defensively enqueue the per-case pair too — if the user @Bridge'd it (required), it's
@@ -2451,11 +2662,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       "Generated by telescope-codegen for @Bridge sealed " + source.getSimpleName() + ".",
       source,
       out -> {
+        // The members below name both roots and every case raw.
+        final var named = new ArrayList<TypeElement>(List.of(source, target));
+        for (final var e : entries) {
+          named.add(e.sourceCase());
+          named.add(e.targetCase());
+        }
+        final var namesRaw = rawNameSuppression(named);
         // Sealed-dispatch via Match — the dispatch is lattice-routed (Match composes internal
         // Prism instances per permit) and exhaustiveness is verified at class-load time by
         // .exhaustive() reading getPermittedSubclasses(). Belt-and-suspenders: if the processor
         // misses a permit, .exhaustive() throws loudly at class init rather than silently
         // defaulting to the unreachable-throw at first invocation of the orphan case.
+        out.print(namesRaw);
         out.println("  private static final Function<" + sourceFq + ", " + targetFq + "> FORWARD =");
         out.println("    Match.<" + sourceFq + ", " + targetFq + ">of(" + sourceFq + ".class)");
         for (final var e : entries) {
@@ -2463,6 +2682,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         out.println("      .exhaustive();");
         out.println();
+        out.print(namesRaw);
         out.println("  private static final Function<" + targetFq + ", " + sourceFq + "> BACKWARD =");
         out.println("    Match.<" + targetFq + ", " + sourceFq + ">of(" + targetFq + ".class)");
         for (final var e : entries) {
@@ -2470,6 +2690,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         out.println("      .exhaustive();");
         out.println();
+        out.print(namesRaw);
         out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
         // Null in -> null out, the same contract the field-sequence bridges emit. Match
         // dispatches
@@ -2480,11 +2701,46 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    return FORWARD.apply(s);");
         out.println("  }");
         out.println();
+        out.print(namesRaw);
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         out.println("    if (t == null) return null;");
         out.println("    return BACKWARD.apply(t);");
         out.println("  }");
         out.println();
+        // A sealed pair on a cycle passes the active path a parent hands it on to each case's own
+        // bridge that takes one, so a reference that closes the cycle through a case converts to
+        // null, as it does through any other bridge on the cycle.
+        if (guardsCycles(source, target)) {
+          final var access = pathOverloadAccess(source, bridge.pkg());
+          for (final var direction : List.of("forward", "backward")) {
+            final var forward = direction.equals("forward");
+            final var inFq = forward ? sourceFq : targetFq;
+            out.println(
+              "  " +
+                access +
+                "static " +
+                (forward ? targetFq : sourceFq) +
+                " " +
+                direction +
+                "(final " +
+                inFq +
+                " v, final " +
+                PATH_TYPE +
+                " __path) {"
+            );
+            out.println("    if (v == null) return null;");
+            for (final var e : entries) {
+              final var inCase = (forward ? e.sourceCase() : e.targetCase()).getQualifiedName();
+              final var path = guardsCycles(e.sourceCase(), e.targetCase()) ? ", __path" : "";
+              out.println(
+                "    if (v instanceof " + inCase + " c) return " + e.bridgeFq() + "." + direction + "(c" + path + ");"
+              );
+            }
+            out.println("    return " + (forward ? "FORWARD" : "BACKWARD") + ".apply(v);");
+            out.println("  }");
+            out.println();
+          }
+        }
         // Sealed-umbrella patch: when base and partial land on matching cases, the per-case
         // bridge's patch overlays one onto the other.
         //
@@ -2495,6 +2751,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // case's patch with a null partial, so the result is still a new object. A caller who
         // wants the case switch calls backward() explicitly. The switch over base is exhaustive
         // over the sealed permits, which javac checks.
+        out.print(namesRaw);
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );
@@ -2521,26 +2778,144 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    };");
         out.println("  }");
         out.println();
-        out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
-        out.println("  private static final class Fn implements BridgeFn<" + sourceFq + ", " + targetFq + "> {");
-        out.println("    @Override");
-        out.println("    public " + targetFq + " forward(final " + sourceFq + " s) {");
-        out.println("      return " + bridgeName + ".forward(s);");
-        out.println("    }");
-        out.println();
-        out.println("    @Override");
-        out.println("    public " + sourceFq + " backward(final " + targetFq + " t) {");
-        out.println("      return " + bridgeName + ".backward(t);");
-        out.println("    }");
-        out.println("  }");
-        out.println();
-        emitBridgeFnJavadoc(out);
-        out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
-        out.println(
-          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
-        );
+        emitBridgeHandles(out, namesRaw, bridgeName, sourceFq, targetFq, declares(ownPair), Set.of(), Set.of());
       }
     );
+  }
+
+  /**
+   * The {@code Fn} class, {@code BRIDGE_FN} and {@code BRIDGE}, each typed over the two classes as
+   * {@code forward} and {@code backward} name them. {@code suppression} is the line each carries,
+   * or empty. {@code declared} says a {@code @Bridge} names the pair. The two sets are the
+   * properties of each side the bridge does not walk.
+   */
+  private static void emitBridgeHandles(
+    final PrintWriter out,
+    final String suppression,
+    final String bridgeName,
+    final String sourceFq,
+    final String targetFq,
+    final boolean declared,
+    final Set<String> unwalkedSource,
+    final Set<String> unwalkedTarget
+  ) {
+    emitBridgeHandles(
+      out,
+      suppression,
+      bridgeName,
+      sourceFq,
+      targetFq,
+      declared,
+      unwalkedSource,
+      unwalkedTarget,
+      false
+    );
+  }
+
+  /**
+   * As above; {@code takesPath} says the bridge has the path-carrying overloads {@link
+   * #emitDirection} writes for a pair that can reach itself, which the {@code Fn} then exposes, so
+   * a runtime mapper converting the pair on a cycle hands the bridge its own path.
+   */
+  private static void emitBridgeHandles(
+    final PrintWriter out,
+    final String suppression,
+    final String bridgeName,
+    final String sourceFq,
+    final String targetFq,
+    final boolean declared,
+    final Set<String> unwalkedSource,
+    final Set<String> unwalkedTarget,
+    final boolean takesPath
+  ) {
+    out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
+    out.print(suppression);
+    out.println("  private static final class Fn implements BridgeFn<" + sourceFq + ", " + targetFq + "> {");
+    out.println("    @Override");
+    out.println("    public " + targetFq + " forward(final " + sourceFq + " s) {");
+    out.println("      return " + bridgeName + ".forward(s);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public " + sourceFq + " backward(final " + targetFq + " t) {");
+    out.println("      return " + bridgeName + ".backward(t);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {");
+    out.println("      return " + bridgeName + ".patch(base, partial);");
+    out.println("    }");
+    out.println();
+    if (takesPath) {
+      out.println("    @Override");
+      out.println("    public boolean takesActivePath() {");
+      out.println("      return true;");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + targetFq + " forward(final " + sourceFq + " s, final " + PATH_TYPE + " __path) {");
+      out.println("      return " + bridgeName + ".forward(s, __path);");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + sourceFq + " backward(final " + targetFq + " t, final " + PATH_TYPE + " __path) {");
+      out.println("      return " + bridgeName + ".backward(t, __path);");
+      out.println("    }");
+      out.println();
+    }
+    if (declared) {
+      out.println("    @Override");
+      out.println("    public boolean declaresPair() {");
+      out.println("      return true;");
+      out.println("    }");
+      out.println();
+    }
+    out.println("    @Override");
+    out.println("    public boolean declaresUnwalkedProperties() {");
+    out.println("      return true;");
+    out.println("    }");
+    emitPropertySet(out, "unwalkedSourceProperties", unwalkedSource);
+    emitPropertySet(out, "unwalkedTargetProperties", unwalkedTarget);
+    out.println("  }");
+    out.println();
+    emitBridgeFnJavadoc(out);
+    out.print(suppression);
+    out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
+    out.print(suppression);
+    out.println(
+      "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
+    );
+  }
+
+  /**
+   * An override of the {@code BridgeFn} method {@code name} answering {@code properties}, if any.
+   */
+  private static void emitPropertySet(final PrintWriter out, final String name, final Set<String> properties) {
+    if (properties.isEmpty()) return;
+    final var listed = properties
+      .stream()
+      .map(p -> "\"" + p + "\"")
+      .collect(Collectors.joining(", "));
+    out.println();
+    out.println("    @Override");
+    out.println("    public java.util.Set<String> " + name + "() {");
+    out.println("      return java.util.Set.of(" + listed + ");");
+    out.println("    }");
+  }
+
+  /**
+   * The {@code rawtypes} suppression line for a member of a bridge that names any of {@code
+   * classes}, or empty when none is generic.
+   *
+   * <p>A bridge names each class raw. A static member cannot name a class's type variables, and a
+   * wildcard is no substitute in a public signature: {@code BridgeFn<Src<?>, Dst<?>>} is not
+   * assignable to the {@code BridgeFn<Src, Dst>} a caller declares, and a {@code Src<?>} returned
+   * by {@code backward} cannot be assigned to the {@code Src<String>} a caller holds. The raw type
+   * accepts both, so a raw name is the type every caller can use.
+   */
+  private static String rawNameSuppression(final List<TypeElement> classes) {
+    for (final var c : classes) if (!c.getTypeParameters().isEmpty()) return RAW_TYPES_SUPPRESSION + "\n";
+    return "";
   }
 
   /**
@@ -2820,6 +3195,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private static final String RAW_SUPPRESSION = "  @SuppressWarnings({\"unchecked\", \"rawtypes\"})";
 
+  /**
+   * The suppression a member carries when it names a generic class raw and reads nothing through it
+   * unchecked.
+   */
+  private static final String RAW_TYPES_SUPPRESSION = "  @SuppressWarnings(\"rawtypes\")";
+
+  /**
+   * Whether a type is, or has among its type arguments at any depth, a sealed interface or a record
+   * or bean given type arguments, which converts through a sub-bridge that names it raw.
+   */
+  private boolean givesBridgedArguments(final TypeMirror type) {
+    if (!(type instanceof DeclaredType declared)) return false;
+    final var bridged = sealedInterface(declared) || isReflectableDeclared(declared);
+    if (bridged && !declared.getTypeArguments().isEmpty()) return true;
+    return declared.getTypeArguments().stream().anyMatch(this::givesBridgedArguments);
+  }
+
   /** Whether a type is, or has among its type arguments at any depth, a generic class used raw. */
   private static boolean mentionsRawUse(final TypeMirror type) {
     if (usedRaw(type)) return true;
@@ -3084,12 +3476,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, String> transforms,
     final Map<String, String> transformMethods,
     final Map<String, String> viaMappers,
+    final Map<String, ViaLift> viaLifts,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final boolean lenient,
     final String parentPkg
   ) {
     nestedElements.clear();
+    viaElementMethods.clear();
     threadedRefs.clear();
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -3108,7 +3502,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // contract. Emit a RECURSE plan whose subBridgeName is the user's class FQN; applyForward /
       // applyBackward already emit `<class>.forward(...)` / `<class>.backward(...)` for RECURSE,
       // so no new dispatch arm is needed.
-      if (viaMappers.containsKey(sf.name())) {
+      // A @ViaMapper lifted over a container's elements is planned as any other container whose
+      // elements convert, with its own element class in place of a sub-bridge.
+      final var lift = viaLifts.get(sf.name());
+      if (viaMappers.containsKey(sf.name()) && lift == null) {
         plans.put(sf.name(), FieldPlan.viaBridge(viaMappers.get(sf.name())));
         continue;
       }
@@ -3116,7 +3513,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // (1) Same type → identity, unless the shared rules copy it: a container of one declared
       //     type is copied by the runtime's ContainerCopy, the copy the reflective path makes, so
       //     the target never shares the source's container and its elements pass through.
-      if (isSameType(sf.type(), tf.type())) {
+      if (lift == null && isSameType(sf.type(), tf.type())) {
         plans.put(
           sf.name(),
           passesThrough(sf.type(), sf.name()) ? FieldPlan.identity() : FieldPlan.copy(rawName(sf.type()))
@@ -3170,18 +3567,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
           return null;
         }
-        final var subPlan = planElementSubBridge(
-          source,
-          target,
-          sf.name(),
-          srcShape.elementType(),
-          tgtShape.elementType(),
-          srcShape.kind(),
-          pending,
-          seen,
-          lenient,
-          parentPkg
-        );
+        final var subPlan =
+          lift != null
+            ? viaElement(srcShape, tgtShape, lift, viaMappers.get(sf.name()))
+            : planElementSubBridge(
+                source,
+                target,
+                sf.name(),
+                srcShape.elementType(),
+                tgtShape.elementType(),
+                srcShape.kind(),
+                pending,
+                seen,
+                lenient,
+                parentPkg
+              );
         if (subPlan == null) return null;
         if (refusesUnorderable(source, target, sf, tf, srcShape, tgtShape)) return null;
         // Only one of the container routes copy-constructs. The inline copy hands the source
@@ -3297,12 +3697,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), subPlan);
         continue;
       }
-      // (4) Both sides are scalar reflectable declared types → sub-bridge.
+      // (4) Both sides are scalar reflectable declared types, or two sealed interfaces whose
+      //     bridge dispatches on the case → sub-bridge. A pair given type arguments the shared
+      //     rules refuse is refused in the rules' words, since its sub-bridge names both raw.
+      final var argumentsRefusal = parameterizedRefusal(sf.type(), tf.type(), sf.name());
+      if (argumentsRefusal != null) {
+        error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + argumentsRefusal);
+        return null;
+      }
       if (
         sf.type() instanceof DeclaredType st &&
         tf.type() instanceof DeclaredType tt &&
-        isReflectableDeclared(st) &&
-        isReflectableDeclared(tt)
+        ((isReflectableDeclared(st) && isReflectableDeclared(tt)) || dispatchesCases(st, tt, sf.name()))
       ) {
         final var subSourceEl = (TypeElement) st.asElement();
         final var subTargetEl = (TypeElement) tt.asElement();
@@ -3310,7 +3716,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           subSourceEl.getQualifiedName().toString(),
           subTargetEl.getQualifiedName().toString()
         );
-        final var abstractSub = firstAbstractSide(subSourceEl, subTargetEl);
+        final var sealedSub = dispatchesCases(st, tt, sf.name());
+        if (sealedSub) sealedSubPairParents.putIfAbsent(subPair, source);
+        final var abstractSub = sealedSub ? null : firstAbstractSide(subSourceEl, subTargetEl);
         if (abstractSub != null) {
           error(
             source,
@@ -3357,6 +3765,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return null;
     }
     return plans;
+  }
+
+  /**
+   * The element plan for a {@code @ViaMapper} lifted over a container: a nested element class whose
+   * {@code forward} and {@code backward} call the lifted methods on each element that is not null,
+   * as a lifted element mapper does on the reflective path.
+   */
+  private FieldPlan viaElement(
+    final ContainerShape srcShape,
+    final ContainerShape tgtShape,
+    final ViaLift lift,
+    final String mapper
+  ) {
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(
+      name,
+      new NestedElement(srcShape.elementType(), tgtShape.elementType(), FieldPlan.viaBridge(mapper))
+    );
+    viaElementMethods.put(name, lift);
+    return FieldPlan.ofKind(srcShape.kind(), name);
   }
 
   /**
@@ -3438,11 +3866,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       return FieldPlan.ofKind(kind, name);
     }
+    final var argumentsRefusal = parameterizedRefusal(srcElement, tgtElement, fieldName);
+    if (argumentsRefusal != null) {
+      error(
+        parentSource,
+        "@Bridge " + parentSource.getSimpleName() + " -> " + parentTarget.getSimpleName() + ": " + argumentsRefusal
+      );
+      return null;
+    }
     if (
       srcElement instanceof DeclaredType sd &&
       tgtElement instanceof DeclaredType td &&
-      isReflectableDeclared(sd) &&
-      isReflectableDeclared(td)
+      ((isReflectableDeclared(sd) && isReflectableDeclared(td)) || dispatchesCases(sd, td, fieldName))
     ) {
       final var subSourceEl = (TypeElement) sd.asElement();
       final var subTargetEl = (TypeElement) td.asElement();
@@ -3450,6 +3885,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         subSourceEl.getQualifiedName().toString(),
         subTargetEl.getQualifiedName().toString()
       );
+      if (dispatchesCases(sd, td, fieldName)) sealedSubPairParents.putIfAbsent(subPair, parentSource);
       if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
@@ -3629,6 +4065,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The nested element classes the pair being planned needs, by class name. */
   private final Map<String, NestedElement> nestedElements = new LinkedHashMap<>();
 
+  /** The methods each nested element class of a lifted {@code @ViaMapper} calls, by its name. */
+  private final Map<String, ViaLift> viaElementMethods = new HashMap<>();
+
   private FieldPlan planNestedElement(
     final TypeElement parentSource,
     final TypeElement parentTarget,
@@ -3711,6 +4150,45 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * One direction of a nested element class that converts each element through {@code method}, a
+   * {@code @ViaMapper}'s {@code forward} or {@code backward}: a null element stays null, since the
+   * mapper is user code with no promise to take one, and any other is handed over cast to the
+   * method's parameter where the element is held as a wider type.
+   */
+  private void emitViaElementDirection(
+    final PrintWriter out,
+    final ExecutableElement method,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String mapper
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    final var parameter = parameterOf(method);
+    final var handed = types.isSameType(parameter, types.erasure(from)) ? "in" : "(" + parameter + ") in";
+    final var direction = method.getSimpleName().toString();
+    out.println(
+      "    static " +
+        to +
+        " " +
+        direction +
+        "(final " +
+        from +
+        " in) { return in == null ? null : " +
+        mapper +
+        "." +
+        direction +
+        "(" +
+        handed +
+        "); }"
+    );
+  }
+
+  /** The erasure of the type {@code method}'s one parameter takes. */
+  private TypeMirror parameterOf(final ExecutableElement method) {
+    return processingEnv.getTypeUtils().erasure(method.getParameters().getFirst().asType());
+  }
+
+  /**
    * Writes each nested element class: its {@code forward} rebuilds one inner source container as
    * the target's, and {@code backward} the reverse, through the same helpers a field uses.
    */
@@ -3741,6 +4219,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               "; }"
           );
         }
+      } else if (plan.userSuppliedBridge()) {
+        final var lift = viaElementMethods.get(entry.getKey());
+        emitViaElementDirection(out, lift.forward(), element.src(), element.tgt(), plan.subBridgeName());
+        emitViaElementDirection(out, lift.backward(), element.tgt(), element.src(), plan.subBridgeName());
       } else if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
         emitNestedDirection(
           out,
@@ -4011,6 +4493,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return new Resolution.Bound(raw ? (ExecutableType) types.erasure(best) : best);
   }
 
+  /**
+   * The type a transform's call returns for an argument of {@code argument}: the bound overload's
+   * return type, or, for a {@code BridgeFn} with none bound, its type argument at {@code
+   * fnArgument}. Null where neither says.
+   */
+  private TypeMirror transformGives(
+    final TypeElement usingEl,
+    final String name,
+    final TypeMirror argument,
+    final PackageElement callerPackage,
+    final boolean bridgeFn,
+    final int fnArgument
+  ) {
+    if (resolvedFn(usingEl, name, argument, callerPackage) instanceof Resolution.Bound bound) {
+      return bound.member().getReturnType();
+    }
+    if (!bridgeFn) return null;
+    final var fn = bridgeFnInstantiation(usingEl.asType());
+    if (fn == null || fn.getTypeArguments().size() != 2) return null;
+    return erasedBound(fn.getTypeArguments().get(fnArgument));
+  }
+
   private TypeMirror paramOf(final ExecutableType m, final boolean raw) {
     final var param = m.getParameterTypes().getFirst();
     return raw ? processingEnv.getTypeUtils().erasure(param) : param;
@@ -4033,6 +4537,520 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private TypeMirror erasedBound(final TypeMirror t) {
     if (t.getKind() != TypeKind.TYPEVAR) return t;
     return processingEnv.getTypeUtils().erasure(t);
+  }
+
+  /**
+   * The type the bridge holds a value of {@code type} as: its erasure where it names a type
+   * variable, and {@code type} itself otherwise. Every method of a bridge is static, so it can name
+   * no type variable, a class's or a method's: a member typed by its class's variable is reached
+   * through the raw class and takes and returns the erasure, and a generic method's variable is
+   * inferred from what the bridge passes or expects. A member a class with no type parameters
+   * declares with a superclass's variable is read as a member of that class first, so its type
+   * names the class the variable is fixed to. Null for null.
+   */
+  private TypeMirror heldAs(final TypeMirror type) {
+    if (type == null || !MirrorProps.typeVariableIn(type)) return type;
+    return processingEnv.getTypeUtils().erasure(type);
+  }
+
+  /**
+   * Per source property a {@code @ViaMapper} converts, the class its {@code forward} and its {@code
+   * backward} call cast their argument to, where the call takes the value only through a cast.
+   */
+  private record ViaCasts(Map<String, String> forwardCasts, Map<String, String> backwardCasts) {}
+
+  /**
+   * A {@code @ViaMapper} whose mapper converts the elements of a container property rather than the
+   * container: the mapper's {@code forward} that takes the source's element, and its {@code
+   * backward} that takes the target's; or, with no methods, the refusal of a row whose element
+   * method cannot be chosen.
+   */
+  private record ViaLift(ExecutableElement forward, ExecutableElement backward, String refusal) {}
+
+  /**
+   * The casts each {@code @ViaMapper} call needs, or null after refusing a row by the property's
+   * name. Only a property whose type names a type variable on either side is checked here: the
+   * bridge holds it as {@link #reachedAs the type it reaches it as}, which may be wider than the
+   * mapper's parameter. Its {@code forward} is handed the source's value and its result is written
+   * through the target's member, and {@code backward} the other way round. A value the parameter
+   * takes is passed as it is; one the parameter's erasure narrows is cast to that erasure, which
+   * checks the class at the call; any other value, or a result the member it is written through
+   * cannot take, refuses the row.
+   */
+  private ViaCasts viaCalls(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final PairedFields paired,
+    final Map<String, String> renames,
+    final Map<String, String> viaMappers,
+    final Map<String, ViaLift> viaLifts,
+    final Rebuild sourceRebuild,
+    final Rebuild targetRebuild,
+    final PackageElement bridgePackage
+  ) {
+    final var forwardCasts = new HashMap<String, String>();
+    final var backwardCasts = new HashMap<String, String>();
+    for (final var entry : viaMappers.entrySet()) {
+      final var field = entry.getKey();
+      if (viaLifts.containsKey(field)) continue;
+      final var tgtName = renames.getOrDefault(field, field);
+      if (!hasField(sourceFields, field) || !hasField(targetFields, tgtName)) continue;
+      final var sourceOwn = fieldByName(sourceFields, field).type();
+      final var targetOwn = fieldByName(targetFields, tgtName).type();
+      final var mapper = processingEnv.getElementUtils().getTypeElement(entry.getValue());
+      final var unfit = viaNeverFits(source, target, field, tgtName, mapper, sourceOwn, targetOwn, bridgePackage);
+      if (unfit != null) {
+        error(source, unfit);
+        return null;
+      }
+      final var sourceHeld = fieldByName(paired.source(), field).type();
+      final var targetHeld = fieldByName(paired.target(), tgtName).type();
+      final var variable = MirrorProps.typeVariableIn(sourceOwn) || MirrorProps.typeVariableIn(targetOwn);
+      // A property no type variable names is handed to the mapper as javac binds it. Where javac
+      // binds no method, the value is cast or told apart by its class to reach one, or the row is
+      // refused by name.
+      if (!variable && bindsAsHeld(mapper, sourceHeld, targetHeld, bridgePackage)) continue;
+      final var forward = viaCall(mapper, "forward", sourceOwn, sourceHeld, bridgePackage);
+      final var refusal =
+        forward == null
+          ? unboundRefusal(field, mapper, "forward", sourceOwn, sourceHeld, bridgePackage)
+          : viaResultRefusal(field, mapper, "forward", forward, target, targetRebuild, tgtName, bridgePackage);
+      if (refusal != null) {
+        error(source, refusal);
+        return null;
+      }
+      final var backward = viaCall(mapper, "backward", targetOwn, targetHeld, bridgePackage);
+      final var backRefusal =
+        backward == null
+          ? unboundRefusal(field, mapper, "backward", targetOwn, targetHeld, bridgePackage)
+          : viaResultRefusal(field, mapper, "backward", backward, source, sourceRebuild, field, bridgePackage);
+      if (backRefusal != null) {
+        error(source, backRefusal);
+        return null;
+      }
+      if (forward.cast() != null) forwardCasts.put(field, forward.cast());
+      if (backward.cast() != null) backwardCasts.put(field, backward.cast());
+    }
+    return new ViaCasts(forwardCasts, backwardCasts);
+  }
+
+  /**
+   * Whether javac binds a {@code forward} and a {@code backward} to the values as the bridge holds
+   * them.
+   */
+  private boolean bindsAsHeld(
+    final TypeElement mapper,
+    final TypeMirror sourceHeld,
+    final TypeMirror targetHeld,
+    final PackageElement bridgePackage
+  ) {
+    return (
+      resolvedFn(mapper, "forward", sourceHeld, bridgePackage) instanceof Resolution.Bound &&
+      resolvedFn(mapper, "backward", targetHeld, bridgePackage) instanceof Resolution.Bound
+    );
+  }
+
+  /**
+   * The {@code @ViaMapper} rows whose mapper converts the elements of a container property, by
+   * source property, each with the methods it lifts; see {@link #viaLift}. Null after refusing a
+   * row whose element method cannot be chosen. Every row reaching here names a property both sides
+   * have and a class that resolves: the rest are refused or retried before a pair is emitted.
+   */
+  private Map<String, ViaLift> viaLifts(
+    final TypeElement source,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames,
+    final Map<String, String> viaMappers,
+    final PackageElement bridgePackage
+  ) {
+    final var lifts = new HashMap<String, ViaLift>();
+    for (final var entry : viaMappers.entrySet()) {
+      final var field = entry.getKey();
+      final var lift = viaLift(
+        field,
+        processingEnv.getElementUtils().getTypeElement(entry.getValue()),
+        fieldByName(sourceFields, field).type(),
+        fieldByName(targetFields, renames.getOrDefault(field, field)).type(),
+        bridgePackage
+      );
+      if (lift == null) continue;
+      if (lift.refusal() != null) {
+        error(source, lift.refusal());
+        return null;
+      }
+      lifts.put(field, lift);
+    }
+    return lifts;
+  }
+
+  /**
+   * How a {@code @ViaMapper} on a pair of containers converts their elements, or null when its
+   * mapper converts the property itself. The two sides must be containers of one kind, List, Set,
+   * Optional or a map's values, and the mapper must declare a {@code forward} taking an element of
+   * the source's container and a {@code backward} taking an element of the target's: the reflective
+   * path lifts a {@code via} row's mapper over a container on the same terms. An element that is a
+   * class is the parameter's class; one typed by a variable is one whose bound admits the
+   * parameter, unless the parameter takes the container itself. A mapper whose {@code forward} and
+   * {@code backward} each have an overload converting the whole property, taking one side's
+   * container and giving what the other side's property holds, converts the property as it is and
+   * is not lifted. Where more than one method of a name takes the element, the row is refused,
+   * since the one an element's class calls for cannot be chosen when the bridge is compiled.
+   */
+  private ViaLift viaLift(
+    final String field,
+    final TypeElement mapper,
+    final TypeMirror sourceOwn,
+    final TypeMirror targetOwn,
+    final PackageElement bridgePackage
+  ) {
+    final var srcShape = containerShapeOf(sourceOwn, targetOwn);
+    final var tgtShape = containerShapeOf(targetOwn, sourceOwn);
+    if (srcShape == null || tgtShape == null || srcShape.kind() != tgtShape.kind()) return null;
+    if (
+      convertsWhole(mapper, "forward", sourceOwn, targetOwn, bridgePackage) &&
+      convertsWhole(mapper, "backward", targetOwn, sourceOwn, bridgePackage)
+    ) {
+      return null;
+    }
+    final var forwards = elementMethods(mapper, "forward", srcShape.elementType(), sourceOwn, bridgePackage);
+    final var backwards = elementMethods(mapper, "backward", tgtShape.elementType(), targetOwn, bridgePackage);
+    if (forwards.isEmpty() || backwards.isEmpty()) return null;
+    if (forwards.size() > 1 || backwards.size() > 1) {
+      final var name = forwards.size() > 1 ? "forward" : "backward";
+      final var container = forwards.size() > 1 ? sourceOwn : targetOwn;
+      return new ViaLift(
+        null,
+        null,
+        viaRefusal(
+          field,
+          mapper,
+          name,
+          "has several overloads that take an element of " +
+            container +
+            ", so the one an element's class calls for cannot be chosen when the bridge is compiled"
+        )
+      );
+    }
+    return new ViaLift(forwards.getFirst(), backwards.getFirst(), null);
+  }
+
+  /**
+   * The refusal of a {@code @ViaMapper} not lifted over its property's elements whose mapper is
+   * handed a property no value of which it can take, or null. The source's property is handed to
+   * {@code forward} and the target's to {@code backward}; a side is refused when no method of that
+   * name takes a class a value of the property can be an instance of, as the reflective path
+   * refuses the same row, with the same message, naming the first such method's parameter.
+   */
+  private String viaNeverFits(
+    final TypeElement source,
+    final TypeElement target,
+    final String field,
+    final String tgtName,
+    final TypeElement mapper,
+    final TypeMirror sourceOwn,
+    final TypeMirror targetOwn,
+    final PackageElement bridgePackage
+  ) {
+    final var forward = viaSideNeverFits(mapper, "forward", sourceOwn, bridgePackage);
+    if (forward != null) {
+      return PairingMessages.viaMapperNeverFits(
+        source.getSimpleName().toString(),
+        target.getSimpleName().toString(),
+        "source",
+        field,
+        forward
+      );
+    }
+    final var backward = viaSideNeverFits(mapper, "backward", targetOwn, bridgePackage);
+    return backward == null
+      ? null
+      : PairingMessages.viaMapperNeverFits(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          "target",
+          tgtName,
+          backward
+        );
+  }
+
+  /**
+   * The simple name of the class {@code mapper}'s first {@code name} method takes, when no method
+   * of that name takes a class a value of {@code own} can be an instance of, a primitive on either
+   * side counting as its wrapper; null otherwise, and for a mapper with no such method.
+   */
+  private String viaSideNeverFits(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final PackageElement bridgePackage
+  ) {
+    final var takes = viaCandidates(mapper, name, bridgePackage)
+      .stream()
+      .map(m -> boxedErasure(m.getParameters().getFirst().asType()))
+      .toList();
+    if (takes.isEmpty()) return null;
+    final var held = boxedErasure(own);
+    if (takes.stream().anyMatch(parameter -> mayShareInstance(held, parameter))) return null;
+    final var first = processingEnv.getTypeUtils().asElement(takes.getFirst());
+    return first == null ? takes.getFirst().toString() : first.getSimpleName().toString();
+  }
+
+  /** {@code type}'s wrapper class where it is a primitive, and its erasure otherwise. */
+  private TypeMirror boxedErasure(final TypeMirror type) {
+    final var types = processingEnv.getTypeUtils();
+    return type.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) type).asType() : types.erasure(type);
+  }
+
+  /**
+   * Whether one object can be an instance of both {@code a} and {@code b}, erased types, as the
+   * reflective path decides it: one extends the other; either is sealed and one of its permitted
+   * cases can be such an instance; or one is an interface and the other is an interface or a class
+   * that is not final, which a subclass can extend to implement it. An enum is final, or sealed
+   * when its constants declare bodies, each of which is final. An array or a primitive shares an
+   * instance only with a type it extends or is extended by.
+   */
+  private boolean mayShareInstance(final TypeMirror a, final TypeMirror b) {
+    final var types = processingEnv.getTypeUtils();
+    if (types.isSubtype(a, b) || types.isSubtype(b, a)) return true;
+    if (!(types.asElement(a) instanceof TypeElement aEl) || !(types.asElement(b) instanceof TypeElement bEl)) {
+      return false;
+    }
+    if (aEl.getModifiers().contains(Modifier.SEALED)) {
+      return aEl
+        .getPermittedSubclasses()
+        .stream()
+        .anyMatch(c -> mayShareInstance(types.erasure(c), b));
+    }
+    if (bEl.getModifiers().contains(Modifier.SEALED)) {
+      return bEl
+        .getPermittedSubclasses()
+        .stream()
+        .anyMatch(c -> mayShareInstance(a, types.erasure(c)));
+    }
+    if (aEl.getKind().isInterface()) return extendableByASubclass(bEl);
+    return bEl.getKind().isInterface() && extendableByASubclass(aEl);
+  }
+
+  /**
+   * Whether a subclass of {@code type} can implement another interface: an interface, or a class
+   * that is not final.
+   */
+  private static boolean extendableByASubclass(final TypeElement type) {
+    return !type.getModifiers().contains(Modifier.FINAL);
+  }
+
+  /**
+   * Whether {@code mapper} has a method named {@code name} that converts the whole property: one
+   * taking the {@code from} side's container and giving what the {@code to} side's property holds,
+   * as javac binds a call handed the container and written into that property. A result typed by
+   * the method's own type variable gives whatever the call site infers it as, so it counts whatever
+   * the variable's bound.
+   */
+  private boolean convertsWhole(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror from,
+    final TypeMirror to,
+    final PackageElement bridgePackage
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    return viaCandidates(mapper, name, bridgePackage)
+      .stream()
+      .anyMatch(
+        m ->
+          types.isAssignable(types.erasure(from), types.erasure(m.getParameters().getFirst().asType())) &&
+          (types.isAssignable(types.erasure(m.getReturnType()), types.erasure(to)) ||
+            (inferredResult(m) && !MirrorProps.typeVariableIn(from)))
+      );
+  }
+
+  /**
+   * Whether {@code method} returns a type variable. A {@code @ViaMapper}'s methods are static, so
+   * such a variable is the method's own, and javac infers it at the call as the property the call
+   * writes, intersected with whatever bound the variable declares, so the call binds whatever that
+   * bound is.
+   */
+  private static boolean inferredResult(final ExecutableElement method) {
+    return method.getReturnType().getKind() == TypeKind.TYPEVAR;
+  }
+
+  /** The static methods of {@code mapper} named {@code name} that take one {@code element}. */
+  private List<ExecutableElement> elementMethods(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror element,
+    final TypeMirror container,
+    final PackageElement bridgePackage
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    return viaCandidates(mapper, name, bridgePackage)
+      .stream()
+      .filter(m -> elementTaken(element, types.erasure(m.getParameters().getFirst().asType()), container))
+      .toList();
+  }
+
+  /**
+   * Whether a container's {@code element} is what a mapper method taking {@code parameter} reads.
+   */
+  private boolean elementTaken(final TypeMirror element, final TypeMirror parameter, final TypeMirror container) {
+    final var types = processingEnv.getTypeUtils();
+    if (element.getKind() != TypeKind.TYPEVAR) return types.isSameType(types.erasure(element), parameter);
+    return (
+      types.isSubtype(parameter, types.erasure(element)) && !types.isSubtype(types.erasure(container), parameter)
+    );
+  }
+
+  /**
+   * A {@code @ViaMapper} call: the class its argument is cast to, or null for none, and its result.
+   */
+  private record ViaCall(String cast, TypeMirror result) {}
+
+  /**
+   * How a call to {@code mapper}'s static {@code name} binds a value of {@code own} type the bridge
+   * holds as {@code held}, or null where it binds none. javac chooses among the overloads by the
+   * held type, which for a variable with a bound is that bound: the overload a method reference
+   * typed by the bound binds as well. A variable with no bound is held as {@code Object}, and the
+   * overload for {@code Object} need not be the one the value's own class calls for, so there the
+   * call binds only when the mapper declares one method of that name. Where javac binds none, the
+   * call binds the one method a value of the property can be an instance of the parameter of, as it
+   * is where it takes {@code held}, and otherwise through a cast to its parameter's erasure.
+   */
+  private ViaCall viaCall(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final TypeMirror held,
+    final PackageElement bridgePackage
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    final var candidates = viaCandidates(mapper, name, bridgePackage);
+    if (!choosesBlind(own, held, candidates.size())) {
+      if (resolvedFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound bound) {
+        return new ViaCall(null, bound.member().getReturnType());
+      }
+    }
+    final var reached = candidates
+      .stream()
+      .filter(m -> mayShareInstance(boxedErasure(held), boxedErasure(m.getParameters().getFirst().asType())))
+      .toList();
+    if (reached.size() != 1) return null;
+    final var parameter = parameterOf(reached.getFirst());
+    // A parameter the held type is assignable to takes the value as it is; a cast to it would be
+    // one
+    // javac reports as redundant.
+    final var cast = types.isAssignable(types.erasure(held), parameter) ? null : parameter.toString();
+    return new ViaCall(cast, types.erasure(reached.getFirst().getReturnType()));
+  }
+
+  /**
+   * Every static method of {@code mapper} named {@code name} taking one argument the bridge can
+   * call.
+   */
+  private List<ExecutableElement> viaCandidates(
+    final TypeElement mapper,
+    final String name,
+    final PackageElement bridgePackage
+  ) {
+    return ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(mapper))
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals(name) && m.getParameters().size() == 1)
+      .filter(m -> m.getModifiers().contains(Modifier.STATIC) && bindableFrom(m, bridgePackage))
+      .toList();
+  }
+
+  /**
+   * Whether javac would choose among {@code candidates} overloads for a value of the variable
+   * {@code own} by nothing but {@code Object}, its erasure where it has no bound.
+   */
+  private boolean choosesBlind(final TypeMirror own, final TypeMirror held, final int candidates) {
+    return (
+      candidates > 1 &&
+      own.getKind() == TypeKind.TYPEVAR &&
+      processingEnv
+        .getTypeUtils()
+        .isSameType(held, processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType())
+    );
+  }
+
+  /**
+   * The refusal of a {@code @ViaMapper} whose {@code name} binds no method: the class declares no
+   * method of that name the bridge can call, or none of them takes the value; see {@link
+   * #viaUnbound}.
+   */
+  private String unboundRefusal(
+    final String field,
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final TypeMirror held,
+    final PackageElement bridgePackage
+  ) {
+    if (viaCandidates(mapper, name, bridgePackage).isEmpty()) {
+      return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + " declares no " + name;
+    }
+    return viaRefusal(field, mapper, name, viaUnbound(mapper, name, own, held, bridgePackage));
+  }
+
+  /** Why {@link #viaCall} bound no method, for the refusal. */
+  private String viaUnbound(
+    final TypeElement mapper,
+    final String name,
+    final TypeMirror own,
+    final TypeMirror held,
+    final PackageElement bridgePackage
+  ) {
+    if (choosesBlind(own, held, viaCandidates(mapper, name, bridgePackage).size())) {
+      return (
+        "has several overloads, and the bridge holds the value as " +
+        heldPhrase(own, held) +
+        ", so the overload its class calls for cannot be chosen when the bridge is compiled"
+      );
+    }
+    return "takes no value of " + heldPhrase(own, held);
+  }
+
+  /**
+   * Why a {@code @ViaMapper} call's result cannot be written through the member {@code owner}
+   * writes {@code property} through, or null when it can.
+   */
+  private String viaResultRefusal(
+    final String field,
+    final TypeElement mapper,
+    final String name,
+    final ViaCall call,
+    final TypeElement owner,
+    final Rebuild rebuild,
+    final String property,
+    final PackageElement bridgePackage
+  ) {
+    final var stores = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
+    if (processingEnv.getTypeUtils().isAssignable(call.result(), stores)) return null;
+    return viaRefusal(
+      field,
+      mapper,
+      name,
+      "returns " +
+        call.result() +
+        ", which the member " +
+        owner.getSimpleName() +
+        " writes " +
+        property +
+        " through does not take: it takes " +
+        stores
+    );
+  }
+
+  private static String viaRefusal(final String field, final TypeElement mapper, final String name, final String why) {
+    return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + "'s " + name + " " + why;
+  }
+
+  /** {@code declared}, followed by the type the bridge holds it as where the two differ. */
+  private String heldPhrase(final TypeMirror declared, final TypeMirror held) {
+    if (processingEnv.getTypeUtils().isSameType(declared, held)) return declared.toString();
+    return declared + " (held as its erasure " + held + ")";
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
@@ -4894,7 +5912,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, bridgePkg));
@@ -4913,7 +5933,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -5136,7 +6158,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     out.println();
-    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
+    if (
+      mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer) || givesBridgedArguments(srcContainer)
+    ) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -5179,6 +6203,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * The configuration a {@code @Bridge} declares for {@code pair}, held back or not, or null when
+   * no {@code @Bridge} names it. See {@link #bridgeNameOf}.
+   */
+  private BridgeConfig configOf(final TypePair pair) {
+    return configsByPair.containsKey(pair) ? configsByPair.get(pair) : deferredConfigs.get(pair);
+  }
+
+  /**
+   * Whether a {@code @Bridge} names {@code pair}, which its bridge says through {@code
+   * declaresPair()} so a runtime mapper can tell it from a bridge derived under the same long name.
+   */
+  private boolean declares(final TypePair pair) {
+    return configOf(pair) != null;
+  }
+
+  /**
    * The name and package of a pair's bridge. This is the only place either is decided: the bridge
    * is written under it and every other bridge refers to it through it, so a reference cannot name
    * a class nothing writes.
@@ -5202,7 +6242,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var elements = processingEnv.getElementUtils();
     final var sourceFq = source.getQualifiedName().toString();
     final var pair = new TypePair(sourceFq, target.getQualifiedName().toString());
-    final var cfg = configsByPair.containsKey(pair) ? configsByPair.get(pair) : deferredConfigs.get(pair);
+    final var cfg = configOf(pair);
     final var carrierEl = cfg == null || cfg.carrierFq() == null ? null : elements.getTypeElement(cfg.carrierFq());
     if (carrierEl != null) {
       return new BridgeName(
@@ -5320,6 +6360,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Write the marker that tells a compilation with the carrier only on its class path that the pair
+   * of {@code source} and {@code target} has a bridge of its own ({@link CarrierMarkers}). It holds
+   * the bridge's name, which nothing reads; the marker's presence is the answer.
+   */
+  private void emitCarrierMarker(
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement carrier,
+    final String qualifiedBridge
+  ) {
+    final var elements = processingEnv.getElementUtils();
+    final var name = CarrierMarkers.relativeName(
+      elements.getBinaryName(source).toString(),
+      elements.getBinaryName(target).toString()
+    );
+    try {
+      final var file = processingEnv.getFiler().createResource(StandardLocation.CLASS_OUTPUT, "", name, carrier);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        out.println(qualifiedBridge);
+      }
+    } catch (final IOException e) {
+      error(carrier, "Failed to write " + name + ": " + e.getMessage());
+    }
+  }
+
+  /**
    * Import {@code type} into {@code imports} unless it shares {@code pkg} or lives in {@code
    * java.lang}.
    */
@@ -5375,6 +6441,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** Named in full, so a type the user declares with the same simple name cannot shadow it. */
   private static final String CONTAINER_COPY = "io.github.eschizoid.telescope.conversion.ContainerCopy";
 
+  /** Named in full, so a type the user declares with the same simple name cannot shadow it. */
+  private static final String FIXED_CLASS = "io.github.eschizoid.telescope.conversion.FixedClass";
+
   /**
    * Whether a value of {@code type}, paired with the same type, is handed across as itself. The
    * shared rules decide, so a container the reflective path copies is copied here too.
@@ -5397,6 +6466,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!prim.getKind().isPrimitive() || !(boxed instanceof DeclaredType)) return false;
     final var types = processingEnv.getTypeUtils();
     return types.isSameType(types.boxedClass((PrimitiveType) prim).asType(), boxed);
+  }
+
+  /**
+   * Whether the shared decision pairs the two types case by case, as two sealed interfaces: their
+   * bridge is the sealed one, dispatching each value to its case's own bridge.
+   */
+  private boolean dispatchesCases(final DeclaredType source, final DeclaredType target, final String name) {
+    return rules.decidePair(source, target, name) instanceof PairDecision.DispatchCases;
+  }
+
+  /**
+   * The shared rules' refusal of two declared types at least one of which is given type arguments,
+   * or null for a pair the rules convert and for one given none. A sub-bridge names both classes
+   * raw, so it converts such a pair whatever arguments it is given: the rules decide which
+   * arguments two sealed interfaces, records or beans may be given, and refuse the rest.
+   */
+  private String parameterizedRefusal(final TypeMirror source, final TypeMirror target, final String name) {
+    final var props = mirrorProps();
+    if (props.typeArguments(source).isEmpty() && props.typeArguments(target).isEmpty()) return null;
+    return rules.decidePair(source, target, name) instanceof PairDecision.Incompatible<TypeMirror> refused
+      ? refused.message()
+      : null;
+  }
+
+  private static boolean sealedInterface(final DeclaredType type) {
+    final var element = type.asElement();
+    return element.getKind() == ElementKind.INTERFACE && element.getModifiers().contains(Modifier.SEALED);
   }
 
   /** Whether the declared type is a record/class telescope can recurse into. */
@@ -5453,8 +6549,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return found;
   }
 
-  /** The record and class types {@code type}'s properties and instance fields mention. */
+  /**
+   * The record and class types {@code type}'s properties and instance fields mention, and the
+   * sealed interfaces, each of which mentions its cases.
+   */
   private List<TypeElement> mentionedTypes(final TypeElement type) {
+    // A sealed interface holds one of its cases, and has no properties of its own.
+    if (type.getKind() == ElementKind.INTERFACE && type.getModifiers().contains(Modifier.SEALED)) {
+      final var cases = new ArrayList<TypeElement>();
+      for (final var permitted : type.getPermittedSubclasses()) {
+        if (permitted instanceof DeclaredType declared) cases.add((TypeElement) declared.asElement());
+      }
+      return cases;
+    }
     final Deque<TypeMirror> pending = new ArrayDeque<>();
     for (final var field : fieldsOf(type)) pending.add(field.type());
     for (var owner = type; owner != null; owner = userSuperclass(owner)) {
@@ -5474,7 +6581,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (wildcard.getSuperBound() != null) pending.add(wildcard.getSuperBound());
       } else if (mirror instanceof DeclaredType declared) {
         pending.addAll(declared.getTypeArguments());
-        if (isReflectableDeclared(declared)) {
+        if (isReflectableDeclared(declared) || sealedInterface(declared)) {
           mentioned.add((TypeElement) declared.asElement());
         } else if (!isJdkType(declared)) {
           // A container the adopter wrote, such as a class extending ArrayList<Item>, carries its
@@ -5576,7 +6683,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     final var token = "__" + direction.toUpperCase(Locale.ROOT) + "_PATH";
-    out.println("  private static final Object " + token + " = new Object();");
+    // The token names the pair this direction converts between, so a runtime mapper that hands
+    // the bridge its own path finds the objects the bridge enters under that pair; on a path
+    // the bridge started itself, the token is only an identity, as a plain object would be.
+    out.println(
+      "  private static final Object " +
+        token +
+        " = new io.github.eschizoid.telescope.PathKey(" +
+        inFq +
+        ".class, " +
+        outFq +
+        ".class);"
+    );
     out.println();
     out.print(suppressRaw);
     out.println("  public static " + outFq + " " + direction + "(final " + inFq + " " + in + ") {");
@@ -5807,7 +6925,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         .<TypeMirror>map(Element::asType)
         .findFirst()
         .orElse(null);
-      case BUILDER -> builderSetterParameter(rebuild.builderType(), field);
+      // The builder method is read as a member of the type builder() returns, so one a generic
+      // builder declares with its variable takes the class builder() fixes the variable to.
+      case BUILDER -> {
+        final var builder = staticBuilderMethod(to);
+        final var member = builderSetterMember(rebuild.builderType(), field);
+        if (member == null || builder == null || !(builder.getReturnType() instanceof DeclaredType made)) {
+          yield builderSetterParameter(rebuild.builderType(), field);
+        }
+        yield ((ExecutableType) processingEnv.getTypeUtils().asMemberOf(made, member)).getParameterTypes().getFirst();
+      }
       // The emission writes the setter's name and lets Java bind the overload, so the slot is
       // whichever one it binds for the value being stored -- not the first of that name, which
       // makes the answer depend on declaration order while the emitted text does not.
@@ -5821,11 +6948,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // whichever
       // one it names, it does not take the value, so the answer is refuse either way. Handing that
       // back to the declared type gives up the refusal in the one case the member is what refuses.
-      case SETTERS -> switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
-        case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
-        case Resolution.Ambiguous ignored -> null;
-        case Resolution.None ignored -> setterParameter(to, field);
-      };
+      // A variable-arity setter the property's value spreads into takes one value as its
+      // component, which is what the emitted call passes, so the component is the slot.
+      //
+      // The named setter is read as a member of `to`, so one a superclass declares takes the type
+      // `to` fixes the superclass's variable to.
+      case SETTERS -> {
+        final var choice = setterChoice(to, field);
+        if (choice.spreads()) yield choice.argument();
+        yield switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
+          case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
+          case Resolution.Ambiguous ignored -> null;
+          case Resolution.None ignored -> choice.member() == null
+            ? null
+            : (
+                (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) to.asType(), choice.member())
+              ).getParameterTypes().getFirst();
+        };
+      }
       case NONE -> null;
     };
   }
@@ -5849,7 +6989,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String writeStrategy,
     final TypeElement annotationSite,
     final Rebuild rebuild,
-    final String hoistInto
+    final String hoistInto,
+    final Set<String> transformed,
+    final Map<String, TypeMirror> transformGives,
+    final Set<String> referenceValued
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
@@ -5859,7 +7002,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var name = c.getSimpleName().toString();
           slots.add(new CtorSlot(name, c.asType(), read.apply(name)));
         }
-        return construct(toFq, slots, hoistInto);
+        return construct(to, slots, hoistInto);
       }
       case CONSTRUCTOR -> {
         final var slots = new ArrayList<CtorSlot>();
@@ -5867,7 +7010,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var name = pa.getSimpleName().toString();
           slots.add(new CtorSlot(name, pa.asType(), read.apply(name)));
         }
-        return construct(toFq, slots, hoistInto);
+        return construct(to, slots, hoistInto);
       }
       case BUILDER -> {
         final var builderType = rebuild.builderType();
@@ -5898,6 +7041,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case SETTERS -> {
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
+          // A value of the field's own type is written through the setter, which has to take it;
+          // a transformed value only has to fit the member, which the transform check decided.
+          final var refusal = setterRefusal(to, f.name(), transformed.contains(f.name()));
+          if (refusal != null) {
+            error(annotationSite, "@Bridge: " + refusal);
+            return null;
+          }
           final var setter = setterName(to, f.name());
           if (setter == null) {
             error(
@@ -5906,7 +7056,95 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return null;
           }
-          sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
+          // Every value is written through the setter chosen from the field's own type, as the
+          // runtime writer chooses it. Where that setter has overloads, or the value is a
+          // transform's result, it is first assigned to a local of the chosen parameter's type,
+          // which binds that method; a cast would type a conditional on its own and unbox a null.
+          // A transform's reference result bound for a primitive parameter is skipped when null,
+          // as the runtime writer skips a null there.
+          //
+          // A transform result of a type wider than the chosen reference parameter is cast to it
+          // and written through that setter: a runtime row can be typed to return such a type,
+          // and the runtime writes it through the setter chosen from the field's type all the
+          // same. Any other result the chosen parameter cannot take is passed as it is, and javac
+          // binds the overload that takes it; no runtime row can be typed to return it.
+          final var choice = setterChoice(to, f.name());
+          final var value = read.apply(f.name());
+          final var gives = transformed.contains(f.name()) ? transformGives.get(f.name()) : null;
+          final var types = processingEnv.getTypeUtils();
+          if (
+            gives != null &&
+            !mirrorProps().mentionsTypeVariable(gives) &&
+            choice.argument() != null &&
+            types.isAssignable(gives, choice.argument())
+          ) {
+            final var call = "{ final " + boundArgumentText(to, choice) + " __arg = __tv; out." + setter + "(__arg); }";
+            if (choice.argument().getKind().isPrimitive() && !gives.getKind().isPrimitive()) {
+              sb.append("{ final ").append(gives).append(" __tv = ").append(value).append("; ");
+              sb.append("if (__tv != null) ").append(call).append(" } ");
+            } else {
+              sb
+                .append("{ final ")
+                .append(gives)
+                .append(" __tv = ")
+                .append(value)
+                .append("; ")
+                .append(call)
+                .append(" } ");
+            }
+          } else if (
+            !transformed.contains(f.name()) &&
+            choice.argument() != null &&
+            choice.argument().getKind().isPrimitive() &&
+            (!f.type().getKind().isPrimitive() || referenceValued.contains(f.name())) &&
+            !mirrorProps().mentionsTypeVariable(f.type())
+          ) {
+            // A reference value bound for a primitive parameter is skipped when null, as the
+            // runtime writer skips it, and otherwise unboxed into the chosen parameter's type.
+            sb
+              .append("{ final ")
+              .append(boxedType(f.type()))
+              .append(" __tv = ")
+              .append(value)
+              .append("; if (__tv != null) { final ")
+              .append(choice.argumentText())
+              .append(" __arg = __tv; out.")
+              .append(setter)
+              .append("(__arg); } } ");
+          } else if (castsToChosen(gives, choice.argument())) {
+            // The local's type is the one the call binds the chosen setter by. A parameter with
+            // type arguments is reached through a cast javac cannot check, which only this
+            // local's declaration suppresses.
+            final var bound = boundArgument(to, choice);
+            final var boundText = boundArgumentText(to, choice);
+            final var narrows = !types.isAssignable(gives, bound);
+            final var unchecked = narrows && bound instanceof DeclaredType d && !d.getTypeArguments().isEmpty();
+            sb
+              .append("{ final ")
+              .append(gives)
+              .append(" __tv = ")
+              .append(value)
+              .append("; { ")
+              .append(unchecked ? "@SuppressWarnings(\"unchecked\") " : "")
+              .append("final ")
+              .append(boundText)
+              .append(" __arg = ")
+              .append(narrows ? "(" + boundText + ") " : "")
+              .append("__tv; out.")
+              .append(setter)
+              .append("(__arg); } } ");
+          } else if (!transformed.contains(f.name()) && choice.argumentType() != null) {
+            sb
+              .append("{ final ")
+              .append(boundArgumentText(to, choice))
+              .append(" __arg = ")
+              .append(value)
+              .append("; out.")
+              .append(setter)
+              .append("(__arg); } ");
+          } else {
+            sb.append("out.").append(setter).append("(").append(value).append("); ");
+          }
         }
         return sb.append("return out; }").toString();
       }
@@ -5921,6 +7159,45 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
   }
 
+  /**
+   * Whether a transform result of type {@code gives} reaches the chosen setter parameter {@code
+   * parameter} only through a cast: both are reference types naming no type variable, the result is
+   * not assignable to the parameter, and the parameter's erasure is a proper subtype of the
+   * result's, so the cast narrows. A result the parameter takes as it is needs no cast, and a
+   * result of a type the parameter's does not reach admits none.
+   */
+  private boolean castsToChosen(final TypeMirror gives, final TypeMirror parameter) {
+    if (gives == null || parameter == null) return false;
+    if (gives.getKind().isPrimitive() || parameter.getKind().isPrimitive()) return false;
+    if (mirrorProps().mentionsTypeVariable(gives) || mirrorProps().mentionsTypeVariable(parameter)) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (types.isAssignable(gives, parameter)) return false;
+    return types.isSubtype(types.erasure(parameter), types.erasure(gives));
+  }
+
+  /**
+   * The type a generated call hands the chosen setter of {@code to} its value as, so that javac
+   * binds that setter and no other overload. The bridge names a generic class raw, and every member
+   * of a raw class takes the erasure of its declared parameter, so there it is that erasure: an
+   * inherited {@code setV(T)} that {@code Tgt extends Base<String>} reads as {@code setV(String)}
+   * is {@code setV(Object)} on the raw {@code Tgt}, and a {@code String} argument would bind an
+   * overload such as {@code setV(CharSequence)} instead. On a class with no type parameters it is
+   * the parameter as a member of {@code to}. Where the value spreads into a variable-arity setter,
+   * it is the array's component.
+   */
+  private TypeMirror boundArgument(final TypeElement to, final MirrorSetters.SetterChoice choice) {
+    if (to.getTypeParameters().isEmpty() || choice.member() == null) return choice.argument();
+    final var declared = processingEnv.getTypeUtils().erasure(choice.member().getParameters().getFirst().asType());
+    return choice.spreads() && declared instanceof ArrayType array ? array.getComponentType() : declared;
+  }
+
+  /** {@link #boundArgument} as a generated local declares it. */
+  private String boundArgumentText(final TypeElement to, final MirrorSetters.SetterChoice choice) {
+    return to.getTypeParameters().isEmpty() || choice.member() == null
+      ? choice.argumentText()
+      : boundArgument(to, choice).toString();
+  }
+
   /** One constructor argument: the parameter it fills, its declared type, and its expression. */
   private record CtorSlot(String name, TypeMirror type, String expr) {}
 
@@ -5928,43 +7205,81 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private static final Pattern CALL_OR_NEW = Pattern.compile("[\\w$]\\s*\\(|\\bnew\\b");
 
   /**
-   * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package,
-   * every argument that calls a method or creates an instance is first evaluated into a {@code
-   * final} local, and the call names the locals. Null {@code hoistInto} emits every argument
-   * inline.
+   * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package, an
+   * argument that calls a method or creates an instance is first evaluated into a {@code final}
+   * local, and the call names the local. Null {@code hoistInto} emits every argument inline.
    *
    * <p>javac emits the {@code new} of a constructor call before the code of its arguments, so an
    * argument that allocates, such as a nested bridge's {@code forward}, allocates after the outer
    * object. Evaluating the arguments first puts the outer allocation last, directly ahead of the
    * constructor that writes its fields.
    *
-   * <p>The locals are evaluated in parameter order, which is the order the call evaluated its
-   * arguments in, and an argument left inline neither calls nor creates anything, so nothing
-   * observable moves. A slot stays inline when its type cannot be written from the bridge's
-   * package: a type variable the static method does not declare, or a class it cannot name.
+   * <p>Arguments are evaluated in parameter order either way, which is the order the runtime
+   * converts the components in. The locals come first, in parameter order, and then the call, whose
+   * remaining arguments run in parameter order after them. So a local is declared only for an
+   * argument ahead of every inline one that calls or creates something: once an argument that does
+   * has to stay inline, every argument after it stays inline too. A local is declared with the
+   * argument's type, or with its erasure where the type names a type variable the static method
+   * does not declare; an argument stays inline when the bridge's package cannot name that.
    */
-  private String construct(final String toFq, final List<CtorSlot> slots, final String hoistInto) {
-    final var hoisted =
-      hoistInto == null
-        ? Set.<String>of()
-        : slots
-            .stream()
-            .filter(slot -> CALL_OR_NEW.matcher(slot.expr()).find() && writableFrom(slot.type(), hoistInto))
-            .map(CtorSlot::name)
-            .collect(Collectors.toUnmodifiableSet());
+  private String construct(final TypeElement to, final List<CtorSlot> slots, final String hoistInto) {
+    final var toFq = to.getQualifiedName().toString();
+    final var types = processingEnv.getTypeUtils();
+    final var erased = erasedArguments(to, slots);
+    final var localTypes = new LinkedHashMap<String, TypeMirror>();
+    if (hoistInto != null) {
+      for (final var slot : slots) {
+        if (!CALL_OR_NEW.matcher(slot.expr()).find()) continue;
+        final var local = mirrorProps().mentionsTypeVariable(slot.type()) ? types.erasure(slot.type()) : slot.type();
+        if (!writableFrom(local, hoistInto)) break;
+        localTypes.put(slot.name(), local);
+      }
+    }
+    final var hoisted = localTypes.keySet();
     final var args = slots
       .stream()
-      .map(slot -> hoisted.contains(slot.name()) ? "__cv_" + slot.name() : slot.expr())
+      .map(slot ->
+        hoisted.contains(slot.name())
+          ? "__cv_" + slot.name()
+          : erased.contains(slot.name())
+            ? erasingBridge + ".<" + types.erasure(slot.type()) + ">__erased(" + slot.expr() + ")"
+            : slot.expr()
+      )
       .collect(Collectors.joining(", "));
+    if (!erased.isEmpty()) erasedArgumentUsed = true;
     final var call = "new " + toFq + "(" + args + ")";
     if (hoisted.isEmpty()) return call;
     final var sb = new StringBuilder("{ ");
     for (final var slot : slots) {
       if (!hoisted.contains(slot.name())) continue;
-      sb.append("final ").append(slot.type()).append(" __cv_").append(slot.name()).append(" = ");
+      sb.append("final ").append(localTypes.get(slot.name())).append(" __cv_").append(slot.name()).append(" = ");
       sb.append(slot.expr()).append("; ");
     }
     return sb.append("return ").append(call).append("; }").toString();
+  }
+
+  /**
+   * The slots of a call to a generic record's canonical constructor whose argument is passed as the
+   * erasure of its declared type. The bridge names the record raw, so a component typed by its
+   * variable takes the erasure, and an argument of a narrower type binds another constructor of the
+   * same arity that takes that type, where the runtime calls the canonical one. Passed as the
+   * erasure, the argument binds the canonical constructor alone. Empty where the record has no
+   * other constructor of the call's arity. A generic bean with a second constructor of its
+   * name-matched constructor's arity is refused before its rebuild is emitted, so a bean has no
+   * such call.
+   */
+  private Set<String> erasedArguments(final TypeElement to, final List<CtorSlot> slots) {
+    if (to.getKind() != ElementKind.RECORD || to.getTypeParameters().isEmpty()) return Set.of();
+    final var sameArity = ElementFilter.constructorsIn(to.getEnclosedElements())
+      .stream()
+      .filter(c -> c.getParameters().size() == slots.size())
+      .count();
+    if (sameArity < 2) return Set.of();
+    return slots
+      .stream()
+      .filter(slot -> mirrorProps().mentionsTypeVariable(slot.type()))
+      .map(CtorSlot::name)
+      .collect(Collectors.toUnmodifiableSet());
   }
 
   /**
@@ -6036,10 +7351,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         .map(c -> new Field(c.getSimpleName().toString(), c.asType()))
         .toList();
     }
-    return beanProperties(type)
+    final var byName = new LinkedHashMap<String, Field>();
+    for (final var p : beanProperties(type)) byName.put(p.name(), new Field(p.name(), p.type()));
+    // The order the runtime walks a bean's properties in: those a field of the same name backs, in
+    // the order the class and its superclasses declare the fields, the root class first, then the
+    // rest by name. A bean's properties are converted in this order on both paths.
+    final var hierarchy = new ArrayDeque<TypeElement>();
+    for (TypeElement c = type; c != null; ) {
+      if (c.getQualifiedName().contentEquals("java.lang.Object")) break;
+      hierarchy.push(c);
+      c = c.getSuperclass() instanceof DeclaredType parent ? (TypeElement) parent.asElement() : null;
+    }
+    final var ordered = new LinkedHashMap<String, Field>();
+    for (final var c : hierarchy) {
+      for (final var f : ElementFilter.fieldsIn(c.getEnclosedElements())) {
+        if (f.getModifiers().contains(Modifier.STATIC)) continue;
+        final var name = f.getSimpleName().toString();
+        final var property = byName.get(name);
+        if (property != null) ordered.putIfAbsent(name, property);
+      }
+    }
+    byName
+      .keySet()
       .stream()
-      .map(p -> new Field(p.name(), p.type()))
-      .toList();
+      .filter(name -> !ordered.containsKey(name))
+      .sorted()
+      .forEach(name -> ordered.put(name, byName.get(name)));
+    return List.copyOf(ordered.values());
   }
 
   /**
@@ -6053,6 +7391,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * @param forwardCasts per target property, the class {@code forward} casts the value it writes
    *     to, where the type it reads is wider than the target's own
    * @param backwardCasts the same per source property, for {@code backward} and {@code patch}
+   * @param forwardChecks per target property whose class fixes the variable a value handed across
+   *     unchanged is declared with, what {@code FixedClass.checked} takes after the value
+   * @param backwardChecks the same per source property, for {@code backward} and {@code patch}
    * @param rawAccess whether any property is read or written through a member of a class the bridge
    *     names raw whose type erasure changes, which javac reports as unchecked
    */
@@ -6063,6 +7404,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     Map<String, String> targetReads,
     Map<String, String> forwardCasts,
     Map<String, String> backwardCasts,
+    Map<String, String> forwardChecks,
+    Map<String, String> backwardChecks,
     boolean rawAccess
   ) {
     /** {@code value}, cast to what {@code casts} names for {@code name}, or as is when nothing. */
@@ -6070,6 +7413,38 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var cast = casts.get(name);
       return cast == null ? value : "((" + cast + ") " + value + ")";
     }
+
+    /**
+     * {@code value}, checked against the class {@code checks} names for {@code name}, or as is when
+     * nothing. The check returns the value as the type it is held as, so a cast around it is the
+     * one the write needs anyway.
+     */
+    String checkedInto(final Map<String, String> checks, final String name, final String value) {
+      final var arguments = checks.get(name);
+      return arguments == null ? value : FIXED_CLASS + ".checked(" + value + ", " + arguments + ")";
+    }
+  }
+
+  /**
+   * Whether {@code sourceType} names a type variable {@code source} declares, or {@code targetType}
+   * one {@code target} declares.
+   */
+  private static boolean namesOwnVariable(
+    final TypeElement source,
+    final TypeMirror sourceType,
+    final TypeElement target,
+    final TypeMirror targetType
+  ) {
+    return Stream.concat(
+      source
+        .getTypeParameters()
+        .stream()
+        .map(variable -> MirrorProps.mentionsVariable(sourceType, variable.asType())),
+      target
+        .getTypeParameters()
+        .stream()
+        .map(variable -> MirrorProps.mentionsVariable(targetType, variable.asType()))
+    ).anyMatch(Boolean::booleanValue);
   }
 
   /**
@@ -6077,8 +7452,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * spec decides whether a pair reads as members of its own classes or as declared ({@link
    * PairingRules#readsAsDeclared}). Read as declared, both are read as the one type the superclass
    * they share declares, with each type variable erased, since no static method of the bridge can
-   * name the variable. A pair whose declared types differ keeps them, and is refused in their
-   * terms.
+   * name the variable. The target's declared type reads each type variable its class declares as
+   * the source class's in the same position ({@link PairingRules#alignedToSource}), so two generic
+   * classes passing a variable across convert it unchanged. A pair whose declared types differ
+   * keeps them, and is refused in their terms.
    *
    * <p>The bridge names a generic class raw, so every member it reaches on one returns its erased
    * type: a property {@code class Page<X> extends Base<String, X>} fixes to {@code String} reads
@@ -6086,6 +7463,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * that fixes the variable a pair reads as declared, such as {@code class Names extends
    * Base<String>}, is written through a cast to its own erasure where that is narrower than the
    * read.
+   *
+   * <p>A pair in {@code ownConversions}, which a transform or a {@code @ViaMapper} converts, is
+   * read as neither of these: the conversion takes what the source gives and returns what the
+   * target takes, so each side is held as the bridge reaches it ({@link #heldAs}).
+   *
+   * <p>Null after refusing a pair whose declared types name a variable of one of the two classes
+   * and which the shared rules refuse in those terms.
    */
   private PairedFields pairedFields(
     final TypeElement source,
@@ -6093,7 +7477,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> everySourceField,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames
+    final Map<String, String> renames,
+    final Set<String> ownConversions,
+    final Set<String> lifted,
+    final boolean lenient
   ) {
     final var types = processingEnv.getTypeUtils();
     final var pairedSource = new ArrayList<>(sourceFields);
@@ -6102,11 +7489,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetReads = new HashMap<String, String>();
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
+    final var forwardChecks = new HashMap<String, String>();
+    final var backwardChecks = new HashMap<String, String>();
     // The methods read and write every property of both sides, a dropped one included, which
     // backward fills with a default and patch copies from base.
     boolean rawAccess = false;
     for (final var f : everySourceField) rawAccess |= !types.isSameType(asReachedThrough(source, f), f.type());
     for (final var f : targetFields) rawAccess |= !types.isSameType(asReachedThrough(target, f), f.type());
+    // A setter a generic class inherits with its superclass's variable is reached raw too, and a
+    // call to it through the raw class is unchecked, whatever its getter returns.
+    for (final var f : everySourceField) rawAccess |= setterReachedRaw(source, f);
+    for (final var f : targetFields) rawAccess |= setterReachedRaw(target, f);
     for (int i = 0; i < sourceFields.size(); i++) {
       final var sf = sourceFields.get(i);
       final var tgtName = renames.getOrDefault(sf.name(), sf.name());
@@ -6116,19 +7509,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var targetOwn = asReachedThrough(target, tf);
       var sourceRead = sf.type();
       var targetRead = tf.type();
-      if (rules.readsAsDeclared(sf.type(), tf.type())) {
-        final var sourceDeclared = declaredTypeOf(source, sf);
-        final var targetDeclared = declaredTypeOf(target, tf);
-        if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
-        sourceRead = withVariablesErased(sourceDeclared);
-        targetRead = sourceRead;
+      if (ownConversions.contains(sf.name())) {
+        // A conversion of the pair's own takes each side as it is, so neither is read as the
+        // other's type: each is held as the bridge reaches it.
+        sourceRead = lifted.contains(sf.name()) ? withVariablesErased(sf.type()) : heldAs(sf.type());
+        targetRead = lifted.contains(sf.name()) ? withVariablesErased(tf.type()) : heldAs(tf.type());
         pairedSource.set(i, new Field(sf.name(), sourceRead));
         pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
-        if (!types.isAssignable(sourceRead, targetOwn)) {
+      } else if (rules.readsAsDeclared(sf.type(), tf.type())) {
+        final var sourceDeclared = declaredTypeOf(source, sf);
+        final var asDeclared = declaredTypeOf(target, tf);
+        final var targetDeclared = rules.alignedToSource(asDeclared, source.asType(), target.asType());
+        final var same = types.isSameType(sourceDeclared, targetDeclared);
+        // A pair naming a type variable of one of the two classes is decided in those terms, the
+        // target's read as the source's, as the runtime decides it: one passing a variable into a
+        // slot another variable fills, such as A against B, is refused in the shared rules' words.
+        if (!same && namesOwnVariable(source, sourceDeclared, target, asDeclared)) {
+          final var decision = rules.decidePair(sourceDeclared, targetDeclared, sf.name());
+          if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+            error(
+              source,
+              "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message()
+            );
+            return null;
+          }
+        }
+        // A target read across in terms of the source's variables, such as InnerDto<T> against
+        // Inner<T>, is planned in those terms, as the runtime decides the pair.
+        if (!same && types.isSameType(asDeclared, targetDeclared)) continue;
+        sourceRead = withVariablesErased(sourceDeclared);
+        targetRead = same ? sourceRead : withVariablesErased(targetDeclared);
+        pairedSource.set(i, new Field(sf.name(), sourceRead));
+        pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
+        // A value handed across unchanged is written through a cast where the side it lands on is
+        // narrower; one the pair converts is written as the conversion returns it.
+        if (same && !types.isAssignable(sourceRead, targetOwn)) {
           forwardCasts.put(tf.name(), types.erasure(targetOwn).toString());
         }
-        if (!types.isAssignable(sourceRead, sourceOwn)) {
+        if (same && !types.isAssignable(sourceRead, sourceOwn)) {
           backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
+        }
+        // A value handed across unchanged is checked against the class the side it lands on fixes
+        // the variable to, as the runtime checks it; a container that cannot be shown to fit is
+        // refused. The direction a lenient bridge documents as lossy refuses nothing.
+        if (same) {
+          // Each side as a member of its class, with the variables it passes through kept, so their
+          // bounds say what it holds, as the runtime reads it.
+          final var intoTarget = rules.fixedFit(sf.type(), tf.type(), sf.name());
+          final var intoSource = rules.fixedFit(tf.type(), sf.type(), sf.name());
+          final var refused =
+            intoTarget instanceof FixedFit.Refused<TypeMirror> forward
+              ? forward.message()
+              : !lenient && intoSource instanceof FixedFit.Refused<TypeMirror> backward
+                ? backward.message()
+                : null;
+          if (refused != null) {
+            error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused);
+            return null;
+          }
+          if (intoTarget instanceof FixedFit.Check<TypeMirror> check) {
+            forwardChecks.put(tf.name(), fixedCheckArguments(check.fixed(), target, tf.name()));
+          }
+          if (intoSource instanceof FixedFit.Check<TypeMirror> check) {
+            backwardChecks.put(sf.name(), fixedCheckArguments(check.fixed(), source, sf.name()));
+          }
         }
       }
       if (!types.isAssignable(sourceOwn, sourceRead)) {
@@ -6145,8 +7589,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetReads,
       forwardCasts,
       backwardCasts,
+      forwardChecks,
+      backwardChecks,
       rawAccess
     );
+  }
+
+  /**
+   * What a call to {@code FixedClass.checked} takes after the value, for a property {@code name} of
+   * {@code owner} whose class fixes the variable to {@code fixed}: both class literals and the
+   * property's name.
+   */
+  private String fixedCheckArguments(final TypeMirror fixed, final TypeElement owner, final String name) {
+    final var types = processingEnv.getTypeUtils();
+    return types.erasure(fixed) + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(name);
+  }
+
+  /**
+   * Whether the bridge writes {@code field} of {@code owner} through a setter whose declared
+   * parameter names a type variable while it names {@code owner} raw, a call javac reports as
+   * unchecked.
+   */
+  private boolean setterReachedRaw(final TypeElement owner, final Field field) {
+    if (owner.getTypeParameters().isEmpty()) return false;
+    final var member = setterChoice(owner, field.name()).member();
+    return member != null && mirrorProps().mentionsTypeVariable(member.getParameters().getFirst().asType());
   }
 
   /**

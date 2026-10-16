@@ -26,6 +26,14 @@ control. Every other difference is a defect to close.
    the operation, or when the JVM gives the runtime no way to perform it. Today that is a private constructor, and a
    package-private or protected constructor in a different package from the bridge. Each stays in a register, and the
    path that cannot do the work refuses by name at compile time or when the mapper is built.
+
+   > **Amendment (2026-10-10).** A third limit is inherent: a builder with no method for a `final` field that has no
+   > initializer. The processor sees from source that nothing but a write strategy gives the field a value, and refuses
+   > the builder. The runtime cannot tell such a blank final from one given a non-constant value where it is declared,
+   > because neither leaves a trace in the class file, so it cannot refuse the one without refusing the other. It builds
+   > the bean, and the field is left at whatever the builder passes. The difference stays in `BeanRebuildCorpusTest`'s
+   > register.
+
 2. **Every other difference is a defect.** It gets an issue and a fix that makes both paths give the same result, either
    both converting or both refusing by name. Converting on both is preferred when both can.
 3. **New differences need this test.** A change that adds a register entry says in its pull request which kind it is. An
@@ -33,6 +41,18 @@ control. Every other difference is a defect to close.
 4. **Runtime-only features are separate decisions.** Multi-source `merge`, context parameters and conditional rows exist
    only on the runtime path. Bringing one to the generated path, or leaving it runtime-only, is decided in its own ADR
    and is not a difference in this sense.
+
+> **Amendment (2026-10-14).** The runtime mapper pairs the cases of two sealed interfaces the way the generated sealed
+> bridge does. Each case of the source pairs with the case of the target its own `@Bridge` converts to, found through
+> the bridge that annotation generated. Without codegen, a `cases(Source.class, Target.class)` row pairs two cases, and
+> a row wins over a case's `@Bridge`. Cases are never paired by name, because ADR-0002 rules out pairing by a guess. A
+> case that nothing pairs is refused by name when the mapper is built. A mapper that converts backward also refuses a
+> case of the target that no case, or more than one case, pairs with. The rule holds wherever the mapper meets two
+> sealed interfaces: the pair it is built for, a field, an element of a container, and an `Optional`. The generated path
+> converts the same places, since a field or element typed by a sealed interface now gets the sealed bridge.
+>
+> A mapper-wide runtime-only setting, `nullSourceValues(DEFAULT)` or a `writeBeans(...)` default, walks every pair,
+> sealed cases included, so the settings of a nested pair's or a case's own bridge do not apply under it.
 
 The registers keep their current shape. Each entry gains a short comment saying whether it is inherent, so the remaining
 work can be read from the test sources.
@@ -55,6 +75,8 @@ work can be read from the test sources.
 ## Open questions
 
 - The case-pairing rule the runtime mapper uses for sealed roots: matching by simple name, by each case's own `@Bridge`,
-  or both.
+  or both. Answered: by each case's own `@Bridge`, or by an explicit `cases(...)` row, and never by simple name, as the
+  amendment of 2026-10-14 sets out.
 - Whether the runtime can read constructor parameter names without `-parameters`, or should refuse the name-matched
-  constructor by name instead.
+  constructor by name instead. Answered: it reads them from the constructor's `LocalVariableTable` in a class compiled
+  with `-g`, as ADR-0005's amendment sets out, and refuses by name when the class has neither.

@@ -19,8 +19,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
-import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -42,7 +40,6 @@ import javax.tools.StandardLocation;
  * GraalVM native-image clean.
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.FromMap")
-@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
@@ -166,13 +163,28 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       written[i] = rebuild.strategy() == BeanWriteStrategy.CONSTRUCTOR || members[i] != null;
     }
     final var coercions = new ArrayList<Coercion>(props.size());
+    // Per property, the type of the local its setter call reads when that call is skipped for a
+    // null, or null: a setter taking a primitive behind a value that can be null, which the
+    // runtime writer skips rather than unboxing.
+    final var skipsNull = new String[props.size()];
     var coercible = true;
     for (var i = 0; i < props.size(); i++) {
       if (!written[i]) {
         coercions.add(null);
         continue;
       }
-      final var coercion = resolveCoercion(props.get(i).type());
+      // A setter a value of the property's own type cannot be passed to is written with a value
+      // converted to the setter's type, which is what the runtime fromMap converts to as well.
+      final var choice =
+        rebuild.strategy() == BeanWriteStrategy.SETTERS ? setterChoice(pojo, props.get(i).name()) : null;
+      final var converted =
+        choice != null && choice.member() != null && !choice.fit().compiles()
+          ? choice.writeType()
+          : props.get(i).type();
+      // Declared as the converted type, so a conversion that unboxes on the way still lands in a
+      // local that can be compared with null.
+      skipsNull[i] = rebuild.nullGuarded()[i] && !converted.getKind().isPrimitive() ? converted.toString() : null;
+      final var coercion = resolveCoercion(converted);
       coercions.add(coercion);
       final var reason = coercion.firstUnsupported();
       if (reason.isPresent()) {
@@ -214,7 +226,14 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
           out.println("    final var bean = new " + target + "();");
           for (var i = 0; i < props.size(); i++) {
             if (!written[i]) continue;
-            out.println("    bean." + members[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
+            final var value = valueOf(coercions.get(i), props.get(i).name());
+            if (skipsNull[i] != null) {
+              final var local = "__set_" + props.get(i).name();
+              out.println("    final " + skipsNull[i] + " " + local + " = " + value + ";");
+              out.println("    if (" + local + " != null) " + rebuild.setterCall(i, "bean", members[i], local));
+              continue;
+            }
+            out.println("    " + rebuild.setterCall(i, "bean", members[i], value));
           }
           out.println("    return bean;");
         }
