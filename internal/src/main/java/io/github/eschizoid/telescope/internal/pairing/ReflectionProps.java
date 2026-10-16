@@ -231,6 +231,18 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public Type componentType(final Type t) {
+    return componentOf(t);
+  }
+
+  @Override
+  public Type upperBound(final Type t) {
+    if (!(t instanceof WildcardType wildcard)) return null;
+    final var upper = wildcard.getUpperBounds()[0];
+    return upper == Object.class ? null : upper;
+  }
+
+  @Override
   public Type lowerBound(final Type t) {
     return t instanceof WildcardType wildcard && wildcard.getLowerBounds().length > 0
       ? wildcard.getLowerBounds()[0]
@@ -259,8 +271,19 @@ public final class ReflectionProps implements PropertySystem<Type> {
    * a pair sharing the superclass see the same variable, and the property copies as same-typed.
    */
   public Type memberOf(final Type type, final Class<?> declaring, final Class<?> owner) {
-    final var resolved = resolve(type, declaring, argumentsAs(owner, declaring));
+    final var resolved = resolvedMemberOf(type, declaring, owner);
     return mentionsTypeVariable(resolved) ? type : resolved;
+  }
+
+  /**
+   * {@code type}, read off a member {@code declaring} declares, with each type variable of {@code
+   * declaring} replaced by the argument {@code owner}'s superclass chain gives it, a variable
+   * {@code owner} declares included. A subclass {@code class Page<T extends Integer> extends
+   * Base<T>} reads {@code Base}'s {@code List<V>} as {@code List<T>}, whose bound says what the
+   * values it holds are.
+   */
+  public Type resolvedMemberOf(final Type type, final Class<?> declaring, final Class<?> owner) {
+    return resolve(type, declaring, argumentsAs(owner, declaring));
   }
 
   @Override
@@ -443,6 +466,12 @@ public final class ReflectionProps implements PropertySystem<Type> {
   public Type rawType(final Type t) {
     if (t instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> raw) return raw;
     return t;
+  }
+
+  @Override
+  public Type erasure(final Type t) {
+    final var erased = rawClass(t);
+    return erased == null ? Object.class : erased;
   }
 
   @Override

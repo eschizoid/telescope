@@ -351,6 +351,21 @@ class PairingRulesTest {
     }
 
     @Override
+    public Type erasure(final Type t) {
+      return delegate.erasure(t);
+    }
+
+    @Override
+    public Type upperBound(final Type t) {
+      return delegate.upperBound(t);
+    }
+
+    @Override
+    public Type componentType(final Type t) {
+      return delegate.componentType(t);
+    }
+
+    @Override
     public boolean isTypeVariable(final Type t) {
       return delegate.isTypeVariable(t);
     }
@@ -1097,6 +1112,93 @@ class PairingRulesTest {
       assertEquals(List.of("id"), result.matched());
       assertEquals(List.of(), result.unmatchedTargets());
       assertEquals(List.of(), result.unmatchedSources());
+    }
+  }
+
+  /** Members typed by a variable a subclass passes through or fixes, read off its fields. */
+  static final class FixedHolder<X, Y extends Integer> {
+
+    X passed;
+    Y bounded;
+    X[] passedArray;
+    List<X> passedList;
+    String fixed;
+    String[] fixedArray;
+    List<String> fixedList;
+    Optional<String> fixedOptional;
+    Integer fixedInteger;
+    Number fixedNumber;
+    List<Y> boundedList;
+    List<Number> fixedNumberList;
+    Comparable<String> fixedComparable;
+  }
+
+  private static Type fixedMember(final String fieldName) {
+    try {
+      return FixedHolder.class.getDeclaredField(fieldName).getGenericType();
+    } catch (final NoSuchFieldException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  @Nested
+  @DisplayName("fixedFit — what a value handed across unchanged owes the side it lands on")
+  class FixedFitDecision {
+
+    private FixedFit<Type> fit(final String sending, final String receiving) {
+      return rules.fixedFit(fixedMember(sending), fixedMember(receiving), "f");
+    }
+
+    @Test
+    @DisplayName("a side that passes its variable through fixes nothing")
+    void aPassingSideFixesNothing() {
+      assertInstanceOf(FixedFit.Fits.class, fit("fixed", "passed"));
+      assertInstanceOf(FixedFit.Fits.class, fit("fixedList", "passedList"));
+    }
+
+    @Test
+    @DisplayName("an array the receiving side passes through takes any array whose class is an Object[]")
+    void anArrayOfAVariableTakesAnyReferenceArray() {
+      assertInstanceOf(FixedFit.Fits.class, fit("fixedArray", "passedArray"));
+    }
+
+    @Test
+    @DisplayName("a variable whose bound is the class the receiving side fixes fits it")
+    void aBoundThatIsTheFixedClassFits() {
+      assertInstanceOf(FixedFit.Fits.class, fit("bounded", "fixedInteger"));
+    }
+
+    @Test
+    @DisplayName("a single value is checked against the erasure the receiving side fixes, an array by its class")
+    void aSingleValueIsChecked() {
+      assertEquals(String.class, assertInstanceOf(FixedFit.Check.class, fit("passed", "fixed")).fixed());
+      assertEquals(String[].class, assertInstanceOf(FixedFit.Check.class, fit("passedArray", "fixedArray")).fixed());
+    }
+
+    @Test
+    @DisplayName("a variable the receiving side passes through admits only what its bound does")
+    void aReceivingVariableAdmitsWhatItsBoundDoes() {
+      assertInstanceOf(FixedFit.Fits.class, fit("boundedList", "fixedNumberList"));
+      assertInstanceOf(FixedFit.Refused.class, fit("fixedNumberList", "boundedList"));
+      assertEquals(Integer.class, assertInstanceOf(FixedFit.Check.class, fit("fixedNumber", "bounded")).fixed());
+    }
+
+    @Test
+    @DisplayName("a generic class other than a container is held to its type arguments, as a container is")
+    void aGenericClassIsHeldToItsArguments() {
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "fixedComparable"));
+      assertInstanceOf(FixedFit.Fits.class, fit("fixedComparable", "fixedComparable"));
+    }
+
+    @Test
+    @DisplayName("a container whose elements cannot be shown to fit is refused by name")
+    void aContainerIsRefused() {
+      final var list = assertInstanceOf(FixedFit.Refused.class, fit("passedList", "fixedList"));
+      assertEquals(
+        PairingMessages.fixedArgumentsDoNotFit("f", "java.util.List<X>", "java.util.List<java.lang.String>"),
+        list.message()
+      );
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "fixedOptional"));
     }
   }
 

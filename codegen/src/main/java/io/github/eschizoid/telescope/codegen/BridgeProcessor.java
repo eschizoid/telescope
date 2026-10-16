@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -2063,7 +2064,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetFields,
       renames,
       ownConversions,
-      viaLifts.keySet()
+      viaLifts.keySet(),
+      lenient
     );
     if (paired == null) return;
     final var viaCasts = viaCalls(
@@ -2154,7 +2156,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var handed = paired.castInto(viaCasts.forwardCasts(), srcName, read);
         return "(" + local + " == null ? null : " + applyForward(srcName, plan, handed) + ")";
       }
-      return paired.castInto(paired.forwardCasts(), targetName, applyForward(srcName, plan, read));
+      return paired.castInto(
+        paired.forwardCasts(),
+        targetName,
+        paired.checkedInto(paired.forwardChecks(), targetName, applyForward(srcName, plan, read))
+      );
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be
@@ -2184,7 +2190,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var handed = paired.castInto(viaCasts.backwardCasts(), sourceName, local);
         return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, handed) + ")";
       }
-      return paired.castInto(paired.backwardCasts(), sourceName, applyBackward(sourceName, plan, local));
+      return paired.castInto(
+        paired.backwardCasts(),
+        sourceName,
+        paired.checkedInto(paired.backwardChecks(), sourceName, applyBackward(sourceName, plan, local))
+      );
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
@@ -2315,7 +2325,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
-        "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")"
+        "(" +
+          pLocal +
+          " != null ? " +
+          paired.checkedInto(paired.backwardChecks(), sourceName, partialRead) +
+          " : " +
+          baseRead +
+          ")"
       );
     };
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
@@ -6425,6 +6441,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** Named in full, so a type the user declares with the same simple name cannot shadow it. */
   private static final String CONTAINER_COPY = "io.github.eschizoid.telescope.conversion.ContainerCopy";
 
+  /** Named in full, so a type the user declares with the same simple name cannot shadow it. */
+  private static final String FIXED_CLASS = "io.github.eschizoid.telescope.conversion.FixedClass";
+
   /**
    * Whether a value of {@code type}, paired with the same type, is handed across as itself. The
    * shared rules decide, so a container the reflective path copies is copied here too.
@@ -7372,6 +7391,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * @param forwardCasts per target property, the class {@code forward} casts the value it writes
    *     to, where the type it reads is wider than the target's own
    * @param backwardCasts the same per source property, for {@code backward} and {@code patch}
+   * @param forwardChecks per target property whose class fixes the variable a value handed across
+   *     unchanged is declared with, what {@code FixedClass.checked} takes after the value
+   * @param backwardChecks the same per source property, for {@code backward} and {@code patch}
    * @param rawAccess whether any property is read or written through a member of a class the bridge
    *     names raw whose type erasure changes, which javac reports as unchecked
    */
@@ -7382,12 +7404,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     Map<String, String> targetReads,
     Map<String, String> forwardCasts,
     Map<String, String> backwardCasts,
+    Map<String, String> forwardChecks,
+    Map<String, String> backwardChecks,
     boolean rawAccess
   ) {
     /** {@code value}, cast to what {@code casts} names for {@code name}, or as is when nothing. */
     String castInto(final Map<String, String> casts, final String name, final String value) {
       final var cast = casts.get(name);
       return cast == null ? value : "((" + cast + ") " + value + ")";
+    }
+
+    /**
+     * {@code value}, checked against the class {@code checks} names for {@code name}, or as is when
+     * nothing. The check returns the value as the type it is held as, so a cast around it is the
+     * one the write needs anyway.
+     */
+    String checkedInto(final Map<String, String> checks, final String name, final String value) {
+      final var arguments = checks.get(name);
+      return arguments == null ? value : FIXED_CLASS + ".checked(" + value + ", " + arguments + ")";
     }
   }
 
@@ -7445,7 +7479,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Map<String, String> renames,
     final Set<String> ownConversions,
-    final Set<String> lifted
+    final Set<String> lifted,
+    final boolean lenient
   ) {
     final var types = processingEnv.getTypeUtils();
     final var pairedSource = new ArrayList<>(sourceFields);
@@ -7454,6 +7489,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetReads = new HashMap<String, String>();
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
+    final var forwardChecks = new HashMap<String, String>();
+    final var backwardChecks = new HashMap<String, String>();
     // The methods read and write every property of both sides, a dropped one included, which
     // backward fills with a default and patch copies from base.
     boolean rawAccess = false;
@@ -7512,6 +7549,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (same && !types.isAssignable(sourceRead, sourceOwn)) {
           backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
         }
+        // A value handed across unchanged is checked against the class the side it lands on fixes
+        // the variable to, as the runtime checks it; a container that cannot be shown to fit is
+        // refused. The direction a lenient bridge documents as lossy refuses nothing.
+        if (same) {
+          // Each side as a member of its class, with the variables it passes through kept, so their
+          // bounds say what it holds, as the runtime reads it.
+          final var intoTarget = rules.fixedFit(sf.type(), tf.type(), sf.name());
+          final var intoSource = rules.fixedFit(tf.type(), sf.type(), sf.name());
+          final var refused =
+            intoTarget instanceof FixedFit.Refused<TypeMirror> forward
+              ? forward.message()
+              : !lenient && intoSource instanceof FixedFit.Refused<TypeMirror> backward
+                ? backward.message()
+                : null;
+          if (refused != null) {
+            error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused);
+            return null;
+          }
+          if (intoTarget instanceof FixedFit.Check<TypeMirror> check) {
+            forwardChecks.put(tf.name(), fixedCheckArguments(check.fixed(), target, tf.name()));
+          }
+          if (intoSource instanceof FixedFit.Check<TypeMirror> check) {
+            backwardChecks.put(sf.name(), fixedCheckArguments(check.fixed(), source, sf.name()));
+          }
+        }
       }
       if (!types.isAssignable(sourceOwn, sourceRead)) {
         sourceReads.put(sf.name(), types.erasure(sourceRead).toString());
@@ -7527,8 +7589,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetReads,
       forwardCasts,
       backwardCasts,
+      forwardChecks,
+      backwardChecks,
       rawAccess
     );
+  }
+
+  /**
+   * What a call to {@code FixedClass.checked} takes after the value, for a property {@code name} of
+   * {@code owner} whose class fixes the variable to {@code fixed}: both class literals and the
+   * property's name.
+   */
+  private String fixedCheckArguments(final TypeMirror fixed, final TypeElement owner, final String name) {
+    final var types = processingEnv.getTypeUtils();
+    return types.erasure(fixed) + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(name);
   }
 
   /**

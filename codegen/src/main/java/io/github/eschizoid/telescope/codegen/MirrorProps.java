@@ -86,6 +86,18 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public TypeMirror componentType(final TypeMirror t) {
+    return t instanceof ArrayType array ? array.getComponentType() : null;
+  }
+
+  @Override
+  public TypeMirror upperBound(final TypeMirror t) {
+    if (!(t instanceof WildcardType wildcard) || wildcard.getExtendsBound() == null) return null;
+    final var upper = wildcard.getExtendsBound();
+    return types.erasure(upper).toString().equals("java.lang.Object") ? null : upper;
+  }
+
+  @Override
   public TypeMirror lowerBound(final TypeMirror t) {
     return t instanceof WildcardType wildcard ? wildcard.getSuperBound() : null;
   }
@@ -239,6 +251,11 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
 
   @Override
   public TypeMirror rawType(final TypeMirror t) {
+    return types.erasure(t);
+  }
+
+  @Override
+  public TypeMirror erasure(final TypeMirror t) {
     return types.erasure(t);
   }
 
