@@ -145,6 +145,12 @@ public interface PropertySystem<T> {
   /** A wildcard's lower bound, or null when {@code t} has none or is not a wildcard. */
   T lowerBound(T t);
 
+  /**
+   * The type {@code t} is nested in as an inner class, with the arguments it gives that class, or
+   * null where {@code t} names no inner class of another.
+   */
+  T enclosingType(T t);
+
   /** An array type's component, generic or not, or null when {@code t} is not an array. */
   T componentType(T t);
 
