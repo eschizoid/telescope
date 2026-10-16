@@ -840,6 +840,26 @@ public final class PairingMessages {
   }
 
   /**
+   * Two records or beans given type arguments that are not the same, one by one, on both sides. The
+   * two classes convert as they pair with each other, passing each type variable across unchanged,
+   * so only a pair whose arguments agree holds them on the far side.
+   */
+  public static String genericArgumentsDiffer(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", generic classes whose type arguments are not the same, one by one. A generic class converts as" +
+      " it pairs with the other side's, passing each type variable across unchanged, so it converts only" +
+      " between arguments that are the same type. Give both sides the same type arguments, or convert the" +
+      " component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
    * A case of a sealed interface that gives the interface type arguments other than the ones the
    * component's type gives it, or ones that cannot be told apart from them without binding a type
    * variable inside another type.

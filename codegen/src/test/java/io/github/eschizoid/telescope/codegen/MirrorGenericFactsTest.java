@@ -85,9 +85,22 @@ class MirrorGenericFactsTest {
         String.valueOf(props.declaredArgumentsAs(elements.getTypeElement("demo.Count").asType(), primitive))
       );
       answers.put("primitive gives", String.valueOf(props.declaredArgumentsAs(primitive, res)));
-      answers.put("case", String.valueOf(props.isSealedCase(ok.asType())));
-      answers.put("not a case", String.valueOf(props.isSealedCase(ranked.asType())));
-      answers.put("primitive case", String.valueOf(props.isSealedCase(primitive)));
+      answers.put("in use", String.valueOf(props.typeParametersInUse(ok.asType())));
+      answers.put(
+        "bean in use",
+        String.valueOf(props.typeParametersInUse(elements.getTypeElement("demo.Sub").asType()))
+      );
+      answers.put(
+        "none in use",
+        String.valueOf(props.typeParametersInUse(elements.getTypeElement("demo.Named").asType()))
+      );
+      for (final var name : List.of("InArray", "InUpper", "InLower", "InOwner", "Unnamed", "Quiet")) {
+        answers.put(
+          name + " in use",
+          String.valueOf(props.typeParametersInUse(elements.getTypeElement("demo." + name).asType()))
+        );
+      }
+      answers.put("primitive in use", String.valueOf(props.typeParametersInUse(primitive)));
       answers.put("is variable", String.valueOf(props.isTypeVariable(variable)));
       answers.put("is not variable", String.valueOf(props.isTypeVariable(integer)));
       return false;
@@ -110,6 +123,31 @@ class MirrorGenericFactsTest {
           " java.util.List<? super T> down, java.util.List<?> any, Outer<T>.Inner in, String s) implements Res<T> {}"
       ),
       ProcessorHarness.source("demo.Count", "package demo; public record Count(int n) implements Res<Integer> {}"),
+      ProcessorHarness.source(
+        "demo.Base",
+        "package demo; public class Base<T> { public T getItem() { return null; }" +
+          " public void setLabel(final String label) {} public static <T> T make() { return null; }" +
+          " public void put(final String k, final T v) {} void hidden(final T v) {} }"
+      ),
+      ProcessorHarness.source("demo.InArray", "package demo; public record InArray<T>(T[] a) {}"),
+      ProcessorHarness.source(
+        "demo.InUpper",
+        "package demo; public record InUpper<T>(java.util.List<? extends T> a) {}"
+      ),
+      ProcessorHarness.source("demo.InLower", "package demo; public record InLower<T>(java.util.List<? super T> a) {}"),
+      ProcessorHarness.source("demo.InOwner", "package demo; public record InOwner<T>(Outer<T>.Inner a) {}"),
+      ProcessorHarness.source(
+        "demo.Unnamed",
+        "package demo; public record Unnamed<T>(java.util.List<?> a, String[] b, int c," +
+          " java.util.List<? extends String> d, java.util.List<? super String> e," +
+          " java.util.Map.Entry<String, String> f) {}"
+      ),
+      ProcessorHarness.source(
+        "demo.Quiet",
+        "package demo; public class Quiet<T> { public void run() {} public void put(final String k, final T v) {} }"
+      ),
+      ProcessorHarness.source("demo.Sub", "package demo; public class Sub<X> extends Base<X> {}"),
+      ProcessorHarness.source("demo.Named", "package demo; public class Named<Y> extends Base<String> {}"),
       ProcessorHarness.source(
         "demo.Ranked",
         "package demo; public record Ranked<T extends Number & Comparable<T>>(T v) {}"
@@ -138,9 +176,16 @@ class MirrorGenericFactsTest {
     expected.put("unrelated gives", "[]");
     expected.put("gives a primitive", "[]");
     expected.put("primitive gives", "[]");
-    expected.put("case", "true");
-    expected.put("not a case", "false");
-    expected.put("primitive case", "false");
+    expected.put("in use", "[T]");
+    expected.put("bean in use", "[X]");
+    expected.put("none in use", "[]");
+    expected.put("InArray in use", "[T]");
+    expected.put("InUpper in use", "[T]");
+    expected.put("InLower in use", "[T]");
+    expected.put("InOwner in use", "[T]");
+    expected.put("Unnamed in use", "[]");
+    expected.put("Quiet in use", "[]");
+    expected.put("primitive in use", "[]");
     expected.put("is variable", "true");
     expected.put("is not variable", "false");
     assertEquals(expected, asking.answers);

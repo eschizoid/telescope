@@ -173,14 +173,16 @@ public interface PropertySystem<T> {
    */
   List<T> typeParameters(T t);
 
+  /**
+   * The type variables the class {@code t} names declares that a member uses: one named in the type
+   * of a record component, or, for any other class, in the return type of a public instance method
+   * taking no arguments or the parameter type of one taking one, each read as a member of that
+   * class, so a variable a superclass's member is given counts too. In declaration order.
+   */
+  List<T> typeParametersInUse(T t);
+
   /** The upper bounds of the type variable {@code t}: {@code Object} when it declares none. */
   List<T> upperBounds(T t);
-
-  /**
-   * Whether the class {@code t} names is a case of a sealed interface: one it implements directly
-   * is sealed, and so permits it.
-   */
-  boolean isSealedCase(T t);
 
   /**
    * The classes the sealed class or interface {@code t} names permits, each as its class with no

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
+import java.util.ArrayList;
 import java.util.List;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
@@ -254,20 +255,57 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public List<TypeMirror> typeParametersInUse(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null || element.getTypeParameters().isEmpty()) return List.of();
+    final var self = (DeclaredType) element.asType();
+    final var members = new ArrayList<TypeMirror>();
+    if (element.getKind() == ElementKind.RECORD) {
+      for (final var component : element.getRecordComponents()) members.add(component.asType());
+    } else {
+      for (final var method : ElementFilter.methodsIn(elements.getAllMembers(element))) {
+        if (
+          !method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)
+        ) continue;
+        if (((TypeElement) method.getEnclosingElement()).getQualifiedName().contentEquals("java.lang.Object")) continue;
+        final var member = (ExecutableType) types.asMemberOf(self, method);
+        if (member.getParameterTypes().isEmpty() && member.getReturnType().getKind() != TypeKind.VOID) {
+          members.add(member.getReturnType());
+        } else if (member.getParameterTypes().size() == 1) {
+          members.add(member.getParameterTypes().getFirst());
+        }
+      }
+    }
+    return element
+      .getTypeParameters()
+      .stream()
+      .map(Element::asType)
+      .filter(variable -> members.stream().anyMatch(member -> mentionsVariable(member, variable)))
+      .toList();
+  }
+
+  /** Whether {@code type} names {@code variable} anywhere inside it. */
+  static boolean mentionsVariable(final TypeMirror type, final TypeMirror variable) {
+    return switch (type) {
+      case TypeVariable named -> named.asElement().equals(((TypeVariable) variable).asElement());
+      case ArrayType array -> mentionsVariable(array.getComponentType(), variable);
+      case WildcardType wildcard -> ((wildcard.getExtendsBound() != null &&
+          mentionsVariable(wildcard.getExtendsBound(), variable)) ||
+        (wildcard.getSuperBound() != null && mentionsVariable(wildcard.getSuperBound(), variable)));
+      case DeclaredType declared -> (declared
+          .getTypeArguments()
+          .stream()
+          .anyMatch(argument -> mentionsVariable(argument, variable)) ||
+        mentionsVariable(declared.getEnclosingType(), variable));
+      default -> false;
+    };
+  }
+
+  @Override
   public List<TypeMirror> upperBounds(final TypeMirror t) {
     if (!(t instanceof TypeVariable variable)) return List.of();
     final var upper = variable.getUpperBound();
     return upper instanceof IntersectionType intersection ? List.copyOf(intersection.getBounds()) : List.of(upper);
-  }
-
-  @Override
-  public boolean isSealedCase(final TypeMirror t) {
-    final var element = elementOf(types.erasure(t));
-    if (element == null) return false;
-    return element
-      .getInterfaces()
-      .stream()
-      .anyMatch(parent -> elementOf(types.erasure(parent)).getModifiers().contains(Modifier.SEALED));
   }
 
   @Override

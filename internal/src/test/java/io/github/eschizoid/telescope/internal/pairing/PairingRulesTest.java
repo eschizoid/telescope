@@ -361,13 +361,13 @@ class PairingRulesTest {
     }
 
     @Override
-    public List<Type> upperBounds(final Type t) {
-      return delegate.upperBounds(t);
+    public List<Type> typeParametersInUse(final Type t) {
+      return delegate.typeParametersInUse(t);
     }
 
     @Override
-    public boolean isSealedCase(final Type t) {
-      return delegate.isSealedCase(t);
+    public List<Type> upperBounds(final Type t) {
+      return delegate.upperBounds(t);
     }
 
     @Override

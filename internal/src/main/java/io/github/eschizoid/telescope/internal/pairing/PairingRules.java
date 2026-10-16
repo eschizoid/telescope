@@ -88,6 +88,17 @@ public final class PairingRules<T> {
     // allow it. One with none on either side is a class type and takes (b.1) below.
     if (sealedWithArgumentsPair(srcType, tgtType)) return sealedWithArguments(srcType, tgtType, componentName);
 
+    // (a.0b) Two records or beans given type arguments → recurse into the pair, where both give
+    // the same argument for every type variable a member uses. One with none on either side is a
+    // class type and takes (b) below.
+    if (genericClassPair(srcType, tgtType)) {
+      return argumentsInUseAgree(srcType, tgtType)
+        ? new PairDecision.RecursePair<>()
+        : new PairDecision.Incompatible<>(
+            PairingMessages.genericArgumentsDiffer(componentName, props.typeName(srcType), props.typeName(tgtType))
+          );
+    }
+
     if (props.isClassType(srcType) && props.isClassType(tgtType)) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
@@ -253,6 +264,71 @@ public final class PairingRules<T> {
   }
 
   /**
+   * Whether both sides are records or beans, neither of them a container, and at least one of them
+   * is given type arguments.
+   *
+   * <p>Such a pair converts as its two classes pair with each other, which reads the target's type
+   * variables as the source's in the same position ({@link #alignedToSource}) and is the same
+   * conversion whatever arguments the component gives them. That is the conversion the component's
+   * arguments call for where both sides give the same argument for each variable a member passes
+   * across ({@link #argumentsInUseAgree}).
+   */
+  private boolean genericClassPair(final T srcType, final T tgtType) {
+    if (props.isClassType(srcType) && props.isClassType(tgtType)) return false;
+    // A wildcard or type variable names no class of its own to pair.
+    if (!namesClass(srcType) || !namesClass(tgtType)) return false;
+    if (containerViewOf(srcType) != null || containerViewOf(tgtType) != null) return false;
+    return reflectable(props.rawType(srcType)) && reflectable(props.rawType(tgtType));
+  }
+
+  /** Whether {@code type} is a class, or a class given type arguments. */
+  private boolean namesClass(final T type) {
+    return props.isClassType(type) || !props.typeArguments(type).isEmpty();
+  }
+
+  /**
+   * Whether two generic classes give the same argument for every type variable a member of either
+   * uses, position by position, which is the pairing {@link #alignedToSource} reads them in. A
+   * variable no member uses carries no value across, so its argument is not compared, and a pair
+   * whose members use none converts whatever arguments it is given, a side used raw included. A
+   * used variable with no counterpart in the same position on the other side, an argument a raw
+   * side does not give, and a wildcard, which names no one type, all refuse the pair.
+   */
+  private boolean argumentsInUseAgree(final T srcType, final T tgtType) {
+    final var srcVariables = props.typeParameters(srcType);
+    final var tgtVariables = props.typeParameters(tgtType);
+    final var srcInUse = props.typeParametersInUse(srcType);
+    final var tgtInUse = props.typeParametersInUse(tgtType);
+    final var srcArguments = props.typeArguments(srcType);
+    final var tgtArguments = props.typeArguments(tgtType);
+    for (int i = 0; i < Math.max(srcVariables.size(), tgtVariables.size()); i++) {
+      final var used =
+        (i < srcVariables.size() && srcInUse.contains(srcVariables.get(i))) ||
+        (i < tgtVariables.size() && tgtInUse.contains(tgtVariables.get(i)));
+      if (!used) continue;
+      if (i >= srcArguments.size() || i >= tgtArguments.size()) return false;
+      if (props.isWildcard(srcArguments.get(i)) || props.isWildcard(tgtArguments.get(i))) return false;
+      if (!props.sameType(srcArguments.get(i), tgtArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether two sides give the same type arguments, one by one, none of them a wildcard, which
+   * names no one type.
+   */
+  private boolean sameArguments(final T srcType, final T tgtType) {
+    final var srcArguments = props.typeArguments(srcType);
+    final var tgtArguments = props.typeArguments(tgtType);
+    if (srcArguments.size() != tgtArguments.size()) return false;
+    for (int i = 0; i < srcArguments.size(); i++) {
+      if (props.isWildcard(srcArguments.get(i)) || props.isWildcard(tgtArguments.get(i))) return false;
+      if (!props.sameType(srcArguments.get(i), tgtArguments.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
    * The decision for two sealed interfaces at least one of which is given type arguments.
    *
    * <p>A case converts as its class pairs with the other side's case, the same conversion whatever
@@ -269,16 +345,7 @@ public final class PairingRules<T> {
    * whether it fits would mean binding the variable inside that type.
    */
   private PairDecision<T> sealedWithArguments(final T srcType, final T tgtType, final String componentName) {
-    final var srcArguments = props.typeArguments(srcType);
-    final var tgtArguments = props.typeArguments(tgtType);
-    var same = srcArguments.size() == tgtArguments.size();
-    for (int i = 0; same && i < srcArguments.size(); i++) {
-      same =
-        !props.isWildcard(srcArguments.get(i)) &&
-        !props.isWildcard(tgtArguments.get(i)) &&
-        props.sameType(srcArguments.get(i), tgtArguments.get(i));
-    }
-    if (!same) {
+    if (!sameArguments(srcType, tgtType)) {
       return new PairDecision.Incompatible<>(
         PairingMessages.sealedArgumentsDiffer(componentName, props.typeName(srcType), props.typeName(tgtType))
       );
@@ -317,17 +384,14 @@ public final class PairingRules<T> {
   /**
    * {@code targetType}, a member type read off {@code targetClass}, with each type variable that
    * class declares read as the variable {@code sourceClass} declares in the same position. Two
-   * cases of sealed interfaces paired with each other pass a variable across by position, so {@code
-   * record OkDto<U>(U v) implements ResDto<U>} paired with {@code record Ok<T>(T v) implements
-   * Res<T>} reads its {@code v} as a {@code T} and converts it unchanged, which is what dispatching
-   * on the case of a {@code Res<Integer>} needs. Nothing is read across between classes that are
-   * not both such cases, so any other generic pair stays refused in terms of its own variables;
-   * between two that declare a different number of type variables; or where a variable's bounds,
-   * read the same way, are not its counterpart's. The target's member type is then returned as it
-   * is.
+   * generic classes paired with each other pass a variable across by position, so {@code record
+   * BoxDto<U>(U v)} paired with {@code record Box<T>(T v)} reads its {@code v} as a {@code T} and
+   * converts it unchanged, which is what converting a {@code Box<Integer>}, or the case of a sealed
+   * {@code Res<Integer>}, needs. Nothing is read across between two classes that declare a
+   * different number of type variables, or where a variable's bounds, read the same way, are not
+   * its counterpart's. The target's member type is then returned as it is.
    */
   public T alignedToSource(final T targetType, final T sourceClass, final T targetClass) {
-    if (!props.isSealedCase(sourceClass) || !props.isSealedCase(targetClass)) return targetType;
     final var sourceVariables = props.typeParameters(sourceClass);
     final var targetVariables = props.typeParameters(targetClass);
     if (targetVariables.isEmpty() || sourceVariables.size() != targetVariables.size()) return targetType;

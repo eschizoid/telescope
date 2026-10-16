@@ -117,9 +117,8 @@ public record Reflective(
   /**
    * The types of a source property and the target property it pairs with, decided once for the pair
    * by {@link PairingRules#readsAsDeclared}: each as a member of its own class, or both as
-   * declared. Read as declared, the target's type of two paired cases of sealed interfaces reads
-   * each type variable its class declares as the source class's variable in the same position
-   * ({@link PairingRules#alignedToSource}).
+   * declared. Read as declared, the target's type reads each type variable its class declares as
+   * the source class's variable in the same position ({@link PairingRules#alignedToSource}).
    */
   public static PairedTypes pairedTypes(
     final Reflective sourceRefl,

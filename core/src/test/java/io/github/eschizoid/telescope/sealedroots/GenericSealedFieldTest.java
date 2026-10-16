@@ -57,13 +57,11 @@ class GenericSealedFieldTest {
   record BoxDto<U>(U v) {}
 
   @Test
-  @DisplayName("a generic record that is no case of a sealed interface keeps its own variable, and is refused")
-  void aGenericRecordOutsideASealedInterfaceIsRefused() {
-    final var refused = assertThrows(IllegalStateException.class, () -> Telescope.mapper(Box.class, BoxDto.class));
-    assertTrue(
-      refused.getMessage().contains("component 'v' has incompatible source/target shapes"),
-      refused.getMessage()
-    );
+  @DisplayName("a generic record that is no case of a sealed interface reads the other's variable as its own too")
+  void aGenericRecordOutsideASealedInterfaceConverts() {
+    final var mapper = Telescope.mapper(Box.class, BoxDto.class);
+    assertEquals(new BoxDto<>(3), mapper.forward(new Box<>(3)));
+    assertEquals(new Box<>("x"), mapper.backward(new BoxDto<>("x")));
   }
 
   @Test

@@ -2065,6 +2065,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       ownConversions,
       viaLifts.keySet()
     );
+    if (paired == null) return;
     final var viaCasts = viaCalls(
       source,
       target,
@@ -6411,29 +6412,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The shared rules' refusal of two declared types at least one of which is given type arguments,
-   * or null for a pair the rules convert, for one given none, and for one the sub-bridge converts
-   * raw. A sub-bridge names both classes raw, so it converts such a pair whatever arguments it is
-   * given. The rules decide which arguments two sealed interfaces may be given and refuse the rest.
-   * Two records or beans each holding none of its own type variables bridge raw where the runtime
-   * refuses them, and are left to the sub-bridge; a record holding one of its own has no
-   * sub-bridge, and is refused in the rules' words.
+   * or null for a pair the rules convert and for one given none. A sub-bridge names both classes
+   * raw, so it converts such a pair whatever arguments it is given: the rules decide which
+   * arguments two sealed interfaces, records or beans may be given, and refuse the rest.
    */
   private String parameterizedRefusal(final TypeMirror source, final TypeMirror target, final String name) {
     final var props = mirrorProps();
     if (props.typeArguments(source).isEmpty() && props.typeArguments(target).isEmpty()) return null;
-    if (!(rules.decidePair(source, target, name) instanceof PairDecision.Incompatible<TypeMirror> refused)) return null;
-    return Stream.of(source, target).allMatch(this::bridgesRaw) ? null : refused.message();
-  }
-
-  /**
-   * Whether a sub-bridge converts {@code type} as its raw class: a record or bean, which is not a
-   * record holding one of its own type variables in a component.
-   */
-  private boolean bridgesRaw(final TypeMirror type) {
-    if (!(type instanceof DeclaredType declared) || !isReflectableDeclared(declared)) return false;
-    return ((TypeElement) declared.asElement()).getRecordComponents()
-      .stream()
-      .noneMatch(component -> MirrorProps.typeVariableIn(component.asType()));
+    return rules.decidePair(source, target, name) instanceof PairDecision.Incompatible<TypeMirror> refused
+      ? refused.message()
+      : null;
   }
 
   private static boolean sealedInterface(final DeclaredType type) {
@@ -7346,14 +7334,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether {@code sourceType} names a type variable {@code source} declares, or {@code targetType}
+   * one {@code target} declares.
+   */
+  private static boolean namesOwnVariable(
+    final TypeElement source,
+    final TypeMirror sourceType,
+    final TypeElement target,
+    final TypeMirror targetType
+  ) {
+    return Stream.concat(
+      source
+        .getTypeParameters()
+        .stream()
+        .map(variable -> MirrorProps.mentionsVariable(sourceType, variable.asType())),
+      target
+        .getTypeParameters()
+        .stream()
+        .map(variable -> MirrorProps.mentionsVariable(targetType, variable.asType()))
+    ).anyMatch(Boolean::booleanValue);
+  }
+
+  /**
    * The types each source property and the target property it pairs with are read as. The shared
    * spec decides whether a pair reads as members of its own classes or as declared ({@link
    * PairingRules#readsAsDeclared}). Read as declared, both are read as the one type the superclass
    * they share declares, with each type variable erased, since no static method of the bridge can
-   * name the variable. The target's declared type of two paired cases of sealed interfaces reads
-   * each type variable its class declares as the source class's in the same position ({@link
-   * PairingRules#alignedToSource}), so two generic cases passing a variable across convert it
-   * unchanged. A pair whose declared types differ keeps them, and is refused in their terms.
+   * name the variable. The target's declared type reads each type variable its class declares as
+   * the source class's in the same position ({@link PairingRules#alignedToSource}), so two generic
+   * classes passing a variable across convert it unchanged. A pair whose declared types differ
+   * keeps them, and is refused in their terms.
    *
    * <p>The bridge names a generic class raw, so every member it reaches on one returns its erased
    * type: a property {@code class Page<X> extends Base<String, X>} fixes to {@code String} reads
@@ -7365,6 +7375,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * <p>A pair in {@code ownConversions}, which a transform or a {@code @ViaMapper} converts, is
    * read as neither of these: the conversion takes what the source gives and returns what the
    * target takes, so each side is held as the bridge reaches it ({@link #heldAs}).
+   *
+   * <p>Null after refusing a pair whose declared types name a variable of one of the two classes
+   * and which the shared rules refuse in those terms.
    */
   private PairedFields pairedFields(
     final TypeElement source,
@@ -7410,16 +7423,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
       } else if (rules.readsAsDeclared(sf.type(), tf.type())) {
         final var sourceDeclared = declaredTypeOf(source, sf);
-        final var targetDeclared = rules.alignedToSource(declaredTypeOf(target, tf), source.asType(), target.asType());
-        if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
+        final var asDeclared = declaredTypeOf(target, tf);
+        final var targetDeclared = rules.alignedToSource(asDeclared, source.asType(), target.asType());
+        final var same = types.isSameType(sourceDeclared, targetDeclared);
+        // A pair naming a type variable of one of the two classes is decided in those terms, the
+        // target's read as the source's, as the runtime decides it: one passing a variable into a
+        // slot another variable fills, such as A against B, is refused in the shared rules' words.
+        if (!same && namesOwnVariable(source, sourceDeclared, target, asDeclared)) {
+          final var decision = rules.decidePair(sourceDeclared, targetDeclared, sf.name());
+          if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+            error(
+              source,
+              "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message()
+            );
+            return null;
+          }
+        }
+        // A target read across in terms of the source's variables, such as InnerDto<T> against
+        // Inner<T>, is planned in those terms, as the runtime decides the pair.
+        if (!same && types.isSameType(asDeclared, targetDeclared)) continue;
         sourceRead = withVariablesErased(sourceDeclared);
-        targetRead = sourceRead;
+        targetRead = same ? sourceRead : withVariablesErased(targetDeclared);
         pairedSource.set(i, new Field(sf.name(), sourceRead));
         pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
-        if (!types.isAssignable(sourceRead, targetOwn)) {
+        // A value handed across unchanged is written through a cast where the side it lands on is
+        // narrower; one the pair converts is written as the conversion returns it.
+        if (same && !types.isAssignable(sourceRead, targetOwn)) {
           forwardCasts.put(tf.name(), types.erasure(targetOwn).toString());
         }
-        if (!types.isAssignable(sourceRead, sourceOwn)) {
+        if (same && !types.isAssignable(sourceRead, sourceOwn)) {
           backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
         }
       }
