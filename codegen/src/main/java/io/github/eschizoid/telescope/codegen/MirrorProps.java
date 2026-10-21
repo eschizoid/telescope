@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
@@ -419,9 +420,49 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
       : Allocability.NOT_ALLOCABLE;
   }
 
+  /**
+   * {@code t} spelled as {@code Type#getTypeName} spells the reflected type: a class by its binary
+   * name, a nested one joined to its enclosing class by {@code $}; type arguments separated by a
+   * comma and a space; a member of a class whose enclosing types give arguments at any level after
+   * its enclosing type, so spelled, and a {@code $}; an array as its component and {@code []}; a
+   * primitive by its keyword; a variable by its name; and a wildcard as {@code ?}, {@code ? extends
+   * B} or {@code ? super B}, where a bound of {@code Object} reads as {@code ?}. Type-use
+   * annotations, which a reflected type's name never carries, are left out. A type of any other
+   * kind is spelled as the compiler spells it.
+   */
   @Override
   public String typeName(final TypeMirror t) {
-    return t.toString();
+    return switch (t) {
+      case PrimitiveType primitive -> primitive.getKind().name().toLowerCase(Locale.ROOT);
+      case ArrayType array -> typeName(array.getComponentType()) + "[]";
+      case TypeVariable variable -> variable.asElement().getSimpleName().toString();
+      case WildcardType wildcard -> {
+        if (wildcard.getSuperBound() != null) yield "? super " + typeName(wildcard.getSuperBound());
+        final var upper = writtenUpperBound(wildcard);
+        yield upper == null ? "?" : "? extends " + typeName(upper);
+      }
+      case DeclaredType declared -> {
+        final var element = (TypeElement) declared.asElement();
+        final var enclosing = declared.getEnclosingType();
+        final var owner =
+          enclosing instanceof DeclaredType outer && givesArguments(outer)
+            ? typeName(outer) + "$" + element.getSimpleName()
+            : elements.getBinaryName(element).toString();
+        final var arguments = declared.getTypeArguments();
+        yield arguments.isEmpty()
+          ? owner
+          : owner + "<" + String.join(", ", arguments.stream().map(this::typeName).toList()) + ">";
+      }
+      default -> t.toString();
+    };
+  }
+
+  /** Whether {@code type}, or a type it is a member of at any level, is given type arguments. */
+  private static boolean givesArguments(final DeclaredType type) {
+    for (TypeMirror level = type; level instanceof DeclaredType declared; level = declared.getEnclosingType()) {
+      if (!declared.getTypeArguments().isEmpty()) return true;
+    }
+    return false;
   }
 
   @Override

@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
+import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
@@ -1552,7 +1553,7 @@ public final class DeepMap {
    */
   private static Iso<?, ?> checkedAgainstFixed(
     final Iso<?, ?> iso,
-    final Reflective.PairedTypes paired,
+    final PairedTypes<Type> paired,
     final RowSides sides,
     final String componentName,
     final boolean forwardOnly

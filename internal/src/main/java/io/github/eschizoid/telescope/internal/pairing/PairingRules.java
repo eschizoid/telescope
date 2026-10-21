@@ -451,6 +451,40 @@ public final class PairingRules<T> {
   }
 
   /**
+   * The types a source property and the target property it pairs with are read as, decided once for
+   * the pair by {@link #readsAsDeclared}: each as a member of its own class, or both as declared.
+   * Read as declared, the target's type reads each type variable {@code targetClass} declares as
+   * the variable {@code sourceClass} declares in the same position ({@link #alignedToSource}).
+   *
+   * @param sourceMember the source property's type as a member of {@code sourceClass}, with each
+   *     variable the class passes through kept as that variable
+   * @param targetMember the target property's type as a member of {@code targetClass}, read the
+   *     same way
+   * @param sourceDeclared the source property's type as its accessor declares it
+   * @param targetDeclared the target property's type as its accessor declares it
+   */
+  public PairedTypes<T> pairedTypes(
+    final T sourceMember,
+    final T targetMember,
+    final T sourceDeclared,
+    final T targetDeclared,
+    final T sourceClass,
+    final T targetClass
+  ) {
+    if (!readsAsDeclared(sourceMember, targetMember)) {
+      return new PairedTypes<>(sourceMember, targetMember, sourceMember, targetMember, false);
+    }
+    final var target = alignedToSource(targetDeclared, sourceClass, targetClass);
+    return new PairedTypes<>(
+      sourceDeclared,
+      target,
+      sourceMember,
+      targetMember,
+      props.sameType(sourceDeclared, target)
+    );
+  }
+
+  /**
    * What a value of a pair read as declared owes the side it is written into, given the type it has
    * as a member of the side it is read from, {@code sendingMember}, and as a member of the side it
    * is written into, {@code receivingMember}. Each member type keeps the variables its class passes

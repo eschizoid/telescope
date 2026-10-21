@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -91,6 +92,7 @@ class ReflectiveSurfaceTest {
       );
       assertEquals(String.class, paired.source());
       assertEquals(Integer.class, paired.target());
+      assertFalse(paired.handedAcross(), "two different types are converted, not handed across");
     }
 
     @Test
@@ -107,6 +109,9 @@ class ReflectiveSurfaceTest {
       );
       assertEquals(declared, paired.source());
       assertEquals(declared, paired.target(), "the fixed side must read as declared too, not as String");
+      assertTrue(paired.handedAcross(), "one declared type on both sides is handed across unchanged");
+      assertEquals(PassingSlot.class.getTypeParameters()[0], paired.sourceMember());
+      assertEquals(String.class, paired.targetMember());
     }
 
     @Test
