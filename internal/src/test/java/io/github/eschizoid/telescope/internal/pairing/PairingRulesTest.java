@@ -1121,12 +1121,13 @@ class PairingRulesTest {
   }
 
   /** Members typed by a variable a subclass passes through or fixes, read off its fields. */
-  static final class FixedHolder<X, Y extends Integer> {
+  static final class FixedHolder<X, Y extends Integer, Z extends Box<Integer>, W extends Comparable<W>> {
 
     X passed;
     Y bounded;
     X[] passedArray;
     List<X> passedList;
+    Optional<X> passedOptional;
     String fixed;
     String[] fixedArray;
     List<String> fixedList;
@@ -1134,8 +1135,41 @@ class PairingRulesTest {
     Integer fixedInteger;
     Number fixedNumber;
     List<Y> boundedList;
+    List<Integer> fixedIntegerList;
     List<Number> fixedNumberList;
     Comparable<String> fixedComparable;
+    Optional<Integer> fixedIntegerOptional;
+    Optional<Number> fixedNumberOptional;
+    Box<Integer> integerBox;
+    Box<Number> numberBox;
+    Box<? extends Number> extendsNumberBox;
+    Box<? super Integer> superIntegerBox;
+    Box<Y> boundedBox;
+    Box<List<Integer>> integerListBox;
+    Box<List<Number>> numberListBox;
+    Box<List<String>> stringListBox;
+    Box<List<X>> passedListBox;
+    List<Box<Integer>> integerBoxList;
+    List<Box<Number>> numberBoxList;
+    List<Box<? extends Number>> extendsNumberBoxList;
+    Box<Integer>[] integerBoxArray;
+    Box<Number>[] numberBoxArray;
+    Z boxBounded;
+    W selfBounded;
+    Set<X> passedSet;
+    Set<Y> boundedSet;
+    Set<Number> fixedNumberSet;
+    Map<X, X> passedMap;
+    Map<String, Y> stringToBounded;
+    Map<String, Number> stringToNumber;
+    Map<Y, String> boundedToString;
+    Map<Number, String> numberToString;
+    HashSet<X> passedHashSet;
+    HashSet<Y> boundedHashSet;
+    HashSet<Number> numberHashSet;
+    Set<? extends Number> extendsNumberSet;
+    Set<Box<Y>> boundedBoxSet;
+    Set<Box<Number>> numberBoxSet;
   }
 
   private static Type fixedMember(final String fieldName) {
@@ -1150,60 +1184,199 @@ class PairingRulesTest {
   @DisplayName("fixedFit — what a value handed across unchanged owes the side it lands on")
   class FixedFitDecision {
 
-    private FixedFit<Type> fit(final String sending, final String receiving) {
-      return rules.fixedFit(fixedMember(sending), fixedMember(receiving), "f");
+    /**
+     * The fit of a value declared as the member {@code declared} is, held as {@code sending} and
+     * written where the receiving side holds it as {@code receiving}.
+     */
+    private FixedFit<Type> fit(final String declared, final String sending, final String receiving) {
+      return rules.fixedFit(fixedMember(declared), fixedMember(sending), fixedMember(receiving), "f");
     }
 
     @Test
     @DisplayName("a side that passes its variable through fixes nothing")
     void aPassingSideFixesNothing() {
-      assertInstanceOf(FixedFit.Fits.class, fit("fixed", "passed"));
-      assertInstanceOf(FixedFit.Fits.class, fit("fixedList", "passedList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "fixed", "passed"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "fixedList", "passedList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "stringListBox", "passedListBox"));
     }
 
     @Test
     @DisplayName("an array the receiving side passes through takes any array whose class is an Object[]")
     void anArrayOfAVariableTakesAnyReferenceArray() {
-      assertInstanceOf(FixedFit.Fits.class, fit("fixedArray", "passedArray"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedArray", "fixedArray", "passedArray"));
     }
 
     @Test
     @DisplayName("a variable whose bound is the class the receiving side fixes fits it")
     void aBoundThatIsTheFixedClassFits() {
-      assertInstanceOf(FixedFit.Fits.class, fit("bounded", "fixedInteger"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "bounded", "fixedInteger"));
     }
 
     @Test
     @DisplayName("a single value is checked against the erasure the receiving side fixes, an array by its class")
     void aSingleValueIsChecked() {
-      assertEquals(String.class, assertInstanceOf(FixedFit.Check.class, fit("passed", "fixed")).fixed());
-      assertEquals(String[].class, assertInstanceOf(FixedFit.Check.class, fit("passedArray", "fixedArray")).fixed());
+      assertEquals(String.class, assertInstanceOf(FixedFit.Check.class, fit("passed", "passed", "fixed")).fixed());
+      assertEquals(
+        String[].class,
+        assertInstanceOf(FixedFit.Check.class, fit("passedArray", "passedArray", "fixedArray")).fixed()
+      );
     }
 
     @Test
     @DisplayName("a variable the receiving side passes through admits only what its bound does")
     void aReceivingVariableAdmitsWhatItsBoundDoes() {
-      assertInstanceOf(FixedFit.Fits.class, fit("boundedList", "fixedNumberList"));
-      assertInstanceOf(FixedFit.Refused.class, fit("fixedNumberList", "boundedList"));
-      assertEquals(Integer.class, assertInstanceOf(FixedFit.Check.class, fit("fixedNumber", "bounded")).fixed());
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "boundedList", "fixedNumberList"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passedList", "fixedNumberList", "boundedList"));
+      assertEquals(
+        Integer.class,
+        assertInstanceOf(FixedFit.Check.class, fit("passed", "fixedNumber", "bounded")).fixed()
+      );
     }
 
     @Test
     @DisplayName("a generic class other than a container is held to its type arguments, as a container is")
     void aGenericClassIsHeldToItsArguments() {
-      assertInstanceOf(FixedFit.Refused.class, fit("passed", "fixedComparable"));
-      assertInstanceOf(FixedFit.Fits.class, fit("fixedComparable", "fixedComparable"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "passed", "fixedComparable"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "fixedComparable", "fixedComparable"));
     }
 
     @Test
     @DisplayName("a container whose elements cannot be shown to fit is refused by name")
     void aContainerIsRefused() {
-      final var list = assertInstanceOf(FixedFit.Refused.class, fit("passedList", "fixedList"));
+      final var list = assertInstanceOf(FixedFit.Refused.class, fit("passedList", "passedList", "fixedList"));
       assertEquals(
         PairingMessages.fixedArgumentsDoNotFit("f", "java.util.List<X>", "java.util.List<java.lang.String>"),
         list.message()
       );
-      assertInstanceOf(FixedFit.Refused.class, fit("passed", "fixedOptional"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "passed", "fixedOptional"));
+    }
+
+    @Test
+    @DisplayName("a container declared as one the allocation table rebuilds is copied, so its arguments may narrow")
+    void aCopiedContainerTakesNarrowerArguments() {
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "fixedIntegerList", "fixedNumberList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "boundedList", "fixedNumberList"));
+    }
+
+    @Test
+    @DisplayName("the same container handed across as the one object both sides hold takes only its own arguments")
+    void aSharedContainerTakesOnlyItsOwnArguments() {
+      final var list = assertInstanceOf(FixedFit.Refused.class, fit("passed", "fixedIntegerList", "fixedNumberList"));
+      assertEquals(
+        PairingMessages.fixedArgumentsDoNotFit(
+          "f",
+          "java.util.List<java.lang.Integer>",
+          "java.util.List<java.lang.Number>"
+        ),
+        list.message()
+      );
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "boundedList", "fixedNumberList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "fixedNumberList", "fixedNumberList"));
+    }
+
+    @Test
+    @DisplayName("a copied container's elements are shared, so an element given arguments takes only its own")
+    void aCopiedContainersElementsAreShared() {
+      assertInstanceOf(FixedFit.Refused.class, fit("passedList", "integerBoxList", "numberBoxList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "integerBoxList", "extendsNumberBoxList"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "numberBoxList", "numberBoxList"));
+    }
+
+    @Test
+    @DisplayName("a generic class shared by reference takes its own arguments, or one a wildcard contains")
+    void aSharedClassTakesItsOwnArgumentsOrAContainingWildcard() {
+      final var box = assertInstanceOf(FixedFit.Refused.class, fit("passed", "integerBox", "numberBox"));
+      assertEquals(
+        PairingMessages.fixedArgumentsDoNotFit(
+          "f",
+          Box.class.getName() + "<java.lang.Integer>",
+          Box.class.getName() + "<java.lang.Number>"
+        ),
+        box.message()
+      );
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "boundedBox", "numberBox"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "integerBox", "integerBox"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "integerBox", "extendsNumberBox"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "boundedBox", "extendsNumberBox"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "integerBox", "superIntegerBox"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "numberBox", "integerBox"));
+    }
+
+    @Test
+    @DisplayName("an argument of a shared class's argument takes only its own too")
+    void aNestedArgumentOfASharedClassTakesOnlyItsOwn() {
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "integerListBox", "numberListBox"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "integerListBox", "integerListBox"));
+    }
+
+    @Test
+    @DisplayName("an Optional and an array are handed across as themselves, so they take only their own arguments")
+    void anOptionalAndAnArrayAreShared() {
+      assertInstanceOf(FixedFit.Refused.class, fit("passedOptional", "fixedIntegerOptional", "fixedNumberOptional"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedOptional", "fixedIntegerOptional", "fixedIntegerOptional"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passedArray", "integerBoxArray", "numberBoxArray"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedArray", "integerBoxArray", "integerBoxArray"));
+    }
+
+    @Test
+    @DisplayName(
+      "a variable bounded by a class given arguments admits only a value that class admits as both sides hold it"
+    )
+    void aVariableBoundedByAClassGivenArgumentsHoldsItsValueToTheBound() {
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "integerBox", "boxBounded"));
+      final var wider = assertInstanceOf(FixedFit.Refused.class, fit("passed", "extendsNumberBox", "boxBounded"));
+      assertEquals(
+        PairingMessages.fixedArgumentsDoNotFit("f", Box.class.getName() + "<? extends java.lang.Number>", "Z"),
+        wider.message()
+      );
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "numberBox", "boxBounded"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "passed", "boxBounded"));
+    }
+
+    @Test
+    @DisplayName("a map whose declared key names a variable is copied, so its values may narrow")
+    void aMapKeyedByAVariableIsCopied() {
+      assertInstanceOf(FixedFit.Fits.class, fit("passedMap", "stringToBounded", "stringToNumber"));
+      assertInstanceOf(FixedFit.Refused.class, fit("passed", "stringToBounded", "stringToNumber"));
+    }
+
+    @Test
+    @DisplayName("a copy that can keep the source's comparator takes only the ordered argument's own type")
+    void aCopyKeepingTheSourcesOrderTakesOnlyTheOrderedArgumentsOwnType() {
+      final var set = assertInstanceOf(FixedFit.Refused.class, fit("passedSet", "boundedSet", "fixedNumberSet"));
+      assertEquals(FixedFit.Reason.ORDERED_COPY, set.reason());
+      assertEquals(
+        PairingMessages.orderedCopyArgumentDiffers("f", "java.util.Set<Y>", "java.util.Set<java.lang.Number>"),
+        set.message()
+      );
+      final var map = assertInstanceOf(FixedFit.Refused.class, fit("passedMap", "boundedToString", "numberToString"));
+      assertEquals(FixedFit.Reason.ORDERED_COPY, map.reason());
+      assertInstanceOf(FixedFit.Fits.class, fit("passedSet", "fixedNumberSet", "fixedNumberSet"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedList", "boundedList", "fixedNumberList"));
+    }
+
+    @Test
+    @DisplayName("an ordered copy takes a class that keeps no comparator, or a wildcard, in its place")
+    void anOrderedCopysRemediesFit() {
+      assertInstanceOf(FixedFit.Fits.class, fit("passedHashSet", "boundedHashSet", "numberHashSet"));
+      assertInstanceOf(FixedFit.Fits.class, fit("passedSet", "boundedSet", "extendsNumberSet"));
+    }
+
+    @Test
+    @DisplayName("an ordered copy whose argument would not fit a fresh copy either keeps the general refusal")
+    void anOrderedCopyOfASharedElementKeepsTheGeneralRefusal() {
+      final var set = assertInstanceOf(FixedFit.Refused.class, fit("passedSet", "boundedBoxSet", "numberBoxSet"));
+      assertEquals(FixedFit.Reason.ARGUMENTS, set.reason());
+    }
+
+    @Test
+    @DisplayName("a variable whose bound names a variable is asked only for its erasure")
+    void aBoundNamingAVariableIsAskedOnlyForItsErasure() {
+      assertInstanceOf(FixedFit.Fits.class, fit("passed", "fixed", "selfBounded"));
+      assertEquals(
+        Comparable.class,
+        assertInstanceOf(FixedFit.Check.class, fit("passed", "passed", "selfBounded")).fixed()
+      );
     }
   }
 

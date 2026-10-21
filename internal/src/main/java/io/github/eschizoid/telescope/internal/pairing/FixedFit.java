@@ -25,9 +25,21 @@ public sealed interface FixedFit<T> {
   record Check<T>(T fixed) implements FixedFit<T> {}
 
   /**
-   * A container whose elements cannot be shown to fit the classes the receiving side fixes. Its
-   * elements are never checked one by one, so the pair is refused with {@code message} when it is
-   * planned.
+   * A value given type arguments, a container or any other generic class, that cannot be shown to
+   * have those the receiving side admits. Nothing checks a value's arguments as it is written, so
+   * the pair is refused with {@code message} when it is planned, for {@code reason}.
    */
-  record Refused<T>(String message) implements FixedFit<T> {}
+  record Refused<T>(Reason reason, String message) implements FixedFit<T> {}
+
+  /** Why a value handed across unchanged is refused. */
+  enum Reason {
+    /** Its type arguments are not shown to be ones the receiving side admits. */
+    ARGUMENTS,
+    /**
+     * It is copied, and every argument fits a fresh copy, but the copy can keep the comparator the
+     * source orders by, which takes only the sending side's element type, or a map's key type, and
+     * that argument differs.
+     */
+    ORDERED_COPY,
+  }
 }

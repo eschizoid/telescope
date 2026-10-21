@@ -7945,9 +7945,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // refused. The direction a lenient bridge documents as lossy refuses nothing.
         if (same) {
           // Each side as a member of its class, with the variables it passes through kept, so their
-          // bounds say what it holds, as the runtime reads it.
-          final var intoTarget = rules.fixedFit(sf.type(), tf.type(), sf.name());
-          final var intoSource = rules.fixedFit(tf.type(), sf.type(), sf.name());
+          // bounds say what it holds, as the runtime reads it. The declared type says whether the
+          // value is copied across or shared, the type the runtime decides it from.
+          final var intoTarget = rules.fixedFit(sourceDeclared, sf.type(), tf.type(), sf.name());
+          final var intoSource = rules.fixedFit(sourceDeclared, tf.type(), sf.type(), sf.name());
           final var refused =
             intoTarget instanceof FixedFit.Refused<TypeMirror> forward
               ? forward.message()

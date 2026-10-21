@@ -46,6 +46,7 @@ class FixedVariableAgreementTest {
     import io.github.eschizoid.telescope.mapping.Mapping;
     import java.util.List;
     import java.util.Map;
+    import java.util.Set;
     class @@Base<K, V> {
       private K key;
       private V first;
@@ -127,6 +128,25 @@ class FixedVariableAgreementTest {
     }
     class @@MSrc<X> extends @@MBase<X> { public @@MSrc() {} }
     class @@MTgt extends @@MBase<String> { public @@MTgt() {} }
+    class @@MBox<B> {
+      private B b;
+      public @@MBox() {}
+      public B getB() { return b; }
+      public void setB(B b) { this.b = b; }
+    }
+    class @@BoxPage<T extends Integer> extends @@Base<String, @@MBox<T>> { public @@BoxPage() {} }
+    class @@BoxNum extends @@Base<String, @@MBox<Number>> { public @@BoxNum() {} }
+    class @@BoxAny extends @@Base<String, @@MBox<? extends Number>> { public @@BoxAny() {} }
+    class @@HeldList<T extends Integer> extends @@Base<String, List<T>> { public @@HeldList() {} }
+    class @@SetBase<V> {
+      private Set<V> items;
+      public @@SetBase() {}
+      public Set<V> getItems() { return items; }
+      public void setItems(Set<V> items) { this.items = items; }
+    }
+    class @@PageSet<T extends Integer> extends @@SetBase<T> { public @@PageSet() {} }
+    class @@NumSet extends @@SetBase<Number> { public @@NumSet() {} }
+    class @@HeldNumList extends @@Base<String, List<Number>> { public @@HeldNumList() {} }
     final class @@Samples {
       static @@Src<String> src() {
         final var s = new @@Src<String>();
@@ -232,6 +252,20 @@ class FixedVariableAgreementTest {
     @DisplayName("the pair as a nested pair, the source used raw")
     void nestedPair() {
       assertBothAccept(outcome("FvF", "Telescope.mapper(@@Outer.class, @@OuterDto.class)"));
+    }
+
+    @Test
+    @DisplayName(
+      "a mutable box of a variable bounded by Integer into one the target holds through a wildcard, forward only"
+    )
+    void sharedBoxIntoAContainingWildcardForwardOnly() {
+      assertBothAccept(
+        outcome(
+          "FvG",
+          "Telescope.mapperForward(@@BoxPage.class, @@BoxAny.class, " +
+            "Mapping.<@@BoxPage<?>, @@BoxAny, @@MBox<? extends Number>>to(@@BoxPage::getFirst, @@BoxAny::getFirst))"
+        )
+      );
     }
   }
 
@@ -373,6 +407,54 @@ class FixedVariableAgreementTest {
       assertBothRefuseWith(
         PairingMessages.fixedArgumentsDoNotFit("items", "java.util.List<X>", "java.util.List<java.lang.String>"),
         outcome("FrF", "Telescope.mapper(@@GenOuter.class, @@GenOuterDto.class)")
+      );
+    }
+
+    @Test
+    @DisplayName("a mutable box both sides hold, whose argument the target fixes wider")
+    void sharedBoxIntoAWiderArgument() {
+      assertBothRefuseWith(
+        PairingMessages.fixedArgumentsDoNotFit(
+          "first",
+          PACKAGE + ".FrHMBox<T>",
+          PACKAGE + ".FrHMBox<java.lang.Number>"
+        ),
+        outcome("FrH", "Telescope.mapper(@@BoxPage.class, @@BoxNum.class)")
+      );
+    }
+
+    @Test
+    @DisplayName("a list handed across as the variable it fills, which no copy takes, held to its own argument")
+    void listFillingAVariableIsShared() {
+      assertBothRefuseWith(
+        PairingMessages.fixedArgumentsDoNotFit("first", "java.util.List<T>", "java.util.List<java.lang.Number>"),
+        outcome("FrJ", "Telescope.mapper(@@HeldList.class, @@HeldNumList.class)")
+      );
+    }
+
+    @Test
+    @DisplayName("a set whose copy can keep the source's comparator, named for that reason")
+    void orderedCopy() {
+      assertBothRefuseWith(
+        PairingMessages.orderedCopyArgumentDiffers("items", "java.util.Set<T>", "java.util.Set<java.lang.Number>"),
+        outcome("FrK", "Telescope.mapper(@@PageSet.class, @@NumSet.class)")
+      );
+    }
+
+    @Test
+    @DisplayName("the same box forward only, through a row naming the property")
+    void sharedBoxIntoAWiderArgumentForwardOnly() {
+      assertBothRefuseWith(
+        PairingMessages.fixedArgumentsDoNotFit(
+          "first → first",
+          PACKAGE + ".FrIMBox<T>",
+          PACKAGE + ".FrIMBox<java.lang.Number>"
+        ),
+        outcome(
+          "FrI",
+          "Telescope.mapperForward(@@BoxPage.class, @@BoxNum.class, " +
+            "Mapping.<@@BoxPage<?>, @@BoxNum, @@MBox<? extends Number>>to(@@BoxPage::getFirst, @@BoxNum::getFirst))"
+        )
       );
     }
 

@@ -485,33 +485,69 @@ public final class PairingRules<T> {
   }
 
   /**
-   * What a value of a pair read as declared owes the side it is written into, given the type it has
-   * as a member of the side it is read from, {@code sendingMember}, and as a member of the side it
-   * is written into, {@code receivingMember}. Each member type keeps the variables its class passes
-   * through, so their bounds say what the side holds. Read as declared, the pair is one type on
-   * both sides and the value is handed across unchanged, so what the receiving side's class says
-   * about the property is the only thing that can refuse it.
+   * What a value of a pair read as declared owes the side it is written into, given the type both
+   * sides declare the property as, {@code declared}, and the type the value has as a member of the
+   * side it is read from, {@code sendingMember}, and as a member of the side it is written into,
+   * {@code receivingMember}. Each member type keeps the variables its class passes through, so
+   * their bounds say what the side holds. Read as declared, the pair is one type on both sides and
+   * the value is handed across unchanged, so what the receiving side's class says about the
+   * property is the only thing that can refuse it.
    *
-   * <p>A value fits where every value of the sending side's member type is one the receiving side's
-   * admits: a variable the receiving side passes through admits whatever its bound does, a type
-   * given arguments admits a value of its own class whose arguments fit its own, one by one, and an
-   * array admits an array whose component fits its own. A value that fits is not checked. Otherwise
-   * a type given arguments is refused, a container and any other generic class alike, since nothing
-   * checks a value's arguments as it is written, and so is an array whose component, once every
-   * array level is taken off, is given type arguments or is a variable: its class carries only the
-   * erasure of that component. Any other value is checked against the erasure of the receiving
-   * side's member type as it is written, unless every value of the sending side's is already of
-   * that class; that includes an array of a class with no type arguments, whose class carries its
-   * component whole.
+   * <p>Handed across unchanged, a value is either copied or shared. A container the allocation
+   * table rebuilds is copied, shallowly ({@link #decidePair} on {@code declared} against itself),
+   * and anything else, an {@code Optional}, an array and any other generic class included, is
+   * handed across as the same object, which both sides then hold. A shared value has to be one the
+   * receiving side's type admits as Java assigns it: its type arguments are the receiving side's,
+   * or contained by a wildcard there, since a write through either side's type reaches the object
+   * the other holds. A copy holds the sending side's own elements, so each of its arguments needs
+   * every value the sending side's stands for to fit the receiving side's as a shared value. It
+   * needs no more where the copy is a fresh container only the receiving side writes to, or an
+   * unmodifiable source handed across as itself, which the receiving side cannot write through. A
+   * copy that keeps the comparator the source orders its elements, or a map its keys, by is neither
+   * for those: the comparator takes only the source's element type, so the argument it orders has
+   * to be the sending side's own. A variable the receiving side passes through admits what its
+   * bounds do, a bound given type arguments as a value both sides hold, and an array admits an
+   * array whose component fits its own, as Java's arrays do.
+   *
+   * <p>A value that fits is not checked. Otherwise a type given arguments is refused, a container
+   * and any other generic class alike, since nothing checks a value's arguments as it is written.
+   * So is a variable with a bound given arguments that names no variable, and an array whose
+   * component, once every array level is taken off, is given type arguments or is a variable: its
+   * class carries only the erasure of that component. Any other value is checked against the
+   * erasure of the receiving side's member type as it is written, unless every value of the sending
+   * side's is already of that class; that includes an array of a class with no type arguments,
+   * whose class carries its component whole.
    */
-  public FixedFit<T> fixedFit(final T sendingMember, final T receivingMember, final String componentName) {
-    if (fitsFixed(sendingMember, receivingMember)) return new FixedFit.Fits<>();
+  public FixedFit<T> fixedFit(
+    final T declared,
+    final T sendingMember,
+    final T receivingMember,
+    final String componentName
+  ) {
+    final var copied = copiedAcross(declared);
+    final var ordered = copied && mayKeepSourceOrder(declared);
+    final var fits = copied
+      ? fitsCopy(sendingMember, receivingMember, ordered)
+      : fitsShared(sendingMember, receivingMember);
+    if (fits) return new FixedFit.Fits<>();
+    if (ordered && fitsCopy(sendingMember, receivingMember, false)) {
+      return new FixedFit.Refused<>(
+        FixedFit.Reason.ORDERED_COPY,
+        PairingMessages.orderedCopyArgumentDiffers(
+          componentName,
+          props.typeName(sendingMember),
+          props.typeName(receivingMember)
+        )
+      );
+    }
     if (
       containerViewOf(receivingMember) != null ||
       !props.typeArguments(receivingMember).isEmpty() ||
-      genericComponent(receivingMember)
+      genericComponent(receivingMember) ||
+      boundGivenArguments(receivingMember)
     ) {
       return new FixedFit.Refused<>(
+        FixedFit.Reason.ARGUMENTS,
         PairingMessages.fixedArgumentsDoNotFit(
           componentName,
           props.typeName(sendingMember),
@@ -535,25 +571,137 @@ public final class PairingRules<T> {
   }
 
   /**
-   * Whether every value of {@code sending} fits {@code receiving}. A variable on the receiving side
-   * admits what its erasure does. An array fits an array whose component its own component fits.
-   * Where the two are the same class their type arguments are compared one by one ({@link
+   * Whether a value of the declared type {@code declared}, handed across unchanged, arrives as a
+   * copy rather than as the object the sending side holds: what {@link #decidePair} decides for the
+   * declared type paired with itself.
+   */
+  private boolean copiedAcross(final T declared) {
+    return !(unchanged(declared) instanceof PairDecision.Identity<T>);
+  }
+
+  /**
+   * Whether a container of type {@code sending}, copied, fits {@code receiving}: the copy holds the
+   * sending side's elements, so each argument of the receiving side's has to admit every value the
+   * sending side's stands for, as that value is shared ({@link #fitsArgument}). Where the copy can
+   * keep the comparator the source orders by, {@code ordered}, the argument it orders, the first of
+   * every class the allocation table names, has to be the sending side's own, since the comparator
+   * takes only values of that type.
+   */
+  private boolean fitsCopy(final T sending, final T receiving, final boolean ordered) {
+    if (fitsShared(sending, receiving)) return true;
+    final var receivingArguments = props.typeArguments(receiving);
+    final var sendingArguments = props.typeArguments(sending);
+    if (receivingArguments.isEmpty() || sendingArguments.size() != receivingArguments.size()) return false;
+    if (!props.sameType(props.rawType(sending), props.rawType(receiving))) return false;
+    for (int i = 0; i < receivingArguments.size(); i++) {
+      final var copy = !(ordered && i == 0);
+      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i), copy)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The JDK containers whose copy keeps the comparator the source orders its elements, or a map its
+   * keys, by.
+   */
+  private static final List<String> ORDER_KEEPING = List.of(
+    "java.util.TreeSet",
+    "java.util.concurrent.ConcurrentSkipListSet",
+    "java.util.PriorityQueue",
+    "java.util.concurrent.PriorityBlockingQueue",
+    "java.util.TreeMap",
+    "java.util.concurrent.ConcurrentSkipListMap"
+  );
+
+  /**
+   * Whether the copy of a value declared as {@code declared} can keep the comparator the source
+   * orders by. A copy of a JDK container keeps the container's class, comparator included, so it
+   * can wherever the declared type holds one of the containers that keep one: a {@code Set} or a
+   * {@code Collection} can hold a {@code TreeSet}, a {@code Queue} a {@code PriorityQueue}, and a
+   * {@code Map} a {@code TreeMap}.
+   */
+  private boolean mayKeepSourceOrder(final T declared) {
+    final var raw = props.rawType(declared);
+    return ORDER_KEEPING.stream().anyMatch(name -> props.isImplementedBy(raw, name));
+  }
+
+  /**
+   * Whether every value of {@code sending} fits {@code receiving} while both sides hold it. A
+   * variable on the receiving side admits what its bounds do ({@link #fitsVariable}). An array fits
+   * an array whose component its own component fits. Where the two are the same class their type
+   * arguments are compared one by one, each contained by the receiving side's ({@link
    * #fitsArgument}).
    */
-  private boolean fitsFixed(final T sending, final T receiving) {
-    if (props.isTypeVariable(receiving)) return props.isAssignable(sending, props.erasure(receiving));
+  private boolean fitsShared(final T sending, final T receiving) {
+    if (props.isTypeVariable(receiving)) return fitsVariable(sending, receiving);
     if (props.isAssignable(sending, receiving)) return true;
     final var receivingComponent = props.componentType(receiving);
     if (receivingComponent != null) {
       final var sendingComponent = props.componentType(sending);
-      return sendingComponent != null && fitsFixed(sendingComponent, receivingComponent);
+      return sendingComponent != null && fitsShared(sendingComponent, receivingComponent);
     }
     final var receivingArguments = props.typeArguments(receiving);
     final var sendingArguments = props.typeArguments(sending);
     if (receivingArguments.isEmpty() || sendingArguments.size() != receivingArguments.size()) return false;
     if (!props.sameType(props.rawType(sending), props.rawType(receiving))) return false;
     for (int i = 0; i < receivingArguments.size(); i++) {
-      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i))) return false;
+      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i), false)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether every value of {@code sending} fits the variable {@code receiving}, which the receiving
+   * side passes through: its erasure, and every bound given type arguments that names no variable,
+   * as a value both sides hold. A bound naming a variable, such as {@code Comparable<Y>}, says what
+   * a value is only against the side's other values of that variable, which one value does not
+   * show, so only its erasure is asked of it.
+   */
+  private boolean fitsVariable(final T sending, final T receiving) {
+    if (!props.isAssignable(sending, props.erasure(receiving))) return false;
+    for (final var bound : props.upperBounds(receiving)) {
+      if (givenArgumentsNamingNoVariable(bound) && !fitsShared(sending, bound)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether {@code type} is a variable with a bound given type arguments that names no variable,
+   * which a check of a value's class cannot show it fits.
+   */
+  private boolean boundGivenArguments(final T type) {
+    return (
+      props.isTypeVariable(type) && props.upperBounds(type).stream().anyMatch(this::givenArgumentsNamingNoVariable)
+    );
+  }
+
+  /** Whether {@code type} is given type arguments and names no type variable. */
+  private boolean givenArgumentsNamingNoVariable(final T type) {
+    return !props.typeArguments(type).isEmpty() && !props.mentionsTypeVariable(type);
+  }
+
+  /**
+   * Whether the type argument {@code sending} names the type the type argument {@code receiving},
+   * which is no wildcard, names: the same type, or one that differs from it only where {@code
+   * receiving} names a variable the receiving side passes through, which admits what its bounds do
+   * ({@link #fitsVariable}). A wildcard names no one type, and a variable of the sending side's is
+   * no type but itself.
+   */
+  private boolean namesTheSameType(final T sending, final T receiving) {
+    if (props.isTypeVariable(receiving)) return fitsVariable(valuesOf(sending), receiving);
+    if (props.isWildcard(sending)) return false;
+    if (props.sameType(sending, receiving)) return true;
+    final var receivingComponent = props.componentType(receiving);
+    if (receivingComponent != null) {
+      final var sendingComponent = props.componentType(sending);
+      return sendingComponent != null && namesTheSameType(sendingComponent, receivingComponent);
+    }
+    final var receivingArguments = props.typeArguments(receiving);
+    final var sendingArguments = props.typeArguments(sending);
+    if (receivingArguments.isEmpty() || sendingArguments.size() != receivingArguments.size()) return false;
+    if (!props.sameType(props.rawType(sending), props.rawType(receiving))) return false;
+    for (int i = 0; i < receivingArguments.size(); i++) {
+      if (!fitsArgument(sendingArguments.get(i), receivingArguments.get(i), false)) return false;
     }
     return true;
   }
@@ -573,6 +721,11 @@ public final class PairingRules<T> {
    * fixes on its supertypes, as {@code class Names extends ArrayList<String>} gives {@code List} a
    * {@code String}. A generic class used raw gives no arguments, and a result of a class neither
    * extends, {@code Object} included, cannot be shown to fit.
+   *
+   * <p>The result is written as it is, and nothing shows that only the receiving side holds it: a
+   * conversion may return its argument, or any value something else keeps. So an argument that is
+   * no wildcard contains only one naming the same type, as for any value two holders share, and a
+   * {@code List<Integer>} result does not fit a {@code List<Number>} parameter.
    */
   public boolean argumentsFit(final T sending, final T receiving) {
     final var receivingArguments = props.typeArguments(receiving);
@@ -599,7 +752,7 @@ public final class PairingRules<T> {
     }
     if (given.isEmpty() || given.size() != wanted.size()) return false;
     for (int i = 0; i < wanted.size(); i++) {
-      if (!fitsArgument(given.get(i), wanted.get(i))) return false;
+      if (!fitsArgument(given.get(i), wanted.get(i), false)) return false;
     }
     return true;
   }
@@ -634,22 +787,27 @@ public final class PairingRules<T> {
   }
 
   /**
-   * Whether the type argument {@code receiving} contains what the type argument {@code sending}
-   * stands for, as Java's containment of type arguments decides it: an unbounded wildcard contains
-   * anything; {@code ? extends B} contains an argument whose values all fit {@code B}; {@code ?
-   * super B} contains an argument every {@code B} is a value of, which only one naming a type with
-   * no variable in it, or a wildcard bounded below by one, can show; and any other argument
-   * contains one whose values all fit it. A sending wildcard stands for values of its upper bound,
-   * {@code Object} where it declares none.
+   * Whether the type argument {@code receiving} admits what the type argument {@code sending}
+   * stands for. A wildcard decides it as Java's containment of type arguments does: an unbounded
+   * one contains anything; {@code ? extends B} contains an argument whose values all fit {@code B};
+   * and {@code ? super B} contains an argument every {@code B} is a value of, which only one naming
+   * a type with no variable in it, or a wildcard bounded below by one, can show. A sending wildcard
+   * stands for values of its upper bound, {@code Object} where it declares none.
+   *
+   * <p>Any other argument admits, in the arguments of a {@code copy} built for the receiving side,
+   * an argument whose values all fit it, since the copy is a fresh container only that side holds.
+   * In the arguments of a value both sides hold, it contains only an argument naming the same type
+   * ({@link #namesTheSameType}): a {@code Box<Integer>} held as a {@code Box<Number>} too would
+   * take a {@code Double} through the one and read it as an {@code Integer} through the other.
    */
-  private boolean fitsArgument(final T sending, final T receiving) {
+  private boolean fitsArgument(final T sending, final T receiving, final boolean copy) {
     if (props.isWildcard(receiving)) {
       final var lower = props.lowerBound(receiving);
       if (lower != null) return everyValueIsOf(lower, sending);
       final var upper = props.upperBound(receiving);
-      return upper == null || fitsFixed(valuesOf(sending), upper);
+      return upper == null || fitsShared(valuesOf(sending), upper);
     }
-    return fitsFixed(valuesOf(sending), receiving);
+    return copy ? fitsShared(valuesOf(sending), receiving) : namesTheSameType(sending, receiving);
   }
 
   /** The type the values a type argument stands for are of: a wildcard's upper bound, or itself. */
@@ -698,14 +856,33 @@ public final class PairingRules<T> {
    * table's answer for the declared type is what a class that cannot be built falls back to.
    * Anything else passes through as itself: a scalar, a record, an {@code Optional}, and a
    * container declared as a class the table does not name.
+   *
+   * <p>A map whose key names a type variable is copied too. Two key types that hold variables
+   * cannot be shown to be the same type, which is why {@link #containerViewOf} gives such a map no
+   * view, but a pair of one declared type has one key type, carried across unchanged.
    */
   private PairDecision<T> unchanged(final T type) {
-    final var view = settledAgainst(containerViewOf(type), null);
+    final var own = containerViewOf(type);
+    final var view = settledAgainst(own == null ? mapKeyedByVariable(type) : own, null);
     if (view == null || view.kind() == ContainerView.Kind.OPTIONAL) return new PairDecision.Identity<>();
     if (!(allocationFor(type, view.kind()) instanceof Allocation.Build)) return new PairDecision.Identity<>();
     return view.kind() == ContainerView.Kind.MAP_VALUES
       ? new PairDecision.MapCopy<>()
       : new PairDecision.CollectionCopy<>();
+  }
+
+  /**
+   * The view of {@code type} as a map whose key names a type variable and is no wildcard, or null
+   * when it is not one. A generic class used raw gives no arguments, and so no view.
+   */
+  private ContainerView<T> mapKeyedByVariable(final T type) {
+    final var raw = props.rawType(type);
+    if (props.typeArguments(type).isEmpty() || !props.isSubtypeOf(raw, WellKnown.MAP)) return null;
+    final var arguments = props.typeArgumentsAs(type, WellKnown.MAP);
+    if (arguments.size() != 2) return null;
+    final var key = arguments.getFirst();
+    if (props.isWildcard(key) || !props.mentionsTypeVariable(key)) return null;
+    return new ContainerView<>(ContainerView.Kind.MAP_VALUES, arguments.get(1), key, raw);
   }
 
   /**

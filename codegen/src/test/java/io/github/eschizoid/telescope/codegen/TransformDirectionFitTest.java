@@ -572,4 +572,82 @@ class TransformDirectionFitTest {
       () -> "forward is the half to name first: " + compilation.errorMessages()
     );
   }
+
+  /**
+   * A bean pair whose {@code value} is a list of {@code Integer} on the source and of {@code
+   * Number} on the target, transformed forward by {@code demo.ListFn}, which takes any collection
+   * of numbers and returns {@code body}, typed {@code result}.
+   */
+  private static JavaFileObject[] listPair(final String result, final String body) {
+    return new JavaFileObject[] {
+      ProcessorHarness.source(
+        "demo.ListFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        import java.util.Collection;
+        public final class ListFn implements BridgeFn<Collection<? extends Number>, %1$s> {
+          @Override public %1$s forward(final Collection<? extends Number> a) { return %2$s; }
+          @Override public Collection<? extends Number> backward(final %1$s b) { return b; }
+        }
+        """.formatted(result, body)
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        import java.util.List;
+        @Bridge(value = demo.Tgt.class, transforms = {
+          @Transform(field = "value", using = demo.ListFn.class, forwardOnly = true)
+        })
+        public class Src {
+          private List<Integer> value;
+          public List<Integer> getValue() { return value; }
+          public void setValue(final List<Integer> value) { this.value = value; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Tgt",
+        """
+        package demo;
+        import java.util.List;
+        public class Tgt {
+          private List<Number> value;
+          public List<Number> getValue() { return value; }
+          public void setValue(final List<Number> value) { this.value = value; }
+        }
+        """
+      ),
+    };
+  }
+
+  @Test
+  @DisplayName("a transform result whose type arguments are not the member's own is refused by name")
+  void aResultWhoseArgumentsAreNotTheMembersIsRefused() {
+    // A result is written as it is, and nothing shows that only the target holds it: this one is
+    // the source's own list, which a write of a Double through the target's List<Number> would
+    // reach. Its type arguments have to be the member's, as a cast to the member's type needs.
+    final var compilation = compile(listPair("java.util.Collection<? extends Number>", "a"));
+
+    assertFalse(compilation.success(), "a result held as a Collection<? extends Number> is no List<Number>");
+    assertTrue(
+      compilation.hasError(
+        "does not fit forward: demo.ListFn's forward resolves to (java.util.Collection<? extends java.lang.Number>)" +
+          " -> java.util.Collection<? extends java.lang.Number>, which does not carry" +
+          " java.util.List<java.lang.Integer> -> java.util.List<java.lang.Number>"
+      ),
+      () -> "the diagnostic should name the result and the member: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a transform result of a wider class with the member's own type arguments is written after a check")
+  void aWiderResultWithTheMembersArgumentsIsWritten() {
+    final var compilation = compile(listPair("java.util.Collection<Number>", "new java.util.ArrayList<Number>(a)"));
+
+    assertTrue(compilation.success(), () -> "the result's arguments are the member's: " + compilation.errorMessages());
+  }
 }
