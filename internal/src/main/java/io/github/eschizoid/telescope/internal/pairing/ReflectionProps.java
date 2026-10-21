@@ -231,6 +231,11 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public Type enclosingType(final Type t) {
+    return t instanceof ParameterizedType parameterized ? parameterized.getOwnerType() : null;
+  }
+
+  @Override
   public Type componentType(final Type t) {
     return componentOf(t);
   }

@@ -576,6 +576,22 @@ public final class MhIso {
     final MethodHandle isoDir,
     final Iso<Object, Object> identity
   ) {
+    // A slot a conversion of the row's own fills: the conversion's own filter, then the check of
+    // its result against the member written, so the slot stays on the composed handle.
+    if (slotIso instanceof ResultCheck check && sp >= 0) {
+      final MethodHandle filter = isoDir == ISO_TO ? check.forwardFilter() : check.backwardFilter();
+      final MethodHandle converted = buildFilter(
+        srcCls,
+        Object.class,
+        srcAccessors,
+        sp,
+        check.conversion(),
+        isoDir,
+        identity
+      );
+      if (filter == null) return converted.asType(MethodType.methodType(slotType, srcCls));
+      return MethodHandles.filterReturnValue(converted, filter).asType(MethodType.methodType(slotType, srcCls));
+    }
     // A value handed across unchanged into a side that fixes its class: the raw read, filtered by
     // the check where the side written fixes one, so the slot stays on the composed handle.
     if (slotIso instanceof FixedCheck check && sp >= 0) {
