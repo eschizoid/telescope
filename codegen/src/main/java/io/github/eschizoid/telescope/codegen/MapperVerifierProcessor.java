@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
@@ -31,7 +32,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
@@ -48,13 +48,11 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
-import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
-import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
@@ -344,7 +342,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     String targetMethod
   ) {}
 
-  /** A pair's properties on each side, as members of the pair's classes and as declared. */
+  /**
+   * A pair's properties on each side, as members of a type of each side's class and as declared.
+   */
   private record PairSides(
     Map<String, TypeMirror> source,
     Map<String, TypeMirror> target,
@@ -565,9 +565,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, name));
         }
         final var seen = new HashSet<String>();
-        seen.add(pairKey(srcType, tgtType));
+        seen.add(pairKey(srcEl, tgtEl));
+        final var sides = classSides(srcEl, tgtEl);
         for (final var name : match.matched()) {
-          verifyDeep(srcProps.get(name), tgtProps.get(name), name, node, seen, false);
+          verifyProperty(srcEl, tgtEl, sides, name, name, name, node, seen, false);
         }
       }
       verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
@@ -1175,7 +1176,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           // carries user functions (or a user default), which construction accepts as-is.
           if ("to".equals(rowName) && rowArgs.size() == 2) {
             final var seen = new HashSet<String>();
-            verifyDeep(src.type(), tgt.type(), src.name() + " → " + tgt.name(), row, seen, forwardOnly);
+            final var componentName = src.name() + " → " + tgt.name();
+            final var sides = classSides(src.owner(), tgt.owner());
+            final var srcName = propertyName(src.method(), src.owner());
+            final var tgtName = propertyName(tgt.method(), tgt.owner());
+            // An accessor that reads no property is refused by construction for that alone.
+            if (sides.source().containsKey(srcName) && sides.target().containsKey(tgtName)) {
+              verifyProperty(src.owner(), tgt.owner(), sides, srcName, tgtName, componentName, row, seen, forwardOnly);
+            }
           }
           return true;
         }
@@ -1277,12 +1285,54 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
+     * Replay construction's pairing of property {@code srcName} of {@code srcEl} with property
+     * {@code tgtName} of {@code tgtEl}, whose properties are {@code sides} ({@link #classSides}).
+     * The shared rules decide which types the pairing reads the two as ({@link
+     * PairingRules#pairedTypes}). A value handed across unchanged is refused only where a side's
+     * class fixes type arguments the value cannot be shown to fit ({@link PairingRules#fixedFit}):
+     * the target, and the source too unless {@code forwardOnly}, since a mapper that runs forward
+     * only never writes it. Any other pairing is decided as {@link #verifyDeep} decides it.
+     */
+    private void verifyProperty(
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final PairSides sides,
+      final String srcName,
+      final String tgtName,
+      final String componentName,
+      final Tree at,
+      final Set<String> seen,
+      final boolean forwardOnly
+    ) {
+      final var paired = rules.pairedTypes(
+        sides.source().get(srcName),
+        sides.target().get(tgtName),
+        sides.declaredSource().get(srcName),
+        sides.declaredTarget().get(tgtName),
+        srcEl.asType(),
+        tgtEl.asType()
+      );
+      if (!paired.handedAcross()) {
+        verifyDeep(paired.source(), paired.target(), componentName, at, seen, forwardOnly);
+        return;
+      }
+      final var intoTarget = rules.fixedFit(paired.sourceMember(), paired.targetMember(), componentName);
+      final var intoSource = forwardOnly
+        ? null
+        : rules.fixedFit(paired.targetMember(), paired.sourceMember(), componentName);
+      if (intoTarget instanceof FixedFit.Refused<TypeMirror> refused) report(at, refused.message());
+      else if (intoSource instanceof FixedFit.Refused<TypeMirror> refused) report(at, refused.message());
+    }
+
+    /**
      * Replay the shared pair decision for one field pair, recursing exactly as construction does:
      * container lifts and Optional bridges recurse on elements; reflectable pairs recurse on their
-     * same-name matches (nested pairs are lenient about unmatched fields, as at runtime, but each
-     * matched nested field is still shape-checked). Cycles terminate via {@code seen}. {@code
-     * forwardOnly} holds for a {@code mapperForward} site, whose enum pairs need a counterpart for
-     * each source constant only.
+     * same-name matches, read as members of the pair's classes whatever type arguments the pair
+     * gives them, since construction converts a pair given type arguments as its classes (nested
+     * pairs are lenient about unmatched fields, as at runtime, but each matched nested field is
+     * still checked). Cycles terminate via {@code seen}. {@code forwardOnly} holds for a {@code
+     * mapperForward} site, whose enum pairs need a counterpart for each source constant only, and
+     * whose source is never written.
      */
     private void verifyDeep(
       final TypeMirror srcType,
@@ -1292,29 +1342,28 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final Set<String> seen,
       final boolean forwardOnly
     ) {
-      // A type variable is bound only when the mapper is built, so nothing here can say what it
-      // pairs with. Skip rather than mis-decide: the construction backstop still applies.
-      if (!staticallyComparable(srcType) || !staticallyComparable(tgtType)) return;
+      // Construction converts a pair as its classes, so a type variable a member type names stands
+      // for itself there, never for an argument a value may carry, and the shared decision reads
+      // it the same way in both worlds.
       final var decision = rules.decidePair(srcType, tgtType, componentName, forwardOnly);
       if (decision instanceof PairDecision.Incompatible<TypeMirror> incompatible) {
         report(at, incompatible.message());
         return;
       }
       if (decision instanceof PairDecision.RecursePair) {
-        if (!seen.add(pairKey(srcType, tgtType))) return;
         final var srcEl = props.elementOf(srcType);
         final var tgtEl = props.elementOf(tgtType);
         if (srcEl == null || tgtEl == null) return;
-        final var srcProps = propertiesOf(srcType, srcEl);
-        final var tgtProps = propertiesOf(tgtType, tgtEl);
+        if (!seen.add(pairKey(srcEl, tgtEl))) return;
+        final var sides = classSides(srcEl, tgtEl);
         final var match = PairingRules.matchFields(
-          List.copyOf(srcProps.keySet()),
-          List.copyOf(tgtProps.keySet()),
+          List.copyOf(sides.source().keySet()),
+          List.copyOf(sides.target().keySet()),
           Set.of(),
           Set.of()
         );
         for (final var name : match.matched()) {
-          verifyDeep(srcProps.get(name), tgtProps.get(name), name, at, seen, forwardOnly);
+          verifyProperty(srcEl, tgtEl, sides, name, name, name, at, seen, forwardOnly);
         }
         return;
       }
@@ -1382,23 +1431,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             method.getModifiers().contains(Modifier.STATIC) &&
             method.getModifiers().contains(Modifier.PUBLIC)
         );
-    }
-
-    /** True when {@code t} contains no type variable at any depth, wildcard bounds included. */
-    private boolean staticallyComparable(final TypeMirror t) {
-      if (t.getKind() == TypeKind.TYPEVAR) return false;
-      if (t instanceof WildcardType wildcard) {
-        return Stream.of(wildcard.getExtendsBound(), wildcard.getSuperBound())
-          .filter(Objects::nonNull)
-          .allMatch(this::staticallyComparable);
-      }
-      if (t instanceof ArrayType at) return staticallyComparable(at.getComponentType());
-      if (t instanceof DeclaredType dt) {
-        for (final var arg : dt.getTypeArguments()) {
-          if (!staticallyComparable(arg)) return false;
-        }
-      }
-      return true;
     }
 
     /** The {@code TypeMirror} behind a class-literal argument ({@code Order.class}), or null. */
@@ -1780,6 +1812,21 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    */
   private Map<String, TypeMirror> declaredPropertiesOf(final TypeElement element) {
     return properties(null, element);
+  }
+
+  /**
+   * The properties of the pair of {@code source} and {@code target} as construction reads them: as
+   * members of each class with every type variable the class declares kept as that variable, and as
+   * declared. Construction converts a pair as its classes, whatever type arguments a property or a
+   * class literal gives them, so a variable's bound says what a side holds.
+   */
+  private PairSides classSides(final TypeElement source, final TypeElement target) {
+    return new PairSides(
+      propertiesOf(source.asType(), source),
+      propertiesOf(target.asType(), target),
+      declaredPropertiesOf(source),
+      declaredPropertiesOf(target)
+    );
   }
 
   private Map<String, TypeMirror> properties(final DeclaredType declared, final TypeElement element) {

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Type;
@@ -47,8 +48,7 @@ public record Reflective(
   Function<String, String> normalize,
   Function<Class<?>, Beans.BeanWriter<?>> chosenWriter
 ) {
-  private static final ReflectionProps PROPS = new ReflectionProps();
-  private static final PairingRules<Type> RULES = new PairingRules<>(PROPS);
+  private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
 
   public static final Reflective RECORDS = new Reflective(
     Records::componentNames,
@@ -112,35 +112,11 @@ public record Reflective(
   }
 
   /**
-   * The types one pairing reads its source and target property as, and the types each has as a
-   * member of its own class. The two pairs differ only where the pairing reads as declared.
-   *
-   * @param source the type the pairing reads the source property as
-   * @param target the type the pairing reads the target property as
-   * @param sourceMember the source property's type as a member of the source class; read as
-   *     declared, with each variable the class passes through kept as that variable
-   * @param targetMember the target property's type as a member of the target class, read the same
-   *     way
-   * @param asDeclared whether the pairing reads both properties as declared
-   */
-  public record PairedTypes(Type source, Type target, Type sourceMember, Type targetMember, boolean asDeclared) {
-    /**
-     * Whether the pairing reads as declared and both sides declare one type, so a value is handed
-     * across unchanged and only a class one side fixes a type variable to can refuse it ({@link
-     * PairingRules#fixedFit}).
-     */
-    public boolean handedAcross() {
-      return asDeclared && PROPS.sameType(source, target);
-    }
-  }
-
-  /**
    * The types of a source property and the target property it pairs with, decided once for the pair
-   * by {@link PairingRules#readsAsDeclared}: each as a member of its own class, or both as
-   * declared. Read as declared, the target's type reads each type variable its class declares as
-   * the source class's variable in the same position ({@link PairingRules#alignedToSource}).
+   * by the shared rules ({@link PairingRules#pairedTypes}) from each property's type as a member of
+   * its own class and as its accessor declares it.
    */
-  public static PairedTypes pairedTypes(
+  public static PairedTypes<Type> pairedTypes(
     final Reflective sourceRefl,
     final Class<?> source,
     final String sourceName,
@@ -148,17 +124,13 @@ public record Reflective(
     final Class<?> target,
     final String targetName
   ) {
-    final var asSourceMember = memberType(sourceRefl, source, sourceName);
-    final var asTargetMember = memberType(targetRefl, target, targetName);
-    if (!RULES.readsAsDeclared(asSourceMember, asTargetMember)) {
-      return new PairedTypes(asSourceMember, asTargetMember, asSourceMember, asTargetMember, false);
-    }
-    return new PairedTypes(
-      sourceRefl.genericType(source, sourceName),
-      RULES.alignedToSource(targetRefl.genericType(target, targetName), source, target),
+    return RULES.pairedTypes(
       resolvedMemberType(sourceRefl, source, sourceName),
       resolvedMemberType(targetRefl, target, targetName),
-      true
+      sourceRefl.genericType(source, sourceName),
+      targetRefl.genericType(target, targetName),
+      source,
+      target
     );
   }
 
@@ -169,11 +141,6 @@ public record Reflective(
    */
   private static Type resolvedMemberType(final Reflective refl, final Class<?> cls, final String name) {
     return cls.isRecord() ? refl.genericType(cls, name) : Beans.resolvedPropertyType(cls, name);
-  }
-
-  /** A record component's type, which nothing inherits, or a bean property's type as a member. */
-  private static Type memberType(final Reflective refl, final Class<?> cls, final String name) {
-    return cls.isRecord() ? refl.genericType(cls, name) : Beans.memberPropertyType(cls, name);
   }
 
   /**
