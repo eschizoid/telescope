@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import javax.lang.model.element.Modifier;
@@ -82,6 +83,7 @@ final class MethodInstantiation {
     if (!gather(declared, taken, Relation.TOP, gathered)) return null;
     final var parameter = parameterVariable(member);
     if (parameter >= 0) facts.get(parameter).lower.add(boxed(argument));
+    if (!sharedSupertypes(gathered)) return null;
     final var solved = new TypeMirror[variables.size()];
     for (int i = 0; i < variables.size(); i++) {
       final var fact = facts.get(i);
@@ -89,11 +91,17 @@ final class MethodInstantiation {
         final var exact = fact.exact.getFirst();
         if (fact.exact.stream().anyMatch(t -> !types.isSameType(t, exact))) return null;
         solved[i] = exact;
-      } else if (parameter == i) {
-        solved[i] = boxed(argument);
-      } else {
-        solved[i] = finalBound(variables.get(i));
+        continue;
       }
+      solved[i] = finalClass(boundsOf(variables.get(i)));
+      // An argument is a lower bound only: a bound naming the variable can raise it above the
+      // argument's type, so the argument is its instantiation only where no bound names it. A
+      // result fixed so is then checked against the taken type as a whole, which a check of its
+      // class may still reach.
+      if (solved[i] == null && parameter == i && !namedByABound(variables.get(i), variables)) {
+        solved[i] = boxed(argument);
+      }
+      if (solved[i] == null) solved[i] = finalClass(fact.uppers());
     }
     final var fixed = new ArrayList<TypeMirror>();
     final var values = new ArrayList<TypeMirror>();
@@ -124,8 +132,7 @@ final class MethodInstantiation {
         continue;
       }
       final var uppers = new ArrayList<TypeMirror>(bounds);
-      uppers.addAll(fact.upper);
-      uppers.addAll(fact.top);
+      uppers.addAll(fact.uppers());
       for (int a = 0; a < uppers.size(); a++) {
         for (int b = a + 1; b < uppers.size(); b++) {
           if (exclusive(uppers.get(a), uppers.get(b))) return null;
@@ -138,6 +145,44 @@ final class MethodInstantiation {
     final var result = props.substitute(declared, fixed, values);
     if (gathered.topUnrelated && props.mentionsTypeVariable(result)) return null;
     return result;
+  }
+
+  /**
+   * Records the type arguments a variable's bound shares with a type the variable has to be a
+   * subtype of: a class has one supertype of each generic class or interface, so where the bound
+   * and that type both reach one, their arguments to it are the same, and a variable among the
+   * bound's is that type's argument exactly. False where they cannot be the same.
+   */
+  private boolean sharedSupertypes(final Gathered into) {
+    for (int i = 0; i < into.variables.size(); i++) {
+      final var uppers = List.copyOf(into.facts.get(i).uppers());
+      for (final var bound : boundsOf(into.variables.get(i))) {
+        if (!(bound instanceof DeclaredType declared) || !names(bound, into.variables)) continue;
+        for (final var upper : uppers) {
+          if (!(upper instanceof DeclaredType wanted)) continue;
+          if (types.isSubtype(types.erasure(bound), types.erasure(upper))) {
+            final var view = viewAs(declared, (TypeElement) wanted.asElement());
+            if (view != null && !arguments(view, wanted, into)) return false;
+          } else if (types.isSubtype(types.erasure(upper), types.erasure(bound))) {
+            final var view = viewAs(wanted, (TypeElement) declared.asElement());
+            if (view != null && !containing(declared, view, into)) return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  /** Whether a bound of any of {@code variables} names {@code variable}. */
+  private boolean namedByABound(final TypeVariable variable, final List<? extends TypeVariable> variables) {
+    final var one = List.of(variable);
+    return variables
+      .stream()
+      .anyMatch(each ->
+        boundsOf(each)
+          .stream()
+          .anyMatch(bound -> names(bound, one))
+      );
   }
 
   /** How the type a variable stands for relates to the type it meets. */
@@ -169,6 +214,13 @@ final class MethodInstantiation {
 
     /** Types the variable is a supertype of. */
     final List<TypeMirror> lower = new ArrayList<>();
+
+    /** Every type the variable is a subtype of, inside the result or as the whole of it. */
+    List<TypeMirror> uppers() {
+      final var all = new ArrayList<>(upper);
+      all.addAll(top);
+      return all;
+    }
   }
 
   /**
@@ -281,8 +333,10 @@ final class MethodInstantiation {
 
   /**
    * Records what {@code given}'s type arguments ask of the variables they name, where {@code view},
-   * a parameterization of the same class, is a subtype of it: each argument that is a type contains
-   * only that type, so the view's argument in its place is that type exactly, and is no wildcard.
+   * a parameterization of the same class, is a subtype of it, so each of its arguments is contained
+   * in {@code given}'s: an argument that is a type contains only that type, which is no wildcard; a
+   * wildcard bounded from above contains the types below its bound, and one bounded from below the
+   * types above it.
    */
   private boolean containing(final DeclaredType given, final DeclaredType view, final Gathered into) {
     final var givenArguments = given.getTypeArguments();
@@ -290,9 +344,18 @@ final class MethodInstantiation {
     if (givenArguments.size() != viewArguments.size()) return true;
     for (int i = 0; i < givenArguments.size(); i++) {
       final var argument = givenArguments.get(i);
-      if (argument instanceof WildcardType || !names(argument, into.variables)) continue;
+      if (!names(argument, into.variables)) continue;
       final var met = viewArguments.get(i);
-      if (met instanceof WildcardType || !gather(argument, met, Relation.EXACT, into)) return false;
+      if (argument instanceof WildcardType wildcard) {
+        if (met instanceof WildcardType) continue;
+        if (wildcard.getExtendsBound() != null) {
+          if (!gather(wildcard.getExtendsBound(), met, Relation.SUPERTYPE, into)) return false;
+        } else if (wildcard.getSuperBound() != null) {
+          if (!gather(wildcard.getSuperBound(), met, Relation.SUBTYPE, into)) return false;
+        }
+      } else if (met instanceof WildcardType || !gather(argument, met, Relation.EXACT, into)) {
+        return false;
+      }
     }
     return true;
   }
@@ -313,18 +376,53 @@ final class MethodInstantiation {
   }
 
   /**
-   * Whether no class can be a subtype of both {@code a} and {@code b}: two classes, not interfaces,
-   * neither a subtype of the other, or two types one of which, read as the other's class, is a
-   * different parameterization of it, with types for every argument. A class has one supertype of
-   * each generic class or interface.
+   * Whether no class can be a subtype of both {@code a} and {@code b}, neither of which names a
+   * type variable: two classes, not interfaces, neither a subtype of the other; an array type and a
+   * class or interface every array does not extend, or two array types whose components are so; or
+   * two types that reach one generic class or interface with different types for its arguments,
+   * since a class has one supertype of each.
    */
   private boolean exclusive(final TypeMirror a, final TypeMirror b) {
+    if (a instanceof ArrayType aa && b instanceof ArrayType ab) {
+      final var ca = aa.getComponentType();
+      final var cb = ab.getComponentType();
+      if (ca.getKind().isPrimitive() || cb.getKind().isPrimitive()) return !types.isSameType(ca, cb);
+      return exclusive(ca, cb);
+    }
+    if (a instanceof ArrayType && b instanceof DeclaredType) return !types.isSubtype(a, b);
+    if (b instanceof ArrayType && a instanceof DeclaredType) return !types.isSubtype(b, a);
     if (!(a instanceof DeclaredType da) || !(b instanceof DeclaredType db)) return false;
     final var ea = types.erasure(a);
     final var eb = types.erasure(b);
-    if (types.isSubtype(ea, eb)) return differentlyParameterized(viewAs(da, (TypeElement) db.asElement()), db);
-    if (types.isSubtype(eb, ea)) return differentlyParameterized(viewAs(db, (TypeElement) da.asElement()), da);
-    return da.asElement().getKind().isClass() && db.asElement().getKind().isClass();
+    if (
+      da.asElement().getKind().isClass() &&
+      db.asElement().getKind().isClass() &&
+      !types.isSubtype(ea, eb) &&
+      !types.isSubtype(eb, ea)
+    ) {
+      return true;
+    }
+    for (final var supertype : supertypesOf(da)) {
+      if (supertype.getTypeArguments().isEmpty()) continue;
+      if (!types.isSubtype(eb, types.erasure(supertype))) continue;
+      if (differentlyParameterized(supertype, viewAs(db, (TypeElement) supertype.asElement()))) return true;
+    }
+    return false;
+  }
+
+  /** {@code type} and every class and interface it extends, each read as a supertype of it. */
+  private List<DeclaredType> supertypesOf(final DeclaredType type) {
+    final var found = new ArrayList<DeclaredType>();
+    final var pending = new ArrayDeque<DeclaredType>(List.of(type));
+    while (!pending.isEmpty()) {
+      final var next = pending.removeFirst();
+      if (found.stream().anyMatch(seen -> types.isSameType(seen, next))) continue;
+      found.add(next);
+      for (final var parent : types.directSupertypes(next)) {
+        if (parent instanceof DeclaredType declared) pending.addLast(declared);
+      }
+    }
+    return found;
   }
 
   private static boolean wildcardArgument(final DeclaredType type) {
@@ -333,7 +431,7 @@ final class MethodInstantiation {
 
   /** Whether {@code a} and {@code b}, one class's parameterizations, give it different types. */
   private boolean differentlyParameterized(final DeclaredType a, final DeclaredType b) {
-    if (a == null || a.getTypeArguments().isEmpty() || b.getTypeArguments().isEmpty()) return false;
+    if (a == null || b == null || a.getTypeArguments().isEmpty() || b.getTypeArguments().isEmpty()) return false;
     if (a.getTypeArguments().size() != b.getTypeArguments().size()) return false;
     if (props.mentionsTypeVariable(a) || props.mentionsTypeVariable(b)) return false;
     if (wildcardArgument(a) || wildcardArgument(b)) return false;
@@ -341,11 +439,11 @@ final class MethodInstantiation {
   }
 
   /**
-   * The final class among {@code variable}'s bounds, where one names no type variable and no
-   * wildcard; null otherwise.
+   * The final class among {@code candidates}, where one names no type variable and no wildcard;
+   * null otherwise. A variable a final class bounds holds instances of that class alone.
    */
-  private TypeMirror finalBound(final TypeVariable variable) {
-    for (final var bound : boundsOf(variable)) {
+  private TypeMirror finalClass(final List<? extends TypeMirror> candidates) {
+    for (final var bound : candidates) {
       if (!(bound instanceof DeclaredType declared) || props.mentionsTypeVariable(bound)) continue;
       if (wildcardArgument(declared)) continue;
       if (declared.asElement().getModifiers().contains(Modifier.FINAL)) return bound;

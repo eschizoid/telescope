@@ -562,7 +562,7 @@ class ViaMapperContainerShapeTest {
   @DisplayName(
     "whole-list overloads whose result is bounded by the final class String bind the whole property and are refused by name"
   )
-  void stringBoundedInferredResultBindsTheWholeProperty() {
+  void stringBoundedResultIsRefusedByName() {
     // A variable bounded by a final class holds only that class, so the overload's result is a
     // String, which the target's List<WzChDto> never takes: refused, not lifted over the elements.
     final var compilation = compiled(

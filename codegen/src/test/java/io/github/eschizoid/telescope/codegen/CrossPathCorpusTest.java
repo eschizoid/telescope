@@ -6521,6 +6521,57 @@ class CrossPathCorpusTest {
       "#0(child=\"<a>\")"
     ),
     new ResultRow(
+      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into a List<CharSequence>",
+      viaOwnRow(
+        "String",
+        "\"a\"",
+        "java.util.List<CharSequence>",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T, U extends java.util.List<T>> U forward(final T t) {" +
+          " return (U) new java.util.ArrayList<T>(java.util.List.of(t)); }\n",
+        "String.valueOf(d.get(0))"
+      ),
+      "#0(child=[\"a\"])"
+    ),
+    new ResultRow(
+      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into a Collection<CharSequence>",
+      viaOwnRow(
+        "String",
+        "\"a\"",
+        "java.util.Collection<CharSequence>",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T, U extends java.util.List<T>> U forward(final T t) {" +
+          " return (U) new java.util.ArrayList<T>(java.util.List.of(t)); }\n",
+        "String.valueOf(d.iterator().next())"
+      ),
+      "#0(child=[\"a\"])"
+    ),
+    new ResultRow(
+      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into an ArrayList<String>",
+      viaOwnRow(
+        "String",
+        "\"a\"",
+        "java.util.ArrayList<String>",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T, U extends java.util.List<T>> U forward(final T t) {" +
+          " return (U) new java.util.ArrayList<T>(java.util.List.of(t)); }\n",
+        "d.get(0)"
+      ),
+      "#0(child=[\"a\"])"
+    ),
+    new ResultRow(
+      "a @ViaMapper with two forwards inferring from the argument, the one with the narrower bound into a List<String>",
+      viaOwnRow(
+        "String",
+        "\"a\"",
+        "java.util.List<String>",
+        "  public static <T> T forward(final T t) { return t; }\n" +
+          "  public static <T extends CharSequence> java.util.List<T> forward(final T t) { return java.util.List.of(t); }\n",
+        "d.get(0)"
+      ),
+      "#0(child=[\"a\"])"
+    ),
+    new ResultRow(
       "a @ViaMapper whose overloaded forward infers a list of a variable bounded by CharSequence, into a List<String>",
       viaListRow(
         "<T extends CharSequence> java.util.List<T>",
@@ -6658,7 +6709,9 @@ class CrossPathCorpusTest {
     // class, a parameterized bound, and an intersection whose first bound is an interface. Then a
     // variable bounded by a final class, which is that class; one whose bound and the property's
     // type are two unrelated classes, or two parameterizations of one interface; one a wildcard
-    // bounds from below; and a result whose class the property's class does not extend.
+    // bounds from below; a result whose class the property's class does not extend; a variable
+    // bounded by a class and taken as an array; an enum's variable, whose Comparable is of itself;
+    // and a variable taken as a final class its bound is no supertype of.
     final var rows = List.of(
       List.of(
         "Uej",
@@ -6743,6 +6796,27 @@ class CrossPathCorpusTest {
         "<T> java.util.Collection<T> forward(final %1$sCh c)",
         "new java.util.ArrayList<T>()",
         "which no instantiation of its type variables"
+      ),
+      List.of(
+        "Vza",
+        "<T extends Number> T forward(final %1$sCh c)",
+        "null",
+        "'s forward returns T, which no instantiation of its type variables",
+        "String[]"
+      ),
+      List.of(
+        "Vgf",
+        "<E extends Enum<E>> E forward(final %1$sCh c)",
+        "null",
+        "'s forward returns E, which no instantiation of its type variables",
+        "Comparable<String>"
+      ),
+      List.of(
+        "Vbc",
+        "<T extends CharSequence> T forward(final %1$sCh c)",
+        "null",
+        "'s forward returns T, which no instantiation of its type variables",
+        "Integer"
       )
     );
     final var failures = new ArrayList<String>();
@@ -6758,7 +6832,7 @@ class CrossPathCorpusTest {
             .replace("java.util.List<String> forward(final %1$sCh c)", row.get(1))
             .replace(
               "java.util.List<String> d) { return new %1$sCh(d.get(0))",
-              property + " d) { return new %1$sCh(String.valueOf(d.get(0)))"
+              property + " d) { return new %1$sCh(String.valueOf(d))"
             )
             .replace("private java.util.List<String> child", "private " + property + " child")
             .replace("public java.util.List<String> getChild", "public " + property + " getChild")
@@ -6815,6 +6889,18 @@ class CrossPathCorpusTest {
         "public record UbvSrc(java.util.List<String> child) {}\n",
       "public record UbvTgt(UbvChDto child) {}\n"
     );
+    // The same rule on a lenient bridge, whose backward returns a list of a variable bounded by
+    // Number into the source's List<String>.
+    final var lenient = List.of(
+      "public record UblChDto(String name) {}\n",
+      "public class UblChMap {\n" +
+        "  public static UblChDto forward(final java.util.List<String> l) { return new UblChDto(l.get(0)); }\n" +
+        "  public static <T extends Number> java.util.List<T> backward(final UblChDto d) { return new java.util.ArrayList<T>(); }\n}\n",
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = UblTgt.class, lenient = true, viaMappers =" +
+        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = UblChMap.class))\n" +
+        "public record UblSrc(java.util.List<String> child) {}\n",
+      "public record UblTgt(UblChDto child) {}\n"
+    );
     // A @ViaMapper whose backward returns a list of its own variable, inferred from the
     // UbgChDto handed to it, into the source's List<String>.
     final var inferred = List.of(
@@ -6830,7 +6916,8 @@ class CrossPathCorpusTest {
     final var rows = List.of(
       Map.entry(transform, "@Transform field=\"value\" does not fit backward"),
       Map.entry(via, "'s backward returns java.util.Collection<java.lang.Integer>"),
-      Map.entry(inferred, "'s backward returns java.util.List<T>, which no instantiation of its type variables")
+      Map.entry(inferred, "'s backward returns java.util.List<T>, which no instantiation of its type variables"),
+      Map.entry(lenient, "UblChMap's backward returns java.util.List<T>, which no instantiation of its type variables")
     );
     for (final var row : rows) {
       final var all = row

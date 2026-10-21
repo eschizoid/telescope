@@ -23,20 +23,32 @@ import org.junit.jupiter.api.Test;
 /**
  * The instantiation of a generic method's variables its result's shape fixes, against what javac
  * itself decides for the same call: a result refused fits under no instantiation, so javac rejects
- * the call too, and a result fixed to a type the taken type takes is one javac accepts the call
- * for. A variable bounded by a final class is the one place the two part: javac accepts an
- * intersection of the class and an interface it does not implement, which holds no value but null.
+ * the call too; a result fixed to a type the taken type takes is one javac accepts the call for;
+ * and a call left to javac is one javac accepts. A variable a final class bounds is the one place a
+ * refusal and javac part: javac accepts an intersection of the class and an interface it does not
+ * implement, which holds no value but null. The shapes the instantiation leaves to javac although
+ * javac rejects them are marked, so each stays visible.
  */
 class MethodInstantiationTest {
+
+  /** How an answer stands against javac's verdict on the same call. */
+  private enum Mark {
+    /** The answer agrees with javac. */
+    AGREES,
+    /** Refused where javac accepts, for a variable a final class bounds. */
+    STRICTER,
+    /** Left to javac, which rejects the call: a shape the instantiation does not decide. */
+    KNOWN_GAP,
+  }
 
   /**
    * One call: the generic method as declared, the argument's type where it takes one, the type its
    * result is passed as, what the instantiation answers ({@code refused}, {@code open} where javac
-   * is left to infer it, or the result's type), and whether the answer is stricter than javac's.
+   * is left to infer it, or the result's type), and how that answer stands against javac's.
    */
-  private record Call(String method, String argument, String taken, String owed, boolean stricter) {
+  private record Call(String method, String argument, String taken, String owed, Mark mark) {
     Call(final String method, final String argument, final String taken, final String owed) {
-      this(method, argument, taken, owed, false);
+      this(method, argument, taken, owed, Mark.AGREES);
     }
   }
 
@@ -56,8 +68,8 @@ class MethodInstantiationTest {
     new Call("<T> List<T> m(T t)", "Integer", "List<String>", REFUSED),
     new Call("<T> List<T> m(T t)", "int", "List<Integer>", "java.util.List<java.lang.Integer>"),
     new Call("<T extends Integer> T m()", null, "Number", "java.lang.Integer"),
-    new Call("<T extends Integer> T m()", null, "List<String>", "java.lang.Integer", true),
-    new Call("<T extends Integer> List<T> m()", null, "List<? extends CharSequence>", REFUSED, true),
+    new Call("<T extends Integer> T m()", null, "List<String>", "java.lang.Integer", Mark.STRICTER),
+    new Call("<T extends Integer> List<T> m()", null, "List<? extends CharSequence>", REFUSED, Mark.STRICTER),
     new Call("<T extends Number> T m()", null, "String", REFUSED),
     new Call("<T extends Number> T m()", null, "CharSequence", OPEN),
     new Call("<T extends Comparable<Integer>> T m()", null, "Comparable<String>", REFUSED),
@@ -65,13 +77,13 @@ class MethodInstantiationTest {
     new Call("<T extends List<Integer>> T m()", null, "ArrayList<String>", REFUSED),
     new Call("<T extends Number> List<T> m()", null, "List<? super String>", REFUSED),
     new Call("<T> List<T> m()", null, "List<? super Integer>", OPEN),
-    new Call("<T extends Number> List<T> m()", null, "List<? extends Integer>", OPEN),
+    new Call("<T extends Number> List<T> m()", null, "List<? extends Integer>", "java.util.List<java.lang.Integer>"),
     new Call("<T> List<T> m(T t)", "String", "List<? extends CharSequence>", "java.util.List<java.lang.String>"),
     new Call("<T> List<T> m(T t)", "String", "List<? extends Integer>", REFUSED),
     new Call("<T> Collection<T> m()", null, "List<String>", REFUSED),
     new Call("<T> Collection<T> m(T t)", "String", "List<String>", "java.util.Collection<java.lang.String>"),
     new Call("<T> List<T> m()", null, "int", REFUSED),
-    new Call("<T> T[] m()", null, "String[]", OPEN),
+    new Call("<T> T[] m()", null, "String[]", "java.lang.String[]"),
     new Call("<T extends Number> T[] m()", null, "String[]", REFUSED),
     new Call("<T> T[] m()", null, "List<String>", REFUSED),
     new Call("<T> T[] m()", null, "Object", OPEN),
@@ -113,7 +125,49 @@ class MethodInstantiationTest {
       "java.util.Map<java.lang.String,java.util.List<java.lang.String>>"
     ),
     new Call("<K, V extends List<K>> Map<K, V> m()", null, "Map<String, List<Integer>>", REFUSED),
-    new Call("<K, V> Map<K, V> m()", null, "Map<String, ? extends Number>", OPEN)
+    new Call("<K, V> Map<K, V> m()", null, "Map<String, ? extends Number>", OPEN),
+    new Call("<T, U extends List<T>> U m(T t)", "String", "List<CharSequence>", OPEN),
+    new Call("<T, U extends List<T>> U m(T t)", "String", "Collection<CharSequence>", OPEN),
+    new Call("<T, U extends List<T>> U m(T t)", "String", "ArrayList<String>", OPEN),
+    new Call("<T, U extends List<T>> U m(T t)", "String", "List<Integer>", REFUSED),
+    new Call("<T, U extends T> U m(T t)", "String", "Integer", "java.lang.Integer"),
+    new Call("<T, U extends Collection<T>> U m(T t)", "String", "List<String>", OPEN),
+    new Call(
+      "<T extends Comparable<T>> T m(T t)",
+      "java.time.LocalDate",
+      "java.time.chrono.ChronoLocalDate",
+      "java.time.chrono.ChronoLocalDate"
+    ),
+    new Call("<T extends Comparable<T>> T m(T t)", "java.sql.Timestamp", "java.util.Date", "java.util.Date"),
+    new Call("<T extends Comparable<? super T>> T m(T t)", "java.sql.Timestamp", "java.util.Date", OPEN),
+    new Call("<T extends Comparable<T>> T m(T t)", "String", "CharSequence", OPEN),
+    new Call("<T extends Number, U extends Comparable<? extends T>> U m()", null, "String", REFUSED),
+    new Call("<T extends Number, U extends Comparable<? super T>> U m()", null, "String", REFUSED),
+    new Call("<T extends Comparable<T>> List<T> m(T t)", "Integer", "List<Number>", REFUSED),
+    new Call("<E extends Enum<E>> E m()", null, "Comparable<String>", REFUSED),
+    new Call("<E extends Enum<E>> E m()", null, "Comparable<java.time.DayOfWeek>", "java.time.DayOfWeek"),
+    new Call("<T extends Number> T m()", null, "String[]", REFUSED),
+    new Call("<T extends CharSequence> T m()", null, "Integer", REFUSED, Mark.STRICTER),
+    new Call("<T extends Number & Comparable<T>> T m()", null, "Integer", "java.lang.Integer"),
+    new Call("<T extends java.nio.file.Path> T m()", null, "Collection<String>", REFUSED),
+    new Call("<T extends M.IA> T m()", null, "M.IB", REFUSED),
+    new Call("<T extends List<String>> T m()", null, "Set<Integer>", REFUSED),
+    new Call("<T extends List<String>> T m()", null, "Set<String>", OPEN),
+    new Call(
+      "<T extends String> List<? extends T> m()",
+      null,
+      "List<? extends Integer>",
+      "java.util.List<? extends java.lang.String>"
+    ),
+    new Call("<T extends Number> List<? extends T> m()", null, "List<? extends String>", OPEN, Mark.KNOWN_GAP),
+    new Call("<T extends Number> M.Outer<T>.Inner m()", null, "M.Outer<String>.Inner", OPEN, Mark.KNOWN_GAP),
+    new Call(
+      "<T extends Comparable<T>> Map<T, T> m()",
+      null,
+      "Map<? super Integer, ? super Long>",
+      OPEN,
+      Mark.KNOWN_GAP
+    )
   );
 
   /** Asks the instantiation about each call in the first round and keeps the answers. */
@@ -162,7 +216,14 @@ class MethodInstantiationTest {
 
   /** The class declaring each call's method, as {@code m<index>}. */
   private static JavaFileObject methods() {
-    final var body = new StringBuilder("package demo;\n" + IMPORTS + "public class M {\n");
+    final var body = new StringBuilder(
+      "package demo;\n" +
+        IMPORTS +
+        "public class M {\n" +
+        "  public interface IA extends Comparable<String> {}\n" +
+        "  public interface IB extends Comparable<Integer> {}\n" +
+        "  public static class Outer<T> { public class Inner {} }\n"
+    );
     for (int i = 0; i < CALLS.size(); i++) {
       final var call = CALLS.get(i);
       body
@@ -238,12 +299,20 @@ class MethodInstantiationTest {
       final var answer = asking.answers.get(name);
       if (!call.owed().equals(answer)) failures.add(what + ": answered " + answer + ", owed " + call.owed());
       final var javacRejects = rejected.contains("Call" + i);
-      if (REFUSED.equals(answer) && !javacRejects && !call.stricter()) {
+      if (REFUSED.equals(answer) && !javacRejects && call.mark() != Mark.STRICTER) {
         failures.add(what + ": refused, but javac accepts the call");
       }
-      if (call.stricter() && javacRejects) failures.add(what + ": marked stricter than javac, which rejects it too");
+      if (call.mark() == Mark.STRICTER && javacRejects) {
+        failures.add(what + ": marked stricter than javac, which rejects it too");
+      }
       if ("true".equals(asking.answers.get(name + " takes")) && javacRejects) {
         failures.add(what + ": fits, but javac rejects the call");
+      }
+      if (OPEN.equals(answer) && javacRejects && call.mark() != Mark.KNOWN_GAP) {
+        failures.add(what + ": left to javac, which rejects the call");
+      }
+      if (call.mark() == Mark.KNOWN_GAP && !(OPEN.equals(answer) && javacRejects)) {
+        failures.add(what + ": marked a known gap, which it no longer is");
       }
     }
     assertTrue(rejected.stream().noneMatch(name -> name.equals("M")), "the methods should compile");
