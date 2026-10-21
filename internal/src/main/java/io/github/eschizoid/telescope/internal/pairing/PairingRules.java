@@ -525,6 +525,81 @@ public final class PairingRules<T> {
   }
 
   /**
+   * Whether a value of type {@code sending}, written into a member whose parameter is {@code
+   * receiving} once a check of its class has passed, can be shown to have the type arguments the
+   * parameter fixes. A cast sees only a value's class, so its arguments have to be decided here.
+   *
+   * <p>A parameter fixing no arguments, or only unbounded wildcards, asks nothing of them.
+   * Otherwise the two types are related by their classes and their arguments compared one by one,
+   * as Java's containment of type arguments decides it ({@link #fitsArgument}): a result of the
+   * parameter's class directly; one of a subclass seen as the parameter's class, as {@code
+   * ArrayList<String>} gives {@code List} a {@code String}; and one of a superclass against the
+   * parameter seen as that class, as {@code List<String>} gives {@code Collection} a {@code
+   * String}. A class declaring no type parameters is seen the same way, through the arguments it
+   * fixes on its supertypes, as {@code class Names extends ArrayList<String>} gives {@code List} a
+   * {@code String}. A generic class used raw gives no arguments, and a result of a class neither
+   * extends, {@code Object} included, cannot be shown to fit.
+   */
+  public boolean argumentsFit(final T sending, final T receiving) {
+    final var receivingArguments = props.typeArguments(receiving);
+    if (receivingArguments.stream().allMatch(this::unboundedWildcard)) return true;
+    final var sendingArguments = props.typeArguments(sending);
+    final var sendingClass = props.rawType(sending);
+    // A generic class used raw gives no arguments at all; a class declaring no type parameters
+    // fixes those of its supertypes, which the relation below reads.
+    if (sendingArguments.isEmpty() && !props.typeParameters(sendingClass).isEmpty()) return false;
+    final var receivingClass = props.rawType(receiving);
+    final List<T> given;
+    final List<T> wanted;
+    if (props.sameType(sendingClass, receivingClass)) {
+      given = sendingArguments;
+      wanted = receivingArguments;
+    } else if (props.isAssignable(sendingClass, receivingClass)) {
+      given = seenAs(sending, receivingClass);
+      wanted = receivingArguments;
+    } else if (props.isAssignable(receivingClass, sendingClass)) {
+      given = sendingArguments;
+      wanted = seenAs(receiving, sendingClass);
+    } else {
+      return false;
+    }
+    if (given.isEmpty() || given.size() != wanted.size()) return false;
+    for (int i = 0; i < wanted.size(); i++) {
+      if (!fitsArgument(given.get(i), wanted.get(i))) return false;
+    }
+    return true;
+  }
+
+  /** Whether {@code argument} is {@code ?}, bounded neither above nor below. */
+  private boolean unboundedWildcard(final T argument) {
+    return props.isWildcard(argument) && props.upperBound(argument) == null && props.lowerBound(argument) == null;
+  }
+
+  /**
+   * The type arguments {@code type} gives its supertype {@code supertype}: what its class declares
+   * it gives, with the variables the class declares read as {@code type}'s arguments, and those of
+   * each class it is nested in as the arguments its enclosing type gives that class, at every
+   * level. {@code Outer<String>.In}, with {@code class In extends ArrayList<T>} inside {@code
+   * Outer<T>}, gives {@code List} a {@code String}.
+   */
+  private List<T> seenAs(final T type, final T supertype) {
+    final var variables = new ArrayList<T>();
+    final var arguments = new ArrayList<T>();
+    for (var level = type; level != null; level = props.enclosingType(level)) {
+      final var declared = props.typeParameters(props.rawType(level));
+      final var given = props.typeArguments(level);
+      if (given.size() != declared.size()) continue;
+      variables.addAll(declared);
+      arguments.addAll(given);
+    }
+    return props
+      .declaredArgumentsAs(props.rawType(type), supertype)
+      .stream()
+      .map(argument -> props.substitute(argument, variables, arguments))
+      .toList();
+  }
+
+  /**
    * Whether the type argument {@code receiving} contains what the type argument {@code sending}
    * stands for, as Java's containment of type arguments decides it: an unbounded wildcard contains
    * anything; {@code ? extends B} contains an argument whose values all fit {@code B}; {@code ?

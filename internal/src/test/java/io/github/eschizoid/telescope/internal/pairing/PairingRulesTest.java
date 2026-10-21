@@ -366,6 +366,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public Type enclosingType(final Type t) {
+      return delegate.enclosingType(t);
+    }
+
+    @Override
     public boolean isTypeVariable(final Type t) {
       return delegate.isTypeVariable(t);
     }

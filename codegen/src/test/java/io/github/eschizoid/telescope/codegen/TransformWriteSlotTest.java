@@ -24,12 +24,15 @@ import org.junit.jupiter.api.Test;
  */
 class TransformWriteSlotTest {
 
-  /** Widens on the way out: reads {@code String}, hands back {@code Object}. */
+  /**
+   * Reads {@code String} and hands back a {@code Number}, which a {@code String} slot does not take
+   * and which no cast reaches it from either.
+   */
   private static final String WIDENING_FN = """
     package demo;
     import io.github.eschizoid.telescope.conversion.BridgeFn;
     public final class Fn implements BridgeFn<String, Object> {
-      @Override public Object forward(final String s) { return s; }
+      @Override public Number forward(final String s) { return s.length(); }
       @Override public String backward(final Object o) { return String.valueOf(o); }
     }
     """;
@@ -196,14 +199,15 @@ class TransformWriteSlotTest {
   }
 
   /**
-   * Widens on the way back: forward narrows to {@code String}, backward hands back {@code Object}.
+   * Forward narrows to {@code String}, and backward hands back a {@code Number}, which a {@code
+   * String} slot does not take and which no cast reaches it from either.
    */
   private static final String WIDENING_BACKWARD_FN = """
     package demo;
     import io.github.eschizoid.telescope.conversion.BridgeFn;
     public final class Fn implements BridgeFn<Object, String> {
       @Override public String forward(final Object o) { return String.valueOf(o); }
-      @Override public Object backward(final String s) { return s; }
+      @Override public Number backward(final String s) { return s.length(); }
     }
     """;
 
@@ -238,7 +242,7 @@ class TransformWriteSlotTest {
     // and while every row was one, reverting that half of the change left them all green. This row
     // and its control below are two-way, so the backward store is the thing under test.
     //
-    // Backward hands back Object and stores it into the source. Its getter says String and its
+    // Backward hands back a Number and stores it into the source. Its getter says String and its
     // setter takes Object, and the setter is what the rebuild writes.
     final var compilation = compileTwoWay(
       """
@@ -262,7 +266,7 @@ class TransformWriteSlotTest {
   @DisplayName("a source slot too narrow for what backward returns is refused, by the check")
   void aNarrowSourceSlotIsRefused() {
     // The control for the row above, and what stops it from being "accept every backward". This
-    // source's setter takes String and backward hands back Object, so the write cannot compile.
+    // source's setter takes String and backward hands back a Number, so the write cannot compile.
     final var compilation = compileTwoWay(
       """
       public class Src {
@@ -498,7 +502,7 @@ class TransformWriteSlotTest {
         public static Builder builder() { return new Builder(); }
         public static final class Builder {
           private final Tgt held = new Tgt();
-          public Builder v(final Integer v) { held.v = String.valueOf(v); return this; }
+          public Builder v(final Boolean v) { held.v = String.valueOf(v); return this; }
           public Tgt build() { return held; }
         }
       }

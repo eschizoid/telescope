@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.internal.FixedCheck;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
+import io.github.eschizoid.telescope.internal.ResultCheck;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
@@ -1100,7 +1101,13 @@ public final class DeepMap {
                 srcField + " → " + tgtField,
                 forwardOnly
               )
-            : fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
+            : resultChecked(
+                fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
+                new RowSides(source, target, srcField, tgtField),
+                srcRefl,
+                tgtRefl,
+                forwardOnly
+              );
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
@@ -1561,6 +1568,39 @@ public final class DeepMap {
     // and a type given arguments is either shown to fit or refused above. The check takes the
     // slot's place, and the composed rebuild reads it as an identity read with a check on it.
     return new FixedCheck(intoTarget, sides.target(), sides.tgtField(), intoSource, sides.source(), sides.srcField());
+  }
+
+  /**
+   * {@code iso}, a conversion of the row's own, with its result checked against the class the
+   * member it is written through takes before it is written: the member the property's type chooses
+   * on each side ({@link Beans#writtenClass}). The conversion is typed by its functions, which
+   * nothing here can read, so the result's own class is all that says whether the member takes it.
+   * A side whose member takes anything checks nothing, and a forward-only mapper writes no source.
+   */
+  @SuppressWarnings("unchecked")
+  private static Iso<?, ?> resultChecked(
+    final Iso<?, ?> iso,
+    final RowSides sides,
+    final Reflective srcRefl,
+    final Reflective tgtRefl,
+    final boolean forwardOnly
+  ) {
+    final var targetWriter = tgtRefl.writerFor(sides.target());
+    final var sourceWriter = srcRefl.writerFor(sides.source());
+    final var intoTarget = Beans.writtenClass(targetWriter, sides.target(), sides.tgtField());
+    final var intoSource = forwardOnly ? null : Beans.writtenClass(sourceWriter, sides.source(), sides.srcField());
+    if (intoTarget == null && intoSource == null) return iso;
+    return new ResultCheck(
+      (Iso<Object, Object>) iso,
+      intoTarget,
+      sides.target(),
+      sides.tgtField(),
+      Beans.writtenNullValue(targetWriter, sides.target(), sides.tgtField()),
+      intoSource,
+      sides.source(),
+      sides.srcField(),
+      Beans.writtenNullValue(sourceWriter, sides.source(), sides.srcField())
+    );
   }
 
   /**

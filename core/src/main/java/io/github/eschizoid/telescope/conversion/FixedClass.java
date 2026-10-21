@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.internal.FixedCheck;
+import io.github.eschizoid.telescope.internal.ResultCheck;
 
 /**
  * The check a conversion makes of a value handed across unchanged into a property whose class fixes
@@ -29,5 +30,46 @@ public final class FixedClass {
    */
   public static <V> V checked(final V value, final Class<?> fixed, final Class<?> owner, final String property) {
     return FixedCheck.checked(value, fixed, owner, property);
+  }
+
+  /**
+   * {@code value} itself, when it is null or an instance of {@code expected}: the check a bridge
+   * makes of a conversion's result before it writes it through the member the property's type
+   * chooses, which takes {@code expected}, where the conversion is typed wider than that.
+   *
+   * @param value the conversion's result
+   * @param expected the class the member takes, its wrapper where that is primitive
+   * @param owner the class whose property is written
+   * @param property the name of the property written
+   * @param <V> the type the value is held as
+   * @return {@code value}
+   * @throws ClassCastException naming the property, the value's class and {@code expected} when the
+   *     value is of another class
+   */
+  public static <V> V result(final V value, final Class<?> expected, final Class<?> owner, final String property) {
+    return ResultCheck.checked(value, expected, owner, property);
+  }
+
+  /**
+   * {@link #result}, with {@code fallback} in place of a null {@code value}: what a constructor or
+   * builder argument of a primitive type takes for a result that is null.
+   *
+   * @param value the conversion's result
+   * @param expected the wrapper of the primitive the member takes
+   * @param owner the class whose property is written
+   * @param property the name of the property written
+   * @param fallback the primitive's default, boxed
+   * @return {@code value}, or {@code fallback} when it is null
+   * @throws ClassCastException naming the property, the value's class and {@code expected} when the
+   *     value is of another class
+   */
+  public static Object resultOr(
+    final Object value,
+    final Class<?> expected,
+    final Class<?> owner,
+    final String property,
+    final Object fallback
+  ) {
+    return value == null ? fallback : ResultCheck.checked(value, expected, owner, property);
   }
 }

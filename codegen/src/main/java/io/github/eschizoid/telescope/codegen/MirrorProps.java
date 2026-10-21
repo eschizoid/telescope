@@ -86,6 +86,13 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public TypeMirror enclosingType(final TypeMirror t) {
+    if (!(t instanceof DeclaredType declared)) return null;
+    final var enclosing = declared.getEnclosingType();
+    return enclosing instanceof DeclaredType ? enclosing : null;
+  }
+
+  @Override
   public TypeMirror componentType(final TypeMirror t) {
     return t instanceof ArrayType array ? array.getComponentType() : null;
   }

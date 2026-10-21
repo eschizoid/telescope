@@ -33,9 +33,9 @@ class TransformDirectionFitTest {
       """
       package demo;
       import io.github.eschizoid.telescope.conversion.BridgeFn;
-      public final class WideFn implements BridgeFn<CharSequence, String> {
-        @Override public String forward(final CharSequence c) { return c.toString(); }
-        @Override public CharSequence backward(final String s) { return s; }
+      public final class WideFn implements BridgeFn<Object, String> {
+        @Override public String forward(final Object o) { return String.valueOf(o); }
+        @Override public Number backward(final String s) { return s.length(); }
       }
       """
     );
@@ -63,9 +63,9 @@ class TransformDirectionFitTest {
   @Test
   @DisplayName("a transform that fits forward but not backward is reported, not emitted")
   void backwardMismatchIsReported() {
-    // String reaches CharSequence, and String reaches String, so forward fits and the old check
-    // was satisfied. Backward has to store the CharSequence that backward() returns into a String
-    // field, which it cannot, and that only shows up once the generated file is attributed.
+    // String reaches Object, and String reaches String, so forward fits. Backward has to store the
+    // Number that backward() returns into a String field, which it cannot, and that only shows up
+    // once the generated file is attributed.
     final var compilation = compile(pair(""));
 
     assertFalse(compilation.success(), "a row whose backward cannot compile must be refused");
@@ -215,7 +215,7 @@ class TransformDirectionFitTest {
         package demo;
         import io.github.eschizoid.telescope.conversion.BridgeFn;
         public final class PrivFn implements BridgeFn<Object, Object> {
-          @Override public Object forward(final Object o) { return o; }
+          @Override public Number forward(final Object o) { return 0; }
           private String forward(final String s) { return s; }
           @Override public String backward(final Object o) { return String.valueOf(o); }
         }
@@ -234,7 +234,7 @@ class TransformDirectionFitTest {
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
-    assertFalse(compilation.success(), "the callable overload returns Object, which does not fit");
+    assertFalse(compilation.success(), "the callable overload returns a Number, which does not fit");
     assertFalse(
       compilation.errorMessages().contains("cannot be converted to"),
       () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
@@ -374,7 +374,7 @@ class TransformDirectionFitTest {
       import io.github.eschizoid.telescope.conversion.BridgeFn;
       @SuppressWarnings("rawtypes")
       public final class RawFn implements BridgeFn {
-        @Override public %s forward(final Object o) { return String.valueOf(o); }
+        @Override public %s forward(final Object o) { return null; }
         @Override public String backward(final Object o) { return String.valueOf(o); }
       }
       """.formatted(forwardReturn)
@@ -404,9 +404,9 @@ class TransformDirectionFitTest {
     // The one shape with no type arguments to fall back on was also the one shape not checked at
     // all, so a mismatch reached the generated file. The class still declares the two methods the
     // call sites bind to, and those are what the check compares.
-    final var compilation = compile(rawPair("Object"));
+    final var compilation = compile(rawPair("Number"));
 
-    assertFalse(compilation.success(), "Object does not fit a String slot");
+    assertFalse(compilation.success(), "a Number does not fit a String slot");
     assertTrue(
       compilation.hasError("does not fit forward"),
       () -> "the diagnostic should name the direction: " + compilation.errorMessages()

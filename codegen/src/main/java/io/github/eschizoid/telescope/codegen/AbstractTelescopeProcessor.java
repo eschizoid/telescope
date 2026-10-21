@@ -3,11 +3,13 @@ package io.github.eschizoid.telescope.codegen;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -359,9 +361,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return mirrorProps;
   }
 
-  // A public single-argument builder method named property / setX / withX, or null.
-  protected String builderSetter(final TypeElement builderType, final String property) {
-    final var member = builderSetterMember(builderType, property);
+  // The builder method that writes property of bean (builderSetterMember), by name, or null.
+  protected String builderSetter(final TypeElement bean, final TypeElement builderType, final String property) {
+    final var member = builderSetterMember(bean, builderType, property);
     return member == null ? null : member.getSimpleName().toString();
   }
 
@@ -371,20 +373,54 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * does not fit — a {@code String} builder method behind an {@code Object} getter. Callers that
    * emit a call to it have to look.
    */
-  protected TypeMirror builderSetterParameter(final TypeElement builderType, final String property) {
-    final var member = builderSetterMember(builderType, property);
+  protected TypeMirror builderSetterParameter(
+    final TypeElement bean,
+    final TypeElement builderType,
+    final String property
+  ) {
+    final var member = builderSetterMember(bean, builderType, property);
     return member == null ? null : member.getParameters().getFirst().asType();
   }
 
-  protected ExecutableElement builderSetterMember(final TypeElement builderType, final String property) {
+  /**
+   * The builder member that writes {@code property} of {@code bean}: among the builder's public
+   * single-argument methods named {@code property}, {@code setX} or {@code withX}, the one {@link
+   * PairingRules#chooseSetter} picks for the property's type, as the runtime builder writer picks
+   * it. Where the bean has no getter for the property, or no one member is chosen, the first in a
+   * fixed order stands, so the answer does not depend on the order the builder declares them in.
+   */
+  protected ExecutableElement builderSetterMember(
+    final TypeElement bean,
+    final TypeElement builderType,
+    final String property
+  ) {
     final var set = "set" + capitalize(property);
     final var with = "with" + capitalize(property);
+    final var candidates = new ArrayList<ExecutableElement>();
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
       if (!isPublicInstance(m) || m.getParameters().size() != 1) continue;
       final var name = m.getSimpleName().toString();
-      if (name.equals(property) || name.equals(set) || name.equals(with)) return m;
+      if (name.equals(property) || name.equals(set) || name.equals(with)) candidates.add(m);
     }
-    return null;
+    if (candidates.size() <= 1) return candidates.isEmpty() ? null : candidates.getFirst();
+    final var types = processingEnv.getTypeUtils();
+    // The runtime orders them by their generic signature, which names each parameter in full.
+    candidates.sort(
+      Comparator.comparing(
+        m -> m.getSimpleName() + "(" + types.erasure(m.getParameters().getFirst().asType()).toString() + ")"
+      )
+    );
+    final var read = bean == null ? null : getterType(bean, property);
+    if (read == null) return candidates.getFirst();
+    final var erased = new ArrayList<TypeMirror>(candidates.size());
+    final var components = new ArrayList<TypeMirror>(candidates.size());
+    for (final var m : candidates) {
+      final var parameter = types.erasure(m.getParameters().getFirst().asType());
+      erased.add(parameter);
+      components.add(m.isVarArgs() && parameter instanceof ArrayType array ? array.getComponentType() : null);
+    }
+    final var index = new PairingRules<>(mirrorProps()).chooseSetter(types.erasure(read), erased, components);
+    return candidates.get(index < 0 ? 0 : index);
   }
 
   // The directly-declared public static no-arg builder() factory on `type`, or null. Only used to
@@ -445,7 +481,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
         @Override
         public BeanWriteStrategy.Member builderMember(final String property) {
-          final var parameter = builderSetterParameter(builderType, property);
+          final var parameter = builderSetterParameter(type, builderType, property);
           if (parameter == null) return BeanWriteStrategy.Member.ABSENT;
           return memberAccepts(parameter, propertyType.apply(property))
             ? BeanWriteStrategy.Member.ACCEPTS
@@ -1576,7 +1612,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var useBuilder = strategy == BeanWriteStrategy.BUILDER;
     for (var i = 0; i < props.size(); i++) {
       final var s = useBuilder
-        ? builderSetter(builderType, props.get(i).name())
+        ? builderSetter(pojo, builderType, props.get(i).name())
         : setterName(pojo, props.get(i).name());
       // A builder is chosen only when every property it has no member for is one nothing else
       // writes either, so the rebuild skips that property as the runtime builder writer does. A

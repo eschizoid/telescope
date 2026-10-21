@@ -86,7 +86,7 @@ class TransformOverloadResolutionTest {
   private static final String WIDENING_MISFIT = """
     public final class Fn implements BridgeFn<Integer, String> {
       @Override public String forward(final Integer v) { return String.valueOf(v); }
-      public Object forward(final long v) { return "long:" + v; }
+      public Number forward(final long v) { return v; }
       @Override public Integer backward(final String s) { return Integer.valueOf(s); }
     }
     """;
@@ -125,7 +125,7 @@ class TransformOverloadResolutionTest {
   private static final String RAW_AMBIGUOUS_BACKWARD = """
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public final class Fn implements BridgeFn {
-      public Object forward(final Object o) { return o; }
+      public Number forward(final Object o) { return 0; }
       public Object backward(final Object o) { return 0; }
       public Integer backward(final CharSequence c) { return 1; }
       public Integer backward(final Comparable<?> c) { return 2; }
