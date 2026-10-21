@@ -859,9 +859,38 @@ public final class PairingMessages {
       receivingType +
       ", whose class fixes the type arguments the value must fit. Nothing shows the value handed" +
       " across to have arguments of those classes, and a value's type arguments, a container's" +
-      " elements included, are not checked as it is written, so the pair is refused. Give both sides" +
-      " the same type arguments, or convert the component with an explicit Mapping.to(src, tgt, fwd," +
-      " bwd) row."
+      " elements included, are not checked as it is written, so the pair is refused. A value that is" +
+      " not copied across, a copied container's elements included, is held by both sides, so its" +
+      " arguments have to be the receiving side's own or contained by a wildcard there. Give both" +
+      " sides the same type arguments, hold the value through a wildcard such as ? extends, or" +
+      " convert the component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A container one side holds as {@code receivingType}, copied across from a side that holds it as
+   * {@code sendingType}, whose arguments fit a fresh copy except the one a sorted container orders
+   * by. The declared type can hold a sorted set or map, or a priority queue, and a copy of one
+   * keeps the comparator the source orders by, which takes only the sending side's type.
+   */
+  public static String orderedCopyArgumentDiffers(
+    final String componentName,
+    final String sendingType,
+    final String receivingType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is copied across from a side that holds it as " +
+      sendingType +
+      " to a side that holds it as " +
+      receivingType +
+      ". The declared type can hold a sorted set or map, or a priority queue, and the copy keeps the" +
+      " comparator the source orders it by, which takes only the sending side's element type, or a" +
+      " map's key type, so that argument has to be the same on both sides. Give both sides the same" +
+      " type argument, declare the container as a class that keeps no comparator, such as HashSet or" +
+      " HashMap, hold it through a wildcard such as ? extends on the receiving side, or convert the" +
+      " component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
     );
   }
 

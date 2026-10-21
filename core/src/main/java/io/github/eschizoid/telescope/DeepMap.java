@@ -1559,10 +1559,13 @@ public final class DeepMap {
     final boolean forwardOnly
   ) {
     if (!paired.handedAcross()) return iso;
-    final var intoTarget = fixedClass(PAIRING.fixedFit(paired.sourceMember(), paired.targetMember(), componentName));
+    final var declared = paired.source();
+    final var intoTarget = fixedClass(
+      PAIRING.fixedFit(declared, paired.sourceMember(), paired.targetMember(), componentName)
+    );
     final var intoSource = forwardOnly
       ? null
-      : fixedClass(PAIRING.fixedFit(paired.targetMember(), paired.sourceMember(), componentName));
+      : fixedClass(PAIRING.fixedFit(declared, paired.targetMember(), paired.sourceMember(), componentName));
     if (intoTarget == null && intoSource == null) return iso;
     // Only a single value is checked, and a single value handed across unchanged is the identity
     // slot: its declared type names a variable, which no default-on-null wrapper has a value for,

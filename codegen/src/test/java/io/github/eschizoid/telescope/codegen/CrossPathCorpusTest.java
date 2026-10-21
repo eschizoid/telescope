@@ -24,6 +24,8 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -4991,7 +4993,7 @@ class CrossPathCorpusTest {
     final var files = new ArrayList<JavaFileObject>();
     files.add(source(prefix + "Base", head + base.replace("%1$s", prefix).replace("%s", prefix)));
     for (final var other : others) {
-      final var named = Pattern.compile("(?:record|class) (\\w+)").matcher(other.replace("%s", prefix));
+      final var named = Pattern.compile("(?:record|class|enum) (\\w+)").matcher(other.replace("%s", prefix));
       if (!named.find()) throw new IllegalStateException(prefix + " declares nothing it names");
       files.add(source(named.group(1), head + other.replace("%s", prefix)));
     }
@@ -5328,6 +5330,405 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A mutable bean holding one value of its variable as {@code b}. {@code %s} is the prefix. */
+  private static final String MUTABLE_BOX =
+    "public class %sBox<B> {\n" +
+    "  private B b;\n" +
+    "  public B getB() { return b; }\n" +
+    "  public void setB(final B b) { this.b = b; }\n" +
+    "}\n";
+
+  /** A record holding a list of its variable as {@code items}. {@code %s} is the prefix. */
+  private static final String LIST_BOX = "public record %sBox<B>(java.util.List<B> items) {}\n";
+
+  @Test
+  @DisplayName(
+    "a generic class handed across as the object both sides hold is refused by name on both paths unless its arguments are the receiving side's"
+  )
+  void aSharedClassWhoseArgumentsDifferIsRefusedOnBothPaths() {
+    // Each value is handed across unchanged and is the same object on both sides afterwards, so a
+    // write through the receiving side's type lands in what the sending side holds: a Double added
+    // through a Box<Number> is read back as an Integer through the Box<T> the source still holds. A
+    // record is no exception once what it holds is mutable, and neither is an element of a list,
+    // which the copy of the list shares. An Optional is handed across as itself. A row that
+    // refuses forward is refused by a forward-only mapper and a lenient bridge too.
+    final var rows = List.of(
+      new RefusedPair(
+        "Fsm",
+        ONE_VALUE_BASE,
+        "public class FsmSrc<T extends Integer> extends FsmBase<FsmBox<T>> {}\n",
+        "public class FsmTgt extends FsmBase<FsmBox<Number>> {}\n",
+        List.of(MUTABLE_BOX),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", PACKAGE + ".FsmBox<T>", PACKAGE + ".FsmBox<java.lang.Number>")
+      ),
+      new RefusedPair(
+        "Fsl",
+        ONE_VALUE_BASE,
+        "public class FslSrc<T extends Integer> extends FslBase<FslBox<T>> {}\n",
+        "public class FslTgt extends FslBase<FslBox<Number>> {}\n",
+        List.of(LIST_BOX),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", PACKAGE + ".FslBox<T>", PACKAGE + ".FslBox<java.lang.Number>")
+      ),
+      new RefusedPair(
+        "Fsc",
+        ONE_VALUE_BASE,
+        "public class FscSrc<T extends Integer> extends FscBase<FscCell<java.util.List<T>>> {}\n",
+        "public class FscTgt extends FscBase<FscCell<java.util.List<Number>>> {}\n",
+        List.of("public record %sCell<B>(B b) {}\n"),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          PACKAGE + ".FscCell<java.util.List<T>>",
+          PACKAGE + ".FscCell<java.util.List<java.lang.Number>>"
+        )
+      ),
+      new RefusedPair(
+        "Fse",
+        LIST_VALUE_BASE,
+        "public class FseSrc<T extends Integer> extends FseBase<FseBox<T>> {}\n",
+        "public class FseTgt extends FseBase<FseBox<Number>> {}\n",
+        List.of(MUTABLE_BOX),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit(
+          "v",
+          "java.util.List<" + PACKAGE + ".FseBox<T>>",
+          "java.util.List<" + PACKAGE + ".FseBox<java.lang.Number>>"
+        )
+      ),
+      new RefusedPair(
+        "Fso",
+        ONE_VALUE_BASE,
+        "public class FsoSrc<T extends Integer> extends FsoBase<java.util.Optional<T>> {}\n",
+        "public class FsoTgt extends FsoBase<java.util.Optional<Number>> {}\n",
+        List.of(),
+        true,
+        PairingMessages.fixedArgumentsDoNotFit("v", "java.util.Optional<T>", "java.util.Optional<java.lang.Number>")
+      ),
+      new RefusedPair(
+        "Fsv",
+        ONE_VALUE_BASE,
+        "public class FsvSrc<T extends FsvBox<Integer>> extends FsvBase<T> {}\n",
+        "public class FsvTgt extends FsvBase<FsvBox<? extends Number>> {}\n",
+        List.of(MUTABLE_BOX),
+        false,
+        PairingMessages.fixedArgumentsDoNotFit("v", PACKAGE + ".FsvBox<? extends java.lang.Number>", "T")
+      )
+    );
+    final var failures = refusedOnBothPaths(rows);
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * A pair the base {@code base} declares, the source {@code src} handed into the target {@code
+   * tgt} with the classes in {@code others}, each with {@code %s} as the prefix, that both paths
+   * owe the refusal {@code owed}: forward too, by a forward-only mapper and a lenient bridge, where
+   * {@code forward}.
+   */
+  private record RefusedPair(
+    String prefix,
+    String base,
+    String src,
+    String tgt,
+    List<String> others,
+    boolean forward,
+    String owed
+  ) {}
+
+  /** What each of {@code rows} was not refused with on each path, as failures. */
+  private static List<String> refusedOnBothPaths(final List<RefusedPair> rows) {
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), false);
+      final var processed = compiled.get(1);
+      if (processed.success() || !processed.hasError(row.owed())) {
+        failures.add(row.prefix() + ": the generated path should refuse it by name; saw " + processed.errorMessages());
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var builds = new ArrayList<Callable<Object>>();
+      builds.add(() -> Telescope.mapper(source, target));
+      if (row.forward()) builds.add(() -> Telescope.mapperForward(source, target));
+      for (final var build : builds) {
+        try {
+          build.call();
+          failures.add(row.prefix() + ": the runtime should refuse it by name, and built the mapper");
+        } catch (final IllegalStateException e) {
+          if (!row.owed().equals(e.getMessage())) failures.add(
+            row.prefix() + ": the runtime refused it with " + e.getMessage()
+          );
+        } catch (final Exception e) {
+          failures.add(row.prefix() + ": the runtime failed with " + e);
+        }
+      }
+      if (row.forward()) {
+        final var lenient = valuePair(row.prefix(), row.base(), row.src(), row.tgt(), row.others(), true).get(1);
+        if (lenient.success() || !lenient.hasError(row.owed())) {
+          failures.add(row.prefix() + ": a lenient bridge should refuse it by name; saw " + lenient.errorMessages());
+        }
+      }
+    }
+    return failures;
+  }
+
+  /**
+   * A bean superclass holding as {@code v} a {@code container} of its variable. {@code %s} is the
+   * prefix.
+   */
+  private static String containerBase(final String container) {
+    return (
+      "public class %sBase<V> {\n" +
+      "  private " +
+      container +
+      "<V> v;\n" +
+      "  public " +
+      container +
+      "<V> getV() { return v; }\n" +
+      "  public void setV(final " +
+      container +
+      "<V> v) { this.v = v; }\n" +
+      "}\n"
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a copied container that can keep the source's comparator is refused by name on both paths unless the argument it orders is the receiving side's"
+  )
+  void aCopyKeepingTheSourcesComparatorTakesOnlyTheOrderedArgumentsOwnType() {
+    // A copy of a TreeSet keeps its comparator, which orders the source's element type: a
+    // TreeSet<Integer> ordered by Integer::compare, copied into a TreeSet<Number>, throws on the
+    // first Double added. A field declared as a Set or a NavigableSet can hold one too.
+    final var rows = new ArrayList<RefusedPair>();
+    for (final var shape : List.of(
+      List.of("Fot", "java.util.TreeSet"),
+      List.of("Fos", "java.util.Set"),
+      List.of("Fon", "java.util.NavigableSet")
+    )) {
+      final var prefix = shape.get(0);
+      rows.add(
+        new RefusedPair(
+          prefix,
+          containerBase(shape.get(1)),
+          "public class %sSrc<T extends Integer> extends %sBase<T> {}\n",
+          "public class %sTgt extends %sBase<Number> {}\n",
+          List.of(),
+          true,
+          PairingMessages.orderedCopyArgumentDiffers("v", shape.get(1) + "<T>", shape.get(1) + "<java.lang.Number>")
+        )
+      );
+    }
+    final var failures = refusedOnBothPaths(rows);
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /**
+   * A bean superclass holding as {@code v} a {@code map} from its first variable, declared {@code
+   * key}, to its second. {@code %s} is the prefix.
+   */
+  private static String mapBase(final String map, final String key) {
+    return (
+      "public class %sBase<" +
+      key +
+      ", V> {\n" +
+      "  private " +
+      map +
+      "<K, V> v;\n" +
+      "  public " +
+      map +
+      "<K, V> getV() { return v; }\n" +
+      "  public void setV(final " +
+      map +
+      "<K, V> v) { this.v = v; }\n" +
+      "}\n"
+    );
+  }
+
+  @Test
+  @DisplayName("a map whose declared key is a type variable is copied by both paths, and refused by both the same way")
+  void aMapKeyedByAVariableIsCopiedAndRefusedTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    // Both sides fix the key to the same type and the source passes a variable bound by Integer
+    // into the value. Forward, the map is copied, so its values may narrow: a forward-only mapper
+    // and a lenient bridge convert it into a fresh map of the input's class. Backward, a Number
+    // is handed into the variable, so a mapper that converts both ways is refused, on both paths,
+    // for the same direction.
+    //
+    // A generated bridge names a variable by its erasure, and an EnumMap's key variable erases to
+    // Enum, which EnumMap's own bound, K extends Enum<K>, does not admit: the lenient bridge for
+    // that row is code javac rejects, which the row owes until the bridge names the key another
+    // way.
+    record Shape(String prefix, String map, String key, String fixedKey, List<String> others, String bridgeError) {}
+    final var shapes = List.of(
+      new Shape("Fmh", "java.util.Map", "K", "String", List.of(), null),
+      new Shape("Fmt", "java.util.TreeMap", "K", "String", List.of(), null),
+      new Shape(
+        "Fme",
+        "java.util.EnumMap",
+        "K extends Enum<K>",
+        "%sE",
+        List.of("public enum %sE { A }\n"),
+        "type argument java.lang.Enum is not within bounds of type-variable K"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var shape : shapes) {
+      final var prefix = shape.prefix();
+      final var base = mapBase(shape.map(), shape.key());
+      final var src = "public class %sSrc<T extends Integer> extends %sBase<" + shape.fixedKey() + ", T> {}\n";
+      final var tgt = "public class %sTgt extends %sBase<" + shape.fixedKey() + ", Number> {}\n";
+      final var lenient = valuePair(prefix, base, src, tgt, shape.others(), true);
+      if (shape.bridgeError() != null) {
+        if (lenient.get(1).success() || !lenient.get(1).hasError(shape.bridgeError())) {
+          failures.add(prefix + ": the lenient bridge should not compile; saw " + lenient.get(1).errorMessages());
+        }
+      } else if (!lenient.get(1).success()) {
+        failures.add(prefix + ": the lenient bridge should compile: " + lenient.get(1).errorMessages());
+        continue;
+      }
+      final var classes = lenient.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var keyClass = shape.others().isEmpty() ? String.class : classes.get(PACKAGE + "." + prefix + "E");
+      final Object key = keyClass.isEnum() ? keyClass.getEnumConstants()[0] : "k";
+      final Callable<Object> input = () -> {
+        final Map<Object, Object> map = switch (shape.map()) {
+          case "java.util.TreeMap" -> new TreeMap<>();
+          case "java.util.EnumMap" -> enumMap(keyClass);
+          default -> new HashMap<>();
+        };
+        map.put(key, 1);
+        return map;
+      };
+      final var nested = nestedBridgesFirst(lenient.get(1), lenient.get(0), prefix);
+      final ForwardMapper<Object, Object> forward;
+      try {
+        forward = Telescope.mapperForward(source, target);
+      } catch (final IllegalStateException e) {
+        failures.add(prefix + ": a forward-only mapper should build; refused with " + e.getMessage());
+        continue;
+      }
+      final var held = call(input);
+      final var owed = "v={" + key + "=1} in a fresh " + held.getClass().getSimpleName();
+      final var seen = new ArrayList<String>();
+      seen.add(mapHeld(forward.forward(holding(source, held)), held));
+      if (shape.bridgeError() == null) {
+        final var bridge = emitted(lenient.get(1), lenient.get(0), prefix, nested);
+        seen.add(mapHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
+      }
+      for (final var one : seen)
+        if (!owed.equals(one)) failures.add(prefix + ": forward gave " + one + ", owed " + owed);
+      final var keyName = keyClass.getName();
+      final var owedRefusal = PairingMessages.fixedArgumentsDoNotFit(
+        "v",
+        shape.map() + "<" + keyName + ", java.lang.Number>",
+        shape.map() + "<" + keyName + ", T>"
+      );
+      final var strict = valuePair(prefix, base, src, tgt, shape.others(), false).get(1);
+      if (strict.success() || !strict.hasError(owedRefusal)) {
+        failures.add(prefix + ": the generated path should refuse it backward by name; saw " + strict.errorMessages());
+      }
+      try {
+        Telescope.mapper(source, target);
+        failures.add(prefix + ": the runtime should refuse it backward by name, and built the mapper");
+      } catch (final IllegalStateException e) {
+        if (!owedRefusal.equals(e.getMessage())) failures.add(
+          prefix + ": the runtime refused it with " + e.getMessage()
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** An empty {@code EnumMap} over the enum {@code keyClass}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Map<Object, Object> enumMap(final Class<?> keyClass) {
+    return new EnumMap(keyClass);
+  }
+
+  /** What {@code out} holds as {@code v}, and whether that is {@code input} or a fresh map. */
+  private static String mapHeld(final Object out, final Object input) throws ReflectiveOperationException {
+    final var v = out.getClass().getMethod("getV").invoke(out);
+    return "v=" + v + (v == input ? " in the input's own " : " in a fresh ") + v.getClass().getSimpleName();
+  }
+
+  @Test
+  @DisplayName(
+    "a generic class handed across as the object both sides hold converts on both paths when the receiving side's arguments contain its own"
+  )
+  void aSharedClassWhoseArgumentsAreContainedConverts() throws ReflectiveOperationException {
+    // The same arguments on both sides, given by a variable's bound, convert both ways. A wildcard
+    // bounded above contains narrower arguments, so a Box<Integer>, or a Box<T> with T bounded by
+    // Integer, converts forward into a Box<? extends Number>; a forward-only mapper and a lenient
+    // bridge plan nothing backward. Each target holds the source's own box.
+    record Row(String prefix, String src, String tgt, boolean bothWays) {}
+    final var rows = List.of(
+      new Row(
+        "Fsi",
+        "public class FsiSrc<T extends FsiBox<Integer>> extends FsiBase<T> {}\n",
+        "public class FsiTgt extends FsiBase<FsiBox<Integer>> {}\n",
+        true
+      ),
+      new Row(
+        "Fsx",
+        "public class FsxSrc<T extends FsxBox<Integer>> extends FsxBase<T> {}\n",
+        "public class FsxTgt extends FsxBase<FsxBox<? extends Number>> {}\n",
+        false
+      ),
+      new Row(
+        "Fsw",
+        "public class FswSrc<T extends Integer> extends FswBase<FswBox<T>> {}\n",
+        "public class FswTgt extends FswBase<FswBox<? extends Number>> {}\n",
+        false
+      )
+    );
+    final var failures = new ArrayList<String>();
+    for (final var row : rows) {
+      final var compiled = valuePair(
+        row.prefix(),
+        ONE_VALUE_BASE,
+        row.src(),
+        row.tgt(),
+        List.of(LIST_BOX),
+        !row.bothWays()
+      );
+      if (!compiled.get(1).success()) {
+        failures.add(row.prefix() + ": the bridge should compile: " + compiled.get(1).errorMessages());
+        continue;
+      }
+      final var classes = compiled.get(0).define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + row.prefix() + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
+      final var box = classes.get(PACKAGE + "." + row.prefix() + "Box").getConstructor(List.class);
+      final Callable<Object> value = () -> box.newInstance(new ArrayList<>(List.of(1)));
+      final var nested = nestedBridgesFirst(compiled.get(1), compiled.get(0), row.prefix());
+      final ForwardMapper<Object, Object> forward = Telescope.mapperForward(source, target);
+      final var bridge = emitted(compiled.get(1), compiled.get(0), row.prefix(), nested);
+      final var held = call(value);
+      final var seen = new ArrayList<String>();
+      seen.add(sharedHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
+      seen.add(sharedHeld(forward.forward(holding(source, held)), held));
+      if (row.bothWays()) {
+        final var mapper = Telescope.mapper(source, target);
+        seen.add(sharedHeld(mapper.forward(holding(source, held)), held));
+        seen.add(sharedHeld(bridge.getMethod("backward", target).invoke(null, holding(target, held)), held));
+        seen.add(sharedHeld(mapper.backward(holding(target, held)), held));
+      }
+      final var owed = "v=" + row.prefix() + "Box[items=[1]], the input's own";
+      if (!seen.stream().allMatch(owed::equals)) {
+        failures.add(row.prefix() + ": gave " + seen + ", owed " + owed + " each time");
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** What {@code out} holds as {@code v}, and whether that is {@code input} itself. */
+  private static String sharedHeld(final Object out, final Object input) throws ReflectiveOperationException {
+    final var v = out.getClass().getMethod("getV").invoke(out);
+    return "v=" + v + (v == input ? ", the input's own" : ", another");
   }
 
   @Test

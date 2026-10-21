@@ -80,6 +80,9 @@ class ArgumentsFitTest {
     List<? super String> superString;
     List<?> anything;
     List<? extends String> extendsString;
+    List<Number> numbers;
+    Collection<Number> numberCollection;
+    Collection<? extends Number> extendsNumberCollection;
   }
 
   private static Type type(final String field) {
@@ -138,6 +141,19 @@ class ArgumentsFitTest {
     void anUnrelatedClassDoesNotFit() {
       assertFalse(fits("stringSet", "strings"));
       assertFalse(fits("object", "strings"));
+    }
+  }
+
+  @Nested
+  @DisplayName("an argument that is no wildcard")
+  class ExactArguments {
+
+    @Test
+    @DisplayName("contains only an argument naming the same type, since the result is written as it is")
+    void containsOnlyTheSameType() {
+      assertFalse(fits("integers", "numbers"));
+      assertFalse(fits("extendsNumberCollection", "numbers"));
+      assertTrue(fits("numberCollection", "numbers"));
     }
   }
 

@@ -1316,10 +1316,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         verifyDeep(paired.source(), paired.target(), componentName, at, seen, forwardOnly);
         return;
       }
-      final var intoTarget = rules.fixedFit(paired.sourceMember(), paired.targetMember(), componentName);
+      // The declared type says whether the value is copied across or shared, as the runtime
+      // decides it.
+      final var declared = paired.source();
+      final var intoTarget = rules.fixedFit(declared, paired.sourceMember(), paired.targetMember(), componentName);
       final var intoSource = forwardOnly
         ? null
-        : rules.fixedFit(paired.targetMember(), paired.sourceMember(), componentName);
+        : rules.fixedFit(declared, paired.targetMember(), paired.sourceMember(), componentName);
       if (intoTarget instanceof FixedFit.Refused<TypeMirror> refused) report(at, refused.message());
       else if (intoSource instanceof FixedFit.Refused<TypeMirror> refused) report(at, refused.message());
     }
