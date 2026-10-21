@@ -212,5 +212,76 @@ class ViaMapperPrimitiveTest {
     assertEquals(3, forwardQty(classes, "Ze", "abc"));
     final var refused = assertThrows(InvocationTargetException.class, () -> forwardQty(classes, "Ze", "abcd"));
     assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
+  }
+
+  /**
+   * The {@code qty} the generated bridge of a source record holding an {@code int} writes back from
+   * a target record holding {@code value} as an {@code Integer}, through a mapper whose {@code
+   * backward} is {@code backward}.
+   */
+  private static Object backwardQty(final String prefix, final String backward, final Integer value)
+    throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var compilation = compile(
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Src",
+        head +
+          (
+            "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
+            " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n" +
+            "public record %1$sSrc(int qty) {}\n"
+          ).formatted(prefix)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Dst",
+        head + "public record %1$sDst(Integer qty) {}\n".formatted(prefix)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          (
+            "public class %1$sMap {\n" +
+            "  public static <T> T forward(final T t) { return t; }\n" +
+            backward +
+            "}\n"
+          ).formatted(prefix)
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
+    final var target = dst.getDeclaredConstructors()[0].newInstance(value);
+    final var source = classes
+      .get(PACKAGE + "." + prefix + "SrcBridge")
+      .getMethod("backward", dst)
+      .invoke(null, target);
+    return source.getClass().getMethod("qty").invoke(source);
+  }
+
+  @Test
+  @DisplayName(
+    "a backward returning a variable bounded by Number writes an int component after a check of the value's class"
+  )
+  void boundedBackwardIntoAnIntComponent() throws ReflectiveOperationException {
+    assertEquals(
+      6,
+      backwardQty(
+        "Ri",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T extends Number> T backward(final Integer i) { return (T) Integer.valueOf(i + 1); }\n",
+        5
+      )
+    );
+    final var refused = assertThrows(InvocationTargetException.class, () ->
+      backwardQty(
+        "Rh",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T extends Number> T backward(final Integer i) { return (T) Long.valueOf(3); }\n",
+        5
+      )
+    );
+    assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
   }
 }

@@ -18,25 +18,32 @@ import javax.lang.model.util.Types;
 /**
  * The instantiation of a generic method's own type variables at a call whose result is passed where
  * one type is taken, as far as it is forced. This is not inference: it gathers only what the
- * result's shape forces on each variable, and decides only what those facts decide.
+ * result's shape and the variables' bounds force on each variable, and decides only what those
+ * facts decide.
  *
  * <ul>
  *   <li>A variable that is a type argument of the result where the taken type has a type, not a
  *       wildcard, is that type exactly, since a generic class's arguments are invariant. Where the
  *       taken type has a wildcard, the variable is bounded by it, from above or below.
- *   <li>A variable that is the method's one parameter is the argument's type or a supertype of it,
- *       and is the argument's type where nothing fixes it exactly, which is the type javac infers.
- *   <li>A variable bounded by a final class is that class, the only class whose instances it can
- *       hold.
+ *   <li>A variable's bound and a type the variable has to be a subtype of that reach one generic
+ *       class give it the same type for each argument both give a type, since a class has one
+ *       supertype of each generic class.
+ *   <li>A variable that is the method's one parameter is a supertype of the argument's type. It is
+ *       the argument's type only where no bound names it, since a bound naming it can raise it.
+ *   <li>A variable bounded by a final class, or that has to be a subtype of one, is that class, the
+ *       only class whose instances it can hold.
  * </ul>
  *
  * <p>A variable fixed so has to satisfy every bound it declares, read with the fixed variables in
  * place, and every bound a wildcard puts on it. A variable nothing fixes is left to javac, which
  * rejects the call, as this does, where two of the types it has to be a subtype of are two classes
- * neither of which extends the other, or two parameterizations of one class, or where a type it has
- * to be a supertype of is no subtype of one of them. A result whose class is no subtype of the
- * taken type's, and which still names a variable, is passed as it is and fits under no
- * instantiation.
+ * neither of which extends the other, an array type and a class every array does not extend, or two
+ * types that reach one generic class with different types for its arguments, or where a type it has
+ * to be a supertype of is no subtype of one of them. Where a bound and a type the variable has to
+ * be a subtype of give one generic class a wildcard and a type for an argument, javac draws no
+ * bound from them, and the call fits only where the wildcard contains the type once the variables
+ * have the instantiations javac gives them. A result whose class is no subtype of the taken type's,
+ * and which still names a variable, is passed as it is and fits under no instantiation.
  */
 final class MethodInstantiation {
 
@@ -142,16 +149,31 @@ final class MethodInstantiation {
         if (uppers.stream().anyMatch(upper -> !types.isAssignable(lower, upper))) return null;
       }
     }
+    // javac gives every variable its instantiation before it reads a pair it drew no bound from.
+    final var instantiated = new ArrayList<TypeMirror>(fixed);
+    final var instances = new ArrayList<TypeMirror>(values);
+    for (int i = 0; i < variables.size(); i++) {
+      if (solved[i] != null) continue;
+      final var instance = javacInstantiation(variables.get(i), facts.get(i));
+      if (instance == null) continue;
+      instantiated.add(variables.get(i));
+      instances.add(instance);
+    }
+    for (final var pair : gathered.pending) {
+      if (!contains(pair, instantiated, instances)) return null;
+    }
     final var result = props.substitute(declared, fixed, values);
     if (gathered.topUnrelated && props.mentionsTypeVariable(result)) return null;
     return result;
   }
 
   /**
-   * Records the type arguments a variable's bound shares with a type the variable has to be a
-   * subtype of: a class has one supertype of each generic class or interface, so where the bound
-   * and that type both reach one, their arguments to it are the same, and a variable among the
-   * bound's is that type's argument exactly. False where they cannot be the same.
+   * Records what a variable's bound and a type the variable has to be a subtype of ask of the
+   * variables the bound names, where both reach one generic class or interface: a class has one
+   * supertype of each, so where both give it a type for an argument, the two are the same type, as
+   * javac reads them. False where they cannot be. Where either gives a wildcard, javac draws no
+   * bound from the pair, so the pair is kept to be checked once each variable has the instantiation
+   * javac gives it.
    */
   private boolean sharedSupertypes(final Gathered into) {
     for (int i = 0; i < into.variables.size(); i++) {
@@ -160,17 +182,87 @@ final class MethodInstantiation {
         if (!(bound instanceof DeclaredType declared) || !names(bound, into.variables)) continue;
         for (final var upper : uppers) {
           if (!(upper instanceof DeclaredType wanted)) continue;
+          final DeclaredType boundView;
+          final DeclaredType upperView;
           if (types.isSubtype(types.erasure(bound), types.erasure(upper))) {
-            final var view = viewAs(declared, (TypeElement) wanted.asElement());
-            if (view != null && !arguments(view, wanted, into)) return false;
+            boundView = viewAs(declared, (TypeElement) wanted.asElement());
+            upperView = wanted;
           } else if (types.isSubtype(types.erasure(upper), types.erasure(bound))) {
-            final var view = viewAs(wanted, (TypeElement) declared.asElement());
-            if (view != null && !containing(declared, view, into)) return false;
+            boundView = declared;
+            upperView = viewAs(wanted, (TypeElement) declared.asElement());
+          } else {
+            continue;
           }
+          if (boundView != null && upperView != null && !sameArguments(boundView, upperView, into)) return false;
         }
       }
     }
     return true;
+  }
+
+  /**
+   * Records what {@code upper}'s type arguments ask of {@code bound}'s, two parameterizations of
+   * one class that a variable's one supertype of that class has to be: a pair of types is one type,
+   * and a pair with a wildcard is kept for {@link #contains}. False where a pair of types cannot be
+   * one type.
+   */
+  private boolean sameArguments(final DeclaredType bound, final DeclaredType upper, final Gathered into) {
+    final var boundArguments = bound.getTypeArguments();
+    final var upperArguments = upper.getTypeArguments();
+    if (boundArguments.size() != upperArguments.size()) return true;
+    for (int i = 0; i < boundArguments.size(); i++) {
+      final var argument = boundArguments.get(i);
+      final var met = upperArguments.get(i);
+      if (!names(argument, into.variables)) continue;
+      if (argument instanceof WildcardType || met instanceof WildcardType) {
+        into.pending.add(new Containment(argument, met));
+      } else if (!gather(argument, met, Relation.EXACT, into)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether the type arguments of a {@link Containment}, read with {@code fixed} replaced by {@code
+   * values}, can belong to one supertype: one argument a type, the other a wildcard that contains
+   * it. True where either still names a variable, or both are wildcards.
+   */
+  private boolean contains(final Containment pair, final List<TypeMirror> fixed, final List<TypeMirror> values) {
+    final var bound = props.substitute(pair.bound(), fixed, values);
+    final var upper = props.substitute(pair.upper(), fixed, values);
+    if (props.mentionsTypeVariable(bound) || props.mentionsTypeVariable(upper)) return true;
+    if (bound instanceof WildcardType wildcard && !(upper instanceof WildcardType)) return holds(wildcard, upper);
+    if (upper instanceof WildcardType wildcard && !(bound instanceof WildcardType)) return holds(wildcard, bound);
+    return true;
+  }
+
+  /** Whether {@code wildcard} contains the type {@code type}. */
+  private boolean holds(final WildcardType wildcard, final TypeMirror type) {
+    if (wildcard.getExtendsBound() != null) return types.isSubtype(type, wildcard.getExtendsBound());
+    if (wildcard.getSuperBound() != null) return types.isSubtype(wildcard.getSuperBound(), type);
+    return true;
+  }
+
+  /**
+   * A type argument of a variable's bound and the one in its place in a type the variable has to be
+   * a subtype of, one of them a wildcard.
+   */
+  private record Containment(TypeMirror bound, TypeMirror upper) {}
+
+  /**
+   * The instantiation javac gives a variable nothing here fixes: the one type it has to be a
+   * supertype of, or, where nothing bounds it but its declaration, its one declared bound naming no
+   * variable; null otherwise.
+   */
+  private TypeMirror javacInstantiation(final TypeVariable variable, final Facts fact) {
+    if (!fact.exact.isEmpty() || !fact.uppers().isEmpty()) return null;
+    if (!fact.lower.isEmpty()) {
+      final var first = fact.lower.getFirst();
+      return fact.lower.stream().allMatch(lower -> types.isSameType(lower, first)) ? first : null;
+    }
+    final var bounds = boundsOf(variable);
+    return bounds.size() == 1 && !props.mentionsTypeVariable(bounds.getFirst()) ? bounds.getFirst() : null;
   }
 
   /** Whether a bound of any of {@code variables} names {@code variable}. */
@@ -224,14 +316,16 @@ final class MethodInstantiation {
   }
 
   /**
-   * The facts per variable, and whether the result's class is no subtype of the taken type's, so
-   * that only a check of its class could write it, which the call cannot carry while it names a
-   * variable.
+   * The facts per variable; the pairs of type arguments a bound and a supertype give one class, one
+   * of them a wildcard, to check once the variables are instantiated; and whether the result's
+   * class is no subtype of the taken type's, so that only a check of its class could write it,
+   * which the call cannot carry while it names a variable.
    */
   private static final class Gathered {
 
     final List<? extends TypeVariable> variables;
     final List<Facts> facts;
+    final List<Containment> pending = new ArrayList<>();
     boolean topUnrelated;
 
     Gathered(final List<? extends TypeVariable> variables, final List<Facts> facts) {

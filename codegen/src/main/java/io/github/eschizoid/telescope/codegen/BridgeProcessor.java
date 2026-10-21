@@ -5022,12 +5022,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     final var candidates = viaCandidates(mapper, name, bridgePackage);
     if (!choosesBlind(own, held, candidates.size())) {
+      // A generic method's result depends on what the call infers, which is held to the member
+      // where the result is written, so no result is given here for one. A method whose one
+      // parameter is its own type variable takes the value as it is.
       if (resolvedFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound bound) {
-        return new ViaCall(null, bound.member().getReturnType());
+        return new ViaCall(null, bound.member().getTypeVariables().isEmpty() ? bound.member().getReturnType() : null);
       }
-      // A method whose one parameter is its own type variable takes the value as it is. What its
-      // result is depends on what the call infers, which is held to the member where the result
-      // is written, so no result is given here.
       if (inferringFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound) {
         return new ViaCall(null, null);
       }

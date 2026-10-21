@@ -6560,6 +6560,38 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
+      "a @ViaMapper whose forward returns a variable bounded by a list of a wildcard, into a List<String> property",
+      viaListRow("<T, U extends java.util.List<? extends T>> U", "(U) (java.util.List<?>) java.util.List.of(c.name())")
+        .stream()
+        .map(declaration ->
+          declaration.startsWith("public class %1$sChMap")
+            ? "@SuppressWarnings(\"unchecked\")\n" + declaration
+            : declaration
+        )
+        .toList(),
+      "#0(child=[\"a\"])"
+    ),
+    new ResultRow(
+      "a @ViaMapper whose forward returns its own variable and whose backward a variable bounded by CharSequence",
+      viaOwnRow(
+        "String",
+        "\"a\"",
+        "CharSequence",
+        "  public static <T> T forward(final T t) { return t; }\n",
+        "d.toString()"
+      )
+        .stream()
+        .map(declaration ->
+          declaration.replace(
+            "  public static String backward(final CharSequence d) { return d.toString(); }",
+            "  @SuppressWarnings(\"unchecked\")\n" +
+              "  public static <T extends CharSequence> T backward(final CharSequence d) { return (T) d.toString(); }"
+          )
+        )
+        .toList(),
+      "#0(child=\"a\")"
+    ),
+    new ResultRow(
       "a @ViaMapper with two forwards inferring from the argument, the one with the narrower bound into a List<String>",
       viaOwnRow(
         "String",
@@ -6711,7 +6743,9 @@ class CrossPathCorpusTest {
     // type are two unrelated classes, or two parameterizations of one interface; one a wildcard
     // bounds from below; a result whose class the property's class does not extend; a variable
     // bounded by a class and taken as an array; an enum's variable, whose Comparable is of itself;
-    // and a variable taken as a final class its bound is no supertype of.
+    // a variable taken as a final class its bound is no supertype of; and two whose bound gives the
+    // property's class a wildcard or a variable where it has a type or a wildcard, which javac
+    // reads with the variable as its declared bound, Object, which the other does not contain.
     final var rows = List.of(
       List.of(
         "Uej",
@@ -6817,6 +6851,19 @@ class CrossPathCorpusTest {
         "null",
         "'s forward returns T, which no instantiation of its type variables",
         "Integer"
+      ),
+      List.of(
+        "Vsh",
+        "<T, U extends java.util.List<? super T>> U forward(final %1$sCh c)",
+        "null",
+        "'s forward returns U, which no instantiation of its type variables"
+      ),
+      List.of(
+        "Vsm",
+        "<T, U extends java.util.List<T>> U forward(final %1$sCh c)",
+        "null",
+        "'s forward returns U, which no instantiation of its type variables",
+        "java.util.List<? extends CharSequence>"
       )
     );
     final var failures = new ArrayList<String>();
