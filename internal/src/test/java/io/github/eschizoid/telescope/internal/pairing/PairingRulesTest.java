@@ -424,6 +424,11 @@ class PairingRulesTest {
     public Type comparatorParameter(final Type impl, final List<Type> arguments) {
       return delegate.comparatorParameter(impl, arguments);
     }
+
+    @Override
+    public List<Property<Type>> properties(final Type t) {
+      return delegate.properties(t);
+    }
   }
 
   /** Maps keyed by a type variable, directly and inside a parameterized key. */

@@ -1,12 +1,17 @@
 package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.Property;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ArrayType;
@@ -418,6 +423,76 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
     return new PairingRules<TypeMirror>(this).hasDefaultImplementation(side)
       ? Allocability.ALLOCABLE
       : Allocability.NOT_ALLOCABLE;
+  }
+
+  @Override
+  public List<Property<TypeMirror>> properties(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null || element.getKind().isInterface()) return List.of();
+    final var members = propertyTypes((DeclaredType) element.asType(), element);
+    final var declared = propertyTypes(null, element);
+    final var properties = new ArrayList<Property<TypeMirror>>(members.size());
+    for (final var entry : members.entrySet()) {
+      properties.add(new Property<>(entry.getKey(), entry.getValue(), declared.get(entry.getKey())));
+    }
+    return properties;
+  }
+
+  /**
+   * The properties of a record (components, in declaration order) or a bean (public zero-arg {@code
+   * getX} / {@code isX} getters, skipping those declared in a platform module and the {@code class}
+   * pseudo-property, as the runtime's getter scan does), each typed as a member of {@code
+   * declared}, or as its accessor declares it when {@code declared} is null.
+   */
+  Map<String, TypeMirror> propertyTypes(final DeclaredType declared, final TypeElement element) {
+    final var result = new LinkedHashMap<String, TypeMirror>();
+    if (element.getKind() == ElementKind.RECORD) {
+      for (final var component : element.getRecordComponents()) {
+        final var accessor = component.getAccessor();
+        final var memberType =
+          declared == null
+            ? accessor.getReturnType()
+            : ((ExecutableType) types.asMemberOf(declared, accessor)).getReturnType();
+        result.put(component.getSimpleName().toString(), memberType);
+      }
+      return result;
+    }
+    for (final var member : elements.getAllMembers(element)) {
+      if (!(member instanceof ExecutableElement method)) continue;
+      if (!method.getParameters().isEmpty()) continue;
+      if (!method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)) continue;
+      final var declaringType = (TypeElement) method.getEnclosingElement();
+      // Skip platform supertypes by MODULE name, exactly like the runtime getter scan — a package
+      // prefix would miss javax.* packages living inside java.* modules (java.sql, java.naming, …).
+      final var declaringModule = elements.getModuleOf(declaringType);
+      if (declaringModule != null && !declaringModule.isUnnamed()) {
+        final var moduleName = declaringModule.getQualifiedName().toString();
+        if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
+      }
+      final var rawName = method.getSimpleName().toString();
+      final var afterGet = PropertyNames.afterGet(rawName);
+      final var afterIs = PropertyNames.afterIs(rawName);
+      final String prop;
+      if (afterGet != null && method.getReturnType().getKind() != TypeKind.VOID) {
+        prop = afterGet;
+      } else if (afterIs != null && booleanReturn(method)) {
+        prop = afterIs;
+      } else {
+        continue;
+      }
+      if ("class".equals(prop) || result.containsKey(prop)) continue;
+      final var memberType =
+        declared == null
+          ? method.getReturnType()
+          : ((ExecutableType) types.asMemberOf(declared, method)).getReturnType();
+      result.put(prop, memberType);
+    }
+    return result;
+  }
+
+  private static boolean booleanReturn(final ExecutableElement method) {
+    final var rt = method.getReturnType();
+    return rt.getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(rt.toString());
   }
 
   /**

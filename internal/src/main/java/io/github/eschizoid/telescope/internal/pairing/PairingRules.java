@@ -90,8 +90,12 @@ public final class PairingRules<T> {
 
     // (a.0b) Two records or beans given type arguments → recurse into the pair, where both give
     // the same argument for every type variable a member uses. One with none on either side is a
-    // class type and takes (b) below.
-    if (genericClassPair(srcType, tgtType)) {
+    // class type and takes (b) below. A pair given type arguments has its container views read
+    // here, once, for (c) too; a pair of two class types reads them only if it reaches (c).
+    final var classTypes = props.isClassType(srcType) && props.isClassType(tgtType);
+    final var srcArgumentsView = classTypes ? null : containerViewOf(srcType);
+    final var tgtArgumentsView = classTypes ? null : containerViewOf(tgtType);
+    if (!classTypes && genericClassPair(srcType, tgtType, srcArgumentsView, tgtArgumentsView)) {
       return argumentsInUseAgree(srcType, tgtType)
         ? new PairDecision.RecursePair<>()
         : new PairDecision.Incompatible<>(
@@ -99,7 +103,7 @@ public final class PairingRules<T> {
           );
     }
 
-    if (props.isClassType(srcType) && props.isClassType(tgtType)) {
+    if (classTypes) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
 
@@ -195,8 +199,8 @@ public final class PairingRules<T> {
     }
 
     // (c) Container views. Cross-Optional bridge first, then same-kind lift.
-    final var srcView = containerViewOf(srcType);
-    final var tgtView = containerViewOf(tgtType);
+    final var srcView = classTypes ? containerViewOf(srcType) : srcArgumentsView;
+    final var tgtView = classTypes ? containerViewOf(tgtType) : tgtArgumentsView;
 
     // (c.1) Optional<X> ↔ nullable scalar/record/bean, either direction.
     if (srcView != null && srcView.kind() == ContainerView.Kind.OPTIONAL && tgtView == null) {
@@ -271,13 +275,19 @@ public final class PairingRules<T> {
    * variables as the source's in the same position ({@link #alignedToSource}) and is the same
    * conversion whatever arguments the component gives them. That is the conversion the component's
    * arguments call for where both sides give the same argument for each variable a member passes
-   * across ({@link #argumentsInUseAgree}).
+   * across ({@link #argumentsInUseAgree}). {@code srcView} and {@code tgtView} are each side's view
+   * as a container ({@link #containerViewOf}).
    */
-  private boolean genericClassPair(final T srcType, final T tgtType) {
+  private boolean genericClassPair(
+    final T srcType,
+    final T tgtType,
+    final ContainerView<T> srcView,
+    final ContainerView<T> tgtView
+  ) {
     if (props.isClassType(srcType) && props.isClassType(tgtType)) return false;
     // A wildcard or type variable names no class of its own to pair.
     if (!namesClass(srcType) || !namesClass(tgtType)) return false;
-    if (containerViewOf(srcType) != null || containerViewOf(tgtType) != null) return false;
+    if (srcView != null || tgtView != null) return false;
     return reflectable(props.rawType(srcType)) && reflectable(props.rawType(tgtType));
   }
 
@@ -930,6 +940,23 @@ public final class PairingRules<T> {
 
   private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
 
+  /**
+   * The container kinds {@link #containerViewOf} asks a type about, in order. Order decides the
+   * answer where a type satisfies more than one: a List is asked as a List before it is asked as a
+   * Collection. The last three are what a type reaches only by being none of the others -- a Deque,
+   * a Queue, or a field declared as the general Collection -- and they are viewed as lists because
+   * that is what they keep: an order, and duplicates.
+   */
+  private static final List<WellKnown> VIEWED_KINDS = List.of(
+    WellKnown.OPTIONAL,
+    WellKnown.LIST,
+    WellKnown.SET,
+    WellKnown.MAP,
+    WellKnown.DEQUE,
+    WellKnown.QUEUE,
+    WellKnown.COLLECTION
+  );
+
   private static final Map<WellKnown, String> GENERAL_NAMES = Map.of(
     WellKnown.DEQUE,
     "java.util.Deque",
@@ -1038,19 +1065,7 @@ public final class PairingRules<T> {
     // parameters, which can be reordered, fixed, or unrelated to the element and key types.
     final var declaresNoArguments = props.typeArguments(t).isEmpty();
     final var raw = props.rawType(t);
-    // Order decides the answer where a type satisfies more than one: a List is asked as a List
-    // before it is asked as a Collection. The last three are what a type reaches only by being
-    // none of the others -- a Deque, a Queue, or a field declared as the general Collection -- and
-    // they are viewed as lists because that is what they keep: an order, and duplicates.
-    for (final var kind : List.of(
-      WellKnown.OPTIONAL,
-      WellKnown.LIST,
-      WellKnown.SET,
-      WellKnown.MAP,
-      WellKnown.DEQUE,
-      WellKnown.QUEUE,
-      WellKnown.COLLECTION
-    )) {
+    for (final var kind : VIEWED_KINDS) {
       if (!props.isSubtypeOf(raw, kind)) continue;
       // The three general kinds are matched by name rather than by subtype. A concrete queue may
       // be capacity-bounded -- a SynchronousQueue holds nothing at all -- and accepting one turns
