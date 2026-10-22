@@ -237,6 +237,15 @@ public interface PropertySystem<T> {
    */
   Allocability copyAllocability(T src, T tgt);
 
+  /**
+   * The properties of the record or bean class {@code t} names, in the order the runtime reads
+   * them: a record's components, or a bean's public, non-static getters taking no arguments, a
+   * {@code getX} returning anything but {@code void} or an {@code isX} returning a boolean, leaving
+   * out the {@code class} pseudo-property and getters declared in a {@code java.*} or {@code jdk.*}
+   * module.
+   */
+  List<Property<T>> properties(T t);
+
   /** Human-readable type name for diagnostics — {@code Type#getTypeName} semantics. */
   String typeName(T t);
 

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -67,12 +68,12 @@ class NeverVisitedRowAgreementTest {
     record @@OuterDto(@@Base inner, String note) {}
     """;
 
-  private record Outcome(List<String> verifier, String construction) {}
+  private record Outcome(List<String> verifier, String construction, List<String> warnings) {}
 
   /**
    * Compiles {@code code} with the verifier reporting warnings, defines what it compiled, and calls
-   * the holder's {@code build()}: the verifier's never-visits reports, and the message construction
-   * refused the mapper with, or null when it built.
+   * the holder's {@code build()}: the verifier's never-visits reports, the message construction
+   * refused the mapper with, or null when it built, and every warning the verifier reported.
    */
   private static Outcome outcome(final String prefix, final String code) {
     final var compilation = compileFully(
@@ -81,19 +82,22 @@ class NeverVisitedRowAgreementTest {
       source(PACKAGE + "." + prefix + "Holder", code.replace("@@", prefix))
     );
     assertTrue(compilation.success(), compilation::errorMessages);
-    final var reported = compilation
+    final var warnings = compilation
       .diagnostics()
       .stream()
       .filter(d -> d.getKind() == Diagnostic.Kind.WARNING)
       .map(d -> d.getMessage(Locale.ROOT))
+      .toList();
+    final var reported = warnings
+      .stream()
       .filter(m -> m.contains("never visits"))
       .toList();
     final var holder = compilation.define(MethodHandles.lookup()).get(PACKAGE + "." + prefix + "Holder");
     try {
       holder.getDeclaredMethod("build").invoke(null);
-      return new Outcome(reported, null);
+      return new Outcome(reported, null, warnings);
     } catch (final InvocationTargetException e) {
-      return new Outcome(reported, e.getCause().getMessage());
+      return new Outcome(reported, e.getCause().getMessage(), warnings);
     } catch (final ReflectiveOperationException e) {
       throw new IllegalStateException(e);
     }
@@ -641,28 +645,293 @@ class NeverVisitedRowAgreementTest {
     assertEquals(List.of(), outcome.verifier());
   }
 
+  @Nested
+  @DisplayName("The pairs reached through generics, sealed cases and refused properties are one answer on both")
+  class WalkedAlike {
+
+    @Test
+    @DisplayName("a property a generic superclass declares, typed as the subclass fixes it")
+    void inheritedTypeVariable() {
+      final var outcome = outcome(
+        "NyA",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          record @@Inner(String name, String label) {}
+          record @@InnerDto(String name) {}
+          record @@Other(String name) {}
+          class @@Box<T> {
+            private T inner;
+            public T getInner() { return inner; }
+            public void setInner(T inner) { this.inner = inner; }
+          }
+          class @@InnerBox extends @@Box<@@Inner> { public @@InnerBox() {} }
+          record @@OuterDto(@@InnerDto inner) {}
+          """ +
+          holder("Telescope.mapperForward(@@InnerBox.class, @@OuterDto.class, to(@@Inner::label, @@Other::name))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.rowsNeverVisited(
+          name("NyA", "InnerBox"),
+          name("NyA", "OuterDto"),
+          List.of(PairingMessages.unvisitedPair(name("NyA", "Inner"), name("NyA", "Other"), List.of("label -> name")))
+        ),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a pair reached through a property a generic superclass declares is accepted by both")
+    void pairReachedThroughATypeVariable() {
+      assertBothAccept(
+        outcome(
+          "NyB",
+          """
+            package io.github.eschizoid.telescope.codegen;
+            import static io.github.eschizoid.telescope.mapping.Mapping.*;
+            import io.github.eschizoid.telescope.Telescope;
+            record @@Inner(String name, String label) {}
+            record @@InnerDto(String name) {}
+            class @@Box<T> {
+              private T inner;
+              public T getInner() { return inner; }
+              public void setInner(T inner) { this.inner = inner; }
+            }
+            class @@InnerBox extends @@Box<@@Inner> { public @@InnerBox() {} }
+            record @@OuterDto(@@InnerDto inner) {}
+            """ +
+            holder("Telescope.mapperForward(@@InnerBox.class, @@OuterDto.class, to(@@Inner::label, @@InnerDto::name))")
+        )
+      );
+    }
+
+    /** A drawing holding a sealed shape, each of whose cases a {@code cases} row pairs. */
+    private static final String DRAWINGS = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Cases.cases;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      record @@Leaf(String name, String label) {}
+      record @@LeafDto(String name) {}
+      record @@Other(String name) {}
+      sealed interface @@Shape permits @@Circle, @@Square {}
+      record @@Circle(@@Leaf leaf) implements @@Shape {}
+      record @@Square(String side) implements @@Shape {}
+      sealed interface @@ShapeDto permits @@CircleDto, @@SquareDto {}
+      record @@CircleDto(@@LeafDto leaf) implements @@ShapeDto {}
+      record @@SquareDto(String side) implements @@ShapeDto {}
+      record @@Drawing(@@Shape shape) {}
+      record @@DrawingDto(@@ShapeDto shape) {}
+      """;
+
+    private static final String PAIRED_CASES =
+      "cases(@@Circle.class, @@CircleDto.class), cases(@@Square.class, @@SquareDto.class)";
+
+    @Test
+    @DisplayName("below a sealed field whose cases rows pair, a pair no case reaches")
+    void belowASealedField() {
+      assertBothRefuse(
+        outcome(
+          "NyC",
+          DRAWINGS +
+            holder(
+              "Telescope.mapper(@@Drawing.class, @@DrawingDto.class, " +
+                PAIRED_CASES +
+                ", to(@@Leaf::label, @@Other::name))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("below a sealed field whose cases rows pair, a pair a case reaches")
+    void reachedBelowASealedField() {
+      assertBothAccept(
+        outcome(
+          "NyD",
+          DRAWINGS +
+            holder(
+              "Telescope.mapper(@@Drawing.class, @@DrawingDto.class, " +
+                PAIRED_CASES +
+                ", to(@@Leaf::label, @@LeafDto::name))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("on a mapper between two sealed interfaces, a pair no case reaches")
+    void onASealedMapper() {
+      assertBothRefuse(
+        outcome(
+          "NyE",
+          DRAWINGS +
+            holder(
+              "Telescope.mapper(@@Shape.class, @@ShapeDto.class, " +
+                PAIRED_CASES +
+                ", to(@@Leaf::label, @@Other::name))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("on a mapper between two sealed interfaces, a pair a case reaches")
+    void reachedOnASealedMapper() {
+      assertBothAccept(
+        outcome(
+          "NyF",
+          DRAWINGS +
+            holder(
+              "Telescope.mapper(@@Shape.class, @@ShapeDto.class, " +
+                PAIRED_CASES +
+                ", to(@@Leaf::label, @@LeafDto::name))"
+            )
+        )
+      );
+    }
+
+    /**
+     * Asserts that construction refuses with a message other than a never-visits one, and that the
+     * verifier reports that message and no never-visits one.
+     */
+    private static void assertBothNameTheBuildsRefusal(final Outcome outcome) {
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertFalse(outcome.construction().contains("never visits"), outcome.construction());
+      assertTrue(outcome.warnings().contains(outcome.construction()), () -> String.join("\n", outcome.warnings()));
+      assertEquals(List.of(), outcome.verifier());
+    }
+
+    /** A row keyed to a pair reached only through a property the shared decision refuses. */
+    private static final String REFUSED = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      import java.util.List;
+      import java.util.Map;
+      record @@E(String a, String b) {}
+      record @@EDto(String a, String c) {}
+      record @@R(List<@@E> items) {}
+      record @@RDto(Map<String, @@EDto> items) {}
+      record @@A(@@E[] items) {}
+      record @@ADto(@@EDto[] items) {}
+      """;
+
+    @Test
+    @DisplayName("a row below a list paired with a map is left to the refusal of that pair")
+    void belowAListPairedWithAMap() {
+      final var outcome = outcome(
+        "NyG",
+        REFUSED + holder("Telescope.mapper(@@R.class, @@RDto.class, to(@@E::b, @@EDto::c))")
+      );
+      assertBothNameTheBuildsRefusal(outcome);
+      assertTrue(outcome.construction().contains("incompatible source/target shapes"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("a row below two arrays of different classes is left to the refusal of that pair")
+    void belowArrays() {
+      final var outcome = outcome(
+        "NyI",
+        REFUSED + holder("Telescope.mapper(@@A.class, @@ADto.class, to(@@E::b, @@EDto::c))")
+      );
+      assertBothNameTheBuildsRefusal(outcome);
+      assertTrue(outcome.construction().contains("incompatible source/target shapes"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("a field with no counterpart is named before a row the walk never reaches")
+    void fieldWithNoCounterpartFirst() {
+      final var outcome = outcome(
+        "NyJ",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          record @@Top(String name, String extra) {}
+          record @@TopDto(String name) {}
+          record @@Stray(String a) {}
+          record @@StrayDto(String a) {}
+          """ +
+          holder("Telescope.mapper(@@Top.class, @@TopDto.class, to(@@Stray::a, @@StrayDto::a))")
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("has no same-name target field"), outcome.construction());
+      assertTrue(outcome.warnings().contains(outcome.construction()), () -> String.join("\n", outcome.warnings()));
+    }
+
+    @Test
+    @DisplayName("a cases row naming cases no sealed pair below the mapper's own dispatches on")
+    void untakenCaseRowBelowASealedField() {
+      final var code =
+        DRAWINGS.replace("@@", "NyH") +
+        """
+          sealed interface NyHTone permits NyHWarm {}
+          record NyHWarm(String v) implements NyHTone {}
+          sealed interface NyHToneDto permits NyHWarmDto {}
+          record NyHWarmDto(String v) implements NyHToneDto {}
+          class NyHHolder {
+            static Object build() {
+              return Telescope.mapper(NyHDrawing.class, NyHDrawingDto.class,
+                cases(NyHCircle.class, NyHCircleDto.class), cases(NyHSquare.class, NyHSquareDto.class),
+                cases(NyHWarm.class, NyHWarmDto.class));
+            }
+          }
+          """;
+      final var compilation = compileFully(
+        List.of(new MapperVerifierProcessor()),
+        List.of("-Atelescope.verify=warn"),
+        source(PACKAGE + ".NyHHolder", code)
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+      final var reported = compilation
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.WARNING)
+        .map(d -> d.getMessage(Locale.ROOT))
+        .filter(m -> m.contains("never dispatches on"))
+        .toList();
+      final var holder = compilation.define(MethodHandles.lookup()).get(PACKAGE + ".NyHHolder");
+      final var refused = assertThrows(InvocationTargetException.class, () ->
+        holder.getDeclaredMethod("build").invoke(null)
+      );
+      assertEquals(
+        PairingMessages.caseRowsNeverDispatched(
+          "NyHDrawing",
+          "NyHDrawingDto",
+          List.of(PairingMessages.caseRow("NyHWarm", "NyHWarmDto"))
+        ),
+        refused.getCause().getMessage()
+      );
+      assertEquals(List.of(refused.getCause().getMessage()), reported);
+    }
+  }
+
   @Test
-  @DisplayName("the verifier says nothing where a property is typed by a type variable it cannot bind")
-  void silentOnATypeVariable() {
+  @DisplayName("the verifier says nothing below a sealed field whose cases no cases row pairs")
+  void silentBelowCasesNoRowPairs() {
     final var outcome = outcome(
       "NvW",
       """
         package io.github.eschizoid.telescope.codegen;
+        import static io.github.eschizoid.telescope.mapping.Cases.cases;
         import static io.github.eschizoid.telescope.mapping.Mapping.*;
         import io.github.eschizoid.telescope.Telescope;
-        record @@Inner(String name, String label) {}
-        record @@InnerDto(String name) {}
+        record @@Leaf(String name, String label) {}
+        record @@LeafDto(String name) {}
         record @@Other(String name) {}
-        class @@Box<T> {
-          private T inner;
-          public T getInner() { return inner; }
-          public void setInner(T inner) { this.inner = inner; }
-        }
-        class @@InnerBox extends @@Box<@@Inner> { public @@InnerBox() {} }
-        record @@OuterDto(@@InnerDto inner) {}
+        sealed interface @@Shape permits @@Circle {}
+        record @@Circle(@@Leaf leaf) implements @@Shape {}
+        sealed interface @@ShapeDto permits @@CircleDto {}
+        record @@CircleDto(@@LeafDto leaf) implements @@ShapeDto {}
+        record @@Drawing(@@Shape shape) {}
+        record @@DrawingDto(@@ShapeDto shape) {}
         """ +
-        holder("Telescope.mapperForward(@@InnerBox.class, @@OuterDto.class, to(@@Inner::label, @@Other::name))")
+        holder("Telescope.mapper(@@Drawing.class, @@DrawingDto.class, to(@@Leaf::label, @@Other::name))")
     );
+    assertNotNull(outcome.construction(), "construction built the mapper");
     assertEquals(List.of(), outcome.verifier());
   }
 }

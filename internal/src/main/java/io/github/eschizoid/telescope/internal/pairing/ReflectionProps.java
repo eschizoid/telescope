@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.Records;
 import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
@@ -304,7 +305,8 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   private boolean anyMentionsTypeVariable(final Type[] types) {
-    return Arrays.stream(types).anyMatch(this::mentionsTypeVariable);
+    for (final var type : types) if (mentionsTypeVariable(type)) return true;
+    return false;
   }
 
   @Override
@@ -590,6 +592,33 @@ public final class ReflectionProps implements PropertySystem<Type> {
         ? Beans.noArgConstructor(cls)
         : Beans.intermediateAllocator(cls);
     return alloc != null && alloc.get() != null;
+  }
+
+  /** Each class's properties, listed once: a class's getters and components do not change. */
+  private static final ClassValue<List<Property<Type>>> PROPERTIES = new ClassValue<>() {
+    @Override
+    protected List<Property<Type>> computeValue(final Class<?> cls) {
+      final var properties = new ArrayList<Property<Type>>();
+      if (cls.isRecord()) {
+        for (final var name : Records.componentNames(cls)) {
+          final var type = Records.componentType(cls, name);
+          properties.add(new Property<>(name, type, type));
+        }
+      } else {
+        for (final var name : Beans.propertyNames(cls)) {
+          properties.add(new Property<>(name, Beans.resolvedPropertyType(cls, name), Beans.propertyType(cls, name)));
+        }
+      }
+      return List.copyOf(properties);
+    }
+  };
+
+  @Override
+  public List<Property<Type>> properties(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls) || cls.isPrimitive() || cls.isArray() || cls.isInterface()) {
+      return List.of();
+    }
+    return PROPERTIES.get(cls);
   }
 
   @Override

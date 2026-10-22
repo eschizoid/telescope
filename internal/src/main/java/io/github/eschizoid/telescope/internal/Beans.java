@@ -22,7 +22,9 @@ import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -725,12 +727,31 @@ public final class Beans {
    * beanClass} declares, and its bound, stay in it.
    */
   public static Type resolvedPropertyType(final Class<?> beanClass, final String name) {
-    final var getter = getters(beanClass).get(name);
-    if (getter == null) throw new IllegalArgumentException(
+    final var resolved = RESOLVED_TYPES.get(beanClass).get(name);
+    if (resolved == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
-    return PROPS.resolvedMemberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), beanClass);
+    return resolved;
   }
+
+  /**
+   * Each bean class's {@link #resolvedPropertyType}s by property, read once: a class's getters and
+   * the arguments its superclass chain gives them do not change.
+   */
+  private static final ClassValue<Map<String, Type>> RESOLVED_TYPES = new ClassValue<>() {
+    @Override
+    protected Map<String, Type> computeValue(final Class<?> type) {
+      final var resolved = new HashMap<String, Type>();
+      for (final var entry : getters(type).entrySet()) {
+        final var getter = entry.getValue();
+        resolved.put(
+          entry.getKey(),
+          PROPS.resolvedMemberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), type)
+        );
+      }
+      return Collections.unmodifiableMap(resolved);
+    }
+  };
 
   private static Map<String, Method> getters(final Class<?> cls) {
     return GETTERS.get(cls);

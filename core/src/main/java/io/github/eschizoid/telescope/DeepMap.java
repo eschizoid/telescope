@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
+import io.github.eschizoid.telescope.internal.pairing.PairWalk;
 import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
@@ -106,6 +107,9 @@ public final class DeepMap {
    * and what compiles there cannot drift.
    */
   private static final PairingRules<Type> PAIRING = new PairingRules<>(new ReflectionProps());
+
+  /** The shared walk of the pairs a mapper visits, which the compile-time verifier takes too. */
+  private static final PairWalk<Type> PAIR_WALK = new PairWalk<>(new ReflectionProps());
 
   // ---------- Package-private entries (called from Telescope.map / Telescope.mapper) ----------
 
@@ -211,6 +215,13 @@ public final class DeepMap {
       cyclicPairs
     );
     final var sealedCases = new SealedCases(caseRows);
+    // The pairs the mapper visits are walked before anything is built. A row keyed to the mapper's
+    // own pair is always visited, so only a row keyed below it needs the walk. A row the walk never
+    // reaches is refused once the build has refused nothing of its own, so a property the build
+    // cannot convert, or a field with no counterpart, is the refusal named.
+    final var walked = keyedBelow(overrideTable, source, target)
+      ? PAIR_WALK.walk(source, target, keyedRows(overrideTable), lenient, new Walking(ownBridges, sealedCases, lenient))
+      : null;
     // A mapper between two sealed interfaces dispatches on the case, and each case's own mapper is
     // what patch and into reach; any other pair is walked by property.
     final var rootCases =
@@ -250,7 +261,12 @@ public final class DeepMap {
       trail
     );
     validateAllHintsConsumed(hintMap, cache);
-    validateAllOverridesConsumed(overrideTable, cache, source, target);
+    if (walked != null) {
+      // Every pair that leaves the runtime walk open is one the build refuses, so a build that
+      // finished was walked to the end.
+      assert !walked.open() && visitsAgree(walked, cache.keySet()) : "the build visited other pairs than the walk";
+      if (walked.refusal() != null) throw new IllegalArgumentException(walked.refusal());
+    }
     sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = patchTableOf(topSteps, source);
@@ -412,38 +428,93 @@ public final class DeepMap {
     );
   }
 
-  /**
-   * Reject any {@code Mapping} row bucket whose (source, target) type pair the recursion never
-   * visited — the rows could only ever be silently ignored. The classic trip-wire is reusing a row
-   * group declared against one DTO variant inside a mapper for a different variant: the rows are
-   * keyed by the accessors' declaring classes, so the foreign pair's bucket would sit unvisited
-   * while same-name auto-mapping masks the loss. Failing loudly here keeps explicit rows on the
-   * same footing as the unmatched-field and writeBean-hint validations.
-   */
-  private static void validateAllOverridesConsumed(
+  /** Whether a row is keyed to a pair other than the mapper's own. */
+  private static boolean keyedBelow(
     final Map<TypePair, List<Mapping<?, ?>>> overrideTable,
-    final Map<TypePair, Iso<?, ?>> cache,
     final Class<?> topSource,
     final Class<?> topTarget
   ) {
-    if (overrideTable.isEmpty()) return;
-    final var dead = new ArrayList<String>();
+    for (final var pair : overrideTable.keySet()) {
+      if (pair.source != topSource || pair.target != topTarget) return true;
+    }
+    return false;
+  }
+
+  /** The rows of {@code overrideTable}, each with the pair it is keyed to, in the order given. */
+  private static List<PairWalk.KeyedRow<Type>> keyedRows(final Map<TypePair, List<Mapping<?, ?>>> overrideTable) {
+    final var rows = new ArrayList<PairWalk.KeyedRow<Type>>();
     for (final var entry : overrideTable.entrySet()) {
       final var pair = entry.getKey();
-      if (cache.containsKey(pair)) continue;
-      // Drop rows are exempt: an unreachable drop is a harmless no-op (nested pairs are lenient
-      // already), and the one-arg form deliberately buckets a nested source class with the top
-      // target. Only rows that promise a mapping effect can be silently lost.
-      final var rows = new ArrayList<String>();
-      for (final var r : entry.getValue()) {
-        if (!(r instanceof Drop)) rows.add(PairingMessages.unvisitedRow(r.sourceField(), r.targetField()));
+      for (final var row : entry.getValue()) {
+        rows.add(new PairWalk.KeyedRow<>(pair.source, pair.target, kindOf(row), row.sourceField(), row.targetField()));
       }
-      if (rows.isEmpty()) continue;
-      dead.add(PairingMessages.unvisitedPair(pair.source.getName(), pair.target.getName(), rows));
     }
-    if (!dead.isEmpty()) throw new IllegalArgumentException(
-      PairingMessages.rowsNeverVisited(topSource.getName(), topTarget.getName(), dead)
-    );
+    return rows;
+  }
+
+  /**
+   * What {@code row} does at the pair it is keyed to, as {@link #populateIso} applies it. A {@code
+   * when} row wraps only a row through a path, which its factory holds it to.
+   */
+  private static PairWalk.RowKind kindOf(final Mapping<?, ?> row) {
+    return switch (row) {
+      case SameTypedTo<?, ?, ?> __ -> PairWalk.RowKind.PASS_THROUGH;
+      case TypedTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
+      case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
+      case Via<?, ?> __ -> PairWalk.RowKind.CONVERTING;
+      case Drop<?, ?, ?> __ -> PairWalk.RowKind.DROP;
+      case TelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case FromTelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case TelescopeToTelescope<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case Constant<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case Compute<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case Conditional<?, ?> __ -> PairWalk.RowKind.PATH;
+    };
+  }
+
+  /** Whether the pairs {@code walked} visited are the pairs the build converted by walking them. */
+  private static boolean visitsAgree(final PairWalk.Walk<Type> walked, final Set<TypePair> built) {
+    final var visited = new HashSet<TypePair>();
+    for (final var pair : walked.visited())
+      visited.add(new TypePair((Class<?>) pair.source(), (Class<?>) pair.target()));
+    return visited.equals(built);
+  }
+
+  /**
+   * The walk's questions, answered as the build answers them: a nested pair converts through its
+   * own bridge where {@link OwnBridges} lets it, and the cases of two sealed interfaces pair as
+   * {@link SealedCases} pairs them.
+   */
+  private record Walking(
+    OwnBridges ownBridges,
+    SealedCases sealedCases,
+    boolean forwardOnly
+  ) implements PairWalk.Decisions<Type> {
+    @Override
+    public boolean ownBridge(final Type source, final Type target, final List<PairWalk.Pair<Type>> around) {
+      final var pair = new TypePair((Class<?>) source, (Class<?>) target);
+      if (!ownBridges.mayStandIn(pair)) return false;
+      final var ancestors = new ArrayList<TypePair>(around.size());
+      for (final var each : around) ancestors.add(new TypePair((Class<?>) each.source(), (Class<?>) each.target()));
+      return ownBridges.standsIn(pair, ancestors);
+    }
+
+    @Override
+    public List<PairWalk.Pair<Type>> casePairs(final Type sourceRoot, final Type targetRoot) {
+      final List<TypePair> pairs;
+      try {
+        pairs = sealedCases.pairsOf(new TypePair((Class<?>) sourceRoot, (Class<?>) targetRoot), forwardOnly);
+      } catch (final IllegalStateException | IllegalArgumentException refused) {
+        // The build pairs the same cases where it meets the pair and raises this refusal there,
+        // after any it raises on the way.
+        return null;
+      }
+      final var cases = new ArrayList<PairWalk.Pair<Type>>();
+      for (final var pair : pairs) {
+        cases.add(new PairWalk.Pair<>(pair.source, pair.target));
+      }
+      return cases;
+    }
   }
 
   // ---------- Override grouping ----------
@@ -2609,11 +2680,24 @@ public final class DeepMap {
 
     /** As {@link #isoFor}, the generated bridge itself. */
     Object bridgeFor(final TypePair pair, final Collection<TypePair> ancestors) {
+      final var bridge = standingIn(pair, ancestors);
+      if (bridge == null) return null;
+      markCycle(pair, ancestors, bridge);
+      converted.add(pair);
+      return bridge;
+    }
+
+    /**
+     * Whether the pair's own bridge converts it, as {@link #bridgeFor} decides, deciding nothing.
+     */
+    boolean standsIn(final TypePair pair, final Collection<TypePair> ancestors) {
+      return standingIn(pair, ancestors) != null;
+    }
+
+    private Object standingIn(final TypePair pair, final Collection<TypePair> ancestors) {
       if (settingReason(pair, ancestors) != null) return null;
       final var found = ownBridge(pair.source, pair.target, false);
       if (found.isEmpty() || reachReason(pair, ancestors, found.get()) != null) return null;
-      markCycle(pair, ancestors, found.get());
-      converted.add(pair);
       return found.get();
     }
 
@@ -2651,14 +2735,28 @@ public final class DeepMap {
 
     /** A reason read from the pair itself, before its bridge is looked up. */
     private String settingReason(final TypePair pair, final Collection<TypePair> ancestors) {
-      if (everyPair != null) return everyPair;
-      if (!rows.getOrDefault(pair, List.of()).isEmpty()) return "a row is keyed to the pair";
-      for (final var cls : List.of(pair.source, pair.target)) {
-        if (hinted.contains(cls)) return "a writeBean hint names " + cls.getSimpleName();
-      }
+      final var configured = configuredReason(pair);
+      if (configured != null) return configured;
       // A pair met again inside itself, such as the mapper's own pair, keeps the walk it is in.
       if (ancestors.contains(pair)) return "the pair is met again inside itself";
       return null;
+    }
+
+    /** A reason read from what the mapper is given about the pair, wherever it is met. */
+    private String configuredReason(final TypePair pair) {
+      if (everyPair != null) return everyPair;
+      if (!rows.getOrDefault(pair, List.of()).isEmpty()) return "a row is keyed to the pair";
+      if (hinted.contains(pair.source)) return "a writeBean hint names " + pair.source.getSimpleName();
+      if (hinted.contains(pair.target)) return "a writeBean hint names " + pair.target.getSimpleName();
+      return null;
+    }
+
+    /**
+     * Whether the pair has a bridge of its own that nothing the mapper is given about the pair
+     * keeps from converting it; the pairs around it may still.
+     */
+    boolean mayStandIn(final TypePair pair) {
+      return configuredReason(pair) == null && ownBridge(pair.source, pair.target, false).isPresent();
     }
 
     /**

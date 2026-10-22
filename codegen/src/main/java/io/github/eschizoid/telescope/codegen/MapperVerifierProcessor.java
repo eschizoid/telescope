@@ -19,6 +19,7 @@ import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
+import io.github.eschizoid.telescope.internal.pairing.PairWalk;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
@@ -27,13 +28,14 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
@@ -50,7 +52,6 @@ import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
-import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.util.ElementFilter;
@@ -136,6 +137,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private Elements elements;
   private MirrorProps props;
   private PairingRules<TypeMirror> rules;
+  private PairWalk<TypeMirror> walk;
   private ContainerAllocation<TypeMirror> allocation;
   private MirrorSetters setters;
   // The compilation units entered so far, by source file, each as last entered; every one is
@@ -157,6 +159,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     elements = processingEnv.getElementUtils();
     props = new MirrorProps(types, elements);
     rules = new PairingRules<>(props);
+    walk = new PairWalk<>(props);
     allocation = new ContainerAllocation<>(props);
     setters = new MirrorSetters(types, elements, props);
     final var mode = processingEnv.getOptions().getOrDefault("telescope.verify", "error");
@@ -317,18 +320,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    */
   private record Prop(String name, TypeMirror type, TypeElement owner, String method) {}
 
-  /** What a row does at the pair it is keyed to, as far as which pairs construction visits. */
-  private enum RowKind {
-    /** {@code to(src, tgt)}: claims the target property and converts it as an unclaimed one is. */
-    PASS_THROUGH,
-    /** A row carrying its own conversion: claims the target property, and reaches no pair. */
-    CONVERTING,
-    /** A row through a telescope path, or {@code constant} / {@code compute} / {@code when}. */
-    PATH,
-    /** {@code drop}, which construction never refuses as unvisited. */
-    DROP,
-  }
-
   /**
    * A row and the pair construction keys it to. The methods are the accessors' own names, null for
    * a side given as a telescope path.
@@ -337,7 +328,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     Tree at,
     TypeElement source,
     TypeElement target,
-    RowKind kind,
+    PairWalk.RowKind kind,
     String sourceMethod,
     String targetMethod
   ) {}
@@ -351,18 +342,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     Map<String, TypeMirror> declaredSource,
     Map<String, TypeMirror> declaredTarget
   ) {}
-
-  /** What a walk of the pairs construction visits does at each pair, besides following it. */
-  private interface PairVisitor {
-    /**
-     * Whether construction walks the pair rather than converting it some other way. {@code keyed}
-     * holds when a row is keyed to the pair, and {@code root} for the call's own pair.
-     */
-    boolean walks(TypeElement source, TypeElement target, boolean keyed, boolean root);
-
-    /** Construction fills {@code targetName} of the pair's target from {@code sourceName}. */
-    void fills(TypeElement source, TypeElement target, PairSides sides, String sourceName, String targetName);
-  }
 
   /**
    * Whether a bridge of its own may convert the pair of {@code source} and {@code target}: either
@@ -491,6 +470,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         rules.decidePair(srcType, tgtType, "", !strict) instanceof PairDecision.DispatchCases
       ) {
         verifySealedCall(args, srcEl, tgtEl);
+        verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
         return;
       }
       if (srcEl == null || tgtEl == null || !rules.reflectable(srcType) || !rules.reflectable(tgtType)) {
@@ -660,17 +640,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
     /**
      * Reports the rows keyed to a type pair the mapper never visits, with the message construction
-     * refuses them with. Construction keys each row to the classes its accessors are applied to,
-     * and to the call's own pair for a side given as a telescope path, for a {@code constant},
-     * {@code compute} or {@code zip} row, and for a target accessor applied to a type the call's
-     * target extends. A {@code when} row is keyed as the row it wraps. Construction then visits the
-     * call's pair and every pair reached from it, and refuses the rows of any other pair, {@code
-     * drop} rows aside.
+     * refuses them with, and the {@code cases} rows no pair of sealed interfaces it dispatches on
+     * takes. Construction keys each row to the classes its accessors are applied to, and to the
+     * call's own pair for a side given as a telescope path, for a {@code constant}, {@code compute}
+     * or {@code zip} row, and for a target accessor applied to a type the call's target extends. A
+     * {@code when} row is keyed as the row it wraps. The pairs the mapper visits are walked as
+     * construction walks them ({@link PairWalk}), {@code drop} rows aside.
      *
-     * <p>Nothing is reported unless every row can be keyed and the whole walk can be followed: a
-     * row this cannot read could claim a property or reach a pair, and a property typed by a type
-     * variable, a pair the shared decision refuses, or a forward-only row on a strict factory each
-     * make construction answer before it gets here or differently from this walk.
+     * <p>Nothing is reported unless every row can be keyed and every pair of sealed interfaces the
+     * walk meets has its cases paired by {@code cases} rows: a row this cannot read could claim a
+     * property or reach a pair, a forward-only row on a strict factory is refused by construction
+     * first, and a case construction pairs through a bridge of its own may pair with a case this
+     * cannot name. A pair a bridge of its own may convert is walked all the same, since a row keyed
+     * below it is refused either way when the walk never reaches it.
      */
     private void verifyRowsVisited(
       final MethodInvocationTree node,
@@ -681,9 +663,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final TypeElement tgtEl,
       final boolean strict
     ) {
-      final var table = new LinkedHashMap<String, List<KeyedRow>>();
-      final var caseRows = new ArrayList<String>();
-      Tree firstCaseRow = null;
+      final var keyed = new ArrayList<KeyedRow>();
+      final var caseRows = new ArrayList<TypeElement[]>();
+      final var caseRowsAt = new ArrayList<Tree>();
       var caseRowsNamed = true;
       var writeHinted = false;
       for (var i = 2; i < args.size(); i++) {
@@ -712,52 +694,131 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             targetEl == null ||
             sealedRootsOf(sourceEl).isEmpty() ||
             sealedRootsOf(targetEl).isEmpty()
-          ) caseRowsNamed = false;
-          else caseRows.add(
-            PairingMessages.caseRow(sourceEl.getSimpleName().toString(), targetEl.getSimpleName().toString())
-          );
-          if (firstCaseRow == null) firstCaseRow = row;
+          ) {
+            caseRowsNamed = false;
+            continue;
+          }
+          caseRows.add(new TypeElement[] { sourceEl, targetEl });
+          caseRowsAt.add(row);
           continue;
         }
         if (!MAPPING_FQN.equals(ownerFqn)) return;
-        final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
-        if (keyed == null) return;
-        table.computeIfAbsent(pairKey(keyed.source(), keyed.target()), __ -> new ArrayList<>()).add(keyed);
+        final var entry = keyedRow(row, rowExec, srcEl, tgtEl, strict);
+        if (entry == null) return;
+        keyed.add(entry);
       }
-      final var visited = new HashSet<String>();
-      if (!visit(srcType, tgtType, table, visited, !strict, null)) return;
-      // A write hint picks the writer a bean is built with and keeps its pairs from their own
-      // bridges, so the setters such a call writes through are left to construction. A
-      // mapperForward call given no rows converts through its own pair's bridge where there is one.
-      if (!writeHinted) verifySetters(node, srcType, tgtType, table, !strict, !strict && args.size() == 2);
-      // The whole walk was followed and met no pair of sealed interfaces,
-      // and only such a pair takes a cases row.
-      if (!caseRows.isEmpty() && caseRowsNamed) {
-        report(
-          firstCaseRow,
-          PairingMessages.caseRowsNeverDispatched(
-            srcEl.getSimpleName().toString(),
-            tgtEl.getSimpleName().toString(),
-            caseRows
-          )
+      final var rows = new ArrayList<PairWalk.KeyedRow<TypeMirror>>(keyed.size());
+      final var rowsAt = new IdentityHashMap<PairWalk.KeyedRow<TypeMirror>, Tree>();
+      final var keyedPairs = new HashSet<String>();
+      for (final var row : keyed) {
+        final var shared = new PairWalk.KeyedRow<>(
+          row.source().asType(),
+          row.target().asType(),
+          row.kind(),
+          row.sourceMethod(),
+          row.targetMethod()
         );
+        rows.add(shared);
+        rowsAt.put(shared, row.at());
+        keyedPairs.add(pairKey(row.source(), row.target()));
       }
-      final var dead = new ArrayList<String>();
-      Tree at = null;
-      for (final var bucket : table.entrySet()) {
-        if (visited.contains(bucket.getKey())) continue;
-        final var rows = new ArrayList<String>();
-        for (final var row : bucket.getValue()) {
-          if (row.kind() == RowKind.DROP) continue;
-          rows.add(PairingMessages.unvisitedRow(row.sourceMethod(), row.targetMethod()));
-          if (at == null) at = row.at();
+      final var forwardOnly = !strict;
+      final var walked = walk.walk(srcType, tgtType, rows, forwardOnly, new Walking(caseRows, forwardOnly));
+      if (walked.open()) return;
+      // A write hint picks the writer a bean is built with and keeps its pairs from their own
+      // bridges, so the setters such a call writes through are left to construction, as are those
+      // of the cases of a call between two sealed interfaces. A mapperForward call given no rows
+      // converts through its own pair's bridge where there is one.
+      final var sealedRoot = rules.decidePair(srcType, tgtType, "", forwardOnly) instanceof PairDecision.DispatchCases;
+      if (!writeHinted && !sealedRoot) {
+        verifySetters(node, srcType, tgtType, rows, keyedPairs, caseRows, forwardOnly, forwardOnly && args.size() == 2);
+      }
+      if (caseRowsNamed) {
+        final var untaken = new ArrayList<String>();
+        Tree firstUntaken = null;
+        for (var i = 0; i < caseRows.size(); i++) {
+          final var row = caseRows.get(i);
+          final var taken = walked
+            .dispatched()
+            .stream()
+            .anyMatch(
+              pair -> permits(props.elementOf(pair.source()), row[0]) && permits(props.elementOf(pair.target()), row[1])
+            );
+          if (taken) continue;
+          untaken.add(PairingMessages.caseRow(row[0].getSimpleName().toString(), row[1].getSimpleName().toString()));
+          if (firstUntaken == null) firstUntaken = caseRowsAt.get(i);
         }
-        if (rows.isEmpty()) continue;
-        final var first = bucket.getValue().getFirst();
-        dead.add(PairingMessages.unvisitedPair(binaryName(first.source()), binaryName(first.target()), rows));
+        if (!untaken.isEmpty()) {
+          report(
+            firstUntaken,
+            PairingMessages.caseRowsNeverDispatched(
+              srcEl.getSimpleName().toString(),
+              tgtEl.getSimpleName().toString(),
+              untaken
+            )
+          );
+        }
       }
-      if (dead.isEmpty()) return;
-      report(at, PairingMessages.rowsNeverVisited(binaryName(srcEl), binaryName(tgtEl), dead));
+      if (walked.refusal() != null) report(rowsAt.get(walked.neverVisited().getFirst()), walked.refusal());
+    }
+
+    /**
+     * The walk's questions, as far as this compilation can answer them. Every pair is walked, since
+     * whether a bridge of its own stands in for one cannot be told here. The cases of two sealed
+     * interfaces pair as the {@code cases} rows naming them pair them, which is how construction
+     * pairs them first; a case no row names pairs through a bridge construction finds, which this
+     * cannot see, so the pairing is unknown, and so is one construction refuses: two rows pairing
+     * one case, type arguments a case pairing crosses, or, for a mapper that also runs backward, a
+     * case of the target no case or several cases pair with.
+     */
+    private class Walking implements PairWalk.Decisions<TypeMirror> {
+
+      private final List<TypeElement[]> caseRows;
+      private final boolean forwardOnly;
+
+      Walking(final List<TypeElement[]> caseRows, final boolean forwardOnly) {
+        this.caseRows = caseRows;
+        this.forwardOnly = forwardOnly;
+      }
+
+      @Override
+      public boolean ownBridge(
+        final TypeMirror source,
+        final TypeMirror target,
+        final List<PairWalk.Pair<TypeMirror>> around
+      ) {
+        return false;
+      }
+
+      @Override
+      public List<PairWalk.Pair<TypeMirror>> casePairs(final TypeMirror sourceRoot, final TypeMirror targetRoot) {
+        final var sourceRootEl = props.elementOf(sourceRoot);
+        final var targetRootEl = props.elementOf(targetRoot);
+        if (sourceRootEl == null || targetRootEl == null) return null;
+        final var named = new HashMap<String, TypeElement>();
+        for (final var row : caseRows) {
+          if (!permits(sourceRootEl, row[0]) || !permits(targetRootEl, row[1])) continue;
+          if (named.putIfAbsent(binaryName(row[0]), row[1]) != null) return null;
+        }
+        final var pairs = new ArrayList<PairWalk.Pair<TypeMirror>>();
+        final var fromSources = new HashMap<String, Integer>();
+        for (final var sourceCase : props.permittedSubclasses(sourceRoot)) {
+          final var sourceCaseEl = props.elementOf(sourceCase);
+          final var targetCaseEl = sourceCaseEl == null ? null : named.get(binaryName(sourceCaseEl));
+          if (targetCaseEl == null) return null;
+          final var targetCase = types.erasure(targetCaseEl.asType());
+          if (rules.caseArgumentsRefusal(sourceRoot, targetRoot, sourceCase, targetCase) != null) return null;
+          pairs.add(new PairWalk.Pair<>(sourceCase, targetCase));
+          fromSources.merge(binaryName(targetCaseEl), 1, Integer::sum);
+        }
+        if (!forwardOnly) {
+          for (final var targetCase : props.permittedSubclasses(targetRoot)) {
+            final var targetCaseEl = props.elementOf(targetCase);
+            if (targetCaseEl == null || fromSources.getOrDefault(binaryName(targetCaseEl), 0) != 1) return null;
+          }
+        }
+        return pairs;
+      }
     }
 
     /**
@@ -780,36 +841,52 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final MethodInvocationTree node,
       final TypeMirror srcType,
       final TypeMirror tgtType,
-      final Map<String, List<KeyedRow>> table,
+      final List<PairWalk.KeyedRow<TypeMirror>> rows,
+      final Set<String> keyedPairs,
+      final List<TypeElement[]> caseRows,
       final boolean forwardOnly,
       final boolean rootBridgeable
     ) {
+      final var srcEl = props.elementOf(srcType);
+      final var tgtEl = props.elementOf(tgtType);
+      if (srcEl == null || tgtEl == null) return;
+      if (rootBridgeable && !keyedPairs.contains(pairKey(srcEl, tgtEl)) && bridgeVisible(srcEl, tgtEl)) return;
       final var refusals = new LinkedHashSet<String>();
-      final var visitor = new PairVisitor() {
-        @Override
-        public boolean walks(
-          final TypeElement source,
-          final TypeElement target,
-          final boolean keyed,
-          final boolean root
-        ) {
-          if (root && !rootBridgeable) return true;
-          return keyed || !bridgeVisible(source, target);
-        }
+      final var sidesByPair = new HashMap<String, PairSides>();
+      walk.walk(
+        srcType,
+        tgtType,
+        rows,
+        forwardOnly,
+        new Walking(caseRows, forwardOnly) {
+          @Override
+          public boolean ownBridge(
+            final TypeMirror source,
+            final TypeMirror target,
+            final List<PairWalk.Pair<TypeMirror>> around
+          ) {
+            final var sourceEl = props.elementOf(source);
+            final var targetEl = props.elementOf(target);
+            return !keyedPairs.contains(pairKey(sourceEl, targetEl)) && bridgeVisible(sourceEl, targetEl);
+          }
 
-        @Override
-        public void fills(
-          final TypeElement source,
-          final TypeElement target,
-          final PairSides sides,
-          final String sourceName,
-          final String targetName
-        ) {
-          addRefusal(refusals, target, sides.target(), targetName);
-          if (!forwardOnly) addRefusal(refusals, source, sides.source(), sourceName);
+          @Override
+          public void fills(
+            final TypeMirror source,
+            final TypeMirror target,
+            final String sourceName,
+            final String targetName
+          ) {
+            final var sourceEl = props.elementOf(source);
+            final var targetEl = props.elementOf(target);
+            final var sides = sidesByPair.computeIfAbsent(pairKey(sourceEl, targetEl), __ ->
+              classSides(sourceEl, targetEl)
+            );
+            addRefusal(refusals, targetEl, sides.target(), targetName);
+            if (!forwardOnly) addRefusal(refusals, sourceEl, sides.source(), sourceName);
+          }
         }
-      };
-      if (!visit(srcType, tgtType, table, new HashSet<>(), forwardOnly, visitor)) return;
+      );
       for (final var refusal : refusals) report(node, refusal);
     }
 
@@ -910,42 +987,51 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var rowArgs = row.getArguments();
       switch (rowExec.getSimpleName().toString()) {
         case "to" -> {
-          if (rowArgs.size() == 4) return accessorRow(row, RowKind.CONVERTING);
+          if (rowArgs.size() == 4) return accessorRow(row, PairWalk.RowKind.CONVERTING);
           if (rowArgs.size() != 2) return null;
           final var srcPath = isTelescopeParameter(rowExec, 0);
           final var tgtPath = isTelescopeParameter(rowExec, 1);
-          if (!srcPath && !tgtPath) return accessorRow(row, RowKind.PASS_THROUGH);
-          if (srcPath && tgtPath) return new KeyedRow(row, srcEl, tgtEl, RowKind.PATH, null, null);
+          if (!srcPath && !tgtPath) return accessorRow(row, PairWalk.RowKind.PASS_THROUGH);
+          if (srcPath && tgtPath) return new KeyedRow(row, srcEl, tgtEl, PairWalk.RowKind.PATH, null, null);
           if (!srcPath) {
             final var src = accessorProp(rowArgs.get(0));
-            return src == null ? null : new KeyedRow(row, src.owner(), tgtEl, RowKind.PATH, src.method(), null);
+            return src == null
+              ? null
+              : new KeyedRow(row, src.owner(), tgtEl, PairWalk.RowKind.PATH, src.method(), null);
           }
           final var tgt = accessorProp(rowArgs.get(1));
           if (tgt == null) return null;
           final var onTarget = types.isSubtype(types.erasure(tgtEl.asType()), types.erasure(tgt.owner().asType()));
-          return new KeyedRow(row, srcEl, onTarget ? tgtEl : tgt.owner(), RowKind.PATH, null, tgt.method());
+          return new KeyedRow(row, srcEl, onTarget ? tgtEl : tgt.owner(), PairWalk.RowKind.PATH, null, tgt.method());
         }
         case "toOneWay" -> {
-          return strict ? null : accessorRow(row, RowKind.CONVERTING);
+          return strict ? null : accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
         case "enumTo", "toOrElse", "toOrElseGet", "via" -> {
-          return accessorRow(row, RowKind.CONVERTING);
+          return accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
         case "drop" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           if (src == null) return null;
-          if (rowArgs.size() == 1) return new KeyedRow(row, src.owner(), tgtEl, RowKind.DROP, src.method(), null);
+          if (rowArgs.size() == 1) return new KeyedRow(
+            row,
+            src.owner(),
+            tgtEl,
+            PairWalk.RowKind.DROP,
+            src.method(),
+            null
+          );
           final var explicit = rowArgs.size() == 2 ? classLiteral(rowArgs.get(1)) : null;
           final var explicitEl = explicit == null ? null : props.elementOf(explicit);
           return explicitEl == null
             ? null
-            : new KeyedRow(row, src.owner(), explicitEl, RowKind.DROP, src.method(), null);
+            : new KeyedRow(row, src.owner(), explicitEl, PairWalk.RowKind.DROP, src.method(), null);
         }
         case "when" -> {
           return whenRow(row, srcEl, tgtEl, strict);
         }
         case "constant", "compute", "zip" -> {
-          return new KeyedRow(row, srcEl, tgtEl, RowKind.PATH, null, null);
+          return new KeyedRow(row, srcEl, tgtEl, PairWalk.RowKind.PATH, null, null);
         }
         default -> {
           return null;
@@ -975,19 +1061,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         return null;
       }
       final var keyed = keyedRow(inner, innerExec, srcEl, tgtEl, strict);
-      if (keyed == null || keyed.kind() != RowKind.PATH) return null;
+      if (keyed == null || keyed.kind() != PairWalk.RowKind.PATH) return null;
       return new KeyedRow(
         row,
         keyed.source(),
         keyed.target(),
-        RowKind.PATH,
+        PairWalk.RowKind.PATH,
         keyed.sourceMethod(),
         keyed.targetMethod()
       );
     }
 
     /** A row given two accessors, keyed to the classes they are applied to, or null. */
-    private KeyedRow accessorRow(final MethodInvocationTree row, final RowKind kind) {
+    private KeyedRow accessorRow(final MethodInvocationTree row, final PairWalk.RowKind kind) {
       final var rowArgs = row.getArguments();
       final var src = accessorProp(rowArgs.get(0));
       final var tgt = accessorProp(rowArgs.get(1));
@@ -1003,129 +1089,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       return (
         types.asElement(parameter) instanceof TypeElement type && type.getQualifiedName().contentEquals(TELESCOPE_FQN)
       );
-    }
-
-    /**
-     * Adds to {@code visited} the pair {@code (src, tgt)} and every pair construction reaches from
-     * it: through each property the pair's own rows pass through unchanged, and through each
-     * same-named property no row of the pair converts, along the shared pair decision's descent
-     * into nested pairs, {@code Optional} bridges and container elements. False when the walk
-     * cannot be followed as construction follows it. A non-null {@code visitor} is told of each
-     * property construction fills, and a pair it says construction does not walk is neither added
-     * nor followed.
-     */
-    private boolean visit(
-      final TypeMirror src,
-      final TypeMirror tgt,
-      final Map<String, List<KeyedRow>> table,
-      final Set<String> visited,
-      final boolean forwardOnly,
-      final PairVisitor visitor
-    ) {
-      final var srcEl = props.elementOf(src);
-      final var tgtEl = props.elementOf(tgt);
-      if (srcEl == null || tgtEl == null) return false;
-      final var key = pairKey(srcEl, tgtEl);
-      if (visitor != null && !visitor.walks(srcEl, tgtEl, table.containsKey(key), visited.isEmpty())) return true;
-      if (!visited.add(key)) return true;
-      final var sides = new PairSides(
-        propertiesOf(src, srcEl),
-        propertiesOf(tgt, tgtEl),
-        declaredPropertiesOf(srcEl),
-        declaredPropertiesOf(tgtEl)
-      );
-      final var converted = new HashSet<String>();
-      for (final var row : table.getOrDefault(key, List.of())) {
-        if (row.kind() != RowKind.PASS_THROUGH && row.kind() != RowKind.CONVERTING) continue;
-        final var tgtName = propertyName(row.targetMethod(), tgtEl);
-        final var srcName = propertyName(row.sourceMethod(), srcEl);
-        converted.add(tgtName);
-        if (visitor != null) visitor.fills(srcEl, tgtEl, sides, srcName, tgtName);
-        if (row.kind() == RowKind.CONVERTING) continue;
-        if (!visitProperty(sides, srcName, tgtName, table, visited, forwardOnly, visitor)) return false;
-      }
-      for (final var name : sides.target().keySet()) {
-        if (converted.contains(name) || !sides.source().containsKey(name)) continue;
-        if (visitor != null) visitor.fills(srcEl, tgtEl, sides, name, name);
-        if (!visitProperty(sides, name, name, table, visited, forwardOnly, visitor)) return false;
-      }
-      return true;
-    }
-
-    private boolean visitProperty(
-      final PairSides sides,
-      final String srcName,
-      final String tgtName,
-      final Map<String, List<KeyedRow>> table,
-      final Set<String> visited,
-      final boolean forwardOnly,
-      final PairVisitor visitor
-    ) {
-      final var srcType = sides.source().get(srcName);
-      final var tgtType = sides.target().get(tgtName);
-      if (srcType == null || tgtType == null) return false;
-      // Construction reads such a property as declared or as a member depending on the pair, and
-      // recurses on the raw class; a property typed by a variable is left to it.
-      if (
-        Stream.of(srcType, tgtType, sides.declaredSource().get(srcName), sides.declaredTarget().get(tgtName)).anyMatch(
-          props::mentionsTypeVariable
-        )
-      ) {
-        return false;
-      }
-      return visitTypes(srcType, tgtType, srcName, table, visited, forwardOnly, visitor);
-    }
-
-    /**
-     * Follows the shared decision for one pair of types that name no type variable. The element
-     * types a decision descends to are type arguments of those types, or of the supertypes they
-     * parameterize, so they name none either.
-     */
-    private boolean visitTypes(
-      final TypeMirror srcType,
-      final TypeMirror tgtType,
-      final String componentName,
-      final Map<String, List<KeyedRow>> table,
-      final Set<String> visited,
-      final boolean forwardOnly,
-      final PairVisitor visitor
-    ) {
-      final var decision = rules.decidePair(srcType, tgtType, componentName, forwardOnly);
-      return switch (decision) {
-        case PairDecision.RecursePair<TypeMirror> __ -> visit(srcType, tgtType, table, visited, forwardOnly, visitor);
-        case PairDecision.OptionalToNullable<TypeMirror> d -> visitTypes(
-          d.elementSrc(),
-          d.elementTgt(),
-          componentName,
-          table,
-          visited,
-          forwardOnly,
-          visitor
-        );
-        case PairDecision.NullableToOptional<TypeMirror> d -> visitTypes(
-          d.elementSrc(),
-          d.elementTgt(),
-          componentName,
-          table,
-          visited,
-          forwardOnly,
-          visitor
-        );
-        case PairDecision.LiftContainer<TypeMirror> d -> visitTypes(
-          d.src().elementType(),
-          d.tgt().elementType(),
-          componentName,
-          table,
-          visited,
-          forwardOnly,
-          visitor
-        );
-        // Which case pairs with which depends on bridges construction finds, so the pairs the cases
-        // reach are left to it.
-        case PairDecision.DispatchCases<TypeMirror> __ -> false;
-        case PairDecision.Incompatible<TypeMirror> __ -> false;
-        default -> true;
-      };
     }
 
     /** Returns false when the row's accessors defeat static analysis (kills completeness only). */
@@ -1805,7 +1768,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * runtime's getter scan).
    */
   private Map<String, TypeMirror> propertiesOf(final TypeMirror type, final TypeElement element) {
-    return properties(type instanceof DeclaredType dt ? dt : null, element);
+    return props.propertyTypes(type instanceof DeclaredType dt ? dt : null, element);
   }
 
   /**
@@ -1814,7 +1777,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * variable.
    */
   private Map<String, TypeMirror> declaredPropertiesOf(final TypeElement element) {
-    return properties(null, element);
+    return props.propertyTypes(null, element);
   }
 
   /**
@@ -1830,57 +1793,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       declaredPropertiesOf(source),
       declaredPropertiesOf(target)
     );
-  }
-
-  private Map<String, TypeMirror> properties(final DeclaredType declared, final TypeElement element) {
-    final var result = new LinkedHashMap<String, TypeMirror>();
-    if (element.getKind() == ElementKind.RECORD) {
-      for (final var component : element.getRecordComponents()) {
-        final var accessor = component.getAccessor();
-        final var memberType =
-          declared == null
-            ? accessor.getReturnType()
-            : ((ExecutableType) types.asMemberOf(declared, accessor)).getReturnType();
-        result.put(component.getSimpleName().toString(), memberType);
-      }
-      return result;
-    }
-    for (final var member : elements.getAllMembers(element)) {
-      if (!(member instanceof ExecutableElement method)) continue;
-      if (!method.getParameters().isEmpty()) continue;
-      if (!method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)) continue;
-      final var declaringType = (TypeElement) method.getEnclosingElement();
-      // Skip platform supertypes by MODULE name, exactly like the runtime getter scan — a package
-      // prefix would miss javax.* packages living inside java.* modules (java.sql, java.naming, …).
-      final var declaringModule = elements.getModuleOf(declaringType);
-      if (declaringModule != null && !declaringModule.isUnnamed()) {
-        final var moduleName = declaringModule.getQualifiedName().toString();
-        if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
-      }
-      final var rawName = method.getSimpleName().toString();
-      final var afterGet = PropertyNames.afterGet(rawName);
-      final var afterIs = PropertyNames.afterIs(rawName);
-      final String prop;
-      if (afterGet != null && method.getReturnType().getKind() != TypeKind.VOID) {
-        prop = afterGet;
-      } else if (afterIs != null && booleanReturn(method)) {
-        prop = afterIs;
-      } else {
-        continue;
-      }
-      if ("class".equals(prop) || result.containsKey(prop)) continue;
-      final var memberType =
-        declared == null
-          ? method.getReturnType()
-          : ((ExecutableType) types.asMemberOf(declared, method)).getReturnType();
-      result.put(prop, memberType);
-    }
-    return result;
-  }
-
-  private static boolean booleanReturn(final ExecutableElement method) {
-    final var rt = method.getReturnType();
-    return rt.getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(rt.toString());
   }
 
   /**
