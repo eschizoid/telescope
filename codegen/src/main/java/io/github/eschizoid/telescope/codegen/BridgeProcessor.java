@@ -2409,12 +2409,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(paired.target(), tgtName);
       final var plan = fieldPlans.get(sourceName);
       final var partialReadExpr = paired.castInto(paired.targetReads(), tgtName, readExpr(target, "partial", tf));
-      // A result written into a primitive property through a null-coalesce or a checked
-      // unboxing,
-      // a wrapper or a result typed by its method's own variable, is coalesced on the partial's
-      // side alone, so the base's own value is read as the primitive it is and never boxed. A
-      // setter skips a null result, which an expression cannot, so its write is a statement of
-      // its own (patchSplits).
+      // A wrapper result, or a result typed by its method's own variable, written into a
+      // primitive property is coalesced on the partial's side alone, through a null-coalesce
+      // or a checked unboxing. The base's own value is read as the primitive it is and never
+      // boxed. A setter skips a null result, which an expression cannot, so its write is a
+      // statement of its own (patchSplits).
       final var gives = transformedSources.contains(sourceName) ? backwardGives.get(sourceName) : null;
       final var unboxed = sf.type().getKind().isPrimitive() && unboxedThroughCheck(gives, sf.type());
       // Primitive target components autobox to non-null wrappers on read — always patch them
