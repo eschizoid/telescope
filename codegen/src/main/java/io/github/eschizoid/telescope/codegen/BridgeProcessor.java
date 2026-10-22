@@ -2080,8 +2080,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetFields,
       renames,
       ownConversions,
-      viaLifts.keySet(),
-      lenient
+      viaLifts.keySet()
     );
     if (paired == null) return;
     final var viaCasts = viaCalls(
@@ -7898,8 +7897,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Map<String, String> renames,
     final Set<String> ownConversions,
-    final Set<String> lifted,
-    final boolean lenient
+    final Set<String> lifted
   ) {
     final var types = processingEnv.getTypeUtils();
     final var pairedSource = new ArrayList<>(sourceFields);
@@ -7970,7 +7968,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         // A value handed across unchanged is checked against the class the side it lands on fixes
         // the variable to, as the runtime checks it; a container that cannot be shown to fit is
-        // refused. The direction a lenient bridge documents as lossy refuses nothing.
+        // refused, in either direction. A lenient bridge leaves properties unmatched, and checks
+        // the ones it pairs as a strict one does.
         if (same) {
           // Each side as a member of its class, with the variables it passes through kept, so their
           // bounds say what it holds, as the runtime reads it. The declared type says whether the
@@ -7980,7 +7979,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var refused =
             intoTarget instanceof FixedFit.Refused<TypeMirror> forward
               ? forward.message()
-              : !lenient && intoSource instanceof FixedFit.Refused<TypeMirror> backward
+              : intoSource instanceof FixedFit.Refused<TypeMirror> backward
                 ? backward.message()
                 : null;
           if (refused != null) {
