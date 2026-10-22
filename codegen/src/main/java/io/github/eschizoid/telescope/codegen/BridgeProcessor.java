@@ -15,6 +15,7 @@ import java.io.StringWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -296,6 +297,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String erasingBridge;
 
   private boolean erasedArgumentUsed;
+
+  /**
+   * The primitives whose wrapper a result of the bridge being emitted is null-coalesced from
+   * through its {@code __orElse} helper; reset for each bridge.
+   */
+  private final Set<TypeKind> orElseKinds = EnumSet.noneOf(TypeKind.class);
+
+  /**
+   * While {@code patch} is emitted, the setter writes of a property whose result a null skips, by
+   * source property: written as a statement of their own, since an expression cannot skip a write.
+   * Empty otherwise.
+   */
+  private Map<String, PatchSplit> patchSplits = Map.of();
+
+  /** While {@code patch} is emitted, whether the source is rebuilt through its setters. */
+  private boolean patchSetters;
+
+  /** While {@code patch} is emitted, the source it rebuilds. */
+  private TypeElement patchOwner;
+
+  /**
+   * A setter write {@code patch} splits: {@code guard} is null where the partial slot is, and then
+   * {@code base} is written; otherwise {@code partial}, the converted value of type {@code gives},
+   * is written unless it is null.
+   */
+  private record PatchSplit(String guard, String partial, String base, TypeMirror gives) {}
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
@@ -2126,6 +2153,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     pathArg = guarded ? "__path" : null;
     erasingBridge = bridgeName;
     erasedArgumentUsed = false;
+    orElseKinds.clear();
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -2381,11 +2409,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(paired.target(), tgtName);
       final var plan = fieldPlans.get(sourceName);
       final var partialReadExpr = paired.castInto(paired.targetReads(), tgtName, readExpr(target, "partial", tf));
+      // A result written into a primitive property through a null-coalesce or a checked
+      // unboxing,
+      // a wrapper or a result typed by its method's own variable, is coalesced on the partial's
+      // side alone, so the base's own value is read as the primitive it is and never boxed. A
+      // setter skips a null result, which an expression cannot, so its write is a statement of
+      // its own (patchSplits).
+      final var gives = transformedSources.contains(sourceName) ? backwardGives.get(sourceName) : null;
+      final var unboxed = sf.type().getKind().isPrimitive() && unboxedThroughCheck(gives, sf.type());
       // Primitive target components autobox to non-null wrappers on read — always patch them
       // from a partial that exists. A null partial overlays nothing, so base supplies every
       // slot.
       if (tf.type().getKind().isPrimitive()) {
-        return "(partial == null ? " + baseRead + " : " + applyBackward(sourceName, plan, partialReadExpr) + ")";
+        final var converted = applyBackward(sourceName, plan, partialReadExpr);
+        if (unboxed) return patchUnboxed(sourceName, "partial", converted, baseRead, gives, sf.type());
+        return "(partial == null ? " + baseRead + " : " + converted + ")";
       }
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
@@ -2403,19 +2441,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plan,
         plan.userSuppliedBridge() ? paired.castInto(viaCasts.backwardCasts(), sourceName, pLocal) : pLocal
       );
+      final var checkedPartial = paired.checkedInto(paired.backwardChecks(), sourceName, partialRead);
+      if (unboxed) {
+        return paired.castInto(
+          paired.backwardCasts(),
+          sourceName,
+          patchUnboxed(sourceName, pLocal, checkedPartial, baseRead, gives, sf.type())
+        );
+      }
       // @Default is a forward-direction null-coalesce and is never applied here: a slot null in
       // both partial and base stays null rather than resurrecting the default on a field the
       // caller never wrote.
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
-        "(" +
-          pLocal +
-          " != null ? " +
-          paired.checkedInto(paired.backwardChecks(), sourceName, partialRead) +
-          " : " +
-          baseRead +
-          ")"
+        "(" + pLocal + " != null ? " + checkedPartial + " : " + baseRead + ")"
       );
     };
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
@@ -2433,16 +2473,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var parameter = chosenParameter(source, sourceRebuild, entry.getKey(), slot);
       final var assignable = processingEnv.getTypeUtils().isAssignable(heldAs(property), entry.getValue());
       final var setters = sourceRebuild.kind() == Rebuild.Kind.SETTERS;
-      // A result typed by its method's own variable is written into a primitive through the
-      // checked unboxing backward uses, which the base's own value passes as well.
       if (
-        (assignable &&
-          ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))) ||
-        inferredIntoPrimitive(entry.getValue(), parameter)
+        assignable &&
+        ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))
       ) {
         patchCasts.put(entry.getKey(), entry.getValue());
       }
     }
+    patchSplits = new HashMap<>();
+    patchSetters = sourceRebuild.kind() == Rebuild.Kind.SETTERS;
+    patchOwner = source;
     final var patchInner = buildExpr(
       source,
       readPatch,
@@ -2455,6 +2495,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       patchCasts,
       Set.of()
     );
+    patchSplits = Map.of();
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
@@ -2529,6 +2570,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (erasedArgumentUsed) {
           out.println("  private static <V> V __erased(final V value) {");
           out.println("    return value;");
+          out.println("  }");
+          out.println();
+        }
+        // A conversion result of a primitive's wrapper class written into that primitive, or one
+        // it widens to, takes the primitive's default where it is null, read once.
+        for (final var kind : orElseKinds) {
+          final var primitive = processingEnv.getTypeUtils().getPrimitiveType(kind);
+          final var wrapper = processingEnv.getTypeUtils().boxedClass(primitive).getQualifiedName();
+          out.println(
+            "  private static " +
+              primitive +
+              " __orElse(final " +
+              wrapper +
+              " value, final " +
+              primitive +
+              " fallback) {"
+          );
+          out.println("    return value == null ? fallback : value;");
           out.println("  }");
           out.println();
         }
@@ -7225,10 +7284,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var gives = transformed.contains(name) ? transformGives.get(name) : null;
           final var value = read.apply(name);
           final var held = heldAs(c.asType());
-          final var checked =
-            reachesByCheck(gives, held) || inferredIntoPrimitive(gives, held)
-              ? checkedResult(value, held, to, name)
-              : value;
+          final var checked = writtenResult(value, gives, held, to, name);
           slots.add(new CtorSlot(name, c.asType(), checked));
         }
         return construct(to, slots, hoistInto);
@@ -7240,10 +7296,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var gives = transformed.contains(name) ? transformGives.get(name) : null;
           final var value = read.apply(name);
           final var held = heldAs(pa.asType());
-          final var checked =
-            reachesByCheck(gives, held) || inferredIntoPrimitive(gives, held)
-              ? checkedResult(value, held, to, name)
-              : value;
+          final var checked = writtenResult(value, gives, held, to, name);
           slots.add(new CtorSlot(name, pa.asType(), checked));
         }
         return construct(to, slots, hoistInto);
@@ -7317,6 +7370,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // binds the overload that takes it; no runtime row can be typed to return it.
           final var choice = setterChoice(to, f.name());
           final var value = read.apply(f.name());
+          final var split = patchSplits.get(f.name());
+          if (split != null && choice.argument() != null) {
+            sb.append(splitWrite(split, setter, choice, to, f.name()));
+            continue;
+          }
           final var gives = transformed.contains(f.name()) ? transformGives.get(f.name()) : null;
           final var types = processingEnv.getTypeUtils();
           if (
@@ -7483,6 +7541,133 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether a conversion result of type {@code gives} is written into the primitive {@code
+   * parameter} through the checked unboxing a result of a wider type takes, so that a null result
+   * gives the parameter's default: a result typed by its method's own variable ({@link
+   * #inferredIntoPrimitive}), or one of the parameter's own wrapper class, which unboxing alone
+   * would turn a null into a {@code NullPointerException} for.
+   */
+  private boolean unboxedThroughCheck(final TypeMirror gives, final TypeMirror parameter) {
+    return inferredIntoPrimitive(gives, parameter) || wrapperIntoPrimitive(gives, parameter);
+  }
+
+  /**
+   * Whether {@code gives} is the wrapper class of a primitive that is {@code parameter}, a
+   * primitive, or widens to it, as {@code Short} widens to {@code int}: unboxing it alone turns a
+   * null into a {@code NullPointerException}, and no value of it fails a check of its class.
+   */
+  private boolean wrapperIntoPrimitive(final TypeMirror gives, final TypeMirror parameter) {
+    if (gives == null || parameter == null || !parameter.getKind().isPrimitive()) return false;
+    if (!(gives instanceof DeclaredType) || mirrorProps().mentionsTypeVariable(gives)) return false;
+    final var types = processingEnv.getTypeUtils();
+    final PrimitiveType unboxed;
+    try {
+      unboxed = types.unboxedType(gives);
+    } catch (final IllegalArgumentException notAWrapper) {
+      return false;
+    }
+    return types.isAssignable(unboxed, parameter);
+  }
+
+  /**
+   * {@code value}, a conversion result of type {@code gives}, as it is written into {@code
+   * parameter} of {@code property} of {@code owner}: a wrapper into its primitive, or one it widens
+   * to, through the bridge's {@code __orElse}, which reads it once and gives the default for a
+   * null; a result only a check of its class can show to fit, through {@code FixedClass}; any other
+   * as it is.
+   */
+  private String writtenResult(
+    final String value,
+    final TypeMirror gives,
+    final TypeMirror parameter,
+    final TypeElement owner,
+    final String property
+  ) {
+    if (wrapperIntoPrimitive(gives, parameter)) {
+      final var kind = processingEnv.getTypeUtils().unboxedType(gives).getKind();
+      orElseKinds.add(kind);
+      return erasingBridge + ".__orElse(" + value + ", " + primitiveDefaultLiteral(kind).orElseThrow() + ")";
+    }
+    if (reachesByCheck(gives, parameter) || inferredIntoPrimitive(gives, parameter)) {
+      return checkedResult(value, parameter, owner, property);
+    }
+    return value;
+  }
+
+  /**
+   * {@code patch}'s value of {@code property}, a primitive the converted {@code partial} of type
+   * {@code gives} is unboxed into: {@code partial} where {@code guard} is not null, its null as the
+   * property's default, and the base's own value, {@code base}, otherwise, read as the primitive it
+   * is. A setter skips a null result, so its write is split into a statement of its own, and the
+   * value returned is not used.
+   */
+  private String patchUnboxed(
+    final String property,
+    final String guard,
+    final String partial,
+    final String base,
+    final TypeMirror gives,
+    final TypeMirror type
+  ) {
+    if (patchSetters) {
+      patchSplits.put(property, new PatchSplit(guard, partial, base, gives));
+      return base;
+    }
+    return "(" + guard + " != null ? " + writtenResult(partial, gives, type, patchOwner, property) + " : " + base + ")";
+  }
+
+  /**
+   * The statement writing {@code split} through {@code setter}, whose chosen parameter is a
+   * primitive: the base's value where the partial slot is null, and otherwise the converted value,
+   * checked against its class where it is typed by its method's own variable, unless it is null.
+   */
+  private String splitWrite(
+    final PatchSplit split,
+    final String setter,
+    final MirrorSetters.SetterChoice choice,
+    final TypeElement owner,
+    final String property
+  ) {
+    final var parameter = choice.argument();
+    final var inferred = mirrorProps().mentionsTypeVariable(split.gives());
+    final var wrapper = boxedErasure(parameter);
+    final var converted = inferred
+      ? "(" +
+        wrapper +
+        ") " +
+        FIXED_CLASS +
+        ".result(__tv, " +
+        wrapper +
+        ".class, " +
+        processingEnv.getTypeUtils().erasure(owner.asType()) +
+        ".class, " +
+        literal(property) +
+        ")"
+      : "__tv";
+    return (
+      "if (" +
+      split.guard() +
+      " == null) { final " +
+      choice.argumentText() +
+      " __arg = " +
+      split.base() +
+      "; out." +
+      setter +
+      "(__arg); } else { final " +
+      (inferred ? "Object" : split.gives().toString()) +
+      " __tv = " +
+      split.partial() +
+      "; if (__tv != null) { final " +
+      choice.argumentText() +
+      " __arg = " +
+      converted +
+      "; out." +
+      setter +
+      "(__arg); } } "
+    );
+  }
+
+  /**
    * Whether a conversion result of type {@code gives} reaches the member parameter {@code
    * parameter} only through a check of its class: both name no type variable, the result is a
    * reference the parameter does not take as it is, and the parameter's class, its wrapper where it
@@ -7563,8 +7748,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String property
   ) {
     if (gives == null || parameter == null) return value;
-    if (reachesByCheck(gives, parameter) || inferredIntoPrimitive(gives, parameter)) {
-      return checkedResult(value, parameter, owner, property);
+    if (reachesByCheck(gives, parameter) || unboxedThroughCheck(gives, parameter)) {
+      return writtenResult(value, gives, parameter, owner, property);
     }
     final var types = processingEnv.getTypeUtils();
     if (
