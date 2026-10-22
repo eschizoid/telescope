@@ -9,11 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * A user-supplied bridge is called through a null gate, because it is user code with no guaranteed
@@ -380,5 +384,223 @@ class ViaMapperPrimitiveTest {
     final var refused = assertThrows(InvocationTargetException.class, () -> patchedQty(classes, "Pb", 2));
     assertInstanceOf(ClassCastException.class, refused.getCause());
     assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
+  }
+
+  /**
+   * How a source holding a primitive {@code qty} is built, which decides how its bridge writes it.
+   * {@code %1$s} is the prefix and {@code %2$s} the primitive.
+   */
+  enum Member {
+    RECORD("public record %1$sSrc(%2$s qty) {}\n"),
+    CONSTRUCTOR(
+      "public class %1$sSrc {\n" +
+        "  private final %2$s qty;\n" +
+        "  public %1$sSrc(final %2$s qty) { this.qty = qty; }\n" +
+        "  public %2$s getQty() { return qty; }\n}\n"
+    ),
+    BUILDER(
+      "public class %1$sSrc {\n" +
+        "  private final %2$s qty;\n" +
+        "  private %1$sSrc(final %2$s qty) { this.qty = qty; }\n" +
+        "  public %2$s getQty() { return qty; }\n" +
+        "  public static Builder builder() { return new Builder(); }\n" +
+        "  public static final class Builder {\n" +
+        "    private %2$s qty = -1;\n" +
+        "    public Builder qty(final %2$s qty) { this.qty = qty; return this; }\n" +
+        "    public %1$sSrc build() { return new %1$sSrc(qty); }\n  }\n}\n"
+    ),
+    SETTER(
+      "public class %1$sSrc {\n" +
+        "  private %2$s qty = -1;\n" +
+        "  public %1$sSrc() {}\n" +
+        "  public %2$s getQty() { return qty; }\n" +
+        "  public void setQty(final %2$s qty) { this.qty = qty; }\n}\n"
+    );
+
+    private final String declaration;
+
+    Member(final String declaration) {
+      this.declaration = declaration;
+    }
+  }
+
+  /**
+   * A wrapper class and a primitive its value is written into: its own, or one it widens to. {@code
+   * primitive} is the primitive's class, {@code narrowing} the cast from {@code int} to the
+   * wrapper's own primitive.
+   */
+  record Wrapping(String wrapper, String primitive, Class<?> type, String narrowing) {}
+
+  private static final List<Wrapping> WRAPPINGS = List.of(
+    new Wrapping("Integer", "int", int.class, ""),
+    new Wrapping("Integer", "long", long.class, ""),
+    new Wrapping("Short", "int", int.class, "(short) ")
+  );
+
+  /** Every member kind with every wrapping. */
+  static List<Arguments> memberWrappings() {
+    final var all = new ArrayList<Arguments>();
+    for (final var member : Member.values()) {
+      for (final var wrapping : WRAPPINGS) all.add(Arguments.of(member, wrapping));
+    }
+    return all;
+  }
+
+  /**
+   * The classes of a {@code @ViaMapper} pair from a source of {@code member} kind holding {@code
+   * wrapping}'s primitive to a target record holding its wrapper, through a mapper whose
+   * non-generic {@code backward} returns the wrapper: null for 1, and otherwise the value plus one.
+   */
+  private static Map<String, Class<?>> wrapperPair(final String prefix, final Member member, final Wrapping wrapping) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge =
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
+      " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n";
+    final var wrapper = wrapping.wrapper();
+    final var compilation = compile(
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Src",
+        head + (bridge + member.declaration).formatted(prefix, wrapping.primitive())
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Dst",
+        head + "public record %1$sDst(%2$s qty) {}\n".formatted(prefix, wrapper)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          (
+            "public class %1$sMap {\n" +
+            "  public static %2$s forward(final %3$s q) { return %4$s(int) q; }\n" +
+            "  public static %2$s backward(final %2$s i) { return i == 1 ? null : %4$s(i + 1); }\n}\n"
+          ).formatted(prefix, wrapper, wrapping.primitive(), wrapping.narrowing())
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    return compilation.define(MethodHandles.lookup());
+  }
+
+  /** A source of {@code member} kind among {@code classes} holding {@code qty} as {@code type}. */
+  private static Object wrapperSource(
+    final Map<String, Class<?>> classes,
+    final String prefix,
+    final Member member,
+    final Class<?> type,
+    final int qty
+  ) throws ReflectiveOperationException {
+    final var src = classes.get(PACKAGE + "." + prefix + "Src");
+    final Object value = type == long.class ? (Object) (long) qty : (Object) qty;
+    return switch (member) {
+      case RECORD, CONSTRUCTOR -> src.getConstructor(type).newInstance(value);
+      case BUILDER -> {
+        final var builder = src.getMethod("builder").invoke(null);
+        builder.getClass().getMethod("qty", type).invoke(builder, value);
+        yield builder.getClass().getMethod("build").invoke(builder);
+      }
+      case SETTER -> {
+        final var bean = src.getConstructor().newInstance();
+        src.getMethod("setQty", type).invoke(bean, value);
+        yield bean;
+      }
+    };
+  }
+
+  /**
+   * The {@code qty}, as a {@code long}, of what the generated bridge among {@code classes} writes
+   * back from a target holding {@code partial}: by {@code backward}, or by {@code patch} onto a
+   * source holding 9.
+   */
+  private static long wrapperBack(
+    final Map<String, Class<?>> classes,
+    final String prefix,
+    final Member member,
+    final Wrapping wrapping,
+    final boolean patch,
+    final Integer partial
+  ) throws ReflectiveOperationException {
+    final var src = classes.get(PACKAGE + "." + prefix + "Src");
+    final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
+    final var bridge = classes.get(PACKAGE + "." + prefix + "SrcBridge");
+    final Object held =
+      partial == null || wrapping.wrapper().equals("Integer") ? partial : (Object) partial.shortValue();
+    final var target = dst.getDeclaredConstructors()[0].newInstance(held);
+    final var written = patch
+      ? bridge
+          .getMethod("patch", src, dst)
+          .invoke(null, wrapperSource(classes, prefix, member, wrapping.type(), 9), target)
+      : bridge.getMethod("backward", dst).invoke(null, target);
+    return (
+      (Number) written.getClass().getMethod(member == Member.RECORD ? "qty" : "getQty").invoke(written)
+    ).longValue();
+  }
+
+  @Test
+  @DisplayName(
+    "a wrapper result into its primitive is coalesced with no class check, and patch reads the base's primitive unboxed"
+  )
+  void wrapperResultIsCoalescedWithoutACheckOrABoxedBase() {
+    // No value of a wrapper class fails a check of that class, and the base's own value is a
+    // primitive already: boxing it to coalesce it would allocate on every write.
+    final var head = "package " + PACKAGE + ";\n";
+    final var compilation = compile(
+      ProcessorHarness.source(
+        PACKAGE + ".VmpCoSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = VmpCoDst.class, viaMappers =" +
+          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = VmpCoMap.class))\n" +
+          "public record VmpCoSrc(int qty) {}\n"
+      ),
+      ProcessorHarness.source(PACKAGE + ".VmpCoDst", head + "public record VmpCoDst(Integer qty) {}\n"),
+      ProcessorHarness.source(
+        PACKAGE + ".VmpCoMap",
+        head +
+          "public class VmpCoMap {\n" +
+          "  public static Integer forward(final int q) { return q; }\n" +
+          "  public static Integer backward(final Integer i) { return i; }\n}\n"
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var generated = compilation.generated().get(PACKAGE + ".VmpCoSrcBridge");
+    final var backward = generated.substring(generated.indexOf(" backward(final "), generated.indexOf(" patch(final "));
+    final var patch = generated.substring(generated.indexOf(" patch(final "), generated.indexOf("class Fn"));
+    for (final var body : List.of(backward, patch)) {
+      assertFalse(body.contains("FixedClass"), () -> "no check of a wrapper's class is owed; saw " + body);
+      assertTrue(body.contains("__orElse("), () -> "a null result takes the default; saw " + body);
+    }
+    assertTrue(patch.contains(": base.qty()"), () -> "patch reads the base's primitive as it is; saw " + patch);
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("memberWrappings")
+  @DisplayName(
+    "a non-generic backward's null wrapper result into its primitive, or one it widens to, is the default, or skips a" +
+      " setter, in backward and patch"
+  )
+  void wrapperResultIntoAPrimitive(final Member member, final Wrapping wrapping) throws ReflectiveOperationException {
+    final var prefix = "VmpWn" + member.ordinal() + WRAPPINGS.indexOf(wrapping);
+    final var classes = wrapperPair(prefix, member, wrapping);
+    // A setter the null result skips leaves the value the bean starts with.
+    final var skipped = member == Member.SETTER ? -1 : 0;
+    assertEquals(6, wrapperBack(classes, prefix, member, wrapping, false, 5));
+    assertEquals(skipped, wrapperBack(classes, prefix, member, wrapping, false, 1));
+    assertEquals(6, wrapperBack(classes, prefix, member, wrapping, true, 5));
+    assertEquals(skipped, wrapperBack(classes, prefix, member, wrapping, true, 1));
+    assertEquals(9, wrapperBack(classes, prefix, member, wrapping, true, null));
+  }
+
+  @Test
+  @DisplayName("a non-generic forward's null wrapper result into an int is the default for a record and skips a setter")
+  void wrapperForwardIntoAnInt() throws ReflectiveOperationException {
+    final var forward = "  public static Integer forward(final Integer t) { return t; }\n";
+    final var record = compile(intTarget("VmpWf", "Integer", false, forward));
+    assertTrue(record.success(), record::errorMessages);
+    final var recordClasses = record.define(MethodHandles.lookup());
+    assertEquals(4, forwardQty(recordClasses, "VmpWf", 4));
+    assertEquals(0, forwardQty(recordClasses, "VmpWf", null));
+    final var bean = compile(intTarget("VmpWg", "Integer", true, forward));
+    assertTrue(bean.success(), bean::errorMessages);
+    final var beanClasses = bean.define(MethodHandles.lookup());
+    assertEquals(4, forwardQty(beanClasses, "VmpWg", 4));
+    assertEquals(-1, forwardQty(beanClasses, "VmpWg", null));
   }
 }
