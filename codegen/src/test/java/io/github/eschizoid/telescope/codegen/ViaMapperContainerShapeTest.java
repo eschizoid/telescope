@@ -2,10 +2,8 @@ package io.github.eschizoid.telescope.codegen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -562,9 +560,11 @@ class ViaMapperContainerShapeTest {
 
   @Test
   @DisplayName(
-    "whole-list overloads whose inferred result is bounded by String bind the whole property and can never succeed"
+    "whole-list overloads whose result is bounded by the final class String bind the whole property and are refused by name"
   )
-  void stringBoundedInferredResultBindsTheWholeProperty() throws ReflectiveOperationException {
+  void stringBoundedResultIsRefusedByName() {
+    // A variable bounded by a final class holds only that class, so the overload's result is a
+    // String, which the target's List<WzChDto> never takes: refused, not lifted over the elements.
     final var compilation = compiled(
       "Wz",
       "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
@@ -577,16 +577,16 @@ class ViaMapperContainerShapeTest {
       "java.util.List<WzCh> children",
       "java.util.List<WzChDto> children"
     );
-    assertTrue(compilation.success(), compilation::errorMessages);
-    final var classes = compilation.define(MethodHandles.lookup());
-    final var src = classes.get(PACKAGE + ".WzSrc");
-    final var ch = classes.get(PACKAGE + ".WzCh").getDeclaredConstructor(String.class).newInstance("a");
-    final var source = src.getDeclaredConstructor(List.class).newInstance(List.of(ch));
-    final var bridge = classes.get(PACKAGE + ".WzSrcBridge").getMethod("forward", src);
-    final var failure = assertThrows(java.lang.reflect.InvocationTargetException.class, () ->
-      bridge.invoke(null, source)
+    assertFalse(compilation.success(), "a result bounded by String cannot be written into a list");
+    assertTrue(
+      compilation.hasError(
+        "@ViaMapper field=\"children\": " +
+          PACKAGE +
+          ".WzChMap's forward returns R, which no instantiation of its type variables lets the member WzTgt" +
+          " writes children through take"
+      ),
+      compilation::errorMessages
     );
-    assertInstanceOf(ClassCastException.class, failure.getCause());
   }
 
   /**

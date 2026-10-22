@@ -2289,8 +2289,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           ? bound
           : inferringFn(mapper, "forward", handed, bridgePackage);
       if (forward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
-        final var gives = bound.member().getReturnType();
-        final var refusal = viaResultUnfit(
+        final var result = viaResult(
           v,
           mapper,
           "forward",
@@ -2301,35 +2300,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           targetName,
           bridgePackage
         );
-        if (refusal != null) {
-          error(source, refusal);
+        if (result.refusal() != null) {
+          error(source, result.refusal());
           return;
         }
-        forwardGives.put(targetName, gives);
+        forwardGives.put(targetName, result.gives());
         transformedTargets.add(targetName);
       }
       if (tf == null) continue;
-      final var backward = resolvedFn(mapper, "backward", heldAs(tf.type()), bridgePackage);
+      final var given = heldAs(tf.type());
+      final var backward =
+        resolvedFn(mapper, "backward", given, bridgePackage) instanceof Resolution.Bound bound
+          ? bound
+          : inferringFn(mapper, "backward", given, bridgePackage);
       if (backward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
-        final var gives = bound.member().getReturnType();
-        final var refusal = lenient
-          ? null
-          : viaResultUnfit(
-              v,
-              mapper,
-              "backward",
-              bound.member(),
-              heldAs(tf.type()),
-              source,
-              sourceRebuild,
-              v,
-              bridgePackage
-            );
-        if (refusal != null) {
-          error(source, refusal);
+        final var result = viaResult(
+          v,
+          mapper,
+          "backward",
+          bound.member(),
+          given,
+          source,
+          sourceRebuild,
+          v,
+          bridgePackage
+        );
+        if (result.refusal() != null) {
+          error(source, result.refusal());
           return;
         }
-        backwardGives.put(v, gives);
+        backwardGives.put(v, result.gives());
         transformedSources.add(v);
       }
     }
@@ -4696,6 +4696,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // A property no type variable names is handed to the mapper as javac binds it. Where javac
       // binds no method, the value is cast or told apart by its class to reach one, or the row is
       // refused by name.
+      // The bridge calls a mapper's methods on its class, so a name it declares only as an
+      // instance method is one it cannot call, though javac would bind it on an instance.
+      for (final var name : List.of("forward", "backward")) {
+        if (viaCandidates(mapper, name, bridgePackage).isEmpty()) {
+          error(source, unboundRefusal(field, mapper, name, sourceOwn, sourceHeld, bridgePackage));
+          return null;
+        }
+      }
       if (!variable && bindsAsHeld(mapper, sourceHeld, targetHeld, bridgePackage)) continue;
       final var forward = viaCall(mapper, "forward", sourceOwn, sourceHeld, bridgePackage);
       final var refusal =
@@ -4989,7 +4997,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A {@code @ViaMapper} call: the class its argument is cast to, or null for none, and its result.
+   * A {@code @ViaMapper} call: the class its argument is cast to, or null for none, and its result,
+   * or null where the call infers it.
    */
   private record ViaCall(String cast, TypeMirror result) {}
 
@@ -5013,8 +5022,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     final var candidates = viaCandidates(mapper, name, bridgePackage);
     if (!choosesBlind(own, held, candidates.size())) {
+      // A generic method's result depends on what the call infers, which is held to the member
+      // where the result is written, so no result is given here for one. A method whose one
+      // parameter is its own type variable takes the value as it is.
       if (resolvedFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound bound) {
-        return new ViaCall(null, bound.member().getReturnType());
+        return new ViaCall(null, bound.member().getTypeVariables().isEmpty() ? bound.member().getReturnType() : null);
+      }
+      if (inferringFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound) {
+        return new ViaCall(null, null);
       }
     }
     final var reached = candidates
@@ -5111,6 +5126,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String property,
     final PackageElement bridgePackage
   ) {
+    if (call.result() == null) return null;
     final var stores = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
     if (processingEnv.getTypeUtils().isAssignable(call.result(), stores)) return null;
     return viaRefusal(
@@ -5129,11 +5145,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Why a {@code @ViaMapper}'s {@code name} result of type {@code gives} cannot be written into
-   * {@code property} of {@code owner}, or null where it can: through the member the property's type
-   * chooses, as it is or after a check of its class, with type arguments shown to fit the member's.
+   * A {@code @ViaMapper} call's result as the bridge writes it, and why it cannot be written, or
+   * null where it can.
    */
-  private String viaResultUnfit(
+  private record ViaResult(TypeMirror gives, String refusal) {}
+
+  /**
+   * How a {@code @ViaMapper}'s {@code name} result is written into {@code property} of {@code
+   * owner}: through the member the property's type chooses, as it is or after a check of its class,
+   * with type arguments shown to fit the member's. A result typed by the method's own type
+   * variables is read with each variable its shape fixes in place, as {@link MethodInstantiation}
+   * fixes them, and is refused where no instantiation of them within their bounds fits the member.
+   * The result is the declared one where that leaves a variable unfixed, which javac infers at the
+   * call.
+   */
+  private ViaResult viaResult(
     final String field,
     final TypeElement mapper,
     final String name,
@@ -5147,50 +5173,62 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var declared = member.getReturnType();
     final var slot = heldAs(writeSlotType(owner, rebuild, property, declared, bridgePackage));
     final var chosen = chosenParameter(owner, rebuild, property, slot);
-    if (chosen == null || mirrorProps().mentionsTypeVariable(chosen)) return null;
-    // A result typed by a variable the method declares is inferred at the call. A variable the
-    // parameter is is inferred as the value handed to it; any other is left to javac, unless its
-    // bound shows no instantiation of it can fit the member's argument in its place.
-    final var gives = inferredResult(member, argument);
-    if (mirrorProps().mentionsTypeVariable(gives)) {
-      return unfitVariable(gives, chosen)
-        ? viaRefusal(
-            field,
-            mapper,
-            name,
-            "returns " +
-              declared +
-              ", which no instantiation of its type variables lets the member " +
-              owner.getSimpleName() +
-              " writes " +
-              property +
-              " through take: it takes " +
-              chosen
-          )
-        : null;
+    if (chosen == null || mirrorProps().mentionsTypeVariable(chosen)) return new ViaResult(declared, null);
+    final var generic = !member.getTypeVariables().isEmpty();
+    final var gives = instantiation().result(member, argument, chosen);
+    if (gives == null) {
+      return new ViaResult(
+        declared,
+        viaRefusal(field, mapper, name, "returns " + declared + unfixedTail(owner, property, chosen))
+      );
     }
+    if (mirrorProps().mentionsTypeVariable(gives)) return new ViaResult(declared, null);
     final var types = processingEnv.getTypeUtils();
-    if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return null;
-    if (reachesByCheck(gives, chosen)) return null;
-    return viaRefusal(
-      field,
-      mapper,
-      name,
-      "returns " +
+    // A call whose result is inferred stays a generic call where it is unboxed into a primitive, so
+    // it is written as the declared result, through a check its inference cannot fail.
+    final var written = generic && chosen.getKind().isPrimitive() ? declared : gives;
+    if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
+    if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);
+    final var why = generic
+      ? "returns " + declared + unfixedTail(owner, property, chosen)
+      : "returns " +
         gives +
         ", which the member " +
         owner.getSimpleName() +
         " writes " +
         property +
         " through does not take: it takes " +
-        chosen
-    );
+        chosen;
+    return new ViaResult(declared, viaRefusal(field, mapper, name, why));
   }
 
   /**
-   * The one public method {@code name} of {@code declaringType} whose one parameter is a type
-   * variable the method declares and whose bound takes {@code argType}, which javac binds by
-   * inferring the variable; null where there is not exactly one.
+   * The end of the refusal of a generic method's result that no instantiation of its variables lets
+   * {@code owner} write into {@code property} through a member taking {@code chosen}.
+   */
+  private static String unfixedTail(final TypeElement owner, final String property, final TypeMirror chosen) {
+    return (
+      ", which no instantiation of its type variables lets the member " +
+      owner.getSimpleName() +
+      " writes " +
+      property +
+      " through take: it takes " +
+      chosen
+    );
+  }
+
+  /** The instantiations of a generic method's type variables its result's shape fixes. */
+  private MethodInstantiation instantiation() {
+    return new MethodInstantiation(processingEnv.getTypeUtils(), mirrorProps());
+  }
+
+  /**
+   * The one static method {@code name} of {@code declaringType} the bridge can call whose one
+   * parameter is a type variable the method declares and whose bound takes {@code argType}, which
+   * javac binds by inferring the variable; of several, the one whose variable's bound is a subtype
+   * of every other's, which javac finds most specific; null where there is none or no such one. The
+   * bridge calls a {@code @ViaMapper}'s methods on its class, so an instance method is none of
+   * them.
    */
   private Resolution.Bound inferringFn(
     final TypeElement declaringType,
@@ -5200,68 +5238,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var types = processingEnv.getTypeUtils();
     final var owner = (DeclaredType) declaringType.asType();
-    Resolution.Bound found = null;
+    final var found = new ArrayList<ExecutableType>();
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(declaringType))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT) || !bindableFrom(m, callerPackage)) continue;
+      if (!m.getModifiers().contains(Modifier.STATIC)) continue;
       final var seen = (ExecutableType) types.asMemberOf(owner, m);
       final var parameter = seen.getParameterTypes().getFirst();
       if (!(parameter instanceof TypeVariable variable) || !seen.getTypeVariables().contains(variable)) continue;
       if (!types.isAssignable(argType, types.erasure(variable.getUpperBound()))) continue;
-      if (found != null) return null;
-      found = new Resolution.Bound(seen);
+      found.add(seen);
     }
-    return found;
-  }
-
-  /**
-   * {@code member}'s result type with each type variable the method declares that is its one
-   * parameter's whole type read as {@code argument}, the value handed to it.
-   */
-  private TypeMirror inferredResult(final ExecutableType member, final TypeMirror argument) {
-    final var result = member.getReturnType();
-    final var variables = new ArrayList<TypeMirror>();
-    final var replacements = new ArrayList<TypeMirror>();
-    final var parameter = member.getParameterTypes().isEmpty() ? null : member.getParameterTypes().getFirst();
-    for (final var variable : member.getTypeVariables()) {
-      if (parameter != null && processingEnv.getTypeUtils().isSameType(parameter, variable)) {
-        variables.add(variable);
-        replacements.add(argument);
-      }
-    }
-    return variables.isEmpty() ? result : mirrorProps().substitute(result, variables, replacements);
-  }
-
-  /**
-   * Whether {@code gives}, a type of the parameter's class given arguments some of which are type
-   * variables, has an argument whose variable's bound and the parameter's argument in its place are
-   * two classes neither of which extends the other, so no value is of both.
-   */
-  private boolean unfitVariable(final TypeMirror gives, final TypeMirror chosen) {
-    final var types = processingEnv.getTypeUtils();
-    if (!types.isSameType(types.erasure(gives), types.erasure(chosen))) return false;
-    if (!(gives instanceof DeclaredType given) || !(chosen instanceof DeclaredType wanted)) return false;
-    final var givenArguments = given.getTypeArguments();
-    final var wantedArguments = wanted.getTypeArguments();
-    if (givenArguments.size() != wantedArguments.size()) return false;
-    for (int i = 0; i < givenArguments.size(); i++) {
-      if (!(givenArguments.get(i) instanceof TypeVariable variable)) continue;
-      final var bound = types.erasure(variable.getUpperBound());
-      final var against = types.erasure(wantedArguments.get(i));
-      if (disjointClasses(bound, against)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Whether {@code a} and {@code b} are two classes, not interfaces, neither a subtype of the
-   * other.
-   */
-  private boolean disjointClasses(final TypeMirror a, final TypeMirror b) {
-    if (!(a instanceof DeclaredType da) || !(b instanceof DeclaredType db)) return false;
-    if (da.asElement().getKind() != ElementKind.CLASS || db.asElement().getKind() != ElementKind.CLASS) return false;
-    final var types = processingEnv.getTypeUtils();
-    return !types.isSubtype(a, b) && !types.isSubtype(b, a);
+    final Function<ExecutableType, TypeMirror> bound = m -> types.erasure(m.getParameterTypes().getFirst());
+    final var specific = found
+      .stream()
+      .filter(m -> found.stream().allMatch(other -> other == m || types.isSubtype(bound.apply(m), bound.apply(other))))
+      .filter(m ->
+        found.stream().noneMatch(other -> other != m && types.isSameType(bound.apply(m), bound.apply(other)))
+      )
+      .toList();
+    return specific.size() == 1 ? new Resolution.Bound(specific.getFirst()) : null;
   }
 
   private static String viaRefusal(final String field, final TypeElement mapper, final String name, final String why) {
@@ -7224,7 +7220,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var gives = transformed.contains(name) ? transformGives.get(name) : null;
           final var value = read.apply(name);
           final var held = heldAs(c.asType());
-          final var checked = reachesByCheck(gives, held) ? checkedResult(value, held, to, name) : value;
+          final var checked =
+            reachesByCheck(gives, held) || inferredIntoPrimitive(gives, held)
+              ? checkedResult(value, held, to, name)
+              : value;
           slots.add(new CtorSlot(name, c.asType(), checked));
         }
         return construct(to, slots, hoistInto);
@@ -7236,7 +7235,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var gives = transformed.contains(name) ? transformGives.get(name) : null;
           final var value = read.apply(name);
           final var held = heldAs(pa.asType());
-          final var checked = reachesByCheck(gives, held) ? checkedResult(value, held, to, name) : value;
+          final var checked =
+            reachesByCheck(gives, held) || inferredIntoPrimitive(gives, held)
+              ? checkedResult(value, held, to, name)
+              : value;
           slots.add(new CtorSlot(name, pa.asType(), checked));
         }
         return construct(to, slots, hoistInto);
@@ -7354,14 +7356,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           } else if (
             choice.argument() != null &&
             choice.argument().getKind().isPrimitive() &&
-            reachesByCheck(gives, choice.argument())
+            (reachesByCheck(gives, choice.argument()) || inferredIntoPrimitive(gives, choice.argument()))
           ) {
             // A result wider than the primitive parameter's wrapper is skipped when null, as the
-            // runtime writer skips it, and otherwise checked against the wrapper and unboxed.
+            // runtime writer skips it, and otherwise checked against the wrapper and unboxed. A
+            // result typed by its method's own variable is held as Object, which no instantiation
+            // of the variable fails to fit.
             final var wrapper = boxedErasure(choice.argument());
             sb
               .append("{ final ")
-              .append(gives)
+              .append(mirrorProps().mentionsTypeVariable(gives) ? "Object" : gives.toString())
               .append(" __tv = ")
               .append(value)
               .append("; if (__tv != null) { final ")
@@ -7458,6 +7462,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether a result typed by a type variable its method declares, {@code gives}, is written into a
+   * primitive {@code parameter}. The call is then passed where {@code Object} is taken, so javac
+   * infers its variables from its argument and their bounds alone, and is checked and unboxed as a
+   * result of a wider type is, a null result giving the parameter's default.
+   */
+  private boolean inferredIntoPrimitive(final TypeMirror gives, final TypeMirror parameter) {
+    return (
+      gives != null &&
+      parameter != null &&
+      parameter.getKind().isPrimitive() &&
+      !gives.getKind().isPrimitive() &&
+      mirrorProps().mentionsTypeVariable(gives)
+    );
+  }
+
+  /**
    * Whether a conversion result of type {@code gives} reaches the member parameter {@code
    * parameter} only through a check of its class: both name no type variable, the result is a
    * reference the parameter does not take as it is, and the parameter's class, its wrapper where it
@@ -7538,7 +7558,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String property
   ) {
     if (gives == null || parameter == null) return value;
-    if (reachesByCheck(gives, parameter)) return checkedResult(value, parameter, owner, property);
+    if (reachesByCheck(gives, parameter) || inferredIntoPrimitive(gives, parameter)) {
+      return checkedResult(value, parameter, owner, property);
+    }
     final var types = processingEnv.getTypeUtils();
     if (
       !mirrorProps().mentionsTypeVariable(parameter) &&

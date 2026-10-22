@@ -1,10 +1,16 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
+import java.util.Map;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -98,5 +104,184 @@ class ViaMapperPrimitiveTest {
     assertTrue(compilation.success(), () -> "the reference pair still bridges: " + compilation.errorMessages());
     final var generated = compilation.generated().get("demo.PSrcBridge");
     assertTrue(generated.contains("__fs_qty == null"), () -> "a reference local keeps its gate; saw " + generated);
+  }
+
+  private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
+
+  /**
+   * A {@code @ViaMapper} on {@code qty} from a source record holding {@code srcType} into a target
+   * holding an {@code int}, a record or a bean whose setter records what it is handed, through a
+   * mapper declaring {@code forward}; each class named with {@code prefix}.
+   */
+  private static JavaFileObject[] intTarget(
+    final String prefix,
+    final String srcType,
+    final boolean bean,
+    final String forward
+  ) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var target = bean
+      ? "public class %1$sDst {\n" +
+        "  private int qty = -1;\n" +
+        "  public %1$sDst() {}\n" +
+        "  public int getQty() { return qty; }\n" +
+        "  public void setQty(final int qty) { this.qty = qty; }\n}\n"
+      : "public record %1$sDst(int qty) {}\n";
+    return new JavaFileObject[] {
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Src",
+        head +
+          (
+            "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, lenient = true, viaMappers =" +
+            " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n" +
+            "public record %1$sSrc(" +
+            srcType +
+            " qty) {}\n"
+          ).formatted(prefix)
+      ),
+      ProcessorHarness.source(PACKAGE + "." + prefix + "Dst", head + target.formatted(prefix)),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          (
+            "public class %1$sMap {\n" +
+            forward +
+            "  public static " +
+            srcType +
+            " backward(final int q) { return null; }\n}\n"
+          ).formatted(prefix)
+      ),
+    };
+  }
+
+  /**
+   * The {@code qty} the generated bridge among {@code classes} writes forward from a source holding
+   * {@code value}.
+   */
+  private static Object forwardQty(final Map<String, Class<?>> classes, final String prefix, final Object value)
+    throws ReflectiveOperationException {
+    final var src = classes.get(PACKAGE + "." + prefix + "Src");
+    final var source = src.getDeclaredConstructors()[0].newInstance(value);
+    final var target = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src).invoke(null, source);
+    return target.getClass().getMethod(target.getClass().isRecord() ? "qty" : "getQty").invoke(target);
+  }
+
+  @Test
+  @DisplayName(
+    "a forward returning its own variable, handed an Integer, writes an int record component, and a null its default"
+  )
+  void inferredResultIntoAnIntComponent() throws ReflectiveOperationException {
+    final var compilation = compile(
+      intTarget("Zh", "Integer", false, "  public static <T> T forward(final T t) { return t; }\n")
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    assertEquals(4, forwardQty(classes, "Zh", 4));
+    assertEquals(0, forwardQty(classes, "Zh", null));
+  }
+
+  @Test
+  @DisplayName("a forward returning its own variable, handed an Integer, writes an int setter, and skips a null")
+  void inferredResultIntoAnIntSetter() throws ReflectiveOperationException {
+    final var compilation = compile(
+      intTarget("Zs", "Integer", true, "  public static <T> T forward(final T t) { return t; }\n")
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    assertEquals(4, forwardQty(classes, "Zs", 4));
+    assertEquals(-1, forwardQty(classes, "Zs", null));
+  }
+
+  @Test
+  @DisplayName(
+    "a forward returning a variable bounded by Number writes an int component after a check of the value's class"
+  )
+  void boundedResultIntoAnIntComponent() throws ReflectiveOperationException {
+    final var compilation = compile(
+      intTarget(
+        "Ze",
+        "String",
+        false,
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T extends Number> T forward(final String s) {" +
+          " return (T) (s.length() > 3 ? (Number) Long.valueOf(9) : Integer.valueOf(s.length())); }\n"
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    assertEquals(3, forwardQty(classes, "Ze", "abc"));
+    final var refused = assertThrows(InvocationTargetException.class, () -> forwardQty(classes, "Ze", "abcd"));
+    assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
+  }
+
+  /**
+   * The {@code qty} the generated bridge of a source record holding an {@code int} writes back from
+   * a target record holding {@code value} as an {@code Integer}, through a mapper whose {@code
+   * backward} is {@code backward}.
+   */
+  private static Object backwardQty(final String prefix, final String backward, final Integer value)
+    throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var compilation = compile(
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Src",
+        head +
+          (
+            "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
+            " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n" +
+            "public record %1$sSrc(int qty) {}\n"
+          ).formatted(prefix)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Dst",
+        head + "public record %1$sDst(Integer qty) {}\n".formatted(prefix)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          (
+            "public class %1$sMap {\n" +
+            "  public static <T> T forward(final T t) { return t; }\n" +
+            backward +
+            "}\n"
+          ).formatted(prefix)
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
+    final var target = dst.getDeclaredConstructors()[0].newInstance(value);
+    final var source = classes
+      .get(PACKAGE + "." + prefix + "SrcBridge")
+      .getMethod("backward", dst)
+      .invoke(null, target);
+    return source.getClass().getMethod("qty").invoke(source);
+  }
+
+  @Test
+  @DisplayName(
+    "a backward returning a variable bounded by Number writes an int component after a check of the value's class"
+  )
+  void boundedBackwardIntoAnIntComponent() throws ReflectiveOperationException {
+    assertEquals(
+      6,
+      backwardQty(
+        "Ri",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T extends Number> T backward(final Integer i) { return (T) Integer.valueOf(i + 1); }\n",
+        5
+      )
+    );
+    final var refused = assertThrows(InvocationTargetException.class, () ->
+      backwardQty(
+        "Rh",
+        "  @SuppressWarnings(\"unchecked\")\n" +
+          "  public static <T extends Number> T backward(final Integer i) { return (T) Long.valueOf(3); }\n",
+        5
+      )
+    );
+    assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
   }
 }
