@@ -265,16 +265,13 @@ class VerifierSilenceAgreementTest {
   /**
    * Construction converts a nested pair through its own bridge unless something the mapper is given
    * reaches below the properties that bridge walks itself, and then visits nothing below the pair.
-   * The verifier walks every pair, since it does not replay that decision, so a row keyed to a pair
-   * reachable only through a property the bridge drops is refused by construction alone. A bridge
-   * compiled apart from the call leaves its settings in no annotation the verifier can read, since
-   * {@code @Bridge} is kept in source only.
+   * The verifier reads the properties a bridge in the same compilation walks from its
+   * {@code @Bridge}, and asks the same shared question, so a row keyed to a pair reachable only
+   * through a property the bridge drops is refused by both.
    */
   @Test
-  @DisplayName(
-    "the verifier says nothing about a row reachable only through a property a nested pair's own bridge drops"
-  )
-  void silentBelowABridgedProperty() {
+  @DisplayName("a row reachable only through a property a nested pair's own bridge drops is refused by both")
+  void rowBelowABridgedPropertyIsRefusedByBoth() {
     final var outcome = bridged(
       "VsL",
       """
@@ -290,6 +287,6 @@ class VerifierSilenceAgreementTest {
     );
     assertNotNull(outcome.construction(), "construction built the mapper");
     assertTrue(outcome.construction().contains("never visits"), outcome.construction());
-    assertEquals(List.of(), outcome.warnings());
+    assertEquals(List.of(outcome.construction()), outcome.warnings());
   }
 }

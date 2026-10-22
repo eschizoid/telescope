@@ -243,4 +243,28 @@ class ReflectionPropsTest {
       assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(ArrayList.class, AbstractList.class));
     }
   }
+
+  @Nested
+  @DisplayName("supertypes and simpleName")
+  class SupertypesAndNames {
+
+    private final ReflectionProps props = new ReflectionProps();
+
+    @Test
+    @DisplayName("a class's superclass as written, then its interfaces; Object and a type variable have none")
+    void supertypes() {
+      assertEquals(List.of(ArraysOf.class.getGenericSuperclass()), props.supertypes(ArraysOf.class));
+      assertEquals(List.of(List.class.getGenericInterfaces()), props.supertypes(List.class));
+      assertEquals(List.of(), props.supertypes(Object.class));
+      assertEquals(List.of(), props.supertypes(List.class.getTypeParameters()[0]));
+    }
+
+    @Test
+    @DisplayName("a class by its simple name, a parameterized type by its class's, anything else by its type name")
+    void simpleName() {
+      assertEquals("ArraysOf", props.simpleName(ArraysOf.class));
+      assertEquals("ArrayList", props.simpleName(ArraysOf.class.getGenericSuperclass()));
+      assertEquals("E", props.simpleName(List.class.getTypeParameters()[0]));
+    }
+  }
 }

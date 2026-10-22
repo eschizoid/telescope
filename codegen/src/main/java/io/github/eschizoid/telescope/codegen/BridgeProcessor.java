@@ -14,6 +14,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -1472,14 +1473,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The properties the bridge converts by a conversion of its own, drops, or fills without
     // reading the source: a runtime mapper looks below the rest only, when it decides whether the
     // bridge may convert this pair for it.
-    final var unwalkedSource = new TreeSet<String>(drops);
-    unwalkedSource.addAll(transforms.keySet());
-    unwalkedSource.addAll(viaMappers.keySet());
-    final var unwalkedTarget = new TreeSet<String>(rawConstants.keySet());
-    unwalkedTarget.addAll(computes.keySet());
-    for (final var converted : List.of(transforms.keySet(), viaMappers.keySet())) {
-      for (final var field : converted) unwalkedTarget.add(renames.getOrDefault(field, field));
-    }
+    final var unwalked = Unwalked.of(
+      drops,
+      transforms.keySet(),
+      viaMappers.keySet(),
+      rawConstants.keySet(),
+      computes.keySet()
+    );
+    final var unwalkedSource = unwalked.source();
+    final var unwalkedTarget = unwalked.target();
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
@@ -6924,6 +6926,41 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       reachableFrom(source).contains(source.getQualifiedName().toString()) &&
       reachableFrom(target).contains(target.getQualifiedName().toString())
     );
+  }
+
+  /**
+   * The properties of each side a generated bridge does not walk, in name order: on the source,
+   * those it drops, transforms or converts through a {@code @ViaMapper}; on the target, those it
+   * fills with a constant or a computed value, and those a transformed or {@code @ViaMapper}
+   * property fills, which carry that property's name because the bridge refuses a converted
+   * property that is also renamed.
+   */
+  record Unwalked(Set<String> source, Set<String> target) {
+    static Unwalked of(
+      final Collection<String> drops,
+      final Collection<String> transformed,
+      final Collection<String> viaMapped,
+      final Collection<String> constants,
+      final Collection<String> computes
+    ) {
+      final var source = new TreeSet<String>(drops);
+      source.addAll(transformed);
+      source.addAll(viaMapped);
+      final var target = new TreeSet<String>(constants);
+      target.addAll(computes);
+      target.addAll(transformed);
+      target.addAll(viaMapped);
+      return new Unwalked(source, target);
+    }
+  }
+
+  /**
+   * Whether the bridge this processor generates for the pair of {@code source} and {@code target}
+   * takes the active path of a runtime mapper converting the pair on a cycle, which it does where
+   * it guards against an object reaching itself ({@link #guardsCycles}).
+   */
+  boolean takesActivePath(final TypeElement source, final TypeElement target) {
+    return guardsCycles(source, target);
   }
 
   /** Whether {@code a} and {@code b} each reach the other, so they lie on one cycle. */

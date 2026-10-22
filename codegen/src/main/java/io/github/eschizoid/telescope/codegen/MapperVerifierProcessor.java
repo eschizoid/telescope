@@ -18,6 +18,7 @@ import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -124,10 +125,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String NULL_HINT_FQN = "io.github.eschizoid.telescope.mapping.NullHint";
   private static final String CASES_FQN = "io.github.eschizoid.telescope.mapping.Cases";
-  private static final Set<String> BRIDGE_FQNS = Set.of(
-    "io.github.eschizoid.telescope.annotations.Bridge",
-    "io.github.eschizoid.telescope.annotations.Bridges"
-  );
+  private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
+  private static final String BRIDGES_FQN = "io.github.eschizoid.telescope.annotations.Bridges";
+  private static final Set<String> BRIDGE_FQNS = Set.of(BRIDGE_FQN, BRIDGES_FQN);
 
   /**
    * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
@@ -144,12 +144,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private PairWalk<TypeMirror> walk;
   private ContainerAllocation<TypeMirror> allocation;
   private MirrorSetters setters;
+  // Answers, as the bridge processor answers it, whether a bridge it generates takes the active
+  // path.
+  private BridgeProcessor bridges;
   // The compilation units entered so far, by source file, each as last entered; every one is
   // entered before the first call site is scanned.
   private final Map<URI, CompilationUnitTree> units = new LinkedHashMap<>();
   // The binary names of the classes a @Bridge in those units is on or names, read once they are all
   // entered; null until then.
   private Set<String> bridgeNamed;
+  // What the model-anchored @Bridge annotations in those units say of each pair they name, by
+  // pair; null until read.
+  private Map<String, OwnBridgeRule.Bridge> bridgeSettings;
   private Diagnostic.Kind reportKind;
   private boolean off;
   private boolean verbose;
@@ -166,6 +172,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     walk = new PairWalk<>(props);
     allocation = new ContainerAllocation<>(props);
     setters = new MirrorSetters(types, elements, props);
+    bridges = new BridgeProcessor();
+    bridges.init(processingEnv);
     final var mode = processingEnv.getOptions().getOrDefault("telescope.verify", "error");
     if (!"error".equals(mode) && !"warn".equals(mode) && !"off".equals(mode)) {
       processingEnv
@@ -196,6 +204,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             if (event.getKind() == TaskEvent.Kind.ENTER && event.getCompilationUnit() != null) {
               units.put(event.getCompilationUnit().getSourceFile().toUri(), event.getCompilationUnit());
               bridgeNamed = null;
+              bridgeSettings = null;
               return;
             }
             if (event.getKind() != TaskEvent.Kind.ANALYZE) return;
@@ -277,6 +286,116 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
     bridgeNamed = named;
     return named;
+  }
+
+  /**
+   * What each {@code @Bridge} on a class in this compilation, naming its target as {@code value},
+   * says of the pair of that class and its target, as the bridge the processor generates for it
+   * reports it at run time: the properties of each side it does not walk ({@link
+   * BridgeProcessor.Unwalked}), and whether it takes the active path ({@link
+   * BridgeProcessor#takesActivePath}). A pair two bridges name is left out, as is a bridge on a
+   * carrier class, which construction finds through its registration.
+   */
+  private Map<String, OwnBridgeRule.Bridge> bridgeSettings() {
+    if (bridgeSettings != null) return bridgeSettings;
+    final var settings = new HashMap<String, OwnBridgeRule.Bridge>();
+    final var twice = new HashSet<String>();
+    for (final var unit : units.values()) {
+      for (final var declaration : unit.getTypeDecls()) {
+        if (trees.getElement(TreePath.getPath(unit, declaration)) instanceof TypeElement type) {
+          collectBridgeSettings(type, settings, twice);
+        }
+      }
+    }
+    for (final var key : twice) settings.remove(key);
+    bridgeSettings = settings;
+    return settings;
+  }
+
+  private void collectBridgeSettings(
+    final TypeElement type,
+    final Map<String, OwnBridgeRule.Bridge> settings,
+    final Set<String> twice
+  ) {
+    for (final var mirror : type.getAnnotationMirrors()) {
+      if (!(mirror.getAnnotationType().asElement() instanceof TypeElement annotation)) continue;
+      final var name = annotation.getQualifiedName().toString();
+      if (name.equals(BRIDGE_FQN)) collectBridgeSetting(type, mirror, settings, twice);
+      else if (name.equals(BRIDGES_FQN)) {
+        for (final var each : listValue(mirror, "value")) {
+          if (each.getValue() instanceof AnnotationMirror nested) collectBridgeSetting(type, nested, settings, twice);
+        }
+      }
+    }
+    for (final var member : type.getEnclosedElements()) {
+      if (member instanceof TypeElement nested) collectBridgeSettings(nested, settings, twice);
+    }
+  }
+
+  private void collectBridgeSetting(
+    final TypeElement source,
+    final AnnotationMirror bridge,
+    final Map<String, OwnBridgeRule.Bridge> settings,
+    final Set<String> twice
+  ) {
+    // A carrier names its pair with source and target, and is found through its registration.
+    if (annotationValue(bridge, "source") != null || annotationValue(bridge, "target") != null) return;
+    final var value = annotationValue(bridge, "value");
+    if (!(value != null && value.getValue() instanceof DeclaredType declared)) return;
+    if (!(declared.asElement() instanceof TypeElement target)) return;
+    final var drops = new ArrayList<String>();
+    for (final var drop : listValue(bridge, "drops")) {
+      if (drop.getValue() instanceof String field) drops.add(field);
+    }
+    final var unwalked = BridgeProcessor.Unwalked.of(
+      drops,
+      fieldsNamed(bridge, "transforms"),
+      fieldsNamed(bridge, "viaMappers"),
+      fieldsNamed(bridge, "constants"),
+      fieldsNamed(bridge, "computes")
+    );
+    final var key = pairKey(source, target);
+    final var takesPath = bridges.takesActivePath(source, target);
+    final var setting = new OwnBridgeRule.Bridge(true, unwalked.source(), unwalked.target(), takesPath);
+    if (settings.putIfAbsent(key, setting) != null) {
+      twice.add(key);
+    }
+  }
+
+  /**
+   * The {@code field} each annotation in the list {@code bridge} holds under {@code name} names.
+   */
+  private static List<String> fieldsNamed(final AnnotationMirror bridge, final String name) {
+    final var fields = new ArrayList<String>();
+    for (final var each : listValue(bridge, name)) {
+      if (each.getValue() instanceof AnnotationMirror mirror && stringValue(mirror, "field") != null) {
+        fields.add(stringValue(mirror, "field"));
+      }
+    }
+    return fields;
+  }
+
+  private static AnnotationValue annotationValue(final AnnotationMirror mirror, final String name) {
+    for (final var entry : mirror.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals(name)) return entry.getValue();
+    }
+    return null;
+  }
+
+  private static List<? extends AnnotationValue> listValue(final AnnotationMirror mirror, final String name) {
+    final var value = annotationValue(mirror, name);
+    if (value == null) return List.of();
+    if (value.getValue() instanceof List<?> list) {
+      final var values = new ArrayList<AnnotationValue>();
+      for (final var each : list) if (each instanceof AnnotationValue element) values.add(element);
+      return values;
+    }
+    return List.of(value);
+  }
+
+  private static String stringValue(final AnnotationMirror mirror, final String name) {
+    final var value = annotationValue(mirror, name);
+    return value != null && value.getValue() instanceof String string ? string : null;
   }
 
   private void collectBridges(final TypeElement type, final Set<String> named) {
@@ -712,6 +831,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var caseRowsAt = new ArrayList<Tree>();
       var caseRowsNamed = true;
       var writeHinted = false;
+      var nullHinted = false;
       for (var i = 2; i < args.size(); i++) {
         if (!(args.get(i) instanceof MethodInvocationTree row)) return;
         if (
@@ -725,7 +845,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           writeHinted = true;
           continue;
         }
-        if (NULL_HINT_FQN.equals(ownerFqn)) continue;
+        if (NULL_HINT_FQN.equals(ownerFqn)) {
+          nullHinted = true;
+          continue;
+        }
         if (CASES_FQN.equals(ownerFqn)) {
           final var rowArgs = row.getArguments();
           final var source = rowArgs.size() == 2 ? classLiteral(rowArgs.get(0)) : null;
@@ -761,7 +884,25 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         keyedPairs.add(pairKey(row.source(), row.target()));
       }
       final var forwardOnly = !strict;
-      final var walked = walk.walk(srcType, tgtType, rows, forwardOnly, new Walking(caseRows, forwardOnly));
+      // A hint may reach every pair or name a class a pair reaches, so a call given one walks every
+      // pair here, which can only leave a refusal to construction.
+      final var bridged = writeHinted || nullHinted ? null : ownBridgeRule(rows, caseRows);
+      final var walked = walk.walk(
+        srcType,
+        tgtType,
+        rows,
+        forwardOnly,
+        new Walking(caseRows, forwardOnly) {
+          @Override
+          public boolean ownBridge(
+            final TypeMirror source,
+            final TypeMirror target,
+            final List<PairWalk.Pair<TypeMirror>> around
+          ) {
+            return bridged != null && standsIn(bridged, source, target, around);
+          }
+        }
+      );
       verifyRowsReadProperties(keyed, walked);
       for (final var refused : walked.offCase()) report(rowsAt.get(refused.row()), refused.message());
       verifyInheritedRows(walked, rows, rowsAt, forwardOnly);
@@ -1034,6 +1175,38 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           );
         }
       }
+    }
+
+    /** The shared decision on a nested pair's own bridge, given the rows of the call. */
+    private OwnBridgeRule<TypeMirror> ownBridgeRule(
+      final List<PairWalk.KeyedRow<TypeMirror>> rows,
+      final List<TypeElement[]> caseRows
+    ) {
+      final var cases = new ArrayList<PairWalk.Pair<TypeMirror>>();
+      for (final var row : caseRows) {
+        cases.add(new PairWalk.Pair<>(types.erasure(row[0].asType()), types.erasure(row[1].asType())));
+      }
+      return new OwnBridgeRule<>(props, rules, walk, null, rows, cases, List.of());
+    }
+
+    /**
+     * Whether construction certainly converts the pair of {@code source} and {@code target} through
+     * a bridge of its own rather than walking it: a {@code @Bridge} in this compilation names the
+     * pair, whose settings say which properties the bridge walks and whether it takes the active
+     * path ({@link #bridgeSettings}), and the shared decision lets it stand in.
+     */
+    private boolean standsIn(
+      final OwnBridgeRule<TypeMirror> rule,
+      final TypeMirror source,
+      final TypeMirror target,
+      final List<PairWalk.Pair<TypeMirror>> around
+    ) {
+      final var sourceEl = props.elementOf(source);
+      final var targetEl = props.elementOf(target);
+      if (sourceEl == null || targetEl == null) return false;
+      final var bridge = bridgeSettings().get(pairKey(sourceEl, targetEl));
+      if (bridge == null || rule.settingReason(source, target, around) != null) return false;
+      return rule.reachReason(source, target, around, bridge) == null;
     }
 
     /**
