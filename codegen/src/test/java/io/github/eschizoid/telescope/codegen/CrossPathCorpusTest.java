@@ -10048,10 +10048,11 @@ class CrossPathCorpusTest {
       "a target that fixes the variable in an Optional to String, with a transform on any Optional",
       List.of(REFUSED + "does not fit forward", "value=Optional[<a>], a Optional", "value=Optional[q], a Optional")
     ),
-    // A defect still to close, in this entry and the next: the processor refuses an
-    // overloaded mapper method on a value it holds only as Object, since the overload javac
-    // picks for Object need not be the one the value's class calls for, while the runtime
-    // row converts through the one mapper it has.
+    // Inherent, in this entry and the next: a runtime row's conversion is bound where the
+    // row is written, so javac picks an overloaded method there from the property's real
+    // type. The bridge is compiled once against the erased variable and sees only Object,
+    // and no generated source can make that static choice. Dispatching on the value's class
+    // would pick by a different rule. The processor refuses by name.
     Map.entry(
       "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
       List.of(
