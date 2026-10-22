@@ -216,6 +216,41 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A {@code via} row, or a {@code @ViaMapper}, whose mapper's result is written into one side's
+   * property, though no value of the class the mapper returns can be an instance of the class the
+   * property takes there, the class that side fixes the property's type variable to among them:
+   * every write would fail.
+   */
+  public static String viaResultNeverFits(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String resultClass,
+    final String takenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row writes its mapper's result, a " +
+      resultClass +
+      ", into the " +
+      side +
+      "'s '" +
+      property +
+      "', which takes " +
+      takenClass +
+      ", and no " +
+      resultClass +
+      " is a " +
+      takenClass +
+      ". Give the row a mapper whose result is of the class the property takes."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed source field. */
   public static String duplicateSourceRow(final String source, final String target, final String srcField) {
     return (
