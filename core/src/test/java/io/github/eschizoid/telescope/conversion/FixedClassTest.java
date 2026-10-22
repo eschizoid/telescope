@@ -11,8 +11,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * {@link FixedClass}, the checks a generated bridge calls inside the cast it writes: of a value
- * handed across into a property that fixes its type variable, and of a conversion's result written
- * through the member its property's type chooses.
+ * handed across into a property that fixes its type variable, of a conversion's result written
+ * through the member its property's type chooses, and of a value read for a conversion that takes a
+ * class narrower than its property's type variable.
  */
 class FixedClassTest {
 
@@ -55,6 +56,21 @@ class FixedClassTest {
     );
     assertEquals(
       PairingMessages.resultClassMismatch(Owner.class.getTypeName(), "value", "java.lang.Integer", "java.lang.String"),
+      refused.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a value read of the class a conversion takes, or null, is handed back, and another is refused by name")
+  void aValueReadIsCheckedAgainstTheConversion() {
+    final var value = "a";
+    assertSame(value, FixedClass.argument(value, String.class, Owner.class, "value"));
+    assertNull(FixedClass.argument(null, String.class, Owner.class, "value"));
+    final var refused = assertThrows(ClassCastException.class, () ->
+      FixedClass.argument(7L, Integer.class, Owner.class, "value")
+    );
+    assertEquals(
+      PairingMessages.argumentClassMismatch(Owner.class.getTypeName(), "value", "java.lang.Long", "java.lang.Integer"),
       refused.getMessage()
     );
   }

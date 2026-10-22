@@ -32,6 +32,7 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Generated `@Bridge` constant      | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap       |
 | Generated `@Focus` navigator      | `UserTelescope.of().address().city()` read and update, with the navigator in `serialization-config.json` |
 | Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
+| Row typed by a type argument      | `Mapping.to` rows typed by `Tagged<String>` and `Tagged<Badge>`, loading each class by name to check it  |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -156,6 +157,30 @@ The mapper looks up both names for every nested pair it reaches, and for most pa
 GraalVM's strict missing-registration mode, a `Class.forName` of a name that is not registered throws an error rather
 than reporting the class absent, and the probe does not catch it, under either name. Run a runtime mapper's image
 without that mode, or register the names it can look up.
+
+## A row typed by a class's type argument
+
+A runtime `Mapping.to` or `Mapping.toOneWay` row can read a property declared with a type variable as a narrower class:
+a row typed by `Tagged<String>` reads `Tagged<X>.value` as `String`, and so does a row reading a getter a generic
+superclass declares through a subclass that fixes the variable. Nothing checked that class when the property was read,
+so the mapper checks each value against it before the row's function runs, and refuses a value of another class by name.
+
+The mapper finds that class in the method reference's `SerializedLambda`, which records it by name, and loads it with
+`Class.forName` when the mapper is built. A class that is the property's own, or one of its supertypes, is recognised by
+name and never loaded. In an image, `Class.forName` answers only for a class registered for reflection, so register the
+class each such row reads its property as. The class alone is enough, with no members:
+
+```json
+{ "name": "com.example.Badge" }
+```
+
+Register a JDK class such as `java.lang.String` the same way. Whether an image can already look one up depends on the
+metadata the other libraries in it contribute, which can change when a dependency does.
+
+A class that is not registered fails the mapper's construction with an `IllegalStateException` naming the class and the
+method reference, and under GraalVM's strict missing-registration mode the image's own missing-registration error passes
+through instead. `NativeVerify` builds two such rows over the example's `Tagged` record, one reading it as `String` and
+one as the example's `Badge` record, with both classes in the example's `reflect-config.json`.
 
 ## The order a bean's properties convert in
 

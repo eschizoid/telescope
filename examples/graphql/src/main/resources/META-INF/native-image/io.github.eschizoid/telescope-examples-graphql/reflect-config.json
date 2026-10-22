@@ -46,5 +46,23 @@
     "allDeclaredConstructors": true,
     "allDeclaredMethods": true,
     "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.Tagged",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.Label",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "java.lang.String"
+  },
+  {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.Badge"
   }
 ]

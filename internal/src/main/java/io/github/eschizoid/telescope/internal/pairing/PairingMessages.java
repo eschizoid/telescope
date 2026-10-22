@@ -1012,6 +1012,33 @@ public final class PairingMessages {
   }
 
   /**
+   * A value of class {@code foundClass}, read from the property {@code propertyName} of {@code
+   * ownerClass}, handed to a conversion of the row's own that takes {@code expectedClass}, a class
+   * the value is not of. The property is declared with a type variable, which the class does not
+   * fix, and the conversion takes a class narrower than the variable's bound, so only the value's
+   * own class says whether it fits.
+   */
+  public static String argumentClassMismatch(
+    final String ownerClass,
+    final String propertyName,
+    final String foundClass,
+    final String expectedClass
+  ) {
+    return (
+      "Deep map: property '" +
+      propertyName +
+      "' of " +
+      ownerClass +
+      " is handed to a conversion that takes " +
+      expectedClass +
+      ", but the value it holds is a " +
+      foundClass +
+      ". Give the class a type argument the conversion takes, or have the conversion take the" +
+      " property's declared type."
+    );
+  }
+
+  /**
    * A value of class {@code foundClass} written into the property {@code propertyName} of {@code
    * ownerClass}, which fixes the type variable the property is declared with to {@code fixedClass},
    * a class the value is not of. The other side passes the variable through, so only the value's

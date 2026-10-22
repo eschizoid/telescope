@@ -51,6 +51,24 @@ public final class FixedClass {
   }
 
   /**
+   * {@code value} itself, when it is null or an instance of {@code expected}: the check a bridge
+   * makes of a value read from a property declared with a type variable before it hands it to a
+   * conversion that takes {@code expected}, a class narrower than the variable's bound.
+   *
+   * @param value the value read
+   * @param expected the class the conversion takes
+   * @param owner the class whose property is read
+   * @param property the name of the property read
+   * @param <V> the type the value is held as
+   * @return {@code value}
+   * @throws ClassCastException naming the property, the value's class and {@code expected} when the
+   *     value is of another class
+   */
+  public static <V> V argument(final V value, final Class<?> expected, final Class<?> owner, final String property) {
+    return ResultCheck.argument(value, expected, owner, property);
+  }
+
+  /**
    * {@link #result}, with {@code fallback} in place of a null {@code value}: what a constructor or
    * builder argument of a primitive type takes for a result that is null.
    *

@@ -306,6 +306,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<TypeKind> orElseKinds = EnumSet.noneOf(TypeKind.class);
 
   /**
+   * Per source property of the bridge being emitted, the check its transform's {@code forward}
+   * argument takes before the call, where the transform takes a class narrower than the property's
+   * type variable ({@link #readsByCheck}); reset for each bridge.
+   */
+  private final Map<String, ArgumentCheck> forwardArguments = new HashMap<>();
+
+  /** The same per source property, for its transform's {@code backward}, which reads the target. */
+  private final Map<String, ArgumentCheck> backwardArguments = new HashMap<>();
+
+  /**
    * While {@code patch} is emitted, the setter writes of a property whose result a null skips, by
    * source property: written as a statement of their own, since an expression cannot skip a write.
    * Empty otherwise.
@@ -1428,6 +1438,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<TypePair> seen
   ) {
     pathArg = null;
+    forwardArguments.clear();
+    backwardArguments.clear();
     if (source.getKind() == ElementKind.INTERFACE) {
       generateSealed(source, target, pending, seen);
       return;
@@ -1665,8 +1677,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 rules.argumentsFit(bwdGives, storesBack) &&
                 (backwardChosen == null || rules.argumentsFit(bwdGives, backwardChosen))) ||
               reachesByCheck(bwdGives, backwardChosen));
-          final var forwardFits = types.isAssignable(sfHeld, fwdAccepts) && forwardStores;
-          final var backwardFits = forwardOnly || (types.isAssignable(tfHeld, bwdAccepts) && backwardStores);
+          // A property declared with a type variable is handed to a transform taking a class
+          // narrower than the variable's bound after a check of its class, as the runtime hands a
+          // row typed by the class's type arguments the value it reads.
+          final var forwardChecked = readsByCheck(sfType, sfHeld, fwdAccepts);
+          final var backwardChecked = !forwardOnly && readsByCheck(tfType, tfHeld, bwdAccepts);
+          final var forwardFits = (types.isAssignable(sfHeld, fwdAccepts) || forwardChecked) && forwardStores;
+          final var backwardFits =
+            forwardOnly || ((types.isAssignable(tfHeld, bwdAccepts) || backwardChecked) && backwardStores);
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message
@@ -1713,6 +1731,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             );
             return;
           }
+          if (forwardChecked) forwardArguments.put(t, argumentCheck(fwdAccepts, source, t));
+          if (backwardChecked) backwardArguments.put(t, argumentCheck(bwdAccepts, target, t));
         }
       }
     }
@@ -5425,7 +5445,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // dispatch through the {@code __tx_<field>} BridgeFn singleton instance (legacy shape).
       case TRANSFORM -> plan.qualifierMethod() != null
         ? plan.subBridgeName() + "." + plan.qualifierMethod() + "(" + readExpr + ")"
-        : "__tx_" + fieldName + ".forward(" + readExpr + ")";
+        : "__tx_" + fieldName + ".forward(" + checkedArgument(forwardArguments.get(fieldName), readExpr) + ")";
     };
   }
 
@@ -5461,7 +5481,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       ".map(" +
       bwdElement +
       ").orElse(null))";
-      case TRANSFORM -> "__tx_" + fieldName + ".backward(" + readExpr + ")";
+      case TRANSFORM -> "__tx_" +
+      fieldName +
+      ".backward(" +
+      checkedArgument(backwardArguments.get(fieldName), readExpr) +
+      ")";
     };
   }
 
@@ -7749,6 +7773,49 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     if (types.isAssignable(gives, parameter)) return false;
     return types.isSubtype(boxedErasure(parameter), types.erasure(gives)) && rules.argumentsFit(gives, parameter);
+  }
+
+  /**
+   * The check of a value read for a transform: the class the transform takes, as the cast after the
+   * check names it, and what a call to {@code FixedClass.argument} takes after the value.
+   */
+  private record ArgumentCheck(String type, String arguments) {}
+
+  /**
+   * Whether a value of a property declared as {@code declared}, held as {@code held}, reaches a
+   * transform taking {@code accepts} only through a check of its class: the property is declared
+   * with a type variable, which the bridge holds as its erasure, and {@code accepts} is a class
+   * naming no type variable and given no type arguments, a subtype of that erasure the value is not
+   * shown to be. The check sees the value's class, which is all of such a type. The value is then
+   * handed over after {@code FixedClass.argument} checks it, as the runtime checks it, and refused
+   * by name otherwise.
+   */
+  private boolean readsByCheck(final TypeMirror declared, final TypeMirror held, final TypeMirror accepts) {
+    if (declared == null || held == null || accepts == null) return false;
+    if (declared.getKind() != TypeKind.TYPEVAR || accepts.getKind().isPrimitive()) return false;
+    if (mirrorProps().mentionsTypeVariable(accepts)) return false;
+    final var types = processingEnv.getTypeUtils();
+    final var erased = types.erasure(accepts);
+    if (!types.isSameType(accepts, erased) || types.isAssignable(held, accepts)) return false;
+    return types.isSubtype(erased, types.erasure(held));
+  }
+
+  /**
+   * The check a value of {@code property} of {@code owner} takes before a transform taking {@code
+   * accepts}.
+   */
+  private ArgumentCheck argumentCheck(final TypeMirror accepts, final TypeElement owner, final String property) {
+    final var types = processingEnv.getTypeUtils();
+    return new ArgumentCheck(
+      accepts.toString(),
+      types.erasure(accepts) + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(property)
+    );
+  }
+
+  /** {@code value}, checked as {@code check} says and cast to the class it names, or as it is. */
+  private static String checkedArgument(final ArgumentCheck check, final String value) {
+    if (check == null) return value;
+    return "((" + check.type() + ") " + FIXED_CLASS + ".argument(" + value + ", " + check.arguments() + "))";
   }
 
   /**

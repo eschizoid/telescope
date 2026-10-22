@@ -78,7 +78,19 @@ class ResultCheckTest {
     final Class<?> owner,
     final Object targetNull
   ) {
-    return new ResultCheck(conversion, expected, owner, "value", targetNull, null, Src.class, "value", null);
+    return new ResultCheck(
+      conversion,
+      expected,
+      owner,
+      "value",
+      targetNull,
+      null,
+      Src.class,
+      "value",
+      null,
+      null,
+      null
+    );
   }
 
   @Nested
@@ -133,6 +145,8 @@ class ResultCheckTest {
         null,
         Src.class,
         "value",
+        null,
+        null,
         null
       );
       assertEquals(42, check.to("a"));
@@ -151,6 +165,8 @@ class ResultCheckTest {
         String.class,
         Src.class,
         "value",
+        null,
+        null,
         null
       );
       final var refused = assertThrows(ClassCastException.class, () -> check.from("a"));
@@ -158,6 +174,79 @@ class ResultCheckTest {
         PairingMessages.resultClassMismatch(Src.class.getTypeName(), "value", "java.lang.Integer", "java.lang.String"),
         refused.getMessage()
       );
+    }
+  }
+
+  /**
+   * A slot whose conversion is {@code conversion}, checking the value it reads forward against
+   * {@code fromSource} and backward against {@code fromTarget}, and no result.
+   */
+  private static ResultCheck reading(
+    final Iso<Object, Object> conversion,
+    final Class<?> fromSource,
+    final Class<?> fromTarget
+  ) {
+    return new ResultCheck(
+      conversion,
+      null,
+      StringTgt.class,
+      "value",
+      null,
+      null,
+      Src.class,
+      "value",
+      null,
+      fromSource,
+      fromTarget
+    );
+  }
+
+  @Nested
+  @DisplayName("checking the value a conversion reads")
+  class ReadChecks {
+
+    @Test
+    @DisplayName(
+      "a value of the class the forward conversion takes is converted, and one of another class is refused by name"
+    )
+    void aForwardReadIsChecked() {
+      final var check = reading(giving(v -> v + "!"), String.class, null);
+      assertEquals("a!", check.to("a"));
+      final var refused = assertThrows(ClassCastException.class, () -> check.to(42));
+      assertEquals(
+        PairingMessages.argumentClassMismatch(
+          Src.class.getTypeName(),
+          "value",
+          "java.lang.Integer",
+          "java.lang.String"
+        ),
+        refused.getMessage()
+      );
+      assertEquals(42, check.from(42), "a backward read with nothing to check is not checked");
+    }
+
+    @Test
+    @DisplayName("a backward read is checked against the class the backward conversion takes, naming the target")
+    void aBackwardReadIsChecked() {
+      final var check = reading(Iso.of(v -> v, v -> "<" + v + ">"), null, Integer.class);
+      assertEquals("<5>", check.from(5));
+      final var refused = assertThrows(ClassCastException.class, () -> check.from("b"));
+      assertEquals(
+        PairingMessages.argumentClassMismatch(
+          StringTgt.class.getTypeName(),
+          "value",
+          "java.lang.String",
+          "java.lang.Integer"
+        ),
+        refused.getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a null value read passes the check")
+    void aNullReadPasses() {
+      assertNull(ResultCheck.argument(null, String.class, Src.class, "value"));
+      assertEquals("null!", reading(giving(v -> v + "!"), Integer.class, null).to(null));
     }
   }
 
@@ -226,6 +315,33 @@ class ResultCheckTest {
     }
 
     @Test
+    @DisplayName("a value read is checked against the class the conversion takes before the conversion runs")
+    void aValueReadIsCheckedOnTheComposedHandle() {
+      final var fitting = composed(StringTgt.class, reading(giving(v -> v + "!"), CharSequence.class, null));
+      assertEquals("a!", fitting.to(source("a")).getValue());
+      final var refusing = composed(
+        StringTgt.class,
+        reading(
+          giving(v -> {
+            throw new AssertionError("the conversion ran on a value the check refuses");
+          }),
+          Integer.class,
+          null
+        )
+      );
+      final var refused = assertThrows(ClassCastException.class, () -> refusing.to(source("a")));
+      assertEquals(
+        PairingMessages.argumentClassMismatch(
+          Src.class.getTypeName(),
+          "value",
+          "java.lang.String",
+          "java.lang.Integer"
+        ),
+        refused.getMessage()
+      );
+    }
+
+    @Test
     @DisplayName("a null result into a record's primitive component takes the default")
     void aNullIntoARecordComponentTakesTheDefault() {
       final var iso = composed(IntRec.class, checking(giving(v -> null), Integer.class, IntRec.class, 0));
@@ -252,6 +368,8 @@ class ResultCheckTest {
         String.class,
         Src.class,
         "value",
+        null,
+        null,
         null
       );
       final var targetWriter = Reflective.BEANS.writerFor(IntTgt.class);

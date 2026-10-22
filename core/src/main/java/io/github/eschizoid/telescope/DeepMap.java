@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.conversion.Match;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.FixedCheck;
+import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
@@ -1242,6 +1243,7 @@ public final class DeepMap {
               )
             : resultChecked(
                 fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
+                row,
                 new RowSides(source, target, srcField, tgtField),
                 srcRefl,
                 tgtRefl,
@@ -1718,10 +1720,18 @@ public final class DeepMap {
    * on each side ({@link Beans#writtenClass}). The conversion is typed by its functions, which
    * nothing here can read, so the result's own class is all that says whether the member takes it.
    * A side whose member takes anything checks nothing, and a forward-only mapper writes no source.
+   *
+   * <p>The value a transform row's conversion is handed is checked too, where the row reads the
+   * property as a class narrower than its getter returns ({@link #narrowedRead}): a property
+   * declared with a type variable, read by a row typed by the class's type arguments, or through a
+   * subclass that fixes the variable. The getter returns the variable's erasure, which nothing
+   * checks against the narrower class, so the value's class is all that says whether the conversion
+   * takes it.
    */
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> resultChecked(
     final Iso<?, ?> iso,
+    final Mapping<?, ?> row,
     final RowSides sides,
     final Reflective srcRefl,
     final Reflective tgtRefl,
@@ -1731,7 +1741,17 @@ public final class DeepMap {
     final var sourceWriter = srcRefl.writerFor(sides.source());
     final var intoTarget = Beans.writtenClass(targetWriter, sides.target(), sides.tgtField());
     final var intoSource = forwardOnly ? null : Beans.writtenClass(sourceWriter, sides.source(), sides.srcField());
-    if (intoTarget == null && intoSource == null) return iso;
+    final var sourceDeclared = srcRefl.genericType(sides.source(), sides.srcField());
+    final var fromSource = switch (row) {
+      case TypedTransformTo<?, ?, ?, ?> r -> narrowedRead(r.src(), sourceDeclared);
+      case ForwardOnlyTransformTo<?, ?, ?, ?> r -> narrowedRead(r.src(), sourceDeclared);
+      default -> null;
+    };
+    final var fromTarget =
+      !forwardOnly && row instanceof TypedTransformTo<?, ?, ?, ?> r
+        ? narrowedRead(r.tgt(), tgtRefl.genericType(sides.target(), sides.tgtField()))
+        : null;
+    if (intoTarget == null && intoSource == null && fromSource == null && fromTarget == null) return iso;
     return new ResultCheck(
       (Iso<Object, Object>) iso,
       intoTarget,
@@ -1741,8 +1761,22 @@ public final class DeepMap {
       intoSource,
       sides.source(),
       sides.srcField(),
-      Beans.writtenNullValue(sourceWriter, sides.source(), sides.srcField())
+      Beans.writtenNullValue(sourceWriter, sides.source(), sides.srcField()),
+      fromSource,
+      fromTarget
     );
+  }
+
+  /**
+   * The class a row reads a property as through {@code accessor}, where it is narrower than the
+   * erasure of {@code declared}, the type the property's record component or getter is declared
+   * with, which is the class a read of it returns: the erasure of the type argument the row's class
+   * gives a property declared with a type variable, which the row's functions take and nothing
+   * checked when the property was read. Null where the row reads the property as that class or a
+   * supertype of it.
+   */
+  private static Class<?> narrowedRead(final Telescope.Accessor<?, ?> accessor, final Type declared) {
+    return LambdaIntrospection.narrowedReturnOf(accessor, (Class<?>) PROPS.erasure(declared));
   }
 
   /**
