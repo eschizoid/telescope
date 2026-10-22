@@ -429,6 +429,16 @@ class PairingRulesTest {
     public List<Property<Type>> properties(final Type t) {
       return delegate.properties(t);
     }
+
+    @Override
+    public List<Type> supertypes(final Type t) {
+      return delegate.supertypes(t);
+    }
+
+    @Override
+    public String simpleName(final Type t) {
+      return delegate.simpleName(t);
+    }
   }
 
   /** Maps keyed by a type variable, directly and inside a parameterized key. */

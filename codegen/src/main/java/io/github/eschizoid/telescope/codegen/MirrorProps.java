@@ -426,6 +426,22 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public List<TypeMirror> supertypes(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null) return List.of();
+    final var supertypes = new ArrayList<TypeMirror>();
+    if (element.getSuperclass().getKind() == TypeKind.DECLARED) supertypes.add(element.getSuperclass());
+    supertypes.addAll(element.getInterfaces());
+    return supertypes;
+  }
+
+  @Override
+  public String simpleName(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element == null ? t.toString() : element.getSimpleName().toString();
+  }
+
+  @Override
   public List<Property<TypeMirror>> properties(final TypeMirror t) {
     final var element = elementOf(types.erasure(t));
     if (element == null || element.getKind().isInterface()) return List.of();

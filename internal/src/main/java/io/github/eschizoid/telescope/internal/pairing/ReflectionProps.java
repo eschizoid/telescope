@@ -622,6 +622,20 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public List<Type> supertypes(final Type t) {
+    if (!(rawType(t) instanceof Class<?> cls)) return List.of();
+    final var supertypes = new ArrayList<Type>();
+    if (cls.getGenericSuperclass() != null) supertypes.add(cls.getGenericSuperclass());
+    supertypes.addAll(List.of(cls.getGenericInterfaces()));
+    return supertypes;
+  }
+
+  @Override
+  public String simpleName(final Type t) {
+    return rawType(t) instanceof Class<?> cls ? cls.getSimpleName() : t.getTypeName();
+  }
+
+  @Override
   public String typeName(final Type t) {
     return t.getTypeName();
   }

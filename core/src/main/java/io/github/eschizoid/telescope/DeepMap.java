@@ -16,8 +16,10 @@ import io.github.eschizoid.telescope.internal.ResultCheck;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
+import io.github.eschizoid.telescope.internal.pairing.Paired;
 import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
@@ -45,7 +47,6 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
-import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -107,7 +108,9 @@ public final class DeepMap {
    * verifier consumes the same rules through a {@code TypeMirror} adapter, so what constructs here
    * and what compiles there cannot drift.
    */
-  private static final PairingRules<Type> PAIRING = new PairingRules<>(new ReflectionProps());
+  private static final ReflectionProps PROPS = new ReflectionProps();
+
+  private static final PairingRules<Type> PAIRING = new PairingRules<>(PROPS);
 
   /** The shared walk of the pairs a mapper visits, which the compile-time verifier takes too. */
   private static final PairWalk<Type> PAIR_WALK = new PairWalk<>(new ReflectionProps());
@@ -207,7 +210,6 @@ public final class DeepMap {
       overrideTable,
       caseRows,
       hintMap.keySet(),
-      beanRefl,
       nullStrategy == NullHint.NullStrategy.DEFAULT
         ? "the mapper's nullSourceValues(DEFAULT) reaches every pair, and a bridge has no counterpart for it"
         : defaultStrategy != null
@@ -2557,7 +2559,7 @@ public final class DeepMap {
 
   // ---------- Inner types ----------
 
-  private record TypePair(Class<?> source, Class<?> target) {}
+  private record TypePair(Class<?> source, Class<?> target) implements Paired<Type> {}
 
   /**
    * The {@code cases} rows of one mapper, and how each pair of sealed interfaces the mapper meets
@@ -2707,30 +2709,22 @@ public final class DeepMap {
    */
   private static final class OwnBridges {
 
-    private final Map<TypePair, List<Mapping<?, ?>>> rows;
-    private final Set<Class<?>> hinted;
-    private final Reflective beanRefl;
-    // Why every pair is walked, for a mapper whose settings reach every pair; null otherwise.
-    private final String everyPair;
-    private final Map<Reach, Set<Class<?>>> reached = new HashMap<>();
+    // The shared decision, given what the mapper is given.
+    private final OwnBridgeRule<Type> rule;
     private final Set<TypePair> converted = new HashSet<>();
     // The walk's pairs whose objects are kept on the active path while they convert.
     private final Set<TypePair> cyclicPairs;
-    private final List<Cases> caseRows;
 
     OwnBridges(
       final Map<TypePair, List<Mapping<?, ?>>> rows,
       final List<Cases> caseRows,
       final Set<Class<?>> hinted,
-      final Reflective beanRefl,
       final String everyPair,
       final Set<TypePair> cyclicPairs
     ) {
-      this.rows = rows;
-      this.caseRows = List.copyOf(caseRows);
-      this.hinted = hinted;
-      this.beanRefl = beanRefl;
-      this.everyPair = everyPair;
+      final List<Paired<Type>> cases = caseRows.isEmpty() ? List.of() : new ArrayList<>(caseRows.size());
+      for (final var row : caseRows) cases.add(new PairWalk.Pair<>(row.sourceCase(), row.targetCase()));
+      this.rule = new OwnBridgeRule<>(PROPS, PAIRING, PAIR_WALK, everyPair, rows.keySet(), cases, List.copyOf(hinted));
       this.cyclicPairs = cyclicPairs;
     }
 
@@ -2760,10 +2754,24 @@ public final class DeepMap {
     }
 
     private Object standingIn(final TypePair pair, final Collection<TypePair> ancestors) {
-      if (settingReason(pair, ancestors) != null) return null;
+      if (rule.settingReason(pair.source, pair.target, ancestors) != null) return null;
       final var found = ownBridge(pair.source, pair.target, false);
-      if (found.isEmpty() || reachReason(pair, ancestors, found.get()) != null) return null;
+      if (found.isEmpty() || rule.reachReason(pair.source, pair.target, ancestors, factsOf(found.get())) != null) {
+        return null;
+      }
       return found.get();
+    }
+
+    /** What the generated bridge {@code bridge} says of itself, as the shared rule reads it. */
+    private static OwnBridgeRule.Bridge factsOf(final Object bridge) {
+      final var fn = Telescope.bridgeFnOf(bridge);
+      final var listed = fn != null && fn.declaresUnwalkedProperties();
+      return new OwnBridgeRule.Bridge(
+        listed,
+        listed ? fn.unwalkedSourceProperties() : Set.of(),
+        listed ? fn.unwalkedTargetProperties() : Set.of(),
+        fn != null && fn.takesActivePath()
+      );
     }
 
     /**
@@ -2775,12 +2783,20 @@ public final class DeepMap {
     private void markCycle(final TypePair pair, final Collection<TypePair> ancestors, final Object bridge) {
       final var fn = Telescope.bridgeFnOf(bridge);
       if (fn == null || !fn.takesActivePath()) return;
-      final var fromSource = reachedFrom(pair.source, fn.unwalkedSourceProperties(), fn.declaresUnwalkedProperties());
-      final var fromTarget = reachedFrom(pair.target, fn.unwalkedTargetProperties(), fn.declaresUnwalkedProperties());
+      final var fromSource = rule.reachedFrom(
+        pair.source,
+        fn.unwalkedSourceProperties(),
+        fn.declaresUnwalkedProperties()
+      );
+      final var fromTarget = rule.reachedFrom(
+        pair.target,
+        fn.unwalkedTargetProperties(),
+        fn.declaresUnwalkedProperties()
+      );
       final var around = List.copyOf(ancestors);
       for (var i = around.size() - 1; i >= 0; i--) {
         final var ancestor = around.get(i);
-        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
+        if (fromSource.contains(ancestor.source.getName()) && fromTarget.contains(ancestor.target.getName())) {
           cyclicPairs.addAll(around.subList(0, i + 1));
           return;
         }
@@ -2792,29 +2808,10 @@ public final class DeepMap {
      * bridge converts it.
      */
     String passedOver(final TypePair pair, final Collection<TypePair> ancestors) {
-      final var setting = settingReason(pair, ancestors);
+      final var setting = rule.settingReason(pair.source, pair.target, ancestors);
       if (setting != null) return setting;
       final var found = ownBridge(pair.source, pair.target, false);
-      return found.isEmpty() ? null : reachReason(pair, ancestors, found.get());
-    }
-
-    /** A reason read from the pair itself, before its bridge is looked up. */
-    private String settingReason(final TypePair pair, final Collection<TypePair> ancestors) {
-      final var configured = configuredReason(pair);
-      if (configured != null) return configured;
-      // A pair met again inside itself, such as the mapper's own pair, keeps the walk it is in.
-      if (ancestors.contains(pair)) return "the pair is met again inside itself";
-      return null;
-    }
-
-    /** A reason read from what the mapper is given about the pair, wherever it is met. */
-    private String configuredReason(final TypePair pair) {
-      if (everyPair != null) return everyPair;
-      if (!rows.getOrDefault(pair, List.of()).isEmpty()) return "a row is keyed to the pair";
-      if (inheritsRows(rows, pair)) return "a row keyed to two sealed interfaces it implements applies to the pair";
-      if (hinted.contains(pair.source)) return "a writeBean hint names " + pair.source.getSimpleName();
-      if (hinted.contains(pair.target)) return "a writeBean hint names " + pair.target.getSimpleName();
-      return null;
+      return found.isEmpty() ? null : rule.reachReason(pair.source, pair.target, ancestors, factsOf(found.get()));
     }
 
     /**
@@ -2822,156 +2819,14 @@ public final class DeepMap {
      * keeps from converting it; the pairs around it may still.
      */
     boolean mayStandIn(final TypePair pair) {
-      return configuredReason(pair) == null && ownBridge(pair.source, pair.target, false).isPresent();
-    }
-
-    /**
-     * A reason read from the classes the pair reaches through the properties {@code bridge} itself
-     * walks: a property it converts by a conversion of its own, or drops, leads nowhere the walk
-     * would go. A bridge that does not list those properties is read as walking every property, and
-     * no sealed interface is read through to its cases.
-     */
-    private String reachReason(final TypePair pair, final Collection<TypePair> ancestors, final Object bridge) {
-      final var fn = Telescope.bridgeFnOf(bridge);
-      final var listed = fn != null && fn.declaresUnwalkedProperties();
-      final var fromSource = reachedFrom(pair.source, listed ? fn.unwalkedSourceProperties() : Set.of(), listed);
-      final var fromTarget = reachedFrom(pair.target, listed ? fn.unwalkedTargetProperties() : Set.of(), listed);
-      for (final var configured : rows.keySet()) {
-        if (fromSource.contains(configured.source) && fromTarget.contains(configured.target)) {
-          return (
-            "a row is keyed to (" +
-            configured.source.getSimpleName() +
-            ", " +
-            configured.target.getSimpleName() +
-            "), a pair it reaches"
-          );
-        }
-      }
-      for (final var row : caseRows) {
-        if (fromSource.contains(row.sourceCase()) && fromTarget.contains(row.targetCase())) {
-          return (
-            "a cases row pairs " +
-            row.sourceCase().getSimpleName() +
-            " with " +
-            row.targetCase().getSimpleName() +
-            ", a pair it reaches"
-          );
-        }
-      }
-      for (final var hint : hinted) {
-        if (fromSource.contains(hint) || fromTarget.contains(hint)) {
-          return "a writeBean hint names " + hint.getSimpleName() + ", a class it reaches";
-        }
-      }
-      // A bridge taking the active path cuts a cycle through it at the reference the walk would.
-      if (fn != null && fn.takesActivePath()) return null;
-      for (final var ancestor : ancestors) {
-        if (fromSource.contains(ancestor.source) && fromTarget.contains(ancestor.target)) {
-          return (
-            "it reaches (" +
-            ancestor.source.getSimpleName() +
-            ", " +
-            ancestor.target.getSimpleName() +
-            "), a pair being converted around it"
-          );
-        }
-      }
-      return null;
+      return (
+        rule.configuredReason(pair.source, pair.target) == null &&
+        ownBridge(pair.source, pair.target, false).isPresent()
+      );
     }
 
     boolean converts(final TypePair pair) {
       return converted.contains(pair);
-    }
-
-    /**
-     * Every class a value of {@code start} can hold at any depth, leaving out what it holds in the
-     * properties named in {@code skipped}: the classes and type arguments of its properties' types,
-     * and the type arguments its class passes to the classes it extends, which is where a container
-     * class of its own names its elements. Read through each record or bean on the way. {@code
-     * skipped} applies to {@code start}'s own properties only.
-     *
-     * <p>With {@code throughCases}, a sealed interface a value holds is read through to its cases,
-     * and the sealed interface a case implements is not counted as one it holds. That is asked only
-     * for a bridge that lists the properties it does not walk; for any other bridge, what lies
-     * beyond a sealed interface cannot be told from what the bridge looks at, so it is not read.
-     */
-    private Set<Class<?>> reachedFrom(final Class<?> start, final Set<String> skipped, final boolean throughCases) {
-      final var key = new Reach(start, skipped, throughCases);
-      final var known = reached.get(key);
-      if (known != null) return known;
-      final var seen = new HashSet<Class<?>>();
-      final var pending = new ArrayDeque<Class<?>>();
-      pending.add(start);
-      while (!pending.isEmpty()) {
-        final var cls = pending.poll();
-        final var mentioned = new ArrayList<Class<?>>();
-        final var visited = new HashSet<Type>();
-        classesIn(cls.getGenericSuperclass(), mentioned, visited);
-        for (final var implemented : cls.getGenericInterfaces()) classesIn(implemented, mentioned, visited);
-        if (throughCases) {
-          // A case is a value of the sealed interface it belongs to, not a
-          // holder of one, so that interface is no class the case reaches.
-          mentioned.removeIf(type -> type.isInterface() && type.isSealed() && type.isAssignableFrom(cls));
-        }
-        if (cls.isInterface()) {
-          // A sealed interface a value holds holds one of its cases.
-          if (cls.isSealed()) mentioned.addAll(List.of(cls.getPermittedSubclasses()));
-        } else {
-          final var refl = pickReflective(cls, beanRefl);
-          for (final var name : refl.names(cls)) {
-            if (cls == start && skipped.contains(name)) continue;
-            // Both types the walk can read a property as: as a member of this
-            // class, which resolves a type variable a bean inherits, and as
-            // declared.
-            classesIn(Reflective.pairedTypes(refl, cls, name, refl, cls, name).source(), mentioned, visited);
-            classesIn(refl.genericType(cls, name), mentioned, visited);
-          }
-        }
-        for (final var next : mentioned) if (seen.add(next) && readable(next, throughCases)) pending.add(next);
-      }
-      reached.put(key, seen);
-      return seen;
-    }
-
-    /**
-     * A class whose reach is asked for, the properties of its own left out, and how far it reads.
-     */
-    private record Reach(Class<?> start, Set<String> skipped, boolean throughCases) {}
-
-    /**
-     * A record or bean whose properties the walk reads, or, {@code throughCases}, a sealed
-     * interface whose cases it reads; no JDK class is either.
-     */
-    private static boolean readable(final Class<?> cls, final boolean throughCases) {
-      return (
-        (PAIRING.reflectable(cls) || (throughCases && cls.isInterface() && cls.isSealed())) &&
-        !cls.getName().startsWith("java.")
-      );
-    }
-
-    /**
-     * The classes {@code type} names, at any depth of its arguments and bounds. {@code visited}
-     * stops a type variable bounded by itself, such as {@code T extends Comparable<T>}.
-     */
-    private static void classesIn(final Type type, final List<Class<?>> out, final Set<Type> visited) {
-      if (type == null || !visited.add(type)) return;
-      switch (type) {
-        case Class<?> cls -> out.add(cls.isArray() ? cls.getComponentType() : cls);
-        case ParameterizedType parameterized -> {
-          classesIn(parameterized.getRawType(), out, visited);
-          for (final var argument : parameterized.getActualTypeArguments()) classesIn(argument, out, visited);
-        }
-        case GenericArrayType array -> classesIn(array.getGenericComponentType(), out, visited);
-        case WildcardType wildcard -> {
-          for (final var bound : wildcard.getUpperBounds()) classesIn(bound, out, visited);
-          for (final var bound : wildcard.getLowerBounds()) classesIn(bound, out, visited);
-        }
-        case TypeVariable<?> variable -> {
-          for (final var bound : variable.getBounds()) classesIn(bound, out, visited);
-        }
-        default -> {
-        }
-      }
     }
   }
 

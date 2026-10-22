@@ -246,6 +246,15 @@ public interface PropertySystem<T> {
    */
   List<Property<T>> properties(T t);
 
+  /**
+   * The types the class {@code t} names directly extends and implements, as it writes them, type
+   * arguments included: its superclass, where it has one, then its interfaces in declaration order.
+   */
+  List<T> supertypes(T t);
+
+  /** The simple name of the class {@code t} names, {@code Class#getSimpleName} semantics. */
+  String simpleName(T t);
+
   /** Human-readable type name for diagnostics — {@code Type#getTypeName} semantics. */
   String typeName(T t);
 

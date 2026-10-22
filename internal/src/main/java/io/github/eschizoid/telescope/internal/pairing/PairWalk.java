@@ -80,7 +80,7 @@ public final class PairWalk<T> {
     String targetAccessor,
     String sourcePathStart,
     String targetPathStart
-  ) {
+  ) implements Paired<T> {
     /** A row with no side given as a path, or whose paths' first steps are not known. */
     public KeyedRow(
       final T source,
@@ -97,7 +97,7 @@ public final class PairWalk<T> {
   public record RowOffCase<T>(KeyedRow<T> row, String message) {}
 
   /** A pair of classes the walk meets. */
-  public record Pair<T>(T source, T target) {}
+  public record Pair<T>(T source, T target) implements Paired<T> {}
 
   /** What a walk asks of the world it runs in. */
   public interface Decisions<T> {
