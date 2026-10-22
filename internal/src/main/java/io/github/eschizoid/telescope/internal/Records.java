@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -10,6 +11,7 @@ import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -288,7 +290,7 @@ public final class Records {
     // instead of forcing the user to read the record source. Load-bearing for the runtime-checked
     // surface — see the "Runtime-checked" bucket of compile-safety scoring in CLAUDE.md.
     return new IllegalArgumentException(
-      "No field '" + fieldName + "' on " + cls.getName() + " — known fields: " + Arrays.toString(componentNames(cls))
+      PairingMessages.noComponent(fieldName, cls.getName(), List.of(componentNames(cls)))
     );
   }
 

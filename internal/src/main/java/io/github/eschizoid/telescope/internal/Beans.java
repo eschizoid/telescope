@@ -534,9 +534,7 @@ public final class Beans {
    */
   public static <P> Getter<P, Object> getter(final Class<P> beanClass, final String name) {
     final var reader = GETTER_INVOKERS.get(beanClass).get(name);
-    if (reader == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return reader::apply;
   }
 
@@ -559,9 +557,7 @@ public final class Beans {
    */
   public static Function<Object, Object> capturedReader(final Class<?> beanClass, final String name) {
     final var reader = GETTER_INVOKERS.get(beanClass).get(name);
-    if (reader == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return reader;
   }
 
@@ -625,9 +621,7 @@ public final class Beans {
     // persistent class's cache entry, not a per-proxy-subclass one. See persistentClassOf.
     final var beanClass = persistentClassOf(pojo);
     final var reader = GETTER_INVOKERS.get(beanClass).get(name);
-    if (reader == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return reader.apply(pojo);
   }
 
@@ -700,9 +694,7 @@ public final class Beans {
    */
   public static Type propertyType(final Class<?> beanClass, final String name) {
     final var getter = getters(beanClass).get(name);
-    if (getter == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (getter == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return getter.getGenericReturnType();
   }
 
@@ -715,9 +707,7 @@ public final class Beans {
    */
   public static Type memberPropertyType(final Class<?> beanClass, final String name) {
     final var getter = getters(beanClass).get(name);
-    if (getter == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (getter == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return PROPS.memberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), beanClass);
   }
 
@@ -728,9 +718,7 @@ public final class Beans {
    */
   public static Type resolvedPropertyType(final Class<?> beanClass, final String name) {
     final var resolved = RESOLVED_TYPES.get(beanClass).get(name);
-    if (resolved == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + beanClass.getName()
-    );
+    if (resolved == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return resolved;
   }
 
@@ -1403,7 +1391,7 @@ public final class Beans {
     final var capturedReaders = GETTER_INVOKERS.get(pojoClass);
     final var capturedReader = capturedReaders.get(property);
     if (capturedReader == null) throw new IllegalArgumentException(
-      "No getter for property '" + property + "' on " + pojoClass.getName()
+      PairingMessages.noGetter(property, pojoClass.getName())
     );
     return new Lens<>() {
       @Override
@@ -1446,9 +1434,7 @@ public final class Beans {
       private Object readForRebuild(final P source, final String name) {
         if (source != null && source.getClass() == pojoClass) {
           final var reader = capturedReaders.get(name);
-          if (reader == null) throw new IllegalArgumentException(
-            "No getter for property '" + name + "' on " + pojoClass.getName()
-          );
+          if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, pojoClass.getName()));
           return reader.apply(source);
         }
         return readProperty(source, name);

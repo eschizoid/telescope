@@ -270,25 +270,25 @@ class FixedVariableAgreementTest {
   }
 
   @Test
-  @DisplayName("a row whose accessor names no property is left to construction, which refuses it for that")
-  void rowNamingNoPropertyIsLeftToConstruction() {
+  @DisplayName("a row whose accessor names no property is refused by both, with one message")
+  void rowNamingNoPropertyIsRefusedByBoth() {
     final var outcome = outcome(
       "FlA",
       "Telescope.mapperForward(@@Tgt.class, @@Fluent.class, to(@@Tgt::getKey, @@Fluent::code))"
     );
-    assertEquals(List.of(), outcome.verifier());
     assertEquals("No getter for property 'code' on " + PACKAGE + ".FlAFluent", outcome.construction());
+    assertEquals(List.of(outcome.construction()), outcome.verifier());
   }
 
   @Test
-  @DisplayName("a row whose source accessor names no property is left to construction the same way")
-  void rowReadingNoSourcePropertyIsLeftToConstruction() {
+  @DisplayName("a row whose source accessor names no property is refused by both the same way")
+  void rowReadingNoSourcePropertyIsRefusedByBoth() {
     final var outcome = outcome(
       "FlB",
       "Telescope.mapperForward(@@Fluent.class, @@NumTgt.class, to(@@Fluent::code, @@NumTgt::getFirst))"
     );
-    assertEquals(List.of(), outcome.verifier());
     assertEquals("No getter for property 'code' on " + PACKAGE + ".FlBFluent", outcome.construction());
+    assertEquals(List.of(outcome.construction()), outcome.verifier());
   }
 
   @Nested
