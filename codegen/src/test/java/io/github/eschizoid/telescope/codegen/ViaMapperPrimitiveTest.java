@@ -284,4 +284,101 @@ class ViaMapperPrimitiveTest {
     assertInstanceOf(ClassCastException.class, refused.getCause());
     assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
   }
+
+  /**
+   * A backward that returns its variable, bounded by Number, as a null for 1, a Long for 2 and
+   * otherwise the value it is handed plus one.
+   */
+  private static final String PATCHED_BACKWARD =
+    "  @SuppressWarnings(\"unchecked\")\n" +
+    "  public static <T extends Number> T backward(final Integer i) {\n" +
+    "    return (T) (i == 1 ? null : i == 2 ? (Number) Long.valueOf(i) : Integer.valueOf(i + 1));\n  }\n";
+
+  /**
+   * The classes of a {@code @ViaMapper} pair from a source holding an {@code int}, a record or a
+   * bean written through its setter whose field starts at -1, to a target record holding an {@code
+   * Integer}, through {@link #PATCHED_BACKWARD}; each class named with {@code prefix}.
+   */
+  private static Map<String, Class<?>> patchedPair(final String prefix, final boolean bean) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge =
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
+      " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n";
+    final var source = bean
+      ? "public class %1$sSrc {\n" +
+        "  private int qty = -1;\n" +
+        "  public %1$sSrc() {}\n" +
+        "  public int getQty() { return qty; }\n" +
+        "  public void setQty(final int qty) { this.qty = qty; }\n}\n"
+      : "public record %1$sSrc(int qty) {}\n";
+    final var compilation = compile(
+      ProcessorHarness.source(PACKAGE + "." + prefix + "Src", head + (bridge + source).formatted(prefix)),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Dst",
+        head + "public record %1$sDst(Integer qty) {}\n".formatted(prefix)
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          (
+            "public class %1$sMap {\n" +
+            "  public static <T> T forward(final T t) { return t; }\n" +
+            PATCHED_BACKWARD +
+            "}\n"
+          ).formatted(prefix)
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    return compilation.define(MethodHandles.lookup());
+  }
+
+  /**
+   * The {@code qty} the generated bridge among {@code classes} patches onto a source holding 9 from
+   * a target holding {@code partial}.
+   */
+  private static Object patchedQty(final Map<String, Class<?>> classes, final String prefix, final Integer partial)
+    throws ReflectiveOperationException {
+    final var src = classes.get(PACKAGE + "." + prefix + "Src");
+    final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
+    final Object base;
+    if (src.isRecord()) {
+      base = src.getConstructor(int.class).newInstance(9);
+    } else {
+      base = src.getConstructor().newInstance();
+      src.getMethod("setQty", int.class).invoke(base, 9);
+    }
+    final var target = dst.getDeclaredConstructors()[0].newInstance(partial);
+    final var patched = classes
+      .get(PACKAGE + "." + prefix + "SrcBridge")
+      .getMethod("patch", src, dst)
+      .invoke(null, base, target);
+    return patched.getClass().getMethod(src.isRecord() ? "qty" : "getQty").invoke(patched);
+  }
+
+  @Test
+  @DisplayName(
+    "patch writes a backward's variable bounded by Number into an int component through the named check, a null its default"
+  )
+  void patchedBackwardIntoAnIntComponent() throws ReflectiveOperationException {
+    final var classes = patchedPair("Pr", false);
+    assertEquals(6, patchedQty(classes, "Pr", 5));
+    assertEquals(9, patchedQty(classes, "Pr", null));
+    assertEquals(0, patchedQty(classes, "Pr", 1));
+    final var refused = assertThrows(InvocationTargetException.class, () -> patchedQty(classes, "Pr", 2));
+    assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
+  }
+
+  @Test
+  @DisplayName(
+    "patch writes a backward's variable bounded by Number into an int setter through the named check, skipping a null"
+  )
+  void patchedBackwardIntoAnIntSetter() throws ReflectiveOperationException {
+    final var classes = patchedPair("Pb", true);
+    assertEquals(6, patchedQty(classes, "Pb", 5));
+    assertEquals(-1, patchedQty(classes, "Pb", 1));
+    final var refused = assertThrows(InvocationTargetException.class, () -> patchedQty(classes, "Pb", 2));
+    assertInstanceOf(ClassCastException.class, refused.getCause());
+    assertTrue(refused.getCause().getMessage().contains("property 'qty'"), refused.getCause()::getMessage);
+  }
 }
