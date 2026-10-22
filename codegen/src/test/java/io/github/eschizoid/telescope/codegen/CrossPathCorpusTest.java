@@ -4977,6 +4977,28 @@ class CrossPathCorpusTest {
     "}\n";
 
   /**
+   * Why a lenient bridge over a pair is not refused with the diagnostic {@code strict}, the strict
+   * bridge over the same pair, gives, or null where it is. A lenient bridge leaves properties
+   * unmatched and checks the ones it pairs as a strict bridge does, in both directions.
+   */
+  private static String lenientNotRefusedAsStrict(
+    final ProcessorHarness.Compilation lenient,
+    final ProcessorHarness.Compilation strict
+  ) {
+    if (strict.success() || strict.errors().isEmpty()) return "the strict bridge should refuse it by name";
+    final var refusal = strict.errors().getFirst().getMessage(Locale.ROOT);
+    if (!refusal.startsWith("@Bridge ")) {
+      return "the strict bridge should refuse it by name; saw " + strict.errorMessages();
+    }
+    if (lenient.success() || !lenient.hasError(refusal)) {
+      return (
+        "a lenient bridge should refuse it as the strict one does, with " + refusal + "; saw " + lenient.errorMessages()
+      );
+    }
+    return null;
+  }
+
+  /**
    * The base, the classes in {@code others}, the source {@code srcDecl} bridged to the target
    * {@code tgtDecl}, leniently when {@code lenient}, compiled without the processor and with it.
    * Each declaration has {@code %s} as the row's prefix.
@@ -5178,35 +5200,25 @@ class CrossPathCorpusTest {
   void aBoundThatFitsTheFixedClassConvertsForwardWithNoCheck() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     // A list of a variable bound by Integer into a list of Number, held as itself or through a
-    // wildcard: forward fits, and a forward-only mapper and a lenient bridge, which plan nothing
-    // backward, convert it.
+    // wildcard: forward fits, and a forward-only mapper, which has no backward, converts it.
+    // Backward would hand a list of Number to the variable, which a bridge, lenient or strict,
+    // refuses by name.
     for (final var shape : List.of(List.of("Fgl", LIST_VALUE_BASE), List.of("Fwl", WILDCARD_LIST_BASE))) {
       final var prefix = shape.get(0);
-      final var list = valuePair(
-        prefix,
-        shape.get(1),
-        "public class %sSrc<T extends Integer> extends %sBase<T> {}\n",
-        "public class %sTgt extends %sBase<Number> {}\n",
-        List.of(),
-        true
+      final var src = "public class %sSrc<T extends Integer> extends %sBase<T> {}\n";
+      final var tgt = "public class %sTgt extends %sBase<Number> {}\n";
+      final var list = valuePair(prefix, shape.get(1), src, tgt, List.of(), true);
+      final var refused = lenientNotRefusedAsStrict(
+        list.get(1),
+        valuePair(prefix, shape.get(1), src, tgt, List.of(), false).get(1)
       );
-      if (!list.get(1).success()) {
-        failures.add(prefix + ": the lenient bridge should compile: " + list.get(1).errorMessages());
-        continue;
-      }
+      if (refused != null) failures.add(prefix + ": " + refused);
       final var classes = list.get(0).define(MethodHandles.lookup());
       final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
-      final var nested = nestedBridgesFirst(list.get(1), list.get(0), prefix);
       final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
-      final var bridge = emitted(list.get(1), list.get(0), prefix, nested);
-      final var viaBridge = valueHeld(() ->
-        bridge.getMethod("forward", source).invoke(null, holding(source, new ArrayList<>(List.of(1))))
-      );
       final var viaRuntime = valueHeld(() -> mapper.forward(holding(source, new ArrayList<>(List.of(1)))));
-      for (final var seen : List.of(viaBridge, viaRuntime)) {
-        if (!"v=[1]".equals(seen)) failures.add(prefix + ": forward gave " + seen + ", owed v=[1]");
-      }
+      if (!"v=[1]".equals(viaRuntime)) failures.add(prefix + ": forward gave " + viaRuntime + ", owed v=[1]");
     }
     // A single value of a variable bound by Integer into a property fixed to Number: forward fits
     // and checks nothing, while backward checks a Number against the bound.
@@ -5250,6 +5262,39 @@ class CrossPathCorpusTest {
     );
     final var owed = List.of(forwardOwed, forwardOwed, backwardOwed, backwardOwed);
     if (!seen.equals(owed)) failures.add("Fgr: generated, runtime, then both backward gave " + seen + ", owed " + owed);
+    // The same single value on a lenient bridge: its backward checks the Number against the bound
+    // as the strict bridge's does.
+    final var lenient = valuePair(
+      "Fgs",
+      ONE_VALUE_BASE,
+      "public class FgsSrc<T extends Integer> extends FgsBase<T> {}\n",
+      "public class FgsTgt extends FgsBase<Number> {}\n",
+      List.of(),
+      true
+    );
+    assertTrue(
+      lenient.get(1).success(),
+      () -> "Fgs: the lenient bridge should compile: " + lenient.get(1).errorMessages()
+    );
+    final var lenientClasses = lenient.get(0).define(MethodHandles.lookup());
+    final Class<Object> lenientSource = cast(lenientClasses.get(PACKAGE + ".FgsSrc"));
+    final Class<Object> lenientTarget = cast(lenientClasses.get(PACKAGE + ".FgsTgt"));
+    final var lenientBridge = emitted(
+      lenient.get(1),
+      lenient.get(0),
+      "Fgs",
+      nestedBridgesFirst(lenient.get(1), lenient.get(0), "Fgs")
+    );
+    final var lenientOwed =
+      REFUSED +
+      "ClassCastException: " +
+      PairingMessages.fixedClassMismatch(lenientSource.getTypeName(), "v", "java.lang.Double", "java.lang.Integer");
+    final var lenientBackward = valueHeld(() ->
+      lenientBridge.getMethod("backward", lenientTarget).invoke(null, holding(lenientTarget, 2.5))
+    );
+    if (!lenientOwed.equals(lenientBackward)) {
+      failures.add("Fgs: the lenient bridge's backward gave " + lenientBackward + ", owed " + lenientOwed);
+    }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
@@ -5549,14 +5594,18 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a map whose declared key is a type variable is copied by both paths, and refused by both the same way")
+  @DisplayName(
+    "a map whose declared key is a type variable is copied by both paths, and refused by both the same way, lenient or not"
+  )
   void aMapKeyedByAVariableIsCopiedAndRefusedTheSameWayOnBothPaths() throws ReflectiveOperationException {
-    // Both sides fix the key to the same type and the source passes a variable bound by Integer
-    // into the value. Forward, the map is copied, so its values may narrow: a forward-only mapper
-    // and a lenient bridge convert it into a fresh map of the input's class. Backward, a Number
-    // is handed into the variable, so a mapper that converts both ways is refused, on both paths,
-    // for the same direction. An EnumMap's key variable is declared K extends Enum<K>, which its
-    // erasure, Enum, is outside, so the bridge cannot hold the map by the erased key.
+    // Both sides fix the key to the same type. Where the source passes a variable bound by Integer
+    // into the value, forward copies the map, so its values may narrow, and a forward-only mapper
+    // converts it into a fresh map of the input's class. Backward hands a Number into the variable,
+    // so a mapper that converts both ways is refused for that direction, on both paths, and so is
+    // a bridge, lenient or strict, since every bridge has a backward. Where both sides pass their
+    // variable through, the bridge and the mapper convert it alike. An EnumMap's key variable is
+    // declared K extends Enum<K>, which its erasure, Enum, is outside, so the bridge cannot hold
+    // the map by the erased key.
     record Shape(String prefix, String map, String key, String fixedKey, List<String> others) {}
     final var shapes = List.of(
       new Shape("Fmh", "java.util.Map", "K", "String", List.of()),
@@ -5570,25 +5619,14 @@ class CrossPathCorpusTest {
       final var src = "public class %sSrc<T extends Integer> extends %sBase<" + shape.fixedKey() + ", T> {}\n";
       final var tgt = "public class %sTgt extends %sBase<" + shape.fixedKey() + ", Number> {}\n";
       final var lenient = valuePair(prefix, base, src, tgt, shape.others(), true);
-      if (!lenient.get(1).success()) {
-        failures.add(prefix + ": the lenient bridge should compile: " + lenient.get(1).errorMessages());
-        continue;
-      }
+      final var strict = valuePair(prefix, base, src, tgt, shape.others(), false).get(1);
+      final var lenientRefused = lenientNotRefusedAsStrict(lenient.get(1), strict);
+      if (lenientRefused != null) failures.add(prefix + ": " + lenientRefused);
       final var classes = lenient.get(0).define(MethodHandles.lookup());
       final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
       final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
       final var keyClass = shape.others().isEmpty() ? String.class : classes.get(PACKAGE + "." + prefix + "E");
       final Object key = keyClass.isEnum() ? keyClass.getEnumConstants()[0] : "k";
-      final Callable<Object> input = () -> {
-        final Map<Object, Object> map = switch (shape.map()) {
-          case "java.util.TreeMap" -> new TreeMap<>();
-          case "java.util.EnumMap" -> enumMap(keyClass);
-          default -> new HashMap<>();
-        };
-        map.put(key, 1);
-        return map;
-      };
-      final var nested = nestedBridgesFirst(lenient.get(1), lenient.get(0), prefix);
       final ForwardMapper<Object, Object> forward;
       try {
         forward = Telescope.mapperForward(source, target);
@@ -5596,21 +5634,16 @@ class CrossPathCorpusTest {
         failures.add(prefix + ": a forward-only mapper should build; refused with " + e.getMessage());
         continue;
       }
-      final var held = call(input);
+      final var held = mapOf(shape.map(), keyClass, key);
       final var owed = "v={" + key + "=1} in a fresh " + held.getClass().getSimpleName();
-      final var seen = new ArrayList<String>();
-      seen.add(mapHeld(forward.forward(holding(source, held)), held));
-      final var bridge = emitted(lenient.get(1), lenient.get(0), prefix, nested);
-      seen.add(mapHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
-      for (final var one : seen)
-        if (!owed.equals(one)) failures.add(prefix + ": forward gave " + one + ", owed " + owed);
+      final var seen = mapHeld(forward.forward(holding(source, held)), held);
+      if (!owed.equals(seen)) failures.add(prefix + ": forward gave " + seen + ", owed " + owed);
       final var keyName = keyClass.getName();
       final var owedRefusal = PairingMessages.fixedArgumentsDoNotFit(
         "v",
         shape.map() + "<" + keyName + ", java.lang.Number>",
         shape.map() + "<" + keyName + ", T>"
       );
-      final var strict = valuePair(prefix, base, src, tgt, shape.others(), false).get(1);
       if (strict.success() || !strict.hasError(owedRefusal)) {
         failures.add(prefix + ": the generated path should refuse it backward by name; saw " + strict.errorMessages());
       }
@@ -5622,8 +5655,51 @@ class CrossPathCorpusTest {
           prefix + ": the runtime refused it with " + e.getMessage()
         );
       }
+      final var passing = prefix + "p";
+      final var both = valuePair(
+        passing,
+        base,
+        "public class %sSrc<T> extends %sBase<" + shape.fixedKey() + ", T> {}\n",
+        "public class %sTgt<Y> extends %sBase<" + shape.fixedKey() + ", Y> {}\n",
+        shape.others(),
+        false
+      );
+      if (!both.get(1).success()) {
+        failures.add(passing + ": the bridge should compile: " + both.get(1).errorMessages());
+        continue;
+      }
+      final var passingClasses = both.get(0).define(MethodHandles.lookup());
+      final Class<Object> passingSource = cast(passingClasses.get(PACKAGE + "." + passing + "Src"));
+      final var passingKeyClass = shape.others().isEmpty()
+        ? String.class
+        : passingClasses.get(PACKAGE + "." + passing + "E");
+      final Object passingKey = passingKeyClass.isEnum() ? passingKeyClass.getEnumConstants()[0] : "k";
+      final var passingTarget = passingClasses.get(PACKAGE + "." + passing + "Tgt");
+      final var nested = nestedBridgesFirst(both.get(1), both.get(0), passing);
+      final var bridge = emitted(both.get(1), both.get(0), passing, nested);
+      final var mapper = Telescope.mapper(passingSource, cast(passingTarget));
+      final var input = mapOf(shape.map(), passingKeyClass, passingKey);
+      final var viaRuntime = mapHeld(mapper.forward(holding(passingSource, input)), input);
+      final var viaBridge = mapHeld(
+        bridge.getMethod("forward", passingSource).invoke(null, holding(passingSource, input)),
+        input
+      );
+      if (!viaRuntime.equals(viaBridge)) {
+        failures.add(passing + ": the bridge gave " + viaBridge + ", the runtime " + viaRuntime);
+      }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** A {@code map} holding {@code key} to 1, its keys of {@code keyClass}. */
+  private static Map<Object, Object> mapOf(final String map, final Class<?> keyClass, final Object key) {
+    final Map<Object, Object> held = switch (map) {
+      case "java.util.TreeMap" -> new TreeMap<>();
+      case "java.util.EnumMap" -> enumMap(keyClass);
+      default -> new HashMap<>();
+    };
+    held.put(key, 1);
+    return held;
   }
 
   /** An empty {@code EnumMap} over the enum {@code keyClass}. */
@@ -5645,8 +5721,9 @@ class CrossPathCorpusTest {
   void aSharedClassWhoseArgumentsAreContainedConverts() throws ReflectiveOperationException {
     // The same arguments on both sides, given by a variable's bound, convert both ways. A wildcard
     // bounded above contains narrower arguments, so a Box<Integer>, or a Box<T> with T bounded by
-    // Integer, converts forward into a Box<? extends Number>; a forward-only mapper and a lenient
-    // bridge plan nothing backward. Each target holds the source's own box.
+    // Integer, converts forward into a Box<? extends Number> through a forward-only mapper, which
+    // has no backward. A bridge, lenient or strict, refuses the backward direction by name. Each
+    // target holds the source's own box.
     record Row(String prefix, String src, String tgt, boolean bothWays) {}
     final var rows = List.of(
       new Row(
@@ -5678,7 +5755,11 @@ class CrossPathCorpusTest {
         List.of(LIST_BOX),
         !row.bothWays()
       );
-      if (!compiled.get(1).success()) {
+      if (!row.bothWays()) {
+        final var strict = valuePair(row.prefix(), ONE_VALUE_BASE, row.src(), row.tgt(), List.of(LIST_BOX), false);
+        final var refused = lenientNotRefusedAsStrict(compiled.get(1), strict.get(1));
+        if (refused != null) failures.add(row.prefix() + ": " + refused);
+      } else if (!compiled.get(1).success()) {
         failures.add(row.prefix() + ": the bridge should compile: " + compiled.get(1).errorMessages());
         continue;
       }
@@ -5687,14 +5768,14 @@ class CrossPathCorpusTest {
       final Class<Object> target = cast(classes.get(PACKAGE + "." + row.prefix() + "Tgt"));
       final var box = classes.get(PACKAGE + "." + row.prefix() + "Box").getConstructor(List.class);
       final Callable<Object> value = () -> box.newInstance(new ArrayList<>(List.of(1)));
-      final var nested = nestedBridgesFirst(compiled.get(1), compiled.get(0), row.prefix());
       final ForwardMapper<Object, Object> forward = Telescope.mapperForward(source, target);
-      final var bridge = emitted(compiled.get(1), compiled.get(0), row.prefix(), nested);
       final var held = call(value);
       final var seen = new ArrayList<String>();
-      seen.add(sharedHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
       seen.add(sharedHeld(forward.forward(holding(source, held)), held));
       if (row.bothWays()) {
+        final var nested = nestedBridgesFirst(compiled.get(1), compiled.get(0), row.prefix());
+        final var bridge = emitted(compiled.get(1), compiled.get(0), row.prefix(), nested);
+        seen.add(sharedHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
         final var mapper = Telescope.mapper(source, target);
         seen.add(sharedHeld(mapper.forward(holding(source, held)), held));
         seen.add(sharedHeld(bridge.getMethod("backward", target).invoke(null, holding(target, held)), held));
@@ -5715,36 +5796,38 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a container only the backward direction cannot fit converts forward, on both paths")
-  void aContainerOnlyBackwardCannotFitConvertsForward() throws ReflectiveOperationException {
-    // A forward-only mapper and a lenient bridge have no backward to plan, so a pair that only the
-    // backward direction refuses converts forward.
+  @DisplayName(
+    "a container only the backward direction cannot fit converts forward through a forward-only mapper, and a lenient bridge refuses it as a strict one does"
+  )
+  void aContainerOnlyBackwardCannotFitConvertsForwardAndIsRefusedByABridge() throws ReflectiveOperationException {
+    // A forward-only mapper has no backward to plan, so a pair that only the backward direction
+    // refuses converts forward. A bridge has a backward, lenient or not, and refuses the pair by
+    // name.
     final var head = "package " + PACKAGE + ";\n";
-    final var sources = new JavaFileObject[] {
-      source("PtfBase", head + PASS_THROUGH_BASE.replace("%s", "Ptf")),
-      source(
-        "PtfSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtfTgt.class, lenient = true)\n" +
-          "public class PtfSrc extends PtfBase<String, String> {}\n"
-      ),
-      source("PtfTgt", head + "public class PtfTgt<Y> extends PtfBase<String, Y> {}\n"),
-    };
-    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    final Function<Boolean, JavaFileObject[]> sources = lenient ->
+      new JavaFileObject[] {
+        source("PtfBase", head + PASS_THROUGH_BASE.replace("%s", "Ptf")),
+        source(
+          "PtfSrc",
+          head +
+            "@io.github.eschizoid.telescope.annotations.Bridge(value = PtfTgt.class, lenient = " +
+            lenient +
+            ")\n" +
+            "public class PtfSrc extends PtfBase<String, String> {}\n"
+        ),
+        source("PtfTgt", head + "public class PtfTgt<Y> extends PtfBase<String, Y> {}\n"),
+      };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources.apply(true));
     assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
-    final var processed = bridged(sources);
-    assertTrue(processed.success(), () -> "the lenient bridge should compile: " + processed.errorMessages());
+    final var refused = lenientNotRefusedAsStrict(bridged(sources.apply(true)), bridged(sources.apply(false)));
+    assertTrue(refused == null, () -> refused);
     final var classes = plain.define(MethodHandles.lookup());
     final Class<Object> source = cast(classes.get(PACKAGE + ".PtfSrc"));
     final Class<Object> target = cast(classes.get(PACKAGE + ".PtfTgt"));
-    final var nested = nestedBridgesFirst(processed, plain, "Ptf");
     final ForwardMapper<Object, Object> mapper = Telescope.mapperForward(source, target);
-    final var bridge = emitted(processed, plain, "Ptf", nested);
     final var owed = "key=k, first=a, items=[b, c] in a fresh ArrayList";
     final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
-    final var viaBridge = passedThrough(() -> bridge.getMethod("forward", source).invoke(null, srcSample), srcSample);
     final var viaRuntime = passedThrough(() -> mapper.forward(srcSample), srcSample);
-    assertTrue(owed.equals(viaBridge), () -> "generated gave " + viaBridge + ", owed " + owed);
     assertTrue(owed.equals(viaRuntime), () -> "runtime gave " + viaRuntime + ", owed " + owed);
   }
 
