@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import java.io.Serializable;
+import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InaccessibleObjectException;
 
@@ -32,7 +33,7 @@ public final class LambdaIntrospection {
     }
   };
 
-  private record Metadata(String methodName, String implName, String receiverName) {}
+  private record Metadata(String methodName, String implName, String receiverName, String returnName) {}
 
   private static final class MetadataSlot {
 
@@ -86,7 +87,8 @@ public final class LambdaIntrospection {
       return new Metadata(
         name,
         serialized.getImplClass().replace('/', '.'),
-        receiverNameOf(serialized.getInstantiatedMethodType())
+        receiverNameOf(serialized.getInstantiatedMethodType()),
+        returnNameOf(serialized.getInstantiatedMethodType())
       );
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException(
@@ -103,6 +105,65 @@ public final class LambdaIntrospection {
     if (descriptor.length() < 2 || descriptor.charAt(1) != 'L') return null;
     final var end = descriptor.indexOf(';');
     return end < 0 ? null : descriptor.substring(2, end).replace('/', '.');
+  }
+
+  // The name Class.forName takes for the return type of a method descriptor, or null when it is
+  // primitive or void. An array keeps its descriptor form, with dots for slashes.
+  private static String returnNameOf(final String descriptor) {
+    final var type = descriptor.substring(descriptor.indexOf(')') + 1);
+    if (type.startsWith("[")) return type.replace('/', '.');
+    if (!type.startsWith("L")) return null;
+    return type.substring(1, type.length() - 1).replace('/', '.');
+  }
+
+  /**
+   * The class a Serializable method reference's instantiation says it returns, where that is
+   * narrower than {@code declared}, the class the referenced method returns; null where every value
+   * of {@code declared} is an instance of it. For {@code Box::value} passed where an {@code
+   * Accessor<Box<String>, String>} is expected, with {@code value} declared by a type variable
+   * whose bound erases to {@code Object}, this is {@code String}: the class a caller typed by the
+   * instantiation takes the value as, which nothing checked when the method returned it. A
+   * primitive {@code declared} is compared as its wrapper.
+   *
+   * <p>The supertypes of {@code declared} are compared by name first, so a reference returning its
+   * method's own class or one of its supertypes loads nothing. Only a narrower class is loaded, by
+   * name through the lambda's class loader, as {@link #receiverClassOf} loads a receiver.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   * @throws IllegalStateException if the narrower class cannot be loaded
+   */
+  public static Class<?> narrowedReturnOf(final Serializable lambda, final Class<?> declared) {
+    final var name = CACHE.get(lambda.getClass()).get(lambda).returnName();
+    if (name == null) return null;
+    final var widened = MethodType.methodType(declared).wrap().returnType();
+    if (namesSupertype(widened, name)) return null;
+    final Class<?> returned;
+    try {
+      returned = Class.forName(name, false, lambda.getClass().getClassLoader());
+    } catch (final ClassNotFoundException e) {
+      throw new IllegalStateException(
+        "Cannot load " +
+          name +
+          ", the class the method reference " +
+          implClassNameOf(lambda) +
+          "::" +
+          methodNameOf(lambda) +
+          " is typed to return. Inside a native image, register it for reflection.",
+        e
+      );
+    }
+    return returned.isAssignableFrom(widened) ? null : returned;
+  }
+
+  // Whether `name` is the name of `type` or of one of its superclasses or interfaces.
+  private static boolean namesSupertype(final Class<?> type, final String name) {
+    if (type == null) return false;
+    if (type.getName().equals(name)) return true;
+    if (namesSupertype(type.getSuperclass(), name)) return true;
+    for (final var implemented : type.getInterfaces()) {
+      if (namesSupertype(implemented, name)) return true;
+    }
+    return false;
   }
 
   /**

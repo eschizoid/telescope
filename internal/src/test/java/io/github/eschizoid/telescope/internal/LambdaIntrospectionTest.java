@@ -9,8 +9,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.Serializable;
 import java.lang.ref.WeakReference;
+import java.util.AbstractList;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -221,6 +225,65 @@ class LambdaIntrospectionTest {
       return SuperBean::getInheritedName;
     }
   }
+
+  @Nested
+  @DisplayName("narrowedReturnOf — the class an instantiation reads a property as, where it is narrower")
+  class NarrowedReturn {
+
+    @Test
+    @DisplayName("a reference typed by a class's argument returns that argument, narrower than the variable's erasure")
+    void anArgumentNarrowsTheVariable() {
+      final SerFn<Box<String>, String> ref = Box::value;
+      assertSame(String.class, LambdaIntrospection.narrowedReturnOf(ref, Object.class));
+    }
+
+    @Test
+    @DisplayName("an array argument narrows the variable to the array class")
+    void anArrayArgumentNarrowsTheVariable() {
+      final SerFn<Box<String[]>, String[]> ref = Box::value;
+      assertSame(String[].class, LambdaIntrospection.narrowedReturnOf(ref, Object.class));
+    }
+
+    @Test
+    @DisplayName("a reference returning its method's own class, or a superclass or interface of it, narrows nothing")
+    void theOwnClassOrASupertypeNarrowsNothing() {
+      final SerFn<User, String> own = User::name;
+      final SerFn<Listed, List<String>> implemented = Listed::value;
+      final SerFn<Listed, AbstractList<String>> extended = Listed::value;
+      assertNull(LambdaIntrospection.narrowedReturnOf(own, String.class));
+      assertNull(LambdaIntrospection.narrowedReturnOf(implemented, ArrayList.class));
+      assertNull(LambdaIntrospection.narrowedReturnOf(extended, ArrayList.class));
+    }
+
+    @Test
+    @DisplayName("an array of a supertype of the elements narrows nothing")
+    void anArrayOfASupertypeNarrowsNothing() {
+      final SerFn<Strings, Object[]> ref = Strings::value;
+      assertNull(LambdaIntrospection.narrowedReturnOf(ref, String[].class));
+    }
+
+    @Test
+    @DisplayName("a primitive is compared as its wrapper, and a primitive return narrows nothing")
+    void aPrimitiveIsComparedAsItsWrapper() {
+      final SerFn<Count, Integer> boxed = Count::value;
+      final SerFn<Count, Number> widened = Count::value;
+      final SerToInt<Count> primitive = Count::value;
+      assertNull(LambdaIntrospection.narrowedReturnOf(boxed, int.class));
+      assertNull(LambdaIntrospection.narrowedReturnOf(widened, int.class));
+      assertNull(LambdaIntrospection.narrowedReturnOf(primitive, int.class));
+    }
+  }
+
+  record Box<X>(X value) {}
+
+  record Listed(ArrayList<String> value) {}
+
+  record Strings(String[] value) {}
+
+  record Count(int value) {}
+
+  @FunctionalInterface
+  interface SerToInt<A> extends ToIntFunction<A>, Serializable {}
 
   static class SuperBean {
 

@@ -566,6 +566,24 @@ public final class MhIso {
     return filters;
   }
 
+  /**
+   * {@code srcAccessors} with the read at {@code sp} filtered by {@code check}, a {@code (Object)
+   * -> Object} check of the value read, and every other read as it is.
+   */
+  private static MethodHandle[] checkedRead(
+    final Class<?> srcCls,
+    final MethodHandle[] srcAccessors,
+    final int sp,
+    final MethodHandle check
+  ) {
+    final MethodHandle[] reads = srcAccessors.clone();
+    reads[sp] = MethodHandles.filterReturnValue(
+      srcAccessors[sp].asType(MethodType.methodType(Object.class, srcCls)),
+      check
+    );
+    return reads;
+  }
+
   /** The single-slot filter — factored out so the record ctor path and bean fold path share it. */
   private static MethodHandle buildFilter(
     final Class<?> srcCls,
@@ -576,14 +594,16 @@ public final class MhIso {
     final MethodHandle isoDir,
     final Iso<Object, Object> identity
   ) {
-    // A slot a conversion of the row's own fills: the conversion's own filter, then the check of
-    // its result against the member written, so the slot stays on the composed handle.
+    // A slot a conversion of the row's own fills: the check of the value read where the row reads
+    // it as a narrower class, the conversion's own filter, then the check of its result against
+    // the member written, so the slot stays on the composed handle.
     if (slotIso instanceof ResultCheck check && sp >= 0) {
       final MethodHandle filter = isoDir == ISO_TO ? check.forwardFilter() : check.backwardFilter();
+      final MethodHandle argument = isoDir == ISO_TO ? check.forwardArgumentFilter() : check.backwardArgumentFilter();
       final MethodHandle converted = buildFilter(
         srcCls,
         Object.class,
-        srcAccessors,
+        argument == null ? srcAccessors : checkedRead(srcCls, srcAccessors, sp, argument),
         sp,
         check.conversion(),
         isoDir,

@@ -9601,20 +9601,20 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a transform that does not fit the erasure of a type-variable property is refused by name, and by javac on a row typed as the raw members"
+    "a transform taking a class no value of a type-variable property can be is refused by name, and by javac on a row typed as the raw members"
   )
-  void aTransformThatDoesNotFitATypeVariablePropertyIsRefusedByName() {
+  void aTransformNoValueOfATypeVariablePropertyFitsIsRefusedByName() {
     // Each row: the prefix, the pair and its transform, the runtime row typed by what the raw
     // members return, and two fragments the processor's refusal has to contain.
     final var rows = List.of(
       List.of(
         "Vr0",
-        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        transformedValue(false) + sampledGeneric("%1$sSrc<X extends Number>", "X value", "new %1$sSrc<>(7)"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("String", "String", "a", "b"),
-        runtimeRow(false, "value", "Object", "String"),
+        runtimeRow(false, "value", "Number", "String"),
         "@Transform field=\"value\" does not fit forward",
-        "X (held as its erasure java.lang.Object) -> java.lang.String"
+        "X (held as its erasure java.lang.Number) -> java.lang.String"
       )
     );
     final var failures = new ArrayList<String>();
@@ -9866,6 +9866,26 @@ class CrossPathCorpusTest {
       )
     ),
     new UncheckedConversion(
+      "a row typed by both classes' arguments, with a transform on String, given values of another class",
+      "value",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(5)"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(6)"),
+        transformFn("String", "String", "a + \"!\"", "b + \"?\""),
+        witnessedRow(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String")
+      )
+    ),
+    new UncheckedConversion(
+      "a row typed by the source's argument under Number, with a transform on Integer, given a Long",
+      "value",
+      List.of(
+        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7L)"),
+        sampled("%1$sTgt", "Integer value", "new %1$sTgt(41)"),
+        transformFn("Integer", "Integer", "a + 1", "b - 1"),
+        witnessedRow(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer")
+      )
+    ),
+    new UncheckedConversion(
       "a row reading a variable bounded by Number as Object, with a backward returning Object",
       "value",
       List.of(
@@ -10049,17 +10069,6 @@ class CrossPathCorpusTest {
     Map.entry(
       "a target that fixes the variable in an Optional to String, with a transform on any Optional",
       List.of(REFUSED + "does not fit forward", "value=Optional[<a>], a Optional", "value=Optional[q], a Optional")
-    ),
-    // A defect still to close, in this entry and the next: a runtime row typed by a class's
-    // arguments reads the property as that argument without checking it, where the
-    // processor holds it as the erasure and refuses a transform narrower than that.
-    Map.entry(
-      "a row typed by both classes' arguments, with a transform on String",
-      List.of(REFUSED + "does not fit forward", "value=a!, a String", "value=q?, a String")
-    ),
-    Map.entry(
-      "a row typed by the source's argument under Number, with a transform on Integer",
-      List.of(REFUSED + "does not fit forward", "value=8, a Integer", "value=40, a Integer")
     ),
     // A defect still to close: the runtime writes the via mapper's result into a property
     // the target fixes to another class without checking it, where the processor refuses

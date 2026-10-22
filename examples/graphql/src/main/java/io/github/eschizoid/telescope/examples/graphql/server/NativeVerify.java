@@ -10,14 +10,18 @@ import io.github.eschizoid.telescope.examples.graphql.model.AccountBridge;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountBuilderBean;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountEntity;
 import io.github.eschizoid.telescope.examples.graphql.model.Address;
+import io.github.eschizoid.telescope.examples.graphql.model.Badge;
 import io.github.eschizoid.telescope.examples.graphql.model.Crewmate;
+import io.github.eschizoid.telescope.examples.graphql.model.Label;
 import io.github.eschizoid.telescope.examples.graphql.model.Role;
 import io.github.eschizoid.telescope.examples.graphql.model.Shift;
 import io.github.eschizoid.telescope.examples.graphql.model.ShiftTelescope;
+import io.github.eschizoid.telescope.examples.graphql.model.Tagged;
 import io.github.eschizoid.telescope.examples.graphql.model.User;
 import io.github.eschizoid.telescope.examples.graphql.model.UserFromMap;
 import io.github.eschizoid.telescope.examples.graphql.model.UserTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.UserView;
+import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -60,6 +64,12 @@ import java.util.Map;
  *       heap — which is why the telescope classes take {@code --initialize-at-build-time} from
  *       telescope-core's {@code native-image.properties} and this example's generated-model package
  *       takes it from {@code build.gradle.kts}.
+ *   <li><b>row typed by a class's type argument</b> — {@code Mapping.<Tagged<String>, Label,
+ *       String, String>to(Tagged::value, Label::value, ...)}, and one typed by {@link Badge}: the
+ *       mapper reads the class the row reads {@code value} as from the method reference's {@code
+ *       SerializedLambda} and loads it by name, which inside an image answers only for a class
+ *       registered for reflection, then checks each value against it before the row's function
+ *       runs.
  *   <li><b>navigator-only multi-edit</b> — {@code Telescope.all(over(ShiftTelescope.of()...), ...)}
  *       over {@link Shift} and {@link Crewmate}, which have no reflection registration: the fused
  *       pass has to rebuild each record level through the navigators' own generated setters.
@@ -104,6 +114,12 @@ public final class NativeVerify {
     results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
     results.add(
       guard("generated @Focus navigator (UserTelescope.of().address().city())", NativeVerify::focusNavigator)
+    );
+    results.add(
+      guard(
+        "runtime row typed by a class's type argument checks the value it reads (Class.forName by name)",
+        NativeVerify::rowTypedByArgument
+      )
     );
     results.add(
       guard(
@@ -261,6 +277,42 @@ public final class NativeVerify {
       new Shift("NIGHT", "n1", List.of(new Crewmate("ada", "@ada"), new Crewmate("bo", "@bo"))).equals(out),
       "navigator multi-edit mismatch: " + out
     );
+  }
+
+  // (l) a runtime row typed by a class's type argument reads Tagged.value, declared with a type
+  // variable, as String, and another as Badge: the mapper loads each by the name the method
+  // reference records, which inside an image answers only for a registered class, and checks the
+  // value against it, so a value of another class is refused by name before the row's function
+  // runs. The classes are passed as values so the compile-time verifier does not read the rows
+  // against the raw record.
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void rowTypedByArgument() {
+    final Class source = Tagged.class;
+    final Class<Label> target = Label.class;
+    final Mapper<Tagged<?>, Label> mapper = Telescope.mapper(
+      source,
+      target,
+      Mapping.<Tagged<String>, Label, String, String>to(Tagged::value, Label::value, s -> s + "!", s -> s)
+    );
+    final Mapper<Tagged<?>, Label> badged = Telescope.mapper(
+      source,
+      target,
+      Mapping.<Tagged<Badge>, Label, Badge, String>to(Tagged::value, Label::value, Badge::text, Badge::new)
+    );
+    final var badge = badged.forward(new Tagged<>(new Badge("b")));
+    expect(new Label("b").equals(badge), "row typed by an application class mismatch: " + badge);
+    final var label = mapper.forward(new Tagged<>("a"));
+    expect(new Label("a!").equals(label), "row typed by an argument mismatch: " + label);
+    try {
+      mapper.forward(new Tagged<>(5));
+      throw new AssertionError("a value of another class was handed to the row's function");
+    } catch (final ClassCastException refused) {
+      expect(
+        refused.getMessage() != null &&
+          refused.getMessage().contains("is handed to a conversion that takes java.lang.String"),
+        "the refusal did not name the class the row reads: " + refused.getMessage()
+      );
+    }
   }
 
   // "native-image" when running as a compiled binary, otherwise "JVM" — a green JVM run only
