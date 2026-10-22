@@ -5555,24 +5555,13 @@ class CrossPathCorpusTest {
     // into the value. Forward, the map is copied, so its values may narrow: a forward-only mapper
     // and a lenient bridge convert it into a fresh map of the input's class. Backward, a Number
     // is handed into the variable, so a mapper that converts both ways is refused, on both paths,
-    // for the same direction.
-    //
-    // A generated bridge names a variable by its erasure, and an EnumMap's key variable erases to
-    // Enum, which EnumMap's own bound, K extends Enum<K>, does not admit: the lenient bridge for
-    // that row is code javac rejects, which the row owes until the bridge names the key another
-    // way.
-    record Shape(String prefix, String map, String key, String fixedKey, List<String> others, String bridgeError) {}
+    // for the same direction. An EnumMap's key variable is declared K extends Enum<K>, which its
+    // erasure, Enum, is outside, so the bridge cannot hold the map by the erased key.
+    record Shape(String prefix, String map, String key, String fixedKey, List<String> others) {}
     final var shapes = List.of(
-      new Shape("Fmh", "java.util.Map", "K", "String", List.of(), null),
-      new Shape("Fmt", "java.util.TreeMap", "K", "String", List.of(), null),
-      new Shape(
-        "Fme",
-        "java.util.EnumMap",
-        "K extends Enum<K>",
-        "%sE",
-        List.of("public enum %sE { A }\n"),
-        "type argument java.lang.Enum is not within bounds of type-variable K"
-      )
+      new Shape("Fmh", "java.util.Map", "K", "String", List.of()),
+      new Shape("Fmt", "java.util.TreeMap", "K", "String", List.of()),
+      new Shape("Fme", "java.util.EnumMap", "K extends Enum<K>", "%sE", List.of("public enum %sE { A }\n"))
     );
     final var failures = new ArrayList<String>();
     for (final var shape : shapes) {
@@ -5581,11 +5570,7 @@ class CrossPathCorpusTest {
       final var src = "public class %sSrc<T extends Integer> extends %sBase<" + shape.fixedKey() + ", T> {}\n";
       final var tgt = "public class %sTgt extends %sBase<" + shape.fixedKey() + ", Number> {}\n";
       final var lenient = valuePair(prefix, base, src, tgt, shape.others(), true);
-      if (shape.bridgeError() != null) {
-        if (lenient.get(1).success() || !lenient.get(1).hasError(shape.bridgeError())) {
-          failures.add(prefix + ": the lenient bridge should not compile; saw " + lenient.get(1).errorMessages());
-        }
-      } else if (!lenient.get(1).success()) {
+      if (!lenient.get(1).success()) {
         failures.add(prefix + ": the lenient bridge should compile: " + lenient.get(1).errorMessages());
         continue;
       }
@@ -5615,10 +5600,8 @@ class CrossPathCorpusTest {
       final var owed = "v={" + key + "=1} in a fresh " + held.getClass().getSimpleName();
       final var seen = new ArrayList<String>();
       seen.add(mapHeld(forward.forward(holding(source, held)), held));
-      if (shape.bridgeError() == null) {
-        final var bridge = emitted(lenient.get(1), lenient.get(0), prefix, nested);
-        seen.add(mapHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
-      }
+      final var bridge = emitted(lenient.get(1), lenient.get(0), prefix, nested);
+      seen.add(mapHeld(bridge.getMethod("forward", source).invoke(null, holding(source, held)), held));
       for (final var one : seen)
         if (!owed.equals(one)) failures.add(prefix + ": forward gave " + one + ", owed " + owed);
       final var keyName = keyClass.getName();

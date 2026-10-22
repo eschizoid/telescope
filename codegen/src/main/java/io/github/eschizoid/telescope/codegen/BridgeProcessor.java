@@ -2151,7 +2151,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var local = "__fs_" + srcName;
       forwardLocals.putIfAbsent(
         local,
-        sf.type() +
+        declarable(sf.type()) +
           " " +
           local +
           " = " +
@@ -2193,7 +2193,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var local = "__bt_" + sourceName;
       backwardLocals.putIfAbsent(
         local,
-        tf.type() +
+        declarable(tf.type()) +
           " " +
           local +
           " = " +
@@ -2390,7 +2390,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
-      patchLocals.put(pLocal, tf.type() + " " + pLocal + " = partial == null ? null : " + partialReadExpr + ";");
+      patchLocals.put(
+        pLocal,
+        declarable(tf.type()) + " " + pLocal + " = partial == null ? null : " + partialReadExpr + ";"
+      );
       // A non-null partial slot is written WHOLE: every plan routes through applyBackward, so a
       // nested component converts via the sub-bridge's backward rather than a recursive
       // sub-patch. Mapper#patch documents whole-value writes for nested components, and a
@@ -8038,6 +8041,44 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private TypeMirror asReachedThrough(final TypeElement owner, final Field field) {
     if (owner.getTypeParameters().isEmpty()) return field.type();
     return processingEnv.getTypeUtils().erasure(declaredTypeOf(owner, field));
+  }
+
+  /**
+   * {@code type} as a local the bridge declares can be typed: each type argument outside the bound
+   * its class declares for it, at any depth, an unbounded wildcard instead, which every bound
+   * admits. A variable read as its erasure can fall outside its own bound, as {@code Enum} is
+   * outside {@code EnumMap}'s {@code K extends Enum<K>}. The pair is still planned as {@code type};
+   * only the declaration changes, and the value it holds is the same.
+   */
+  private TypeMirror declarable(final TypeMirror type) {
+    final var types = processingEnv.getTypeUtils();
+    if (type instanceof ArrayType array) return types.getArrayType(declarable(array.getComponentType()));
+    if (!(type instanceof DeclaredType declared) || declared.getTypeArguments().isEmpty()) return type;
+    final var element = (TypeElement) declared.asElement();
+    final var arguments = declared
+      .getTypeArguments()
+      .stream()
+      .map(a -> a instanceof WildcardType ? a : declarable(a))
+      .toArray(TypeMirror[]::new);
+    final var parameters = element.getTypeParameters().stream().<TypeMirror>map(Element::asType).toList();
+    final var given = List.of(arguments);
+    var changed = false;
+    for (int i = 0; i < arguments.length && i < parameters.size(); i++) {
+      final var argument = arguments[i];
+      if (argument instanceof WildcardType) continue;
+      final var outside = element
+        .getTypeParameters()
+        .get(i)
+        .getBounds()
+        .stream()
+        .anyMatch(bound -> !types.isSubtype(argument, mirrorProps().substitute(bound, parameters, given)));
+      if (outside) {
+        arguments[i] = types.getWildcardType(null, null);
+        changed = true;
+      }
+    }
+    if (!changed && given.equals(declared.getTypeArguments())) return type;
+    return types.getDeclaredType(element, arguments);
   }
 
   /**
