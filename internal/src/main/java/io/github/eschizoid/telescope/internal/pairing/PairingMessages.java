@@ -49,6 +49,22 @@ public final class PairingMessages {
   }
 
   /**
+   * A bean has no getter for {@code property}, which a row or path names on the class whose binary
+   * name is {@code beanClass}.
+   */
+  public static String noGetter(final String property, final String beanClass) {
+    return "No getter for property '" + property + "' on " + beanClass;
+  }
+
+  /**
+   * A record has no component named {@code component}, which a row or path names on the class whose
+   * binary name is {@code recordClass}; {@code known} are its components in declaration order.
+   */
+  public static String noComponent(final String component, final String recordClass, final List<String> known) {
+    return "No field '" + component + "' on " + recordClass + " — known fields: " + known;
+  }
+
+  /**
    * One row in a {@link #rowsNeverVisited} refusal, by the raw method names of its accessors. A
    * side given as a telescope path has no accessor and is written {@code <path>}.
    */

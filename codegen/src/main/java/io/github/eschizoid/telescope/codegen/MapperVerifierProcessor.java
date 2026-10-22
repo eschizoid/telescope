@@ -78,20 +78,24 @@ import javax.tools.StandardLocation;
  * -Atelescope.verify.verbose} notes skipped sites. Per-site exemption:
  * {@code @UncheckedMapping("reason")} on an enclosing field, method, constructor, or class.
  *
- * <p>Scope notes, mirroring the runtime exactly: {@code mapperForward} is lenient by contract, so
- * only its explicit rows are checked (no completeness). Rows that carry a conversion the verifier
- * can't check ({@code to(src, tgt, fwd, bwd)}, {@code toOneWay}, {@code enumTo}, {@code via}) are
- * claims only. Presence of a target-telescope / {@code constant} / {@code compute} row switches the
- * runtime into its permissive mode, so completeness checking is disabled for that site too. Nested
- * auto-recursed pairs are lenient about unmatched fields (as at runtime) but still shape-checked.
- * {@code toOrElse} / {@code toOrElseGet} are claims only: the runtime constructs them without a
- * shape gate, and this verifier never fires where construction succeeds. A row keyed to a type pair
- * the mapper never visits is reported with construction's refusal, but only when every row of the
- * call and every property on the walk can be read; otherwise construction decides alone. Under the
- * same condition, a bean property construction fills through a setter that cannot take the
- * property's own type, or through one of several setters none of which takes it more specifically,
- * is reported with construction's refusal, on the target and, for a mapper that also runs backward,
- * on the source.
+ * <p>Scope notes, mirroring the runtime exactly: each property no row claims and both sides have
+ * under one name is shape-checked on every factory, a {@code mapperForward} call given no rows
+ * aside where a bridge of its own pair may convert it. {@code mapperForward} is lenient by
+ * contract, so it gets no completeness check, and nor does a site with a {@code constant} or {@code
+ * compute} row, which switches the runtime into its permissive mode. Rows that carry a conversion
+ * the verifier can't check ({@code to(src, tgt, fwd, bwd)}, {@code toOneWay}, {@code enumTo},
+ * {@code via}) are claims only. A row construction applies whose accessor reads no property of its
+ * class is reported with construction's refusal. Nested auto-recursed pairs are lenient about
+ * unmatched fields (as at runtime) but still shape-checked, leaving out a property a row keyed to
+ * the pair claims, and a pair no row is keyed to that a bridge of its own may convert. {@code
+ * toOrElse} / {@code toOrElseGet} are claims only: the runtime constructs them without a shape
+ * gate, and this verifier never fires where construction succeeds. A row keyed to a type pair the
+ * mapper never visits is reported with construction's refusal, but only when every row of the call
+ * and every property on the walk can be read; otherwise construction decides alone. Under the same
+ * condition, a bean property construction fills through a setter that cannot take the property's
+ * own type, or through one of several setters none of which takes it more specifically, is reported
+ * with construction's refusal, on the target and, for a mapper that also runs backward, on the
+ * source.
  *
  * <p>A {@code cases} row is reported when a class it names is not a permitted subclass of a sealed
  * interface, when two rows pair the same case of the two sealed interfaces the call itself maps,
@@ -408,6 +412,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
+    // The target properties the rows of the call being verified claim, by the nested pair they are
+    // keyed to; a nested pair with no entry has no row keyed to it.
+    private Map<String, Set<String>> nestedClaims = Map.of();
+
     @Override
     public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
       verifyIfTelescopeFactory(node);
@@ -483,6 +491,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
       final var srcSimple = srcEl.getSimpleName().toString();
       final var tgtSimple = tgtEl.getSimpleName().toString();
+      nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       final var claimedSrc = new LinkedHashSet<String>();
       final var claimedTgt = new LinkedHashSet<String>();
       final var hintTargets = new HashSet<String>();
@@ -525,30 +534,36 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         note(node, "telescope: some mapping rows are not statically analyzable; completeness deferred to construction");
       }
 
-      // Completeness — top-level only, strict factories only, and only when the runtime itself
-      // would be strict (no permissive telescope/constant/compute rows) and every row was visible.
+      // Every row must be readable for the properties no row claims to be known. A mapperForward
+      // call given no rows converts through its own pair's bridge where there is one, and walks no
+      // property of its own then.
       final var srcProps = propertiesOf(srcType, srcEl);
       final var tgtProps = propertiesOf(tgtType, tgtEl);
-      if (strict && analyzable && !permissive) {
+      final var rootBridged = !strict && args.size() == 2 && bridgeVisible(srcEl, tgtEl);
+      if (analyzable && !rootBridged) {
         final var match = PairingRules.matchFields(
           List.copyOf(srcProps.keySet()),
           List.copyOf(tgtProps.keySet()),
           claimedSrc,
           claimedTgt
         );
-        final var srcSlot = srcEl.getKind() == ElementKind.RECORD ? "field" : "property";
-        final var tgtSlot = tgtEl.getKind() == ElementKind.RECORD ? "field" : "property";
-        for (final var name : match.unmatchedTargets()) {
-          report(node, PairingMessages.noSameNameSource(srcSimple, tgtSimple, tgtSlot, srcSlot, name));
-        }
-        for (final var name : match.unmatchedSources()) {
-          report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, name));
+        // Completeness only where construction is strict: a factory converting both ways, given no
+        // constant or compute row, which turns construction lenient about unmatched properties.
+        if (strict && !permissive) {
+          final var srcSlot = srcEl.getKind() == ElementKind.RECORD ? "field" : "property";
+          final var tgtSlot = tgtEl.getKind() == ElementKind.RECORD ? "field" : "property";
+          for (final var name : match.unmatchedTargets()) {
+            report(node, PairingMessages.noSameNameSource(srcSimple, tgtSimple, tgtSlot, srcSlot, name));
+          }
+          for (final var name : match.unmatchedSources()) {
+            report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, name));
+          }
         }
         final var seen = new HashSet<String>();
         seen.add(pairKey(srcEl, tgtEl));
         final var sides = classSides(srcEl, tgtEl);
         for (final var name : match.matched()) {
-          verifyProperty(srcEl, tgtEl, sides, name, name, name, node, seen, false);
+          verifyProperty(srcEl, tgtEl, sides, name, name, name, node, seen, !strict);
         }
       }
       verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
@@ -724,6 +739,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var forwardOnly = !strict;
       final var walked = walk.walk(srcType, tgtType, rows, forwardOnly, new Walking(caseRows, forwardOnly));
+      verifyRowsReadProperties(keyed, walked);
       if (walked.open()) return;
       // A write hint picks the writer a bean is built with and keeps its pairs from their own
       // bridges, so the setters such a call writes through are left to construction, as are those
@@ -760,6 +776,81 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
       }
       if (walked.refusal() != null) report(rowsAt.get(walked.neverVisited().getFirst()), walked.refusal());
+    }
+
+    /**
+     * Reports each row construction applies whose accessor reads no property of the class the row
+     * is keyed to on its side, with the message construction refuses it with: a row with accessors
+     * on both sides, or a {@code drop}, on a pair the walk visited, which a pair of sealed
+     * interfaces is not, since a row keyed to one is applied to no property. The source accessor is
+     * read first, as construction reads it.
+     */
+    private void verifyRowsReadProperties(final List<KeyedRow> keyed, final PairWalk.Walk<TypeMirror> walked) {
+      final var visited = new HashSet<String>();
+      for (final var pair : walked.visited()) {
+        final var sourceEl = props.elementOf(pair.source());
+        final var targetEl = props.elementOf(pair.target());
+        if (sourceEl != null && targetEl != null) visited.add(pairKey(sourceEl, targetEl));
+      }
+      for (final var pair : walked.dispatched()) {
+        visited.remove(pairKey(props.elementOf(pair.source()), props.elementOf(pair.target())));
+      }
+      for (final var row : keyed) {
+        if (row.kind() == PairWalk.RowKind.PATH || !visited.contains(pairKey(row.source(), row.target()))) continue;
+        var refusal = unreadRefusal(row.sourceMethod(), row.source());
+        if (refusal == null && row.kind() != PairWalk.RowKind.DROP) {
+          refusal = unreadRefusal(row.targetMethod(), row.target());
+        }
+        if (refusal != null) report(row.at(), refusal);
+      }
+    }
+
+    /**
+     * Construction's refusal of an accessor named {@code method} that reads no property of {@code
+     * owner}, or null when it reads one.
+     */
+    private String unreadRefusal(final String method, final TypeElement owner) {
+      if (method == null) return null;
+      final var properties = declaredPropertiesOf(owner);
+      final var name = propertyName(method, owner);
+      if (properties.containsKey(name)) return null;
+      final var binary = binaryName(owner);
+      return owner.getKind() == ElementKind.RECORD
+        ? PairingMessages.noComponent(name, binary, List.copyOf(properties.keySet()))
+        : PairingMessages.noGetter(name, binary);
+    }
+
+    /**
+     * The target properties each row of a call claims, by the pair it is keyed to, for each pair
+     * other than the call's own: those a row with accessors on both sides names, which construction
+     * converts as the row says rather than by name. A {@code drop} claims none.
+     */
+    private Map<String, Set<String>> claimsOf(
+      final List<? extends ExpressionTree> args,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final boolean strict
+    ) {
+      final var claims = new HashMap<String, Set<String>>();
+      for (var i = 2; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        if (
+          !(elementAt(row.getMethodSelect()) instanceof ExecutableElement rowExec) ||
+          !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
+          !rowOwner.getQualifiedName().contentEquals(MAPPING_FQN)
+        ) {
+          continue;
+        }
+        final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
+        if (keyed == null) continue;
+        final var key = pairKey(keyed.source(), keyed.target());
+        if (key.equals(pairKey(srcEl, tgtEl))) continue;
+        final var names = claims.computeIfAbsent(key, __ -> new HashSet<>());
+        if (keyed.kind() == PairWalk.RowKind.PASS_THROUGH || keyed.kind() == PairWalk.RowKind.CONVERTING) {
+          names.add(propertyName(keyed.targetMethod(), keyed.target()));
+        }
+      }
+      return claims;
     }
 
     /**
@@ -1320,13 +1411,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         final var srcEl = props.elementOf(srcType);
         final var tgtEl = props.elementOf(tgtType);
         if (srcEl == null || tgtEl == null) return;
-        if (!seen.add(pairKey(srcEl, tgtEl))) return;
+        final var key = pairKey(srcEl, tgtEl);
+        final var claimed = nestedClaims.get(key);
+        // A nested pair no row is keyed to converts through a bridge of its own where it has one,
+        // which decides its properties its own way, so a pair that may have one is left to it.
+        if (claimed == null && bridgeVisible(srcEl, tgtEl)) return;
+        if (!seen.add(key)) return;
         final var sides = classSides(srcEl, tgtEl);
         final var match = PairingRules.matchFields(
           List.copyOf(sides.source().keySet()),
           List.copyOf(sides.target().keySet()),
           Set.of(),
-          Set.of()
+          claimed == null ? Set.of() : claimed
         );
         for (final var name : match.matched()) {
           verifyProperty(srcEl, tgtEl, sides, name, name, name, at, seen, forwardOnly);
