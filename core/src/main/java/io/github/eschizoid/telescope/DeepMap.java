@@ -1244,6 +1244,7 @@ public final class DeepMap {
             : resultChecked(
                 fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
                 row,
+                paired,
                 new RowSides(source, target, srcField, tgtField),
                 srcRefl,
                 tgtRefl,
@@ -1716,10 +1717,15 @@ public final class DeepMap {
 
   /**
    * {@code iso}, a conversion of the row's own, with its result checked against the class the
-   * member it is written through takes before it is written: the member the property's type chooses
-   * on each side ({@link Beans#writtenClass}). The conversion is typed by its functions, which
-   * nothing here can read, so the result's own class is all that says whether the member takes it.
-   * A side whose member takes anything checks nothing, and a forward-only mapper writes no source.
+   * property takes before it is written: the class the member the property's type chooses takes on
+   * each side ({@link Beans#writtenClass}), or, where narrower, the class that side fixes the
+   * property's type variable to ({@link #fixedBy}). The conversion is typed by its functions, which
+   * nothing here can read, so the result's own class is all that says whether the property takes
+   * it. A side whose property takes anything checks nothing, and a forward-only mapper writes no
+   * source.
+   *
+   * <p>A {@code via} row's mapper names the class it returns on each side, so a mapper no result of
+   * which the property can take is refused here, while the mapper is built.
    *
    * <p>The value a transform row's conversion is handed is checked too, where the row reads the
    * property as a class narrower than its getter returns ({@link #narrowedRead}): a property
@@ -1732,6 +1738,7 @@ public final class DeepMap {
   private static Iso<?, ?> resultChecked(
     final Iso<?, ?> iso,
     final Mapping<?, ?> row,
+    final PairedTypes<Type> paired,
     final RowSides sides,
     final Reflective srcRefl,
     final Reflective tgtRefl,
@@ -1739,8 +1746,16 @@ public final class DeepMap {
   ) {
     final var targetWriter = tgtRefl.writerFor(sides.target());
     final var sourceWriter = srcRefl.writerFor(sides.source());
-    final var intoTarget = Beans.writtenClass(targetWriter, sides.target(), sides.tgtField());
-    final var intoSource = forwardOnly ? null : Beans.writtenClass(sourceWriter, sides.source(), sides.srcField());
+    final var fixedTarget = fixedBy(paired.target(), paired.targetMember());
+    final var fixedSource = forwardOnly ? null : fixedBy(paired.source(), paired.sourceMember());
+    if (row instanceof Via<?, ?> via) {
+      refuseResultUnfit(sides, "target", sides.tgtField(), via.nested().targetClass(), fixedTarget);
+      refuseResultUnfit(sides, "source", sides.srcField(), via.nested().sourceClass(), fixedSource);
+    }
+    final var intoTarget = narrower(Beans.writtenClass(targetWriter, sides.target(), sides.tgtField()), fixedTarget);
+    final var intoSource = forwardOnly
+      ? null
+      : narrower(Beans.writtenClass(sourceWriter, sides.source(), sides.srcField()), fixedSource);
     final var sourceDeclared = srcRefl.genericType(sides.source(), sides.srcField());
     final var fromSource = switch (row) {
       case TypedTransformTo<?, ?, ?, ?> r -> narrowedRead(r.src(), sourceDeclared);
@@ -1777,6 +1792,49 @@ public final class DeepMap {
    */
   private static Class<?> narrowedRead(final Telescope.Accessor<?, ?> accessor, final Type declared) {
     return LambdaIntrospection.narrowedReturnOf(accessor, (Class<?>) PROPS.erasure(declared));
+  }
+
+  /**
+   * The class a side fixes a property's type variable to, where a pairing reads the property as
+   * {@code read} and the side's class gives it {@code member}, a narrower class: a property a
+   * generic superclass declares with a variable the side's class fixes, in a pair read as declared.
+   * Null where the two are one class, or the member's class is no narrower.
+   */
+  private static Class<?> fixedBy(final Type read, final Type member) {
+    final var readClass = (Class<?>) PROPS.erasure(read);
+    final var memberClass = (Class<?>) PROPS.erasure(member);
+    return readClass != memberClass && readClass.isAssignableFrom(memberClass) ? boxed(memberClass) : null;
+  }
+
+  /** The narrower of two classes a value is checked against, either of which may be null. */
+  private static Class<?> narrower(final Class<?> written, final Class<?> fixed) {
+    if (fixed == null) return written;
+    return written == null || written.isAssignableFrom(fixed) ? fixed : written;
+  }
+
+  /**
+   * Refuses a {@code via} row whose mapper returns {@code mapperClass} on the side it writes {@code
+   * property} of, when the side fixes the property to {@code fixed} and no value of the mapper's
+   * class can be an instance of it: every write would fail.
+   */
+  private static void refuseResultUnfit(
+    final RowSides sides,
+    final String side,
+    final String property,
+    final Class<?> mapperClass,
+    final Class<?> fixed
+  ) {
+    if (fixed == null || mayBeInstance(boxed(mapperClass), fixed)) return;
+    throw new IllegalArgumentException(
+      PairingMessages.viaResultNeverFits(
+        sides.source().getSimpleName(),
+        sides.target().getSimpleName(),
+        side,
+        property,
+        mapperClass.getSimpleName(),
+        fixed.getSimpleName()
+      )
+    );
   }
 
   /**

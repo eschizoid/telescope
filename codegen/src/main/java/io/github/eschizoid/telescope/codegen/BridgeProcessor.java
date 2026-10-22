@@ -4824,7 +4824,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var refusal =
         forward == null
           ? unboundRefusal(field, mapper, "forward", sourceOwn, sourceHeld, bridgePackage)
-          : viaResultRefusal(field, mapper, "forward", forward, target, targetRebuild, tgtName, bridgePackage);
+          : viaResultRefusal(field, mapper, "forward", forward, source, target, targetRebuild, tgtName, bridgePackage);
       if (refusal != null) {
         error(source, refusal);
         return null;
@@ -4833,7 +4833,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backRefusal =
         backward == null
           ? unboundRefusal(field, mapper, "backward", targetOwn, targetHeld, bridgePackage)
-          : viaResultRefusal(field, mapper, "backward", backward, source, sourceRebuild, field, bridgePackage);
+          : viaResultRefusal(field, mapper, "backward", backward, source, target, sourceRebuild, field, bridgePackage);
       if (backRefusal != null) {
         error(source, backRefusal);
         return null;
@@ -5004,6 +5004,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (takes.stream().anyMatch(parameter -> mayShareInstance(held, parameter))) return null;
     final var first = processingEnv.getTypeUtils().asElement(takes.getFirst());
     return first == null ? takes.getFirst().toString() : first.getSimpleName().toString();
+  }
+
+  /**
+   * The simple name of the class {@code type} names, as {@link Class#getSimpleName} gives it: an
+   * array's is its component's followed by {@code []}, and a primitive's is its keyword.
+   */
+  private String simpleNameOf(final TypeMirror type) {
+    if (type instanceof ArrayType array) return simpleNameOf(array.getComponentType()) + "[]";
+    final var element = processingEnv.getTypeUtils().asElement(type);
+    return element == null ? type.toString() : element.getSimpleName().toString();
   }
 
   /** {@code type}'s wrapper class where it is a primitive, and its erasure otherwise. */
@@ -5228,22 +5238,40 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Why a {@code @ViaMapper} call's result cannot be written through the member {@code owner}
-   * writes {@code property} through, or null when it can.
+   * Why a {@code @ViaMapper} call's result cannot be written through the member that writes {@code
+   * property} of the side {@code name} writes, the target for {@code forward} and the source for
+   * {@code backward}, or null when it can. A result no value of which can be an instance of the
+   * class the member takes is refused as the reflective path refuses a {@code via} row whose mapper
+   * returns that class, with the same message.
    */
   private String viaResultRefusal(
     final String field,
     final TypeElement mapper,
     final String name,
     final ViaCall call,
-    final TypeElement owner,
+    final TypeElement source,
+    final TypeElement target,
     final Rebuild rebuild,
     final String property,
     final PackageElement bridgePackage
   ) {
     if (call.result() == null) return null;
+    final var forward = name.equals("forward");
+    final var owner = forward ? target : source;
     final var stores = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
     if (processingEnv.getTypeUtils().isAssignable(call.result(), stores)) return null;
+    final var returned = boxedErasure(call.result());
+    final var taken = boxedErasure(stores);
+    if (!mayShareInstance(returned, taken)) {
+      return PairingMessages.viaResultNeverFits(
+        source.getSimpleName().toString(),
+        target.getSimpleName().toString(),
+        forward ? "target" : "source",
+        property,
+        simpleNameOf(returned),
+        simpleNameOf(taken)
+      );
+    }
     return viaRefusal(
       field,
       mapper,

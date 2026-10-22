@@ -9896,28 +9896,6 @@ class CrossPathCorpusTest {
       )
     ),
     new UncheckedConversion(
-      "a @ViaMapper whose forward returns a class the target's fixed property does not take",
-      "child",
-      List.of(
-        "public record %1$sCh(String name) {}\n",
-        "public record %1$sOtherDto(String name) {}\n",
-        "public class %1$sChMap {\n" +
-          "  public static %1$sOtherDto forward(final %1$sCh c) { return new %1$sOtherDto(c.name()); }\n" +
-          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
-        "public record %1$sChDto(String name) {}\n",
-        CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
-        childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"q\")"),
-        "public class %1$sRuntime {\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static Object mapper() {\n" +
-          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sOtherDto.class);\n" +
-          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
-          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
-          " child));\n  }\n}\n"
-      )
-    ),
-    new UncheckedConversion(
       "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
       "child",
       List.of(
@@ -10069,17 +10047,6 @@ class CrossPathCorpusTest {
     Map.entry(
       "a target that fixes the variable in an Optional to String, with a transform on any Optional",
       List.of(REFUSED + "does not fit forward", "value=Optional[<a>], a Optional", "value=Optional[q], a Optional")
-    ),
-    // A defect still to close: the runtime writes the via mapper's result into a property
-    // the target fixes to another class without checking it, where the processor refuses
-    // the row.
-    Map.entry(
-      "a @ViaMapper whose forward returns a class the target's fixed property does not take",
-      List.of(
-        REFUSED + "@ViaMapper forward returns",
-        "child=OtherDto[name=a], a OtherDto",
-        REFUSED + "ClassCastException"
-      )
     ),
     // A defect still to close, in this entry and the next: the processor refuses an
     // overloaded mapper method on a value it holds only as Object, since the overload javac
@@ -10966,9 +10933,10 @@ class CrossPathCorpusTest {
 
   /**
    * A {@code @ViaMapper} and the runtime {@code via} row over the same pair, whose mapper is handed
-   * a property no value of which it can take: the declarations other than the child pair, each with
-   * {@code %1$s} as the row's prefix and the last of them the runtime row, and the refusal both
-   * paths owe when the bridge and the mapper are built.
+   * a property no value of which it can take, or returns a class no value of which the property it
+   * writes takes: the declarations other than the child pair, each with {@code %1$s} as the row's
+   * prefix and the last of them the runtime row, and the refusal both paths owe when the bridge and
+   * the mapper are built.
    */
   private record ViaNeverFits(String name, List<String> declarations, String refusal) {}
 
@@ -11104,11 +11072,76 @@ class CrossPathCorpusTest {
           " child));\n  }\n}\n"
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sPlain")
+    ),
+    new ViaNeverFits(
+      "a mapper whose forward returns a class the target's fixed property does not take, on a variable the source passes through",
+      List.of(
+        "public record %1$sOtherDto(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sOtherDto forward(final %1$sCh c) { return new %1$sOtherDto(c.name()); }\n" +
+          "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sOtherDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaResultNeverFits("%1$sSrc", "%1$sTgt", "target", "child", "%1$sOtherDto", "%1$sChDto")
+    ),
+    new ViaNeverFits(
+      "a mapper whose backward returns a class the source's fixed property does not take, on a variable the target passes through",
+      List.of(
+        "public record %1$sOther(String name) {}\n",
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+          "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sOther.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaResultNeverFits("%1$sSrc", "%1$sTgt", "source", "child", "%1$sOther", "%1$sCh")
+    ),
+    new ViaNeverFits(
+      "a mapper whose forward returns an array into a property the target fixes to the array's component",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static String[] forward(final %1$sCh c) { return new String[] { c.name() }; }\n" +
+          "  public static %1$sCh backward(final String d) { return new %1$sCh(d); }\n}\n",
+        CHILD_BASE,
+        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sTgt", "String", "%1$sTgt", "\"q\""),
+        "public class %1$sRuntime {\n" +
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final io.github.eschizoid.telescope.conversion.Mapper child =" +
+          " io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+          "      (java.util.function.Function) c -> new String[] { ((%1$sCh) c).name() },\n" +
+          "      (java.util.function.Function) d -> new %1$sCh((String) d),\n" +
+          "      %1$sCh.class, String[].class, java.util.Map.of());\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
+      ),
+      PairingMessages.viaResultNeverFits("%1$sSrc", "%1$sTgt", "target", "child", "String[]", "String")
     )
   );
 
   @Test
-  @DisplayName("a via row whose mapper no value of the property fits is refused by name on both paths")
+  @DisplayName(
+    "a via row whose mapper no value of the property fits, or whose result the property never takes, is refused by name on both paths"
+  )
   void aViaRowWhoseMapperNoValueFitsIsRefusedOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
