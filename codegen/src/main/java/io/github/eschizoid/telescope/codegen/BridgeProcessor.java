@@ -2431,9 +2431,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var parameter = chosenParameter(source, sourceRebuild, entry.getKey(), slot);
       final var assignable = processingEnv.getTypeUtils().isAssignable(heldAs(property), entry.getValue());
       final var setters = sourceRebuild.kind() == Rebuild.Kind.SETTERS;
+      // A result typed by its method's own variable is written into a primitive through the
+      // checked unboxing backward uses, which the base's own value passes as well.
       if (
-        assignable &&
-        ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))
+        (assignable &&
+          ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))) ||
+        inferredIntoPrimitive(entry.getValue(), parameter)
       ) {
         patchCasts.put(entry.getKey(), entry.getValue());
       }
