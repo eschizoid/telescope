@@ -2668,6 +2668,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * The settings of a bridge that decide how fields convert, by attribute, that {@code config}
+   * gives: a bridge between two sealed interfaces converts no field itself, so none applies to it.
+   */
+  private static List<String> caseSettings(final BridgeConfig config) {
+    final var given = new ArrayList<String>();
+    if (!config.drops().isEmpty()) given.add("drops");
+    if (!config.renames().isEmpty() || !config.renameFanouts().isEmpty()) given.add("renames");
+    if (!config.transforms().isEmpty()) given.add("transforms");
+    if (!config.constants().isEmpty()) given.add("constants");
+    if (!config.computes().isEmpty()) given.add("computes");
+    if (!config.defaults().isEmpty()) given.add("defaults");
+    if (!config.viaMappers().isEmpty()) given.add("viaMappers");
+    if (!"AUTO".equals(config.writeStrategy())) given.add("writeStrategy");
+    return given;
+  }
+
   // Sealed-source bridge: dispatch on the permits clause and delegate each case to the per-case
   // bridge that the user already declared with @Bridge on the subtype. The emitted forward/backward
   // dispatch through the Match.of(...).when(...).exhaustive() fluent over the sealed permits; no
@@ -2702,6 +2719,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       heldBy == null
         ? "@Bridge sealed " + source.getSimpleName()
         : "sealed " + source.getSimpleName() + ", which @Bridge " + heldBy.getSimpleName() + " converts case by case,";
+    final var ownConfig = configsByPair.get(ownPair);
+    final var unapplied = ownConfig == null ? List.<String>of() : caseSettings(ownConfig);
+    if (!unapplied.isEmpty()) {
+      error(
+        source,
+        "@Bridge sealed " +
+          source.getSimpleName() +
+          " converts each case through the case's own @Bridge, which this bridge's " +
+          String.join(", ", unapplied) +
+          " would not reach. Declare them on the @Bridge of each case they apply to."
+      );
+      return;
+    }
     final var targetPermitsFq = new HashSet<String>();
     for (final var tp : target.getPermittedSubclasses()) {
       if (tp.getKind() == TypeKind.DECLARED) {

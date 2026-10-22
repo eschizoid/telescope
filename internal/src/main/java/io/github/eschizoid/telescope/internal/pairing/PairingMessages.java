@@ -73,6 +73,82 @@ public final class PairingMessages {
   }
 
   /**
+   * Two rows keyed to two pairs of sealed interfaces, neither of which extends the other, that both
+   * apply to the pair of cases {@code caseSource} and {@code caseTarget} and both claim its
+   * property {@code property}. The rows come from {@link #unvisitedRow}; classes are named by
+   * binary name.
+   */
+  public static String interfaceRowsClash(
+    final String firstRow,
+    final String firstSource,
+    final String firstTarget,
+    final String secondRow,
+    final String secondSource,
+    final String secondTarget,
+    final String caseSource,
+    final String caseTarget,
+    final String property
+  ) {
+    return (
+      "Mapping rows " +
+      firstRow +
+      ", keyed to the sealed interfaces (" +
+      firstSource +
+      " -> " +
+      firstTarget +
+      "), and " +
+      secondRow +
+      ", keyed to (" +
+      secondSource +
+      " -> " +
+      secondTarget +
+      "), both apply to the pair (" +
+      caseSource +
+      " -> " +
+      caseTarget +
+      ") and both claim its property '" +
+      property +
+      "', and neither pair of interfaces extends the other, so neither is the more specific. Key a row to the" +
+      " pair of cases to say which applies there, or remove one."
+    );
+  }
+
+  /**
+   * A row keyed to two sealed interfaces, which applies to each pair of their cases a mapper
+   * converts, where one case of the pair {@code caseSource} and {@code caseTarget} has no property
+   * the row names. {@code row} comes from {@link #unvisitedRow}; classes are named by binary name.
+   */
+  public static String interfaceRowOffCase(
+    final String row,
+    final String sealedSource,
+    final String sealedTarget,
+    final String caseSource,
+    final String caseTarget,
+    final String lacking,
+    final String property
+  ) {
+    return (
+      "Mapping row " +
+      row +
+      " is keyed to the sealed interfaces (" +
+      sealedSource +
+      " -> " +
+      sealedTarget +
+      "), so it applies to each pair of their cases the mapper converts, but " +
+      lacking +
+      " has no property '" +
+      property +
+      "' for it on the pair (" +
+      caseSource +
+      " -> " +
+      caseTarget +
+      "). Give " +
+      lacking +
+      " the property, or key the row to the pairs of cases that have it."
+    );
+  }
+
+  /**
    * The rows keyed to one type pair the mapper never visits, as one entry of a {@link
    * #rowsNeverVisited} refusal. Classes are named by binary name; {@code rows} come from {@link
    * #unvisitedRow}.

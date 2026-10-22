@@ -1,8 +1,10 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +27,17 @@ import java.util.Set;
  * a row through a telescope path, and a {@code constant}, {@code compute}, {@code when} or {@code
  * drop} row, claims nothing the walk follows. Each pair is walked once, so a cycle ends where it
  * closes.
+ *
+ * <p>A row keyed to two sealed interfaces applies to every pair of classes the walk meets that
+ * implement them, after the pair's own rows ({@link #inheritsRows}): its accessors are declared on
+ * the interfaces, so each case has them. Where two rows claim one property of a pair, the more
+ * specific applies ({@link #inherited}): a row of the pair's own over one keyed to interfaces when
+ * both convert the same target property or both drop the same source property ({@link
+ * #overridden}), and a row keyed to interfaces extending another's on both sides over that other.
+ * Two rows keyed to interfaces neither of which extends the other's are refused, as is a case pair
+ * on which one of a row's accessors reads no property ({@link #offCase}); either leaves the walk
+ * open. Such a row counts as visited where the walk visits the pair of interfaces or a pair it
+ * applies to.
  *
  * <p>What only one world can tell is asked of {@link Decisions}: whether a nested pair converts
  * through a bridge of its own, which then stands in for the walk below it, and which case of a
@@ -54,9 +67,34 @@ public final class PairWalk<T> {
    * @param kind what the row does at that pair
    * @param sourceAccessor the source accessor's method name as written, or null for a path
    * @param targetAccessor the target accessor's method name as written, or null for a path
+   * @param sourcePathStart for a source given as a path, the method name its first step reads
+   *     through, or null where there is none or it is not known
+   * @param targetPathStart the same, for a target given as a path
    * @param <T> the world's type handle
    */
-  public record KeyedRow<T>(T source, T target, RowKind kind, String sourceAccessor, String targetAccessor) {}
+  public record KeyedRow<T>(
+    T source,
+    T target,
+    RowKind kind,
+    String sourceAccessor,
+    String targetAccessor,
+    String sourcePathStart,
+    String targetPathStart
+  ) {
+    /** A row with no side given as a path, or whose paths' first steps are not known. */
+    public KeyedRow(
+      final T source,
+      final T target,
+      final RowKind kind,
+      final String sourceAccessor,
+      final String targetAccessor
+    ) {
+      this(source, target, kind, sourceAccessor, targetAccessor, null, null);
+    }
+  }
+
+  /** A row keyed to two sealed interfaces that a pair of their cases cannot take, and why. */
+  public record RowOffCase<T>(KeyedRow<T> row, String message) {}
 
   /** A pair of classes the walk meets. */
   public record Pair<T>(T source, T target) {}
@@ -97,6 +135,8 @@ public final class PairWalk<T> {
    * @param neverVisited the rows keyed to a pair the walk never visits, {@code drop} rows aside, in
    *     the order they were given; empty when {@code open}
    * @param refusal the refusal those rows earn, or null when there are none
+   * @param offCase each row keyed to two sealed interfaces that a pair of their cases the walk met
+   *     cannot take, in the order met ({@link #offCase})
    * @param <T> the world's type handle
    */
   public record Walk<T>(
@@ -104,7 +144,8 @@ public final class PairWalk<T> {
     List<Pair<T>> dispatched,
     boolean open,
     List<KeyedRow<T>> neverVisited,
-    String refusal
+    String refusal,
+    List<RowOffCase<T>> offCase
   ) {}
 
   private final PropertySystem<T> props;
@@ -138,13 +179,14 @@ public final class PairWalk<T> {
       List.copyOf(run.dispatched),
       true,
       List.of(),
-      null
+      null,
+      List.copyOf(run.offCase)
     );
     List<KeyedRow<T>> neverVisited = null;
     Map<Key, List<String>> dead = null;
     for (final var row : rows) {
       final var key = run.key(props.rawType(row.source()), props.rawType(row.target()));
-      if (run.visited.containsKey(key)) continue;
+      if (run.visited.containsKey(key) || run.applied.contains(row)) continue;
       if (dead == null) {
         dead = new LinkedHashMap<>();
         neverVisited = new ArrayList<>();
@@ -168,8 +210,196 @@ public final class PairWalk<T> {
       List.copyOf(run.dispatched),
       false,
       neverVisited == null ? List.of() : List.copyOf(neverVisited),
-      refusal
+      refusal,
+      List.of()
     );
+  }
+
+  /**
+   * Whether a row keyed to {@code rowSource} and {@code rowTarget} applies to the pair of {@code
+   * caseSource} and {@code caseTarget}, which are not that pair: both are sealed interfaces, and
+   * each class of the pair implements the one on its side. Every pair of classes of a mapper
+   * converts through one conversion wherever it is met, so a row applies to the pair wherever the
+   * walk meets it.
+   */
+  public boolean inheritsRows(final T caseSource, final T caseTarget, final T rowSource, final T rowTarget) {
+    if (!props.isSealedInterfaceType(rowSource) || !props.isSealedInterfaceType(rowTarget)) return false;
+    if (props.sameType(caseSource, rowSource) && props.sameType(caseTarget, rowTarget)) return false;
+    return props.isAssignable(caseSource, rowSource) && props.isAssignable(caseTarget, rowTarget);
+  }
+
+  /**
+   * Whether {@code inherited}, a row keyed to two sealed interfaces, gives way on the pair of
+   * {@code caseSource} and {@code caseTarget} to one of {@code own}, the rows keyed to that pair,
+   * which are the more specific: one that converts the same target property, or drops the same
+   * source property.
+   */
+  public boolean overridden(
+    final KeyedRow<T> inherited,
+    final List<KeyedRow<T>> own,
+    final T caseSource,
+    final T caseTarget
+  ) {
+    if (own == null) return false;
+    for (final var row : own) {
+      if (claimed(inherited, row, caseSource, caseTarget) != null) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The property {@code a} and {@code b} both claim on the pair of {@code caseSource} and {@code
+   * caseTarget}, or null when they claim none in common: the target property both convert, or the
+   * source property both drop.
+   */
+  private String claimed(final KeyedRow<T> a, final KeyedRow<T> b, final T caseSource, final T caseTarget) {
+    if (converts(a) && converts(b)) {
+      final var written = propertyName(a.targetAccessor(), caseTarget);
+      return written.equals(propertyName(b.targetAccessor(), caseTarget)) ? written : null;
+    }
+    if (a.kind() == RowKind.DROP && b.kind() == RowKind.DROP) {
+      final var dropped = propertyName(a.sourceAccessor(), caseSource);
+      return dropped.equals(propertyName(b.sourceAccessor(), caseSource)) ? dropped : null;
+    }
+    return null;
+  }
+
+  /**
+   * The rows keyed to two sealed interfaces the pair of {@code caseSource} and {@code caseTarget}
+   * applies, and those it refuses, out of {@code candidates}, given {@code own}, the rows keyed to
+   * the pair. A candidate applies where the pair's classes implement its interfaces ({@link
+   * #inheritsRows}), unless a row of the pair's own claims the same property ({@link #overridden})
+   * or another candidate does whose interfaces extend its own on both sides, which is the more
+   * specific. Two candidates claiming one property of the pair, neither of whose pairs of
+   * interfaces extends the other's, are refused, naming both; two keyed to one pair of interfaces
+   * are left to the refusal any two rows keyed to one pair earn. A candidate the pair cannot take
+   * is refused by name ({@link #offCase}).
+   */
+  public Inherited<T> inherited(
+    final List<KeyedRow<T>> candidates,
+    final List<KeyedRow<T>> own,
+    final T caseSource,
+    final T caseTarget
+  ) {
+    final var matching = new ArrayList<KeyedRow<T>>();
+    for (final var row : candidates) {
+      if (!inheritsRows(caseSource, caseTarget, props.rawType(row.source()), props.rawType(row.target()))) continue;
+      if (!overridden(row, own, caseSource, caseTarget)) matching.add(row);
+    }
+    final var applied = new ArrayList<KeyedRow<T>>();
+    final var refused = new ArrayList<RowOffCase<T>>();
+    for (var i = 0; i < matching.size(); i++) {
+      final var row = matching.get(i);
+      var outranked = false;
+      String clash = null;
+      for (var j = 0; j < matching.size() && !outranked; j++) {
+        final var other = matching.get(j);
+        if (j == i || sameInterfaces(row, other)) continue;
+        final var property = claimed(row, other, caseSource, caseTarget);
+        if (property == null) continue;
+        if (extendsBoth(other, row)) outranked = true;
+        else if (j < i && clash == null && !extendsBoth(row, other)) {
+          clash = PairingMessages.interfaceRowsClash(
+            PairingMessages.unvisitedRow(other.sourceAccessor(), other.targetAccessor()),
+            nameOf(other.source()),
+            nameOf(other.target()),
+            PairingMessages.unvisitedRow(row.sourceAccessor(), row.targetAccessor()),
+            nameOf(row.source()),
+            nameOf(row.target()),
+            nameOf(caseSource),
+            nameOf(caseTarget),
+            property
+          );
+        }
+      }
+      if (outranked) continue;
+      if (clash != null) {
+        refused.add(new RowOffCase<>(row, clash));
+        continue;
+      }
+      final var offCase = offCase(row, caseSource, caseTarget);
+      if (offCase != null) refused.add(new RowOffCase<>(row, offCase));
+      else applied.add(row);
+    }
+    return new Inherited<>(List.copyOf(applied), List.copyOf(refused));
+  }
+
+  /** What {@link #inherited} decides for one pair. */
+  public record Inherited<T>(List<KeyedRow<T>> applied, List<RowOffCase<T>> refused) {}
+
+  /** Whether {@code a} and {@code b} are keyed to the same pair of interfaces. */
+  private boolean sameInterfaces(final KeyedRow<T> a, final KeyedRow<T> b) {
+    return (
+      props.sameType(props.rawType(a.source()), props.rawType(b.source())) &&
+      props.sameType(props.rawType(a.target()), props.rawType(b.target()))
+    );
+  }
+
+  /**
+   * Whether the interfaces {@code narrower} is keyed to extend those {@code wider} is, on both
+   * sides.
+   */
+  private boolean extendsBoth(final KeyedRow<T> narrower, final KeyedRow<T> wider) {
+    return (
+      props.isAssignable(props.rawType(narrower.source()), props.rawType(wider.source())) &&
+      props.isAssignable(props.rawType(narrower.target()), props.rawType(wider.target()))
+    );
+  }
+
+  /**
+   * Whether {@code row} claims its target property: it has accessors on both sides and converts.
+   */
+  private static boolean converts(final KeyedRow<?> row) {
+    return row.kind() == RowKind.PASS_THROUGH || row.kind() == RowKind.CONVERTING;
+  }
+
+  /**
+   * Why {@code row}, keyed to two sealed interfaces, cannot apply to the pair of their cases {@code
+   * caseSource} and {@code caseTarget}, or null when it can: an accessor it reads, or the first
+   * step of a path it reads or writes, names no property of the case on that side.
+   */
+  public String offCase(final KeyedRow<T> row, final T caseSource, final T caseTarget) {
+    final var reads = row.sourceAccessor() != null ? row.sourceAccessor() : row.sourcePathStart();
+    final var writes = row.targetAccessor() != null ? row.targetAccessor() : row.targetPathStart();
+    final var readsAt = reads == null ? null : propertyName(reads, caseSource);
+    if (readsAt != null && named(props.properties(caseSource), readsAt) == null) {
+      return offCaseMessage(row, caseSource, caseTarget, caseSource, readsAt);
+    }
+    if (row.kind() == RowKind.DROP || writes == null) return null;
+    final var writesAt = propertyName(writes, caseTarget);
+    if (named(props.properties(caseTarget), writesAt) == null) {
+      return offCaseMessage(row, caseSource, caseTarget, caseTarget, writesAt);
+    }
+    return null;
+  }
+
+  private String offCaseMessage(
+    final KeyedRow<T> row,
+    final T caseSource,
+    final T caseTarget,
+    final T lacking,
+    final String property
+  ) {
+    return PairingMessages.interfaceRowOffCase(
+      PairingMessages.unvisitedRow(row.sourceAccessor(), row.targetAccessor()),
+      nameOf(row.source()),
+      nameOf(row.target()),
+      nameOf(caseSource),
+      nameOf(caseTarget),
+      nameOf(lacking),
+      property
+    );
+  }
+
+  /** The property an accessor names on {@code owner}: a record component as written. */
+  private String propertyName(final String accessor, final T owner) {
+    return props.isRecordType(owner) ? accessor : PropertyNames.property(accessor);
+  }
+
+  /** The first of {@code properties} named {@code name}, or null. */
+  private static <T> Property<T> named(final List<Property<T>> properties, final String name) {
+    for (final var property : properties) if (property.name().equals(name)) return property;
+    return null;
   }
 
   /** A class by its binary name, as a refusal names it. */
@@ -188,6 +418,11 @@ public final class PairWalk<T> {
     private final Decisions<T> decisions;
     private final Map<Key, Pair<T>> visited = new LinkedHashMap<>();
     private final List<Pair<T>> dispatched = new ArrayList<>();
+    private final List<RowOffCase<T>> offCase = new ArrayList<>();
+    // The rows keyed to two sealed interfaces some pair the walk visited applies.
+    private final Set<KeyedRow<T>> applied = Collections.newSetFromMap(new IdentityHashMap<>());
+    // The rows keyed to two sealed interfaces, which each pair of their cases applies.
+    private final List<KeyedRow<T>> interfaceRows = new ArrayList<>();
     // The pairs being walked, the outermost first; read innermost first through `inward`.
     private final ArrayList<Pair<T>> around = new ArrayList<>();
     private final List<Pair<T>> inward = around.reversed();
@@ -201,6 +436,9 @@ public final class PairWalk<T> {
         rowsByPair
           .computeIfAbsent(key(props.rawType(row.source()), props.rawType(row.target())), __ -> new ArrayList<>(1))
           .add(row);
+        if (props.isSealedInterfaceType(row.source()) && props.isSealedInterfaceType(row.target())) {
+          interfaceRows.add(row);
+        }
       }
     }
 
@@ -218,7 +456,7 @@ public final class PairWalk<T> {
       try {
         final var sourceProperties = props.properties(source);
         final var targetProperties = props.properties(target);
-        final var rows = rowsByPair.get(key);
+        final var rows = rowsAt(key, source, target);
         Set<String> claimed = Set.of();
         if (rows != null) {
           claimed = new HashSet<>();
@@ -305,15 +543,24 @@ public final class PairWalk<T> {
       }
     }
 
-    /** The first of {@code properties} named {@code name}, or null. */
-    private Property<T> named(final List<Property<T>> properties, final String name) {
-      for (final var property : properties) if (property.name().equals(name)) return property;
-      return null;
-    }
-
-    /** The property an accessor names on {@code owner}: a record component as written. */
-    private String propertyName(final String accessor, final T owner) {
-      return props.isRecordType(owner) ? accessor : PropertyNames.property(accessor);
+    /**
+     * The rows the pair applies: its own, then each row keyed to two sealed interfaces it inherits
+     * ({@link #inherited}), in the order given, leaving out one the pair refuses, which is recorded
+     * and leaves the walk open. Null when there are none.
+     */
+    private List<KeyedRow<T>> rowsAt(final Key key, final T source, final T target) {
+      final var own = rowsByPair.get(key);
+      if (interfaceRows.isEmpty()) return own;
+      final var inherited = inherited(interfaceRows, own, source, target);
+      if (!inherited.refused().isEmpty()) {
+        offCase.addAll(inherited.refused());
+        open = true;
+      }
+      if (inherited.applied().isEmpty()) return own;
+      final var all = own == null ? new ArrayList<KeyedRow<T>>() : new ArrayList<>(own);
+      all.addAll(inherited.applied());
+      applied.addAll(inherited.applied());
+      return all;
     }
   }
 }

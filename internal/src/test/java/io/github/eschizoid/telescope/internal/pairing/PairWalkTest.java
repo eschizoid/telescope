@@ -124,6 +124,74 @@ class PairWalkTest {
 
   record DrawingDto(ShapeDto shape) {}
 
+  sealed interface Tag permits TagOne, TagTwo {
+    String label();
+  }
+
+  record TagOne(String label, Leaf leaf) implements Tag {}
+
+  record TagTwo(String label) implements Tag {}
+
+  sealed interface TagDto permits TagOneDto, TagTwoDto {
+    String title();
+  }
+
+  record TagOneDto(String title, LeafDto inner) implements TagDto {}
+
+  /** A case that implements the accessor with a method that is no record component. */
+  record TagTwoDto(String side) implements TagDto {
+    @Override
+    public String title() {
+      return side;
+    }
+  }
+
+  record Tagged(Tag tag) {}
+
+  record TaggedDto(TagDto tag) {}
+
+  sealed interface Root permits Mid, Lone {
+    String a();
+  }
+
+  sealed interface Mid extends Root permits Cell {
+    String b();
+  }
+
+  record Cell(String a, String b) implements Mid {}
+
+  record Lone(String a) implements Root {}
+
+  sealed interface RootDto permits MidDto, LoneDto {
+    String t();
+  }
+
+  sealed interface MidDto extends RootDto permits CellDto {}
+
+  record CellDto(String t) implements MidDto {}
+
+  record LoneDto(String t) implements RootDto {}
+
+  sealed interface Left permits Twin {
+    String a();
+  }
+
+  sealed interface Right permits Twin {
+    String b();
+  }
+
+  record Twin(String a, String b) implements Left, Right {}
+
+  sealed interface LeftDto permits TwinDto {
+    String t();
+  }
+
+  sealed interface RightDto permits TwinDto {
+    String t();
+  }
+
+  record TwinDto(String t) implements LeftDto, RightDto {}
+
   /** Answers as a world with no bridges, pairing each case of a source by the map it is given. */
   private static class Answers implements PairWalk.Decisions<Type> {
 
@@ -456,6 +524,182 @@ class PairWalkTest {
       assertEquals(List.of(), props.properties(Shape.class));
       assertEquals(List.of(), props.properties(int.class));
       assertEquals(List.of(), props.properties(Leaf[].class));
+    }
+  }
+
+  @Nested
+  @DisplayName("A row keyed to two sealed interfaces")
+  class InterfaceRows {
+
+    /** Pairs each case of a source tag with the target case of the same position. */
+    private final PairWalk.Decisions<Type> tags = new PairWalk.Decisions<>() {
+      @Override
+      public boolean ownBridge(final Type source, final Type target, final List<Pair<Type>> around) {
+        return false;
+      }
+
+      @Override
+      public List<Pair<Type>> casePairs(final Type sourceRoot, final Type targetRoot) {
+        return pairs(TagOne.class, TagOneDto.class, TagTwo.class, TagTwoDto.class);
+      }
+    };
+
+    @Test
+    @DisplayName("applies to a pair whose classes implement both, and to no other pair")
+    void inheritsRows() {
+      assertTrue(WALK.inheritsRows(TagOne.class, TagOneDto.class, Tag.class, TagDto.class));
+      assertFalse(WALK.inheritsRows(Tag.class, TagDto.class, Tag.class, TagDto.class));
+      assertFalse(WALK.inheritsRows(Leaf.class, TagOneDto.class, Tag.class, TagDto.class));
+      assertFalse(WALK.inheritsRows(TagOne.class, LeafDto.class, Tag.class, TagDto.class));
+      assertFalse(WALK.inheritsRows(Leaf.class, LeafDto.class, Leaf.class, LeafDto.class));
+    }
+
+    @Test
+    @DisplayName("renames a property on a pair of cases, leading below it")
+    void passesThroughOnEachCase() {
+      final var rows = List.of(row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "leaf", "inner"));
+      final var walk = WALK.walk(TagOne.class, TagOneDto.class, rows, false, plain());
+      assertEquals(pairs(TagOne.class, TagOneDto.class, Leaf.class, LeafDto.class), walk.visited());
+      assertFalse(walk.open());
+    }
+
+    @Test
+    @DisplayName("leaves the walk open on a pair of cases that cannot take it, and names that pair")
+    void offCaseLeavesTheWalkOpen() {
+      final var rows = List.of(
+        row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "label", "title"),
+        row(Other.class, OtherDto.class, RowKind.PASS_THROUGH, "name", "name")
+      );
+      final var walk = WALK.walk(Tagged.class, TaggedDto.class, rows, false, tags);
+      assertTrue(walk.open());
+      assertNull(walk.refusal());
+      assertEquals(1, walk.offCase().size());
+      assertEquals(rows.getFirst(), walk.offCase().getFirst().row());
+      assertEquals(
+        PairingMessages.interfaceRowOffCase(
+          "label -> title",
+          Tag.class.getName(),
+          TagDto.class.getName(),
+          TagTwo.class.getName(),
+          TagTwoDto.class.getName(),
+          TagTwoDto.class.getName(),
+          "title"
+        ),
+        walk.offCase().getFirst().message()
+      );
+    }
+
+    @Test
+    @DisplayName("names the source side a pair of cases lacks, and asks only the source of a drop")
+    void offCaseSides() {
+      final var reads = row(Tag.class, TagDto.class, RowKind.CONVERTING, "missing", "title");
+      assertTrue(
+        WALK.offCase(reads, TagOne.class, TagOneDto.class).contains(
+          TagOne.class.getName() + " has no property 'missing'"
+        )
+      );
+      final var drop = row(Tag.class, TagDto.class, RowKind.DROP, "label", null);
+      assertNull(WALK.offCase(drop, TagTwo.class, TagTwoDto.class));
+      assertNull(
+        WALK.offCase(
+          row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "label", "title"),
+          TagOne.class,
+          TagOneDto.class
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("gives way to a row of the pair's own converting the same target or dropping the same source")
+    void overridden() {
+      final var inherited = row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "label", "title");
+      final var sameTarget = row(TagOne.class, TagOneDto.class, RowKind.CONVERTING, "leaf", "title");
+      final var otherTarget = row(TagOne.class, TagOneDto.class, RowKind.PASS_THROUGH, "leaf", "inner");
+      final var drop = row(Tag.class, TagDto.class, RowKind.DROP, "label", null);
+      final var ownDrop = row(TagOne.class, TagOneDto.class, RowKind.DROP, "label", null);
+      assertTrue(WALK.overridden(inherited, List.of(sameTarget), TagOne.class, TagOneDto.class));
+      assertFalse(WALK.overridden(inherited, List.of(otherTarget, ownDrop), TagOne.class, TagOneDto.class));
+      assertFalse(WALK.overridden(inherited, null, TagOne.class, TagOneDto.class));
+      assertTrue(WALK.overridden(drop, List.of(ownDrop), TagOne.class, TagOneDto.class));
+      assertFalse(WALK.overridden(drop, List.of(sameTarget), TagOne.class, TagOneDto.class));
+    }
+
+    @Test
+    @DisplayName("counts as visited where a pair it applies to is visited, the pair of interfaces aside")
+    void visitedThroughACase() {
+      final var rows = List.of(row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "label", "title"));
+      final var walk = WALK.walk(TagOne.class, TagOneDto.class, rows, false, plain());
+      assertEquals(List.of(), walk.neverVisited());
+      assertNull(walk.refusal());
+    }
+
+    @Test
+    @DisplayName("left out on a pair whose own row converts the same target property, which it then never applies to")
+    void overriddenOnAWalkedPair() {
+      final var rows = List.of(
+        row(Tag.class, TagDto.class, RowKind.PASS_THROUGH, "missing", "title"),
+        row(TagOne.class, TagOneDto.class, RowKind.CONVERTING, "label", "title")
+      );
+      final var walk = WALK.walk(TagOne.class, TagOneDto.class, rows, false, plain());
+      assertFalse(walk.open());
+      assertEquals(List.of(), walk.offCase());
+      assertEquals(List.of(rows.getFirst()), walk.neverVisited());
+    }
+
+    @Test
+    @DisplayName("gives way to one keyed to interfaces extending its own on both sides, in either order")
+    void moreSpecificInterfacesWin() {
+      final var wide = row(Root.class, RootDto.class, RowKind.PASS_THROUGH, "a", "t");
+      final var narrow = row(Mid.class, MidDto.class, RowKind.PASS_THROUGH, "b", "t");
+      assertEquals(List.of(narrow), WALK.inherited(List.of(wide, narrow), null, Cell.class, CellDto.class).applied());
+      assertEquals(List.of(narrow), WALK.inherited(List.of(narrow, wide), null, Cell.class, CellDto.class).applied());
+      assertEquals(List.of(wide), WALK.inherited(List.of(wide, narrow), null, Lone.class, LoneDto.class).applied());
+    }
+
+    @Test
+    @DisplayName("is refused beside one keyed to interfaces neither of which extends its own, naming both")
+    void unrelatedInterfacesClash() {
+      final var left = row(Left.class, LeftDto.class, RowKind.PASS_THROUGH, "a", "t");
+      final var right = row(Right.class, RightDto.class, RowKind.PASS_THROUGH, "b", "t");
+      final var inherited = WALK.inherited(List.of(left, right), null, Twin.class, TwinDto.class);
+      assertEquals(List.of(left), inherited.applied());
+      assertEquals(1, inherited.refused().size());
+      assertEquals(right, inherited.refused().getFirst().row());
+      assertEquals(
+        PairingMessages.interfaceRowsClash(
+          "a -> t",
+          Left.class.getName(),
+          LeftDto.class.getName(),
+          "b -> t",
+          Right.class.getName(),
+          RightDto.class.getName(),
+          Twin.class.getName(),
+          TwinDto.class.getName(),
+          "t"
+        ),
+        inherited.refused().getFirst().message()
+      );
+    }
+
+    @Test
+    @DisplayName("is left beside another keyed to the same interfaces, to the refusal two rows of one pair earn")
+    void sameInterfacesBothApply() {
+      final var first = row(Root.class, RootDto.class, RowKind.PASS_THROUGH, "a", "t");
+      final var second = row(Root.class, RootDto.class, RowKind.CONVERTING, "a", "t");
+      assertEquals(
+        List.of(first, second),
+        WALK.inherited(List.of(first, second), null, Lone.class, LoneDto.class).applied()
+      );
+    }
+
+    @Test
+    @DisplayName("asks a side given as a path for the property its first step reads")
+    void offCasePathStart() {
+      final var constant = new KeyedRow<Type>(Tag.class, TagDto.class, RowKind.PATH, null, null, null, "title");
+      assertNull(WALK.offCase(constant, TagOne.class, TagOneDto.class));
+      assertTrue(WALK.offCase(constant, TagTwo.class, TagTwoDto.class).contains("has no property 'title'"));
+      final var unknown = row(Tag.class, TagDto.class, RowKind.PATH, null, null);
+      assertNull(WALK.offCase(unknown, TagTwo.class, TagTwoDto.class));
     }
   }
 }

@@ -54,6 +54,7 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -445,11 +446,73 @@ public final class DeepMap {
     final var rows = new ArrayList<PairWalk.KeyedRow<Type>>();
     for (final var entry : overrideTable.entrySet()) {
       final var pair = entry.getKey();
-      for (final var row : entry.getValue()) {
-        rows.add(new PairWalk.KeyedRow<>(pair.source, pair.target, kindOf(row), row.sourceField(), row.targetField()));
-      }
+      for (final var row : entry.getValue()) rows.add(keyedRow(pair, row));
     }
     return rows;
+  }
+
+  /** {@code row} and the pair it is keyed to, as the shared walk reads it. */
+  private static PairWalk.KeyedRow<Type> keyedRow(final TypePair pair, final Mapping<?, ?> row) {
+    final Mapping<?, ?> applied = row instanceof Conditional<?, ?> c ? c.inner() : row;
+    final String sourcePathStart = switch (applied) {
+      case FromTelescopeTo<?, ?, ?> t -> t.sourceTelescope().firstHopName();
+      case TelescopeToTelescope<?, ?, ?> t -> t.sourceTelescope().firstHopName();
+      default -> null;
+    };
+    final String targetPathStart = switch (applied) {
+      case TelescopeTo<?, ?, ?> t -> t.targetTelescope().firstHopName();
+      case TelescopeToTelescope<?, ?, ?> t -> t.targetTelescope().firstHopName();
+      case Constant<?, ?, ?> c -> c.targetTelescope().firstHopName();
+      case Compute<?, ?, ?> c -> c.targetTelescope().firstHopName();
+      default -> null;
+    };
+    return new PairWalk.KeyedRow<>(
+      pair.source,
+      pair.target,
+      kindOf(row),
+      row.sourceField(),
+      row.targetField(),
+      sourcePathStart,
+      targetPathStart
+    );
+  }
+
+  /**
+   * The rows {@code key}'s pair applies, as the shared walk applies them: those keyed to it, then
+   * each row keyed to two sealed interfaces its classes implement that the shared rules let apply
+   * ({@link PairWalk#inherited}), in the order given, with a side given as a path started at the
+   * pair's own class. A row the pair refuses is refused by name.
+   */
+  private static List<Mapping<?, ?>> rowsAt(final Map<TypePair, List<Mapping<?, ?>>> overrides, final TypePair key) {
+    final var own = overrides.getOrDefault(key, List.of());
+    if (!inheritsRows(overrides, key)) return own;
+    final var candidates = new ArrayList<PairWalk.KeyedRow<Type>>();
+    final var rowOf = new IdentityHashMap<PairWalk.KeyedRow<Type>, Mapping<?, ?>>();
+    for (final var entry : overrides.entrySet()) {
+      final var keyed = entry.getKey();
+      if (keyed.equals(key)) continue;
+      for (final var row : entry.getValue()) {
+        final var candidate = keyedRow(keyed, row);
+        candidates.add(candidate);
+        rowOf.put(candidate, row);
+      }
+    }
+    final var ownKeyed = new ArrayList<PairWalk.KeyedRow<Type>>(own.size());
+    for (final var row : own) ownKeyed.add(keyedRow(key, row));
+    final var inherited = PAIR_WALK.inherited(candidates, ownKeyed, key.source, key.target);
+    if (!inherited.refused().isEmpty()) throw new IllegalStateException(inherited.refused().getFirst().message());
+    if (inherited.applied().isEmpty()) return own;
+    final var all = new ArrayList<Mapping<?, ?>>(own);
+    for (final var row : inherited.applied()) all.add(rootedRow(rowOf.get(row), key.source, key.target));
+    return all;
+  }
+
+  /** Whether a row keyed to two sealed interfaces the pair's classes implement applies to it. */
+  private static boolean inheritsRows(final Map<TypePair, List<Mapping<?, ?>>> overrides, final TypePair pair) {
+    for (final var keyed : overrides.keySet()) {
+      if (PAIR_WALK.inheritsRows(pair.source, pair.target, keyed.source, keyed.target)) return true;
+    }
+    return false;
   }
 
   /**
@@ -893,7 +956,9 @@ public final class DeepMap {
     if (!(srcType instanceof Class<?> srcCls) || !(tgtType instanceof Class<?> tgtCls)) return false;
     if (!(PAIRING.decidePair(srcType, tgtType, "") instanceof PairDecision.RecursePair)) return false;
     final var pair = new TypePair(srcCls, tgtCls);
-    return overrides.getOrDefault(pair, List.of()).isEmpty() && !ownBridges.converts(pair);
+    return (
+      overrides.getOrDefault(pair, List.of()).isEmpty() && !inheritsRows(overrides, pair) && !ownBridges.converts(pair)
+    );
   }
 
   /**
@@ -1016,7 +1081,7 @@ public final class DeepMap {
       final var telescopeWritesTgt = new HashSet<String>();
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
-      for (final var rawRow : overrides.getOrDefault(key, List.of())) {
+      for (final var rawRow : rowsAt(overrides, key)) {
         // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
         // peel to the inner — Conditional delegates sourceField/targetField/sourceClass/targetClass
         // to inner already, so the metadata is identical, but the telescope-shape checks below need
@@ -2746,6 +2811,7 @@ public final class DeepMap {
     private String configuredReason(final TypePair pair) {
       if (everyPair != null) return everyPair;
       if (!rows.getOrDefault(pair, List.of()).isEmpty()) return "a row is keyed to the pair";
+      if (inheritsRows(rows, pair)) return "a row keyed to two sealed interfaces it implements applies to the pair";
       if (hinted.contains(pair.source)) return "a writeBean hint names " + pair.source.getSimpleName();
       if (hinted.contains(pair.target)) return "a writeBean hint names " + pair.target.getSimpleName();
       return null;
