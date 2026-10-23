@@ -716,9 +716,12 @@ JVM/codegen-only under AOT).
 18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
     guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
     Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
-19. **0019 — Which differences between the paths may remain.** (Proposed.) Only inherent limits (a private constructor,
-    a non-public constructor in another package) stay in the cross-path registers, refused by name; every other
-    difference is a defect with an issue. Runtime-only features are decided in their own ADRs.
+19. **0019 — Which differences between the paths may remain.** (Accepted, shipped.) Only inherent limits stay in the
+    cross-path registers, each refused by name on the path that cannot do the work: a private constructor, a non-public
+    constructor in another package, a builder with no method for a `final` field that has no initializer, an overloaded
+    `@ViaMapper` on an erased type variable, and a transform result whose arguments reach a fixed property only through
+    an unchecked cast. The verifier cannot read a bridge compiled apart from the call. Every other difference is a
+    defect with an issue. Runtime-only features are decided in their own ADRs.
 20. **0020 — Mapped Spring MVC responses.** (Accepted, shipped.) `@TelescopeGetMapping` and its siblings: the handler
     declares the type it returns and the annotation names the response type; the value is mapped where Spring MVC writes
     the body, never in the Java call. Resolved at startup; a fixed set of return shapes.
