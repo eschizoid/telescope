@@ -289,6 +289,14 @@ from "compile-checked" to "runtime-checked" is a regression.
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
   that writes more makes `Telescope.all` fuse to a different result than the sequential fold.
+- The protected `Mapper(Mapper, BridgeGrant)` and `ForwardMapper(ForwardMapper, BridgeGrant)` constructors: the class
+  the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
+  call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
+  constructor. `BridgeRegistry.specialise` hands it, at dispatch, only to a provider `ServiceLoader` registered for the
+  field's class, and a constructor given any other value refuses it. The grant stops accidental subclassing, such as
+  wrapping a field's mapper in a class of one's own, which fails at construction. It does not stop a deliberate one: a
+  hand-written provider registered in `META-INF/services` receives the grant at dispatch and can keep it, and on the
+  class path reflection can read `BridgeGrant.INSTANCE`.
 
 ### Zero runtime-check points: codegen path
 
@@ -335,7 +343,9 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 `Telescope<Source, Target>` bridge from component-name bijection or builder/setter rebuild). Example:
 `UserEntityTelescope.of().asUserDto().email().update(entity, String::toLowerCase)`.
 `AbstractTelescopeProcessor#emitBridgeHop` writes the body. If the target is itself navigable, the hop returns
-`<Target>Telescope<R>`; otherwise a terminal `Telescope<R, Target>`.
+`<Target>Telescope<R>`; otherwise a terminal `Telescope<R, Target>`. A pair a `@Bridge` field declares (ADR-0022) is the
+pair's own bridge, so the navigator of its source hops through `<Source>To<Target>Bridge.BRIDGE`, in the package of the
+class declaring the field, named in full.
 
 ### Files
 
@@ -345,6 +355,7 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 | `FocusProcessor.java`                                     | scans `@Focus`, emits the record version of the Telescope navigator (canonical-ctor rebuild).                                                                                                                                                                                                                                                                |
 | `BeanFocusProcessor.java`                                 | scans `@BeanFocus`, delegates to `emitBeanNavigator` (builder, all-args constructor or setters rebuild, in the shared `BeanWriteStrategy.AUTO_ORDER`).                                                                                                                                                                                                       |
 | `BridgeProcessor.java`                                    | scans `@Bridge`, generates the bidirectional Iso class plus the BRIDGE static constant. Handles all type-pair combinations (record↔record, record↔POJO, POJO↔POJO).                                                                                                                                                                                          |
+| `FieldRows.java`                                          | reads the rows of a `@Bridge` field's `Telescope.mapper(...)` call through the javac tree API in a processing round, into the configuration `BridgeProcessor` emits from (ADR-0022). Converters and suppliers become small generated `BridgeFn` / `Supplier` classes; every other row is refused by name on the row.                                         |
 | `FromMapProcessor.java`                                   | scans `@FromMap`, emits the reflection-free `Map<String, Object>` → record binder (ADR-0010). Uses the sealed `Coercion` taxonomy for per-component conversion.                                                                                                                                                                                              |
 | `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`.                                                                                                                                                           |
 | `TelescopeMapperProcessor.java`                           | scans core's `@TelescopeMapper` / `@TelescopeTransformer` interfaces and emits a Spring `@Component` implementation for each. Refuses on the interface when Spring is not on the classpath. Covered by the Spring starter's tests, which is where its JaCoCo coverage is reported.                                                                           |

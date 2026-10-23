@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.FixedCheck;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MhIso;
+import io.github.eschizoid.telescope.internal.NativeImage;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.ResultCheck;
@@ -43,12 +44,16 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.io.IOException;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -133,15 +138,187 @@ public final class DeepMap {
     return Telescope.mapped(r.iso, r.trail);
   }
 
+  /**
+   * What a mapper factory called from {@code caller} for the pair resolves to: the provider of the
+   * bridge a {@code @Bridge} field of {@code caller} declares, which the factory dispatches to, and
+   * the node {@code explain()} reports for the path the mapper runs on. A pair no field of {@code
+   * caller} is known to declare has neither.
+   */
+  record Declaration(BridgeProvider provider, OpticNode.Declared node) {
+    static final Declaration NONE = new Declaration(null, null);
+  }
+
+  /**
+   * The {@link Declaration} for a factory called from {@code caller}. A provider generated from
+   * rows of other kinds than {@code steps} is passed over, and the runtime mapper is built from the
+   * rows instead, since the bridge was generated from a different declaration: the processor
+   * stopped running on the class and an older bridge stayed on the class path.
+   */
+  static Declaration declaration(
+    final Class<?> caller,
+    final Class<?> source,
+    final Class<?> target,
+    final MapStep[] steps
+  ) {
+    if (caller == null) return Declaration.NONE;
+    final var provider = BridgeRegistry.declaredBy(caller, source, target).orElse(null);
+    if (provider == null) {
+      if (!UNREAD_ROWS.get(caller).contains(source.getName() + " -> " + target.getName())) return Declaration.NONE;
+      return new Declaration(
+        null,
+        new OpticNode.Declared(
+          caller.getName(),
+          OpticNode.Runs.RUNTIME,
+          caller.getName() +
+            " was compiled without the javac tree API, so the rows of its @Bridge fields were not" +
+            " compiled into a bridge"
+        )
+      );
+    }
+    final var given = new ArrayList<String>(steps.length);
+    for (final var step : steps) given.add(step.getClass().getSimpleName());
+    final var stale = staleness(provider, steps, given);
+    if (stale != null) {
+      final var why =
+        "the bridge on the class path was generated from " +
+        stale +
+        "; re-run the annotation processor on " +
+        caller.getName();
+      LOGGER.log(
+        Level.WARNING,
+        () ->
+          "The @Bridge mapper of " +
+          PairingMessages.className(source) +
+          " -> " +
+          PairingMessages.className(target) +
+          " in " +
+          caller.getName() +
+          " runs on the runtime path: " +
+          why +
+          "."
+      );
+      return new Declaration(null, new OpticNode.Declared(caller.getName(), OpticNode.Runs.RUNTIME, why));
+    }
+    final var bridgeName = provider.getClass().getName().replaceFirst("Provider$", "");
+    return new Declaration(
+      provider,
+      new OpticNode.Declared(
+        caller.getName(),
+        OpticNode.Runs.GENERATED,
+        "the bridge " + bridgeName + ", generated from the rows of its @Bridge field"
+      )
+    );
+  }
+
+  /**
+   * How the rows a provider's bridge was generated from differ from {@code steps}, or null when
+   * they agree. The kinds of the rows are compared everywhere. The accessors each row names are
+   * compared on the JVM, where reading them decodes each method reference; inside a native image,
+   * which is built from one compilation and needs no such decoding, they are not.
+   */
+  private static String staleness(final BridgeProvider provider, final MapStep[] steps, final List<String> kinds) {
+    if (!kinds.equals(provider.rowKinds())) {
+      return "the rows " + provider.rowKinds() + ", but the mapper is built from " + kinds;
+    }
+    if (NativeImage.IN_IMAGE) return null;
+    final var accessors = new ArrayList<String>(steps.length);
+    for (final var step : steps) {
+      if (!(step instanceof Mapping<?, ?> row)) return null;
+      accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
+    }
+    if (accessors.equals(provider.rowAccessors())) return null;
+    return (
+      "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors
+    );
+  }
+
+  private static String nullToEmpty(final String value) {
+    return value == null ? "" : value;
+  }
+
+  /**
+   * The pairs, as {@code source -> target} binary names, of the {@code @Bridge} fields the
+   * telescope processor recorded as read by nobody, because {@code type} was compiled without the
+   * javac tree API; empty when it recorded none. Read once per class.
+   */
+  private static final ClassValue<Set<String>> UNREAD_ROWS = new ClassValue<>() {
+    @Override
+    protected Set<String> computeValue(final Class<?> type) {
+      final var loader = type.getClassLoader() != null ? type.getClassLoader() : DeepMap.class.getClassLoader();
+      final var resource = loader.getResource(BridgeProvider.UNREAD_ROWS_PREFIX + type.getName());
+      if (resource == null) return Set.of();
+      try (final var in = resource.openStream()) {
+        return Set.copyOf(new String(in.readAllBytes(), StandardCharsets.UTF_8).lines().map(String::strip).toList());
+      } catch (final IOException e) {
+        return Set.of();
+      }
+    }
+  };
+
+  private static final Logger LOGGER = System.getLogger(Telescope.class.getName());
+
+  /** The mapper over the generated bridge {@code declaration} found. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  static <A, B> Mapper<A, B> declaredMapper(
+    final Declaration declaration,
+    final Class<A> source,
+    final Class<B> target
+  ) {
+    final var bridge = declaration.provider().bridge();
+    final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
+    final var built = Mapper.ofGenerated(
+      fn,
+      source,
+      target,
+      Telescope.bridgePatch((Telescope) bridge),
+      declaration.provider().targetProperties(),
+      List.of(declaration.node())
+    );
+    return (Mapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
+  }
+
+  /** As {@link #declaredMapper}, for a mapper converting forward only. */
+  @SuppressWarnings("unchecked")
+  static <A, B> ForwardMapper<A, B> declaredForwardMapper(
+    final Declaration declaration,
+    final Class<A> source,
+    final Class<B> target
+  ) {
+    final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(declaration.provider().bridge());
+    final var built = ForwardMapper.ofGenerated(fn, source, target, List.of(declaration.node()));
+    return (ForwardMapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
+  }
+
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    return resolveMapper(source, target, steps, null);
+  }
+
+  /**
+   * As {@link #resolveMapper(Class, Class, MapStep[])}, with {@code note}, when there is one, last
+   * in the trail {@code explain()} reports.
+   */
+  static <A, B> Mapper<A, B> resolveMapper(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps,
+    final OpticNode note
+  ) {
     // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.
     final var r = resolution(source, target, steps, false);
+    final var trail = noted(r.trail, note);
     // Pass the leaf Iso straight through (Mapper.ofIso) rather than re-wrapping it in a second
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
     // trail rides along so explain() can surface the field decisions this resolution just made.
-    if (r.cases != null) return Mapper.ofCases(r.iso, source, target, r.cases, r.trail);
-    return Mapper.ofIso(r.iso, source, target, r.patchTable, r.trail);
+    if (r.cases != null) return Mapper.ofCases(r.iso, source, target, r.cases, trail);
+    return Mapper.ofIso(r.iso, source, target, r.patchTable, trail);
+  }
+
+  private static List<OpticNode> noted(final List<OpticNode> trail, final OpticNode note) {
+    if (note == null) return trail;
+    final var noted = new ArrayList<>(trail);
+    noted.add(note);
+    return noted;
   }
 
   /**
@@ -166,8 +343,20 @@ public final class DeepMap {
     final Class<B> target,
     final MapStep[] steps
   ) {
+    return resolveForwardMapper(source, target, steps, null);
+  }
+
+  /**
+   * As {@link #resolveForwardMapper(Class, Class, MapStep[])}, with {@code note} last in the trail.
+   */
+  static <A, B> ForwardMapper<A, B> resolveForwardMapper(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps,
+    final OpticNode note
+  ) {
     final var r = resolution(source, target, steps, true);
-    return ForwardMapper.create(r.iso::to, source, target, r.trail);
+    return ForwardMapper.create(r.iso::to, source, target, noted(r.trail, note));
   }
 
   // ---------- Resolution (shared by both public entries) ----------

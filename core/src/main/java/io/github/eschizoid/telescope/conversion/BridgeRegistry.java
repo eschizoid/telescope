@@ -1,6 +1,11 @@
 package io.github.eschizoid.telescope.conversion;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
 /**
@@ -21,6 +26,82 @@ import java.util.ServiceLoader;
 public final class BridgeRegistry {
 
   private BridgeRegistry() {}
+
+  private static final Logger LOGGER = System.getLogger(BridgeRegistry.class.getName());
+
+  /**
+   * The providers registered for bridges that {@code @Bridge} fields of a class declare, by that
+   * class, read once per class: a class's mapper fields are initialised together, so its first
+   * factory call reads the registry for the rest.
+   */
+  private static final ClassValue<List<BridgeProvider>> DECLARED = new ClassValue<>() {
+    @Override
+    protected List<BridgeProvider> computeValue(final Class<?> declaring) {
+      final var loader =
+        declaring.getClassLoader() != null ? declaring.getClassLoader() : BridgeRegistry.class.getClassLoader();
+      final var found = new ArrayList<BridgeProvider>();
+      final var providers = ServiceLoader.load(BridgeProvider.class, loader).iterator();
+      while (true) {
+        final BridgeProvider provider;
+        try {
+          if (!providers.hasNext()) break;
+          provider = providers.next();
+        } catch (final ServiceConfigurationError broken) {
+          // An entry naming a class that is missing or cannot be built says nothing of this
+          // class's bridges, so it is reported and passed over, and every other provider is
+          // still read.
+          LOGGER.log(
+            Level.WARNING,
+            () ->
+              "A BridgeProvider registration on the class path cannot be loaded, so it is passed over: " +
+              broken.getMessage()
+          );
+          continue;
+        }
+        if (provider.declaringType() == declaring) found.add(provider);
+      }
+      return List.copyOf(found);
+    }
+  };
+
+  /**
+   * The provider of the bridge a {@code @Bridge} field of {@code declaring} declares for {@code
+   * (source, target)}, or {@link Optional#empty()} when there is none, as when the processor did
+   * not run on that class.
+   */
+  public static Optional<BridgeProvider> declaredBy(
+    final Class<?> declaring,
+    final Class<?> source,
+    final Class<?> target
+  ) {
+    for (final var provider : DECLARED.get(declaring)) {
+      if (provider.sourceType() == source && provider.targetType() == target) return Optional.of(provider);
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Codegen-support seam: the mapper a factory call dispatched to {@code provider} returns. A
+   * provider {@code ServiceLoader} registered for its declaring class is handed {@code built} and
+   * the {@link BridgeGrant} that lets it build the class generated for the field; any other
+   * provider is not called, and {@code built} is returned.
+   */
+  public static Mapper<?, ?> specialise(final BridgeProvider provider, final Mapper<?, ?> built) {
+    return registered(provider) ? provider.mapper(built, BridgeGrant.INSTANCE) : built;
+  }
+
+  /** As {@link #specialise(BridgeProvider, Mapper)}, for a forward mapper. */
+  public static ForwardMapper<?, ?> specialise(final BridgeProvider provider, final ForwardMapper<?, ?> built) {
+    return registered(provider) ? provider.forwardMapper(built, BridgeGrant.INSTANCE) : built;
+  }
+
+  /** Whether {@code provider} is the instance this registry read for its declaring class. */
+  private static boolean registered(final BridgeProvider provider) {
+    final var declaring = provider.declaringType();
+    if (declaring == null) return false;
+    for (final var each : DECLARED.get(declaring)) if (each == provider) return true;
+    return false;
+  }
 
   /**
    * The {@code bridge()} value of the unique {@link BridgeProvider} registered for {@code (source,

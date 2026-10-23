@@ -15,4 +15,13 @@ module io.github.eschizoid.telescope.benchmarks {
   requires jmh.core;
 
   exports io.github.eschizoid.telescope.benchmarks;
+
+  provides io.github.eschizoid.telescope.conversion.BridgeProvider
+    with
+      io.github.eschizoid.telescope.benchmarks.McFieldFlatBeanToMcFlatRecBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.McFieldNestedBeanToMcNestedRecBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.ShField1ToShDst1BridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.ShField2ToShDst2BridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.ShField3ToShDst3BridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.ShField4ToShDst4BridgeProvider;
 }

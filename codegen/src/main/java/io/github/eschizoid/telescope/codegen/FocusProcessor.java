@@ -57,6 +57,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
+    readFieldBridges(roundEnv);
     final var heldLastRound = List.copyOf(held);
     held.clear();
     for (final var recordType : heldLastRound) generate(recordType);
@@ -148,7 +149,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
         emitPathClassHeader(out, pathName, owner);
         for (var i = 0; i < components.size(); i++) emitComponentMethod(out, owner, components, i, components.get(i));
         final var bridgeTarget = bridgeTargetFqn(recordType);
-        if (bridgeTarget != null) emitBridgeHop(out, recordRef, bridgeTarget);
+        if (bridgeTarget != null) emitBridgeHop(out, recordType, recordRef, bridgeTarget);
         emitTelescopeForwarders(out, recordRef, owner.suppression("  "));
       }
     );

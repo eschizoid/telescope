@@ -53,6 +53,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -412,6 +413,23 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * The bridges the whole corpus compiles that are held to a field twin, at least, and those with
+   * no row of the same meaning, at most. A run of a few cells compiles too few to say, so the bound
+   * holds once the corpus compiles at least {@link #FIELD_TWIN_CORPUS} bridges. A change that stops
+   * a cell being twinned fails here, and a change that twins more raises the floor.
+   */
+  @AfterAll
+  static void everyCellWithRowsIsTwinned() {
+    final var twinned = FieldTwin.TWINNED.get();
+    final var untwinned = FieldTwin.UNTWINNED.get();
+    if (twinned + untwinned < FIELD_TWIN_CORPUS) return;
+    assertTrue(twinned >= 474, () -> "field twins fell to " + twinned + " of " + (twinned + untwinned));
+    assertTrue(untwinned <= 192, () -> "cells with no field twin rose to " + untwinned);
+  }
+
+  private static final int FIELD_TWIN_CORPUS = 600;
+
+  /**
    * {@code sources} compiled with the bridge processor, failing the calling test on any warning
    * javac reports in a file the processor wrote. The harness compiles with {@code -Xlint:all}, and
    * a generated file is code its adopter cannot edit, so a build compiling it with {@code -Werror}
@@ -421,6 +439,7 @@ class CrossPathCorpusTest {
     final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
     final var warnings = warningsInGenerated(processed);
     assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    FieldTwin.assertAgrees(processed, sources);
     return processed;
   }
 

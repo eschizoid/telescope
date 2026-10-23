@@ -3,3 +3,7 @@ io.github.eschizoid.telescope.conversion.RegistryFixtures$NullBridgeProvider
 io.github.eschizoid.telescope.conversion.RegistryFixtures$DupProviderA
 io.github.eschizoid.telescope.conversion.RegistryFixtures$DupProviderB
 io.github.eschizoid.telescope.conversion.RegistryFixtures$RenamingProvider
+io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$PointProvider
+io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$StaleProvider
+io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$ForwardProvider
+io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$MovedProvider

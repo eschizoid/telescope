@@ -13,7 +13,8 @@ package io.github.eschizoid.telescope.introspection;
  *       {@link Traverse}, {@link Filter}, {@link Narrow}, {@link Bridge}.
  *   <li>{@link Row} — a field correspondence of a conversion built by {@code map} / {@code mapper}
  *       / {@code mapperForward} / {@code fromMap}: {@link Mapped}, {@link Transformed}, {@link
- *       Extracted}, {@link Skipped}, {@link UnusedSource}, {@link Dispatched}.
+ *       Extracted}, {@link Skipped}, {@link UnusedSource}, {@link Dispatched}, and {@link
+ *       Declared}, which says which path runs a mapper a {@code @Bridge} field declares.
  * </ul>
  *
  * <p>Every variant is a public record so a caller can assert on it directly ({@code
@@ -46,6 +47,14 @@ public sealed interface OpticNode {
      * target's {@code @FromMap(required = ...)} lists whose slot reads the field's own key.
      */
     REFUSES,
+  }
+
+  /** The path a mapper a {@code @Bridge} field declares runs on. See {@link Declared}. */
+  enum Runs {
+    /** The bridge the processor generated from the field's rows. */
+    GENERATED,
+    /** The runtime mapper, built from the same rows. */
+    RUNTIME,
   }
 
   /** A navigation step of a path. */
@@ -127,4 +136,14 @@ public sealed interface OpticNode {
    * sourceCase} converts to {@code targetCase}; a report names each by its simple name.
    */
   record Dispatched(String path, Class<?> sourceCase, Class<?> targetCase) implements Row {}
+
+  /**
+   * Which path runs a mapper that a {@code @Bridge} field of {@code declaredBy} declares, and why.
+   * {@link Runs#GENERATED} names the generated bridge; {@link Runs#RUNTIME} says why the bridge is
+   * not used: the class was compiled by a compiler without the javac tree API, or the bridge on the
+   * class path was generated from other rows than the ones the mapper is built from. A mapper whose
+   * class the processor never saw carries no such node, since nothing at run time tells it from a
+   * mapper no field declares.
+   */
+  record Declared(String declaredBy, Runs runs, String why) implements Row {}
 }

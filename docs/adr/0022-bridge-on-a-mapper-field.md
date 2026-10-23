@@ -21,7 +21,11 @@ the existing emitter without a second one.
 1. **`@Bridge` may annotate a `static final` field initialised in place by `Telescope.mapper(...)` or
    `Telescope.mapperForward(...)`.** The processor reads the rows of that call and generates the bridge from them. The
    field form takes no attributes; the rows are the whole declaration. `mapper` gives a strict bridge, `mapperForward` a
-   lenient one, as on the runtime path.
+   lenient one, as on the runtime path. The field may sit on the source itself or on any class or interface, and the
+   bridge is named by its pair, `<Source>To<Target>Bridge`, in the package of the class declaring the field. One
+   declaration per pair keeps the name unique there, and renaming the field or moving it within the package leaves the
+   name as it is. Two pairs whose simple names agree, declared from one package, take one name, and the second is
+   refused by name on its field.
 2. **The rows the processor compiles** are those whose every argument it can name at compile time, and whose meaning the
    bridge emitter already has:
    - `to` between two accessors, which renames when the names differ;
@@ -36,9 +40,9 @@ the existing emitter without a second one.
    through a `@Transform` class today, so every type check the emitter makes applies unchanged.
 
    Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
-   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, `toOrElseGet`, and the
-   mapper-wide hints `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated
-   path is added to this list then.
+   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the mapper-wide hints
+   `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated path is added to
+   this list then.
 
 3. **Everything else is refused by name at compile time, on the row.** An inline lambda, a row built by a helper method,
    a loop or a variable, a row keyed to a nested pair, a non-literal constant, an initializer that is not the factory
@@ -46,25 +50,52 @@ the existing emitter without a second one.
    (`when`, `zip`) each get a message naming what the processor needs instead. A refused row never falls back to the
    runtime path silently: the build fails, so the field never claims generated code it does not have.
 4. **Dispatch is by the calling class and the pair.** The bridge's generated `BridgeProvider` names the class that
-   declares the field. `Telescope.mapper` and `mapperForward` read their caller with `StackWalker` once, when the mapper
-   is built, and look the provider up by that class and the pair through `ServiceLoader`. When one is found the factory
-   returns a mapper over the generated bridge and builds nothing reflective; when none is found, because the processor
-   did not run, it builds the runtime mapper from the same rows. The processor refuses a class that declares a `@Bridge`
-   field for a pair and also calls a mapper factory for that pair anywhere else in the class, so the lookup cannot hand
-   the generated bridge to a call with other rows.
+   declares the field. `Telescope.mapper` and `mapperForward` read their caller once, when the mapper is built, with a
+   `StackWalker` that shows hidden frames, reflection's among them. Only when the frame directly below the factory is a
+   class's static initialiser, which is what initialises a `@Bridge` field, do they look a provider up by that class and
+   the pair through `ServiceLoader`. When one is found the factory returns the mapper generated for the field and builds
+   nothing reflective; when none is found, because the processor did not run, it builds the runtime mapper from the same
+   rows. A call from a method, a lambda, the hidden class behind a method reference or `Method.invoke` puts its own
+   frame below the factory and always builds the runtime mapper. At compile time, a class that declares a `@Bridge`
+   field builds every other mapper as a static field initialised in place by the factory, naming literal classes of a
+   pair no `@Bridge` field of the class declares. Every other call in the class is refused: by name during the round,
+   and again once javac has attributed the class, by the method each call or method reference resolves to, whatever its
+   receiver. The runtime guard holds every call whose frame below the factory is not a static initialiser. The
+   compile-time guard holds every call and reference written in the declaring class, a helper's included, only when
+   javac's analysis runs with the processor attached. A split build that runs the processor with `-proc:only` and
+   compiles with `-proc:none` gets the name pass alone, so there a static initialiser's call that does not name the
+   factory, such as one through a receiver expression, is not refused and is handed the field's bridge. A nested class
+   is a class of its own on both sides.
 5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
    pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a
    compilation, which is the rule carrier bridges already follow at run time. When the processor did not run, such a
    mapper converts the pair by its own rows instead, as with a `@Bridge` on a class; a `via` row naming the field holds
    the same in both cases.
-6. **The generated mapper costs what today's `@Bridge` costs per call.** The dispatched mapper holds the generated
-   `BridgeFn` and calls it directly; the lookup happens once, when the field is initialised.
+6. **The generated mapper costs what today's `@Bridge` costs per call.** The factory returns an instance of a class the
+   processor generates for the field, a subclass of `Mapper` or `ForwardMapper` whose `forward`, `backward` and `patch`
+   each make one call through the bridge's `BRIDGE_FN` constant. A call through the field's `static final` constant
+   resolves to the bridge as a call to `BRIDGE_FN` does, and the JIT inlines it. The lookup happens once, when the field
+   is initialised. Every other method, `explain()`, `trace()` and the hooks among them, is the base class's own, and a
+   hook returns a mapper of the base class around the same bridge.
 7. **The per-field annotations are retired** once the field form compiles what they express: `@Rename`, `@Transform`,
    `@ViaMapper`, `@Constant`, `@Default` and `@Compute`, together with the `@Bridge` attributes that hold them and
    `drops`, with no deprecated aliases. The class form of `@Bridge` keeps `value`, `writeStrategy` and `lenient` for a
    pair declared with no rows.
-8. **Only javac reads the rows.** On a compiler without the tree API the processor prints one note and generates nothing
-   for the field, and the runtime mapper runs, which the cross-path corpus holds to the same result.
+8. **Only javac reads the rows.** On a compiler without the tree API the processor warns on each `@Bridge` field and
+   generates nothing for it, and the runtime mapper runs, which the cross-path corpus holds to the same result.
+9. **Which path runs is reported.** `explain()` and `trace()` on a mapper a field declares carry an `OpticNode.Declared`
+   naming the generated bridge, or saying why the runtime path runs: the class was compiled without the tree API, or the
+   bridge on the class path was generated from other rows. A class the processor never saw leaves no trace at run time,
+   since `@Bridge` is retained only in source, so its mapper carries no such node.
+
+> **Amendment (2026-10-23).** A provider whose recorded rows differ from the call's, in kind or in the accessors they
+> name, is passed over rather than refused: the factory builds the runtime mapper from the rows it was given, logs a
+> warning, and `explain()` says why. The rows are what the author wrote, so they are the declaration to honour. The note
+> on a compiler without the tree API is a warning on each field, so it is seen where the field is. A named module that
+> does not `provides` the generated bridges gets a mandatory warning naming the line to add, since `ServiceLoader`
+> ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its class,
+> on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge builds it
+> when the bridge is initialised.
 
 ### Amendments to ADR-0018
 
@@ -84,12 +115,16 @@ the existing emitter without a second one.
 - Every field name in a mapping is a method reference the compiler checks.
 - A call site keeps working unchanged when the processor is removed; it runs the runtime mapper instead.
 - Building a mapper costs one stack walk and one `ServiceLoader` scan more than today, once per mapper.
-- The generated path needs no reflection configuration inside a native image: the rows are constructed but never
-  decoded, `ServiceLoader` providers are registered by the image builder, and `StackWalker` is supported there. The
-  `NativeVerify` binary covers a field-declared mapper.
+- The generated path needs no reflection configuration inside a native image: `ServiceLoader` providers are registered
+  by the image builder, `StackWalker` is supported there, and the rows are built but not decoded, except a `constant` or
+  `compute` row, which decodes its target accessor. The `NativeVerify` binary covers a field-declared mapper.
 - A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
-  generated from. The provider records the kinds of the rows it was generated from, and the runtime refuses a mismatch
-  by name rather than running a stale bridge.
+  generated from. The provider records the kind of each row and the accessors it names; on the JVM the factory compares
+  both with the rows it is given, and builds the runtime mapper from those rows when they differ. What the comparison
+  cannot see is a converter, supplier or constant replaced by another while the accessors stay the same, since a
+  `Function` carries no name to compare. Inside a native image only the kinds are compared, because reading the
+  accessors decodes each method reference; an image is built from one compilation, where the provider and the rows
+  cannot disagree.
 
 ## Alternatives considered
 
