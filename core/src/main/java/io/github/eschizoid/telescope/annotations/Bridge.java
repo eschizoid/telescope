@@ -86,7 +86,8 @@ import java.lang.annotation.Target;
  * a reference to a static method, an unbound instance method, a constructor, or a method of a
  * {@code static final} field; a constant or default is a literal or an enum constant. Any other row
  * or argument is refused at compile time by name. A field's bridge is its pair's own bridge, so a
- * pair is declared once, and the class that declares the field builds no other mapper of that pair.
+ * pair is declared once, and the static initialiser of the class that declares the field builds no
+ * other mapper of that pair; a method of the class may, and gets the runtime mapper.
  *
  * @see io.github.eschizoid.telescope.Telescope#map(Class, Class,
  *     io.github.eschizoid.telescope.mapping.MapStep...)

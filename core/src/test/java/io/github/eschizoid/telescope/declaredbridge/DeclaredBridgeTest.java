@@ -70,8 +70,7 @@ class DeclaredBridgeTest {
   @Test
   @DisplayName("hooks on the declaring class's mapper run around the generated bridge")
   void hooksRunAroundTheBridge() {
-    final var hooked = PointMappers.POINT
-      .beforeForward(p -> new Point(p.name().trim(), p.note()))
+    final var hooked = PointMappers.POINT.beforeForward(p -> new Point(p.name().trim(), p.note()))
       .afterForward(d -> new PointDto(d.label().toUpperCase(), d.note()))
       .beforeBackward(d -> new PointDto(d.label().trim(), d.note()))
       .afterBackward(p -> new Point(p.name().toLowerCase(), p.note()));

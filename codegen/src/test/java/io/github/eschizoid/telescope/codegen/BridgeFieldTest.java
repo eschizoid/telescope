@@ -286,8 +286,14 @@ class BridgeFieldTest {
         "drop(...) keyed to a nested pair has no generated form yet",
       },
       new String[] { "drop(User::secret), drop(User::secret)", "a property is dropped once, by a row of its own" },
-      new String[] { "to(User::name, UserDto::name), drop(User::name)", "a property is dropped once, by a row of its own" },
-      new String[] { "drop(User::name), to(User::name, UserDto::name)", "'name' is dropped by another row of this mapper" },
+      new String[] {
+        "to(User::name, UserDto::name), drop(User::name)",
+        "a property is dropped once, by a row of its own",
+      },
+      new String[] {
+        "drop(User::name), to(User::name, UserDto::name)",
+        "'name' is dropped by another row of this mapper",
+      },
       new String[] {
         "toOneWay(User::name, UserDto::name, Mappers::lower)",
         "Mappers.lower cannot be called from the generated bridge in package 'fb'",

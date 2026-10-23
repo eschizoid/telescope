@@ -47,11 +47,12 @@ the existing emitter without a second one.
    runtime path silently: the build fails, so the field never claims generated code it does not have.
 4. **Dispatch is by the calling class and the pair.** The bridge's generated `BridgeProvider` names the class that
    declares the field. `Telescope.mapper` and `mapperForward` read their caller with `StackWalker` once, when the mapper
-   is built, and look the provider up by that class and the pair through `ServiceLoader`. When one is found the factory
-   returns a mapper over the generated bridge and builds nothing reflective; when none is found, because the processor
-   did not run, it builds the runtime mapper from the same rows. The processor refuses a class that declares a `@Bridge`
-   field for a pair and also calls a mapper factory for that pair anywhere else in the class, so the lookup cannot hand
-   the generated bridge to a call with other rows.
+   is built, and look the provider up by that class and the pair through `ServiceLoader`, when the call comes from the
+   class's static initialiser, which is what initialises a `@Bridge` field. When one is found the factory returns a
+   mapper over the generated bridge and builds nothing reflective; when none is found, because the processor did not
+   run, it builds the runtime mapper from the same rows. A call from a method or a lambda always builds the runtime
+   mapper. The processor refuses another call in the static initialiser for the same pair, or for classes it cannot
+   name, so the lookup cannot hand the generated bridge to a call with other rows.
 5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
    pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a
    compilation, which is the rule carrier bridges already follow at run time. When the processor did not run, such a

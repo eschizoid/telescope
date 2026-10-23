@@ -918,9 +918,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!(argument instanceof DeclaredType side) || !(side.asElement() instanceof TypeElement type)) return;
       names.add(elements.getBinaryName(type).toString());
     }
-    unreadRows
-      .computeIfAbsent(carrier, unused -> new LinkedHashSet<>())
-      .add(names.get(0) + " -> " + names.get(1));
+    unreadRows.computeIfAbsent(carrier, unused -> new LinkedHashSet<>()).add(names.get(0) + " -> " + names.get(1));
   }
 
   /**

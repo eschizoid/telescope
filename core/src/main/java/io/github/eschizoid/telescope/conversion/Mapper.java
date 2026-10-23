@@ -196,10 +196,10 @@ public final class Mapper<A, B> {
     this.traced = traced(this.explainTrail);
     this.generated =
       iso instanceof GeneratedIso<A, B> bridge &&
-        preForward == null &&
-        postForward == null &&
-        preBackward == null &&
-        postBackward == null
+      preForward == null &&
+      postForward == null &&
+      preBackward == null &&
+      postBackward == null
         ? bridge.fn
         : null;
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
@@ -336,9 +336,9 @@ public final class Mapper<A, B> {
   }
 
   /**
-   * <b>Module-internal seam — NOT public API.</b> A mapper over a generated bridge: {@code
-   * forward} and {@code backward} call {@code bridge} directly, {@link #patch} is {@code patcher},
-   * and {@link #explain()} reports {@code explainTrail}.
+   * <b>Module-internal seam — NOT public API.</b> A mapper over a generated bridge: {@code forward}
+   * and {@code backward} call {@code bridge} directly, {@link #patch} is {@code patcher}, and
+   * {@link #explain()} reports {@code explainTrail}.
    */
   public static <A, B> Mapper<A, B> ofGenerated(
     final BridgeFn<A, B> bridge,

@@ -154,8 +154,8 @@ row is a compile error on the row, naming what to write instead. `explain()` on 
 when it is the runtime path although a field declares it, why.
 
 A field's bridge is its pair's own bridge, so a pair is declared once in a compilation, a navigator of the source hops
-through it, and a Spring `@TelescopeMapper` for the pair calls it. The class that declares the field builds no other
-mapper of the pair, since the factory finds the bridge by its calling class.
+through it, and a Spring `@TelescopeMapper` for the pair calls it. The class's static initialiser builds no other mapper
+of the pair, since the factory finds the bridge by the static initialiser that calls it; a method of the class can.
 
 The rows are read through the javac tree API. Under a compiler without it, Eclipse's for one, the processor warns on
 each `@Bridge` field and the mapper runs on the runtime path from the same rows.

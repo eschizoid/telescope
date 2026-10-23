@@ -211,9 +211,9 @@ public final class DeepMap {
   }
 
   /**
-   * The pairs, as {@code source -> target} binary names, of the {@code @Bridge} fields the telescope
-   * processor recorded as read by nobody, because {@code type} was compiled without the javac tree
-   * API; empty when it recorded none. Read once per class.
+   * The pairs, as {@code source -> target} binary names, of the {@code @Bridge} fields the
+   * telescope processor recorded as read by nobody, because {@code type} was compiled without the
+   * javac tree API; empty when it recorded none. Read once per class.
    */
   private static final ClassValue<Set<String>> UNREAD_ROWS = new ClassValue<>() {
     @Override

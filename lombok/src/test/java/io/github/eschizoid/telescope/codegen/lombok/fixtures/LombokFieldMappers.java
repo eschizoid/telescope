@@ -27,6 +27,11 @@ public final class LombokFieldMappers {
     FieldBridgedLombokUser.class,
     FieldBridgedLombokView.class,
     to(FieldBridgedLombokUser::getLogin, FieldBridgedLombokView::username),
-    to(FieldBridgedLombokUser::getEmail, FieldBridgedLombokView::email, LombokFieldMappers::lower, LombokFieldMappers::upper)
+    to(
+      FieldBridgedLombokUser::getEmail,
+      FieldBridgedLombokView::email,
+      LombokFieldMappers::lower,
+      LombokFieldMappers::upper
+    )
   );
 }

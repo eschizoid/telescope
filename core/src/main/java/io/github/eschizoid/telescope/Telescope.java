@@ -3088,8 +3088,8 @@ public sealed class Telescope<
 
   /**
    * The class whose static initialiser called the mapper factory that calls this, or null when the
-   * call came from anywhere else. Only a static initialiser initialises a {@code @Bridge} field, so a
-   * mapper built in a method or a lambda is never handed a field's bridge. Read once per mapper
+   * call came from anywhere else. Only a static initialiser initialises a {@code @Bridge} field, so
+   * a mapper built in a method or a lambda is never handed a field's bridge. Read once per mapper
    * built.
    */
   private static Class<?> initialisingCaller() {
