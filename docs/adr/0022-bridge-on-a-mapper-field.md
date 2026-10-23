@@ -100,14 +100,23 @@ the existing emitter without a second one.
 
 > **Amendment: a `via` row of two methods.** `via(src, tgt, Hw::forward, Hw::backward)` converts a property through two
 > methods written by hand, which is what `@ViaMapper(using = Hw.class)` names. On the runtime path the row reads the
-> classes it converts between from `forward`'s own method, so a parameter typed by a type variable is its bound and a
-> primitive its wrapper, and it converts each element of a `List`, `Set` or `Optional`, or each value of a `Map`, when
-> that class is the element's, and the whole property otherwise, as a `via` row with a mapper does. A null value or
+> classes it converts between from `forward`'s own method, when the runtime path builds a mapper from the row and not
+> before, so a mapper on the generated path, inside a native image included, never decodes them. A parameter typed by a
+> type variable is its bound, a primitive its wrapper, an unbound instance method takes its declaring class, and a
+> return a generic supertype types is the class the receiver gives it; a return a type variable hides is refused by name
+> when the mapper is built. The row converts each element of a `List`, `Set` or `Optional`, or each value of a `Map`,
+> when that class is the element's, and the whole property otherwise, as a `via` row with a mapper does. A null value or
 > element stays null and reaches neither method. In a `@Bridge` mapper the two must be the static `forward` and
 > `backward` of one class, and the row compiles to the configuration `@ViaMapper` names, so the generated bridge is the
-> same; other methods are refused by name on the row. The row types `backward`'s return as a value `forward` takes,
-> which is what lets javac infer a generic `forward`. A `@ViaMapper` class whose `backward` returns a class `forward`
-> does not take, relying on the bridge's cast, has no such row, and stays on the class form until it does.
+> same; other methods are refused by name on the row. A row naming a class the same compilation generates is read once
+> that class exists. The row types `backward`'s return as a value `forward` takes, which is what lets javac infer a
+> generic `forward`. These `@ViaMapper` classes have no such row and stay on the class form until they do:
+>
+> - a `backward` returning a class `forward` does not take, relying on the bridge's cast;
+> - a generic `forward` returning its own type variable, paired with a generic `backward`;
+> - a class declaring both an element and a whole-container overload of `forward` or `backward`.
+>
+> A method of the class typed for the one shape the row takes is the replacement for each.
 
 ### Amendments to ADR-0018
 

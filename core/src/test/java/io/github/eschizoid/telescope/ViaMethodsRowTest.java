@@ -144,9 +144,115 @@ class ViaMethodsRowTest {
   @Test
   @DisplayName("a lambda is refused by name, since the row reads the classes from a method reference")
   void aLambdaIsRefused() {
+    final var row = via(Box::items, BoxDto::items, (Item i) -> i.toDto(), ItemDto::toItem);
     final var refused = assertThrows(IllegalArgumentException.class, () ->
-      via(Box::items, BoxDto::items, (Item i) -> i.toDto(), ItemDto::toItem)
+      Telescope.mapper(Box.class, BoxDto.class, row)
     );
     assertTrue(refused.getMessage().contains("not a lambda"), refused::getMessage);
+  }
+
+  /** A class a subclass implements, whose method an unbound reference names. */
+  public interface Shape {
+    String name();
+
+    default ShapeDto toDto() {
+      return new ShapeDto(name());
+    }
+  }
+
+  public record Circle(String name) implements Shape {}
+
+  public record ShapeDto(String name) {
+    public Circle toCircle() {
+      return new Circle(name);
+    }
+  }
+
+  public record Shapes(List<Shape> shapes) {}
+
+  public record ShapesDto(List<ShapeDto> shapes) {}
+
+  @Test
+  @DisplayName("an unbound method takes any instance of the class declaring it, whatever backward returns")
+  void anUnboundMethodTakesItsDeclaringClass() {
+    final var mapper = Telescope.mapper(
+      Shapes.class,
+      ShapesDto.class,
+      via(Shapes::shapes, ShapesDto::shapes, Shape::toDto, ShapeDto::toCircle)
+    );
+    final var dto = mapper.forward(new Shapes(List.of(new Circle("a"))));
+    assertEquals(new ShapesDto(List.of(new ShapeDto("a"))), dto);
+    assertEquals(new Shapes(List.of(new Circle("a"))), mapper.backward(dto));
+  }
+
+  /** A generic supertype whose inherited method returns its type variable. */
+  public interface Carries<D> {
+    D carried();
+
+    default D dto() {
+      return carried();
+    }
+  }
+
+  public record Tagged(String name) implements Carries<TagDto> {
+    @Override
+    public TagDto carried() {
+      return new TagDto(name);
+    }
+  }
+
+  public record TagDto(String label) {
+    public Tagged tagged() {
+      return new Tagged(label);
+    }
+  }
+
+  public record Tags(List<Tagged> tags) {}
+
+  public record TagsDto(List<TagDto> tags) {}
+
+  @Test
+  @DisplayName("a method a generic supertype declares returns the class the receiver gives its variable")
+  void aGenericSupertypesMethodReturnsTheReceiversClass() {
+    final var mapper = Telescope.mapper(
+      Tags.class,
+      TagsDto.class,
+      via(Tags::tags, TagsDto::tags, Tagged::dto, TagDto::tagged)
+    );
+    final var dto = mapper.forward(new Tags(List.of(new Tagged("a"))));
+    assertEquals(new TagsDto(List.of(new TagDto("a"))), dto);
+    assertEquals(new Tags(List.of(new Tagged("a"))), mapper.backward(dto));
+  }
+
+  /** A method returning its own class's type variable, which nothing at the call site names. */
+  public record Holder<T>(T value) {
+    public T get() {
+      return value;
+    }
+  }
+
+  public record Held(List<Holder<String>> held) {}
+
+  public record HeldDto(List<String> held) {}
+
+  public static Holder<String> hold(final String value) {
+    return new Holder<>(value);
+  }
+
+  @Test
+  @DisplayName("a method whose return a type variable hides is refused by name when the mapper is built")
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  void aHiddenReturnIsRefused() {
+    final Telescope.Accessor raw = (Telescope.Accessor<Holder, Object>) Holder::get;
+    final var row = via(
+      Held::held,
+      HeldDto::held,
+      raw,
+      (Telescope.Accessor<String, Holder<String>>) ViaMethodsRowTest::hold
+    );
+    final var refused = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapper(Held.class, HeldDto.class, row)
+    );
+    assertTrue(refused.getMessage().contains("returns, which a type variable names"), refused::getMessage);
   }
 }

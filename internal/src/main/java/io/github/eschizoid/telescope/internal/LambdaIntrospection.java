@@ -5,6 +5,8 @@ import java.lang.invoke.MethodHandleInfo;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InaccessibleObjectException;
+import java.lang.reflect.TypeVariable;
+import java.util.Arrays;
 
 /**
  * Reflective extraction of method-reference metadata via {@link SerializedLambda}. The runtime
@@ -208,11 +210,11 @@ public final class LambdaIntrospection {
       );
     }
     final var kind = metadata.implKind();
-    final var unbound =
-      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
-      metadata.capturedArgs() == 0;
+    final var unbound = takesReceiver(lambda);
     final Class<?> from;
-    if (unbound && type.parameterCount() == 0) from = receiverClassOf(lambda);
+    // An unbound method takes any instance of the class declaring it, whatever receiver the call
+    // site's inference narrowed the reference to.
+    if (unbound && type.parameterCount() == 0) from = implClassOf(lambda);
     else if (!unbound && type.parameterCount() == 1) from = type.parameterType(0);
     else throw new IllegalArgumentException(
       "Expected a method reference converting one value, such as Hw::forward; " +
@@ -223,11 +225,75 @@ public final class LambdaIntrospection {
         type.parameterCount() +
         (unbound ? " besides its receiver" : "")
     );
-    final Class<?> to = kind == MethodHandleInfo.REF_newInvokeSpecial ? implClassOf(lambda) : type.returnType();
+    final Class<?> to = kind == MethodHandleInfo.REF_newInvokeSpecial ? implClassOf(lambda) : returnedBy(lambda, type);
     return new Class<?>[] {
       MethodType.methodType(from).wrap().returnType(),
       MethodType.methodType(to).wrap().returnType(),
     };
+  }
+
+  /**
+   * Whether a Serializable method reference names an instance method it calls on the value it is
+   * handed, as {@code Shape::toDto} does, rather than a static method, a constructor, or a method
+   * of a receiver it holds.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   */
+  public static boolean takesReceiver(final Serializable lambda) {
+    final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+    final var kind = metadata.implKind();
+    return (
+      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
+      metadata.capturedArgs() == 0
+    );
+  }
+
+  /**
+   * The class {@code lambda}'s method returns: what the reference's instantiation says, where that
+   * is narrower than the method's erased return, as a method a generic supertype declares returns
+   * the class the receiver gives its type variable.
+   *
+   * @throws IllegalArgumentException if the method returns a type variable nothing narrows
+   */
+  private static Class<?> returnedBy(final Serializable lambda, final MethodType type) {
+    final var erased = type.returnType();
+    final var narrowed = narrowedReturnOf(lambda, erased);
+    if (narrowed != null) return narrowed;
+    if (erased == Object.class && returnsTypeVariable(lambda, type)) {
+      final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+      throw new IllegalArgumentException(
+        "Cannot read the class " +
+          metadata.implName() +
+          "::" +
+          metadata.methodName() +
+          " returns, which a type variable names; reference a method whose return names the class," +
+          " such as a static one"
+      );
+    }
+    return erased;
+  }
+
+  /** Whether the method {@code lambda} references declares its return as a type variable. */
+  private static boolean returnsTypeVariable(final Serializable lambda, final MethodType type) {
+    return returnsTypeVariable(implClassOf(lambda), CACHE.get(lambda.getClass()).get(lambda).methodName(), type);
+  }
+
+  private static boolean returnsTypeVariable(final Class<?> owner, final String name, final MethodType type) {
+    if (owner == null) return false;
+    for (final var method : owner.getDeclaredMethods()) {
+      if (
+        method.getName().equals(name) &&
+        Arrays.equals(method.getParameterTypes(), type.parameterArray()) &&
+        method.getGenericReturnType() instanceof TypeVariable<?>
+      ) {
+        return true;
+      }
+    }
+    if (returnsTypeVariable(owner.getSuperclass(), name, type)) return true;
+    for (final var implemented : owner.getInterfaces()) {
+      if (returnsTypeVariable(implemented, name, type)) return true;
+    }
+    return false;
   }
 
   /**

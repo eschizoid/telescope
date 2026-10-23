@@ -874,8 +874,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Refused refused) {
-      // A null message is a call javac cannot resolve, which javac reports on its own.
-      if (refused.message() == null) return;
+      // A null message is a row javac cannot type yet. Before the final round it may name a class a
+      // later round writes, such as another @Bridge's generated bridge, so the field is read again
+      // then; in the final round every such class exists, and javac reports the row on its own.
+      if (refused.message() == null) {
+        if (!roundEnv.processingOver()) fieldRetries.add(key);
+        return;
+      }
       if (refused.at() == null) error(field, refused.message());
       else errorAt(trees, field, refused.at(), refused.message());
       return;
@@ -5705,10 +5710,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror container,
     final PackageElement bridgePackage
   ) {
-    final var types = processingEnv.getTypeUtils();
     return viaCandidates(mapper, name, bridgePackage)
       .stream()
-      .filter(m -> elementTaken(element, types.erasure(m.getParameters().getFirst().asType()), container))
+      // A primitive parameter takes the wrapper's elements, unboxed one at a time, null left as
+      // it is.
+      .filter(m -> elementTaken(element, boxedErasure(m.getParameters().getFirst().asType()), container))
       .toList();
   }
 

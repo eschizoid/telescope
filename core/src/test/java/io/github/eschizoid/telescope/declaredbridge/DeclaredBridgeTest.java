@@ -113,6 +113,16 @@ class DeclaredBridgeTest {
   }
 
   @Test
+  @DisplayName("a via row of two methods is never read on the generated path")
+  void aViaRowOfMethodsIsNotReadOnTheGeneratedPath() {
+    final var mapper = DeclaredFixtures.LazyMappers.LAZY;
+    assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+    final var before = DeclaredFixtures.GENERATED_CALLS.get();
+    assertEquals(new DeclaredFixtures.LazyDto("a"), mapper.forward(new DeclaredFixtures.Lazy("a")));
+    assertEquals(1, DeclaredFixtures.GENERATED_CALLS.get() - before);
+  }
+
+  @Test
   @DisplayName("a forward-only mapper the declaring class builds runs the generated bridge")
   void aForwardMapperRunsTheBridge() {
     final var before = DeclaredFixtures.GENERATED_CALLS.get();

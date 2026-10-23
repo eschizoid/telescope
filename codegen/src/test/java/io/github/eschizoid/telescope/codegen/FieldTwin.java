@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -26,10 +27,11 @@ import javax.tools.JavaFileObject;
  * a class-form bridge against the runtime mapper then holds the field form to the runtime mapper
  * too, on every shape it compiles. Every class-form {@code @Bridge} of the compilation becomes a
  * field of a carrier class in its package, so a {@code @ViaMapper} naming another of them becomes a
- * {@code via} row naming that field. The twin is built when every attribute has a row of the same
- * meaning: the target, {@code lenient}, {@code renames} and {@code drops}, a {@code @Transform}
- * naming a {@code BridgeFn} class both ways, and a {@code @ViaMapper} naming another bridge of the
- * compilation. Every other compilation is counted as having no twin.
+ * {@code via} row naming that field, and one naming a class written by hand a {@code via} row of
+ * that class's {@code forward} and {@code backward}. The twin is built when every attribute has a
+ * row of the same meaning: the target, {@code lenient}, {@code renames} and {@code drops}, a
+ * {@code @Transform} naming a {@code BridgeFn} class both ways or a method forward only, and a
+ * {@code @ViaMapper}. Every other compilation is counted as having no twin.
  */
 final class FieldTwin {
 
@@ -51,6 +53,8 @@ final class FieldTwin {
 
   static final AtomicInteger UNTWINNED = new AtomicInteger();
 
+  private static final Pattern FIELD_PREFIX = Pattern.compile("^In the rows of @Bridge field \\w+\\.\\w+: ");
+
   private FieldTwin() {}
 
   /**
@@ -65,9 +69,9 @@ final class FieldTwin {
       return;
     }
     final var compiled = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), twin.get());
-    // A class the conversion's row cannot take at its types, a generic BridgeFn or one wider
-    // than the properties, which @Transform checks itself, is a carrier javac refuses: no row of
-    // the same meaning exists.
+    // A class a row cannot take at its types is a carrier javac refuses: a generic BridgeFn or one
+    // wider than the properties, which @Transform checks itself, or a @ViaMapper class whose
+    // backward returns a class its forward does not take. No row of the same meaning exists.
     if (
       compiled
         .errors()
@@ -87,6 +91,22 @@ final class FieldTwin {
       assertFalse(
         compiled.success(),
         () -> "the class form is refused and its field twin is not:\n" + original.errorMessages()
+      );
+      // The field form refuses with the class form's words, once a refusal made on a field's rows
+      // is read without its prefix. It refuses earlier where a field's rows cannot be written at
+      // all: a side nested in another class, or a row naming a property its side lacks.
+      final var refusal = original.errors().getFirst().getMessage(Locale.ROOT);
+      final var twinRefusals = compiled
+        .errors()
+        .stream()
+        .map(d -> FIELD_PREFIX.matcher(d.getMessage(Locale.ROOT)).replaceFirst(""))
+        .toList();
+      final var earlier = twinRefusals
+        .stream()
+        .anyMatch(m -> m.contains("must be a top-level type") || m.startsWith("invalid method reference"));
+      assertTrue(
+        earlier || twinRefusals.contains(refusal),
+        () -> "the field twin is refused otherwise than the class form:\n  " + refusal + "\nvs\n  " + twinRefusals
       );
       return;
     }

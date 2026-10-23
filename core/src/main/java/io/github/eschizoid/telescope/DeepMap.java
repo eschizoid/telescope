@@ -43,6 +43,7 @@ import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
+import io.github.eschizoid.telescope.mapping.ViaMethods;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.IOException;
 import java.lang.System.Logger;
@@ -718,6 +719,7 @@ public final class DeepMap {
       case TypedTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case Via<?, ?> __ -> PairWalk.RowKind.CONVERTING;
+      case ViaMethods<?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case Drop<?, ?, ?> __ -> PairWalk.RowKind.DROP;
       case TelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case FromTelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
@@ -1380,6 +1382,7 @@ public final class DeepMap {
           case TypedTransformTo<?, ?, ?, ?> __ -> true;
           case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> true;
           case Via<?, ?> __ -> true;
+          case ViaMethods<?, ?> __ -> true;
         };
         if (!structural) continue;
         final var tgtField = tgtRefl.normalize(row.targetField());
@@ -1959,9 +1962,15 @@ public final class DeepMap {
     final var sourceWriter = srcRefl.writerFor(sides.source());
     final var fixedTarget = fixedBy(paired.target(), paired.targetMember());
     final var fixedSource = forwardOnly ? null : fixedBy(paired.source(), paired.sourceMember());
-    if (row instanceof Via<?, ?> via) {
-      refuseResultUnfit(sides, "target", sides.tgtField(), via.nested().targetClass(), fixedTarget);
-      refuseResultUnfit(sides, "source", sides.srcField(), via.nested().sourceClass(), fixedSource);
+    final var nested = switch (row) {
+      case Via<?, ?> via -> via.nested();
+      // A via row of two methods reads them only while the runtime path builds a mapper.
+      case ViaMethods<?, ?> methods -> methods.resolved().nested();
+      default -> null;
+    };
+    if (nested != null) {
+      refuseResultUnfit(sides, "target", sides.tgtField(), nested.targetClass(), fixedTarget);
+      refuseResultUnfit(sides, "source", sides.srcField(), nested.sourceClass(), fixedSource);
     }
     final var intoTarget = narrower(Beans.writtenClass(targetWriter, sides.target(), sides.tgtField()), fixedTarget);
     final var intoSource = forwardOnly
@@ -2334,7 +2343,8 @@ public final class DeepMap {
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides);
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, false);
+      case ViaMethods<?, ?> r -> liftViaIfNeeded(r.resolved(), srcType, tgtType, sides, r.forwardTakesAnySubclass());
       // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
       // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
       // called. The cases exist only because the sealed switch must stay exhaustive — if a future
@@ -2370,7 +2380,8 @@ public final class DeepMap {
     final Via<?, ?> row,
     final Type srcType,
     final Type tgtType,
-    final RowSides sides
+    final RowSides sides,
+    final boolean anySubclass
   ) {
     // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
     // pull the source/target classes from the same Mapper. Reading the public components inline
@@ -2390,7 +2401,8 @@ public final class DeepMap {
       srcShape != null &&
       tgtShape != null &&
       srcShape.kind() == tgtShape.kind() &&
-      elementTypeMatches(srcShape.elementType(), mapperSrc) &&
+      (elementTypeMatches(srcShape.elementType(), mapperSrc) ||
+        (anySubclass && srcShape.elementType() instanceof Class<?> held && mapperSrc.isAssignableFrom(held))) &&
       elementTypeMatches(tgtShape.elementType(), mapperTgt)
     ) {
       if (srcShape.kind() == ContainerView.Kind.MAP_VALUES && !srcShape.keyType().equals(tgtShape.keyType())) {

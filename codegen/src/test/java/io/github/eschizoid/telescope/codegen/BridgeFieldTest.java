@@ -14,6 +14,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import javax.annotation.processing.Processor;
@@ -622,6 +623,13 @@ class BridgeFieldTest {
     "  public static Integer backward(final Long l) { return (int) (l / 10); }\n" +
     "}\n";
 
+  private static final String PRIMITIVE_MAP =
+    "package fb;\n" +
+    "public final class ItemMap {\n" +
+    "  public static long forward(final int i) { return i * 10L; }\n" +
+    "  public static int backward(final long l) { return (int) (l / 10); }\n" +
+    "}\n";
+
   static List<String[]> viaShapes() {
     final var items = "java.util.Arrays.asList(new Item(\"a\"), null, new Item(\"b\"))";
     return List.of(
@@ -669,6 +677,27 @@ class BridgeFieldTest {
         "java.util.List<Long>",
         WRAPPING_MAP,
         "java.util.Arrays.asList(1, null, 3)",
+      },
+      new String[] {
+        "a forward taking a primitive, over a List of its wrapper",
+        "java.util.List<Integer>",
+        "java.util.List<Long>",
+        PRIMITIVE_MAP,
+        "java.util.Arrays.asList(1, null, 3)",
+      },
+      new String[] {
+        "a forward taking a primitive, over an Optional of its wrapper",
+        "java.util.Optional<Integer>",
+        "java.util.Optional<Long>",
+        PRIMITIVE_MAP,
+        "java.util.Optional.of(4)",
+      },
+      new String[] {
+        "a forward taking a primitive, over a Map's values of its wrapper",
+        "java.util.Map<String, Integer>",
+        "java.util.Map<String, Long>",
+        PRIMITIVE_MAP,
+        "new java.util.TreeMap<>(java.util.Map.of(\"k\", 2, \"m\", 5))",
       }
     );
   }
@@ -732,12 +761,50 @@ class BridgeFieldTest {
     }
   }
 
+  static List<String[]> rowsNamingAGeneratedBridge() {
+    return List.of(
+      new String[] { "a via row", "via(Src::value, Dst::value, ItemBridge::forward, ItemBridge::backward)" },
+      new String[] { "a to row", "to(Src::value, Dst::value, ItemBridge::forward, ItemBridge::backward)" }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("rowsNamingAGeneratedBridge")
+  @DisplayName("a row naming a bridge the same compilation generates is read once that bridge exists")
+  void aRowNamingAGeneratedBridgeIsReadOnceItExists(final String name, final String row) throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Item",
+        "package fb; @io.github.eschizoid.telescope.annotations.Bridge(ItemDto.class) public record Item(String label) {}",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.Src",
+        "package fb; public record Src(Item value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(ItemDto value) {}",
+        "fb.Fields",
+        HEADER +
+          "public final class Fields {\n" +
+          "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class, " +
+          row +
+          ");\n}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.SrcToDstBridge"), () -> name + ": " + c.generated().keySet());
+    try (final var loader = load(c)) {
+      final var generated = (Mapper<?, ?>) field(loader, "fb.Fields", "GEN");
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs(), name);
+    }
+  }
+
   static List<String[]> viaMethodRefusals() {
     return List.of(
       new String[] { "methods with other names", "Conv2::up, Conv2::down" },
       new String[] { "a backward of another class", "ItemMap::forward, Conv2::down" },
       new String[] { "a backward of another name", "ItemMap::forward, ItemMap::back" },
-      new String[] { "an instance method", "Item::toDto, ItemMap::backward" }
+      new String[] { "an instance method", "Item::toDto, ItemMap::backward" },
+      new String[] { "a backward of the same name on another class", "ItemMap::forward, Other::backward" }
     );
   }
 
@@ -760,6 +827,9 @@ class BridgeFieldTest {
         "package fb; public final class Conv2 {\n" +
           "  public static ItemDto up(final Item i) { return new ItemDto(i.name()); }\n" +
           "  public static Item down(final ItemDto d) { return new Item(d.label()); }\n}\n",
+        "fb.Other",
+        "package fb; public final class Other {\n" +
+          "  public static Item backward(final ItemDto d) { return new Item(d.label()); }\n}\n",
         "fb.Src",
         "package fb; public record Src(Item value) {}",
         "fb.Dst",
@@ -806,7 +876,7 @@ class BridgeFieldTest {
       final var item = loader.loadClass("fb.Item").getConstructors()[0];
       final var src = loader
         .loadClass("fb.Src")
-        .getConstructors()[0].newInstance(java.util.Arrays.asList(item.newInstance("a"), null));
+        .getConstructors()[0].newInstance(Arrays.asList(item.newInstance("a"), null));
       assertEquals("Dst[value=[ItemDto[label=A], null]]", generated.forward(src).toString());
     }
     final var named = compile(

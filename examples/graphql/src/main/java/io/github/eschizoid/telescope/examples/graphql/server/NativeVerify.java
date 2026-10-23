@@ -11,6 +11,8 @@ import io.github.eschizoid.telescope.examples.graphql.model.AccountBuilderBean;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountEntity;
 import io.github.eschizoid.telescope.examples.graphql.model.Address;
 import io.github.eschizoid.telescope.examples.graphql.model.Badge;
+import io.github.eschizoid.telescope.examples.graphql.model.Booking;
+import io.github.eschizoid.telescope.examples.graphql.model.BookingView;
 import io.github.eschizoid.telescope.examples.graphql.model.Crewmate;
 import io.github.eschizoid.telescope.examples.graphql.model.Label;
 import io.github.eschizoid.telescope.examples.graphql.model.Role;
@@ -24,6 +26,7 @@ import io.github.eschizoid.telescope.examples.graphql.model.User;
 import io.github.eschizoid.telescope.examples.graphql.model.UserFromMap;
 import io.github.eschizoid.telescope.examples.graphql.model.UserTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.UserView;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -80,6 +83,9 @@ import java.util.Map;
  *       generated from the field's rows by the calling class through {@code StackWalker} and {@code
  *       ServiceLoader}, in the image. {@link Ticket} and {@link TicketView} have no reflection
  *       registration, so a mapper that fell back to the runtime path fails here.
+ *   <li><b>{@code @Bridge} mapper field with a via row of two methods</b> — {@code Booking.VIEW}:
+ *       the generated bridge calls {@code TicketViews.forward} and {@code backward} on each ticket,
+ *       and the row's method references are never decoded, so they need no serialization entry.
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
@@ -138,6 +144,12 @@ public final class NativeVerify {
       guard(
         "@Bridge mapper field runs its generated bridge (StackWalker + ServiceLoader, no registration)",
         NativeVerify::bridgeField
+      )
+    );
+    results.add(
+      guard(
+        "@Bridge mapper field with a via row of two methods runs its bridge, the methods never read",
+        NativeVerify::bridgeFieldViaMethods
       )
     );
 
@@ -340,6 +352,28 @@ public final class NativeVerify {
     expect(ticket.equals(mapper.backward(view)), "bridge field backward mismatch");
     final var patched = mapper.patch(ticket, new TicketView(null, "3C"));
     expect(new Ticket("K7", "3C").equals(patched), "bridge field patch mismatch: " + patched);
+  }
+
+  // (n) a @Bridge mapper field whose via row names two methods written by hand: the generated
+  // bridge calls them on each ticket, and the row's method references are never decoded, so the
+  // image needs no serialization registration for them.
+  private static void bridgeFieldViaMethods() {
+    final var mapper = Booking.VIEW;
+    expect(
+      mapper
+        .explain()
+        .declared()
+        .map(d -> d.runs() == OpticNode.Runs.GENERATED)
+        .orElse(false),
+      "via-row field is not on the generated path: " + mapper.explain()
+    );
+    final var booking = new Booking("B1", List.of(new Ticket("K7", "12A"), new Ticket("K8", "12B")));
+    final var view = mapper.forward(booking);
+    expect(
+      new BookingView("B1", List.of(new TicketView("K7", "12A"), new TicketView("K8", "12B"))).equals(view),
+      "via-row field forward mismatch: " + view
+    );
+    expect(booking.equals(mapper.backward(view)), "via-row field backward mismatch");
   }
 
   // "native-image" when running as a compiled binary, otherwise "JVM" — a green JVM run only

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.declaredbridge;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.BridgeFn;
@@ -103,6 +104,74 @@ public final class DeclaredFixtures {
   }
 
   public record ForwardDto(String label) {}
+
+  public record Lazy(String v) {}
+
+  public record LazyDto(String v) {}
+
+  public static final Telescope<Lazy, LazyDto> LAZY_BRIDGE = Telescope.bridge(
+    new BridgeFn<Lazy, LazyDto>() {
+      @Override
+      public LazyDto forward(final Lazy s) {
+        GENERATED_CALLS.incrementAndGet();
+        return s == null ? null : new LazyDto(s.v());
+      }
+
+      @Override
+      public Lazy backward(final LazyDto t) {
+        GENERATED_CALLS.incrementAndGet();
+        return t == null ? null : new Lazy(t.v());
+      }
+    }
+  );
+
+  /**
+   * A class whose field's via row converts through two lambdas, which the runtime path refuses to
+   * read, so its mapper builds only if the generated path never reads them.
+   */
+  public static final class LazyMappers {
+
+    private LazyMappers() {}
+
+    public static final Mapper<Lazy, LazyDto> LAZY = Telescope.mapper(
+      Lazy.class,
+      LazyDto.class,
+      via(Lazy::v, LazyDto::v, (String s) -> s, (String s) -> s)
+    );
+  }
+
+  public static final class LazyProvider implements BridgeProvider {
+
+    @Override
+    public Class<?> sourceType() {
+      return Lazy.class;
+    }
+
+    @Override
+    public Class<?> targetType() {
+      return LazyDto.class;
+    }
+
+    @Override
+    public Class<?> declaringType() {
+      return LazyMappers.class;
+    }
+
+    @Override
+    public List<String> rowKinds() {
+      return List.of("ViaMethods");
+    }
+
+    @Override
+    public List<String> rowAccessors() {
+      return List.of("v>v");
+    }
+
+    @Override
+    public Object bridge() {
+      return LAZY_BRIDGE;
+    }
+  }
 
   /**
    * The grant a registered provider was handed when a field's factory call was dispatched to it.

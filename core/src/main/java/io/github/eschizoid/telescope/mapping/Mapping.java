@@ -8,7 +8,6 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
-import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -49,6 +48,7 @@ public sealed interface Mapping<A, B>
     TypedTransformTo,
     ForwardOnlyTransformTo,
     Via,
+    ViaMethods,
     Drop,
     TelescopeTo,
     FromTelescopeTo,
@@ -508,22 +508,18 @@ public sealed interface Mapping<A, B>
    * <p>In a {@code @Bridge} mapper the two are the static {@code forward} and {@code backward}
    * methods of one class, which the generated bridge calls on the same values.
    *
-   * @throws IllegalArgumentException if {@code forward} or {@code backward} is not a method
-   *     reference converting one value
+   * <p>The methods are read when the runtime path builds a mapper from the row; a mapper a
+   * {@code @Bridge} field declares, which runs its generated bridge, never reads them. Building
+   * that mapper throws {@link IllegalArgumentException} if either is not a method reference
+   * converting one value.
    */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
   static <A, B, X, Y, U, V extends X> Mapping<A, B> via(
     final Accessor<A, ?> src,
     final Accessor<B, ?> tgt,
     final Accessor<X, Y> forward,
     final Accessor<U, V> backward
   ) {
-    final var classes = LambdaIntrospection.conversionOf(forward);
-    LambdaIntrospection.conversionOf(backward);
-    final Function<Object, Object> there = (Function) forward;
-    final Function<Object, Object> back = (Function) backward;
-    final var element = Mapper.create(there, back, (Class<Object>) classes[0], (Class<Object>) classes[1], Map.of());
-    return new Via<>(src, tgt, element);
+    return new ViaMethods<>(src, tgt, forward, backward);
   }
 
   /**

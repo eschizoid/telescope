@@ -841,7 +841,7 @@ final class FieldRows {
       final var refusal = write(row, src.property(), tgt.property(), owner);
       if (refusal != null) return refusal;
       if (!viaMappers.containsKey(src.property())) viaMappers.put(src.property(), owner.getQualifiedName().toString());
-      rowKinds.add("Via");
+      rowKinds.add("ViaMethods");
       rowAccessors.add(src.method() + ">" + tgt.method());
       return null;
     }
