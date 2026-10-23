@@ -895,7 +895,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       "AUTO",
       Map.of(),
       parsed.computes(),
-      Map.of(),
+      parsed.transformMethods(),
       carrier.getQualifiedName().toString(),
       !parsed.strict(),
       fieldName,
@@ -948,6 +948,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     unreadRows.clear();
+  }
+
+  /**
+   * The target, among {@code targets}, of a pair whose source is {@code source} and which a {@code
+   * @Bridge} field declares, or null.
+   */
+  private TypeMirror fieldDeclaredTarget(final TypeElement source, final Set<String> targets) {
+    final var sourceFq = source.getQualifiedName().toString();
+    final var pairs = new ArrayList<TypePair>(configsByPair.keySet());
+    pairs.addAll(deferredConfigs.keySet());
+    for (final var pair : pairs) {
+      final var cfg = configOf(pair);
+      if (cfg == null || cfg.declaringField() == null) continue;
+      if (!pair.sourceFq().equals(sourceFq) || !targets.contains(pair.targetFq())) continue;
+      final var target = processingEnv.getElementUtils().getTypeElement(pair.targetFq());
+      if (target != null) return target.asType();
+    }
+    return null;
   }
 
   /** Why a pair a {@code @Bridge} field declares cannot be declared again. */
@@ -3241,6 +3259,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           break;
         }
       }
+      // A case whose pair a @Bridge field declares carries no annotation of its own.
+      if (caseTarget == null) caseTarget = fieldDeclaredTarget(sourceCaseEl, targetPermitsFq);
       if (caseTarget == null) {
         if (caseBridges.isEmpty()) {
           error(

@@ -36,7 +36,7 @@ the existing emitter without a second one.
    through a `@Transform` class today, so every type check the emitter makes applies unchanged.
 
    Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
-   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, `toOrElseGet`, and the
+   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the
    mapper-wide hints `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated
    path is added to this list then.
 
@@ -51,8 +51,11 @@ the existing emitter without a second one.
    class's static initialiser, which is what initialises a `@Bridge` field. When one is found the factory returns a
    mapper over the generated bridge and builds nothing reflective; when none is found, because the processor did not
    run, it builds the runtime mapper from the same rows. A call from a method or a lambda always builds the runtime
-   mapper. The processor refuses another call in the static initialiser for the same pair, or for classes it cannot
-   name, so the lookup cannot hand the generated bridge to a call with other rows.
+   mapper. At compile time, a class that declares a `@Bridge` field builds no other mapper except as a static field
+   initialised in place, naming literal classes of a pair no `@Bridge` field of the class declares; every other
+   `Telescope.mapper` or `mapperForward` call in the class is refused by name. The two guards together keep the
+   generated bridge from a call with other rows: the runtime one stops a call outside the static initialiser, the
+   compile-time one a call inside it, a helper's included.
 5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
    pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a
    compilation, which is the rule carrier bridges already follow at run time. When the processor did not run, such a
@@ -71,13 +74,14 @@ the existing emitter without a second one.
    bridge on the class path was generated from other rows. A class the processor never saw leaves no trace at run time,
    since `@Bridge` is retained only in source, so its mapper carries no such node.
 
-> **Amendment (2026-10-23).** A provider whose recorded row kinds differ from the call's rows is passed over rather than
-> refused: the factory builds the runtime mapper from the rows it was given, logs a warning, and `explain()` says why.
-> The rows are what the author wrote, so they are the declaration to honour. The note on a compiler without the tree API
-> is a warning on each field, so it is seen where the field is. A named module that does not `provides` the generated
-> bridges gets a mandatory warning naming the line to add, since `ServiceLoader` ignores `META-INF/services` there. A
-> `to` row also takes one two-way conversion, a `BridgeFn` instance or its class, on both paths; this is a public
-> addition the feature's pull request puts to the user.
+> **Amendment (2026-10-23).** A provider whose recorded rows differ from the call's, in kind or in the accessors they
+> name, is passed over rather than refused: the factory builds the runtime mapper from the rows it was given, logs a
+> warning, and `explain()` says why. The rows are what the author wrote, so they are the declaration to honour. The note
+> on a compiler without the tree API is a warning on each field, so it is seen where the field is. A named module that
+> does not `provides` the generated bridges gets a mandatory warning naming the line to add, since `ServiceLoader`
+> ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its
+> class, on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge
+> builds it when the bridge is initialised.
 
 ### Amendments to ADR-0018
 
@@ -97,12 +101,16 @@ the existing emitter without a second one.
 - Every field name in a mapping is a method reference the compiler checks.
 - A call site keeps working unchanged when the processor is removed; it runs the runtime mapper instead.
 - Building a mapper costs one stack walk and one `ServiceLoader` scan more than today, once per mapper.
-- The generated path needs no reflection configuration inside a native image: the rows are constructed but never
-  decoded, `ServiceLoader` providers are registered by the image builder, and `StackWalker` is supported there. The
-  `NativeVerify` binary covers a field-declared mapper.
+- The generated path needs no reflection configuration inside a native image: `ServiceLoader` providers are registered
+  by the image builder, `StackWalker` is supported there, and the rows are built but not decoded, except a `constant`
+  or `compute` row, which decodes its target accessor. The `NativeVerify` binary covers a field-declared mapper.
 - A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
-  generated from. The provider records the kinds of the rows it was generated from, and the runtime builds the mapper
-  from the call's rows when they differ, rather than running a stale bridge.
+  generated from. The provider records the kind of each row and the accessors it names; on the JVM the factory compares
+  both with the rows it is given, and builds the runtime mapper from those rows when they differ. What the comparison
+  cannot see is a converter, supplier or constant replaced by another while the accessors stay the same, since a
+  `Function` carries no name to compare. Inside a native image only the kinds are compared, because reading the
+  accessors decodes each method reference; an image is built from one compilation, where the provider and the rows
+  cannot disagree.
 
 ## Alternatives considered
 

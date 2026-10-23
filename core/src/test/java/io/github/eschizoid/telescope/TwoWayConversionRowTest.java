@@ -53,6 +53,32 @@ class TwoWayConversionRowTest {
     }
   }
 
+  public static final class Throwing implements BridgeFn<String, String> {
+
+    public Throwing() {
+      throw new IllegalStateException("cannot be built");
+    }
+
+    @Override
+    public String forward(final String s) {
+      return s;
+    }
+
+    @Override
+    public String backward(final String s) {
+      return s;
+    }
+  }
+
+  @Test
+  @DisplayName("a class whose constructor throws fails where the row is built, as the generated bridge fails where it is")
+  void aThrowingConstructorFailsWithTheRow() {
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      to(Contact::email, ContactDto::address, Throwing.class)
+    );
+    assertEquals("cannot be built", thrown.getMessage());
+  }
+
   @Test
   @DisplayName("an instance converts forward through forward and backward through backward")
   void anInstanceConvertsBothWays() {

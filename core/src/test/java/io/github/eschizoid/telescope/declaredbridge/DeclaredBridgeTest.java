@@ -31,6 +31,8 @@ class DeclaredBridgeTest {
     assertEquals(new Point("b", "m"), mapper.backward(new PointDto("b", "m")));
     assertEquals(new Point("c", "n"), mapper.patch(new Point("a", "n"), new PointDto("c", null)));
     assertEquals(3, DeclaredFixtures.GENERATED_CALLS.get() - before);
+    assertEquals(null, mapper.forward(null));
+    assertEquals(null, mapper.backward(null));
   }
 
   @Test

@@ -97,6 +97,7 @@ final class FieldRows {
     Map<String, String> renames,
     Map<String, List<String>> fanouts,
     Map<String, String> transforms,
+    Map<String, String> transformMethods,
     Set<String> forwardOnly,
     Map<String, String> viaMappers,
     Map<String, String> computes,
@@ -393,6 +394,7 @@ final class FieldRows {
     private final Map<String, String> renames = new LinkedHashMap<>();
     private final Map<String, List<String>> fanouts = new LinkedHashMap<>();
     private final Map<String, String> transforms = new LinkedHashMap<>();
+    private final Map<String, String> transformMethods = new LinkedHashMap<>();
     private final Set<String> forwardOnly = new LinkedHashSet<>();
     private final Map<String, String> viaMappers = new LinkedHashMap<>();
     private final Map<String, String> computes = new LinkedHashMap<>();
@@ -427,6 +429,7 @@ final class FieldRows {
         renames,
         fanouts,
         transforms,
+        transformMethods,
         forwardOnly,
         viaMappers,
         computes,
@@ -533,7 +536,23 @@ final class FieldRows {
       }
       final var refusal = write(row, s.property(), t.property(), ((Call) forward).method());
       if (refusal != null) return refusal;
+      final var forwardMethod = ((Call) forward).method();
+      if (
+        !twoWay &&
+        !transforms.containsKey(s.property()) &&
+        forwardMethod.getKind() == ElementKind.METHOD &&
+        forwardMethod.getModifiers().contains(Modifier.STATIC) &&
+        ((TypeElement) forwardMethod.getEnclosingElement()).getNestingKind() == NestingKind.TOP_LEVEL
+      ) {
+        // A static method converting forward only is called by name from the bridge, as a
+        // @Transform naming a method is.
+        transforms.put(s.property(), ((TypeElement) forwardMethod.getEnclosingElement()).getQualifiedName().toString());
+        transformMethods.put(s.property(), forwardMethod.getSimpleName().toString());
+        forwardOnly.add(s.property());
+      }
       if (!transforms.containsKey(s.property())) {
+        final var unnamed = unnameable(s, t);
+        if (unnamed != null) return unnamed;
         final var name = bridgeName + camel(s.property()) + "Fn";
         transforms.put(s.property(), qualified(name));
         if (!twoWay) forwardOnly.add(s.property());
@@ -576,6 +595,8 @@ final class FieldRows {
       ) {
         final var heldOwner = (TypeElement) held.getEnclosingElement();
         if (!reachable(held, heldOwner)) return new Refused(conversion, unreachable(heldOwner, held.getSimpleName()));
+        final var unnamed = unnameable(s, t);
+        if (unnamed != null) return unnamed;
         final var reference = heldOwner.getQualifiedName() + "." + held.getSimpleName();
         final var name = bridgeName + camel(s.property()) + "Fn";
         using = qualified(name);
@@ -626,6 +647,8 @@ final class FieldRows {
       if (transforms.containsKey(s.property())) {
         return new Refused(row, "a @Bridge mapper converts one source property through one row");
       }
+      final var unnamed = unnameable(s, t);
+      if (unnamed != null) return unnamed;
       final var name = bridgeName + camel(s.property()) + "Fn";
       transforms.put(s.property(), qualified(name));
       classes.add(bridgeFn(name, s.type(), t.type(), "v == null ? " + fallback + " : v", "v"));
@@ -722,6 +745,8 @@ final class FieldRows {
       if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
+      final var unnamed = unnameable(t);
+      if (unnamed != null) return unnamed;
       final var name = bridgeName + camel(t.property()) + (constant ? "Constant" : "Compute");
       computes.put(t.property(), qualified(name));
       classes.add(supplier(name, t.type(), value));
@@ -822,11 +847,8 @@ final class FieldRows {
       final var declared = types.asMemberOf((DeclaredType) side.asType(), accessor);
       final var read = ((ExecutableType) declared).getReturnType();
       final var type = read.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) read).asType() : read;
-      if (!nameable(type)) {
-        return new Refused(arg, "the type " + type + " this accessor reads has no name the generated bridge can write");
-      }
       final var method = accessor.getSimpleName().toString();
-      return new Accessor(property(method, side), type, method);
+      return new Accessor(property(method, side), type, method, arg);
     }
 
     /**
@@ -1067,6 +1089,26 @@ final class FieldRows {
       return new GeneratedClass(qualified(name), out.toString());
     }
 
+    /**
+     * The refusal of a row whose conversion the processor writes as a class of its own, when that
+     * class cannot name the type of one of {@code sides}, as a type variable of a generic class; or
+     * null.
+     */
+    private Refused unnameable(final Accessor... sides) {
+      for (final var side : sides) {
+        if (!nameable(side.type())) {
+          return new Refused(
+            side.at(),
+            "the type " +
+              side.type() +
+              " this accessor reads has no name the class the processor writes for the row's conversion" +
+              " can use; convert it with a BridgeFn class, to(src, tgt, ItsFn.class), instead"
+          );
+        }
+      }
+      return null;
+    }
+
     private boolean nameable(final TypeMirror type) {
       if (type.getKind() == TypeKind.ARRAY) return nameable(((ArrayType) type).getComponentType());
       if (type.getKind() != TypeKind.DECLARED) return type.getKind().isPrimitive();
@@ -1078,7 +1120,7 @@ final class FieldRows {
     }
   }
 
-  private record Accessor(String property, TypeMirror type, String method) {}
+  private record Accessor(String property, TypeMirror type, String method, Tree at) {}
 
   /**
    * Whether {@code accessor} of {@code declaring} reads a property: a record's component accessor,

@@ -104,8 +104,8 @@ public final class Mapper<A, B> {
   private final boolean traced;
 
   // The generated bridge this mapper converts through, when it is one with no hooks: forward and
-  // backward call it directly, as a bridge called on its own is, since it already returns null for
-  // null. Null for every other mapper.
+  // backward call it directly, as a bridge called on its own is, null included, since a generated
+  // bridge returns null for null. Null for every other mapper.
   private final BridgeFn<A, B> generated;
 
   /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
@@ -569,9 +569,9 @@ public final class Mapper<A, B> {
     // Null in, null out — matches MapStruct's generated `if (source == null) return null;` and the
     // JPA "no row" idiom adopters rely on. The hook chain is skipped on null since neither
     // pre/postForward has a sensible meaning when no value flowed through.
-    if (a == null) return null;
     final var direct = generated;
     if (direct != null) return direct.forward(a);
+    if (a == null) return null;
     final A a1 = preForward == null ? a : preForward.apply(a);
     // Post-hook null guard: a preForward that returns null (e.g. a normalisation hook that maps
     // sentinel-empty to null) must propagate as null, not NPE in iso.to(null). postForward is
@@ -759,9 +759,9 @@ public final class Mapper<A, B> {
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
     // Null in, null out — symmetric with forward(). See the rationale on forward(Object) above.
-    if (b == null) return null;
     final var direct = generated;
     if (direct != null) return direct.backward(b);
+    if (b == null) return null;
     final B b1 = preBackward == null ? b : preBackward.apply(b);
     if (b1 == null) return null;
     final A a = iso.from(b1);
