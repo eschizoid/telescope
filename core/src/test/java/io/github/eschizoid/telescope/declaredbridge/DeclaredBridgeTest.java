@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.declaredbridge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.Forward;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.ForwardDto;
@@ -54,6 +55,24 @@ class DeclaredBridgeTest {
     assertTrue(declared.why().contains("built from [SameTypedTo]"), declared::why);
     assertTrue(declared.why().contains("re-run the annotation processor"), declared::why);
     assertTrue(mapper.explain().toString().startsWith("Runs: runtime — "), mapper.explain()::toString);
+  }
+
+  @Test
+  @DisplayName("a bridge generated from rows naming other accessors is passed over on the JVM")
+  void aBridgeFromOtherAccessorsIsPassedOver() {
+    // An image compares row kinds only; the accessors are read on the JVM.
+    assumeTrue(System.getProperty("org.graalvm.nativeimage.imagecode") == null);
+    final var mapper = DeclaredFixtures.MovedMappers.MOVED;
+    final var before = DeclaredFixtures.GENERATED_CALLS.get();
+    assertEquals(
+      new DeclaredFixtures.MovedDto("n"),
+      mapper.forward(new DeclaredFixtures.Moved("n", "a"))
+    );
+    assertEquals(0, DeclaredFixtures.GENERATED_CALLS.get() - before);
+    final var declared = mapper.explain().declared().orElseThrow();
+    assertEquals(OpticNode.Runs.RUNTIME, declared.runs());
+    assertTrue(declared.why().contains("rows naming the accessors [alias>label, name>]"), declared::why);
+    assertTrue(declared.why().contains("built from rows naming [name>label, alias>]"), declared::why);
   }
 
   @Test

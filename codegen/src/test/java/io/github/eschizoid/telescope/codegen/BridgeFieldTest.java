@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
@@ -285,6 +286,16 @@ class BridgeFieldTest {
         "drop(User::secret, Address.class)",
         "drop(...) keyed to a nested pair has no generated form yet",
       },
+      new String[] {
+        "to(User::name, UserDto::name, NoCtor.class)",
+        "NoCtor has no no-argument constructor the generated bridge can call",
+      },
+      new String[] { "to(User::name, UserDto::name, AbstractFn.class)", "AbstractFn is abstract or not a class" },
+      new String[] { "to(User::toString, UserDto::kind)", "User::toString is not the accessor of a property of User" },
+      new String[] {
+        "constant(UserDto::userId, 5)",
+        "the value 5 is int, which the java.lang.Long property 'userId' does not hold",
+      },
       new String[] { "drop(User::secret), drop(User::secret)", "a property is dropped once, by a row of its own" },
       new String[] {
         "to(User::name, UserDto::name), drop(User::name)",
@@ -324,6 +335,11 @@ class BridgeFieldTest {
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",
+        "fb.NoCtor",
+        "package fb; public final class NoCtor implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {" +
+          " public NoCtor(int x) {} public String forward(String s) { return s; } public String backward(String s) { return s; } }",
+        "fb.AbstractFn",
+        "package fb; public abstract class AbstractFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {}",
         "fb.Mappers",
         HEADER +
           "public final class Mappers {\n" +
@@ -363,49 +379,101 @@ class BridgeFieldTest {
     assertTrue(helper.hasError("must be initialised by a Telescope.mapper(...)"), helper::errorMessages);
   }
 
+  static List<String[]> unsanctionedCalls() {
+    return List.of(
+      new String[] {
+        "the same pair in a static field",
+        "  static final ForwardMapper<User, UserDto> OTHER = Telescope.mapperForward(User.class, UserDto.class," +
+          " drop(User::nick), toOneWay(User::handle, UserDto::handle, Handle::new));",
+      },
+      new String[] {
+        "classes held in a variable",
+        "  static final Class<User> SOURCE = User.class;\n" +
+          "  static final ForwardMapper<User, UserDto> OTHER = Telescope.mapperForward(SOURCE, UserDto.class);",
+      },
+      new String[] {
+        "a static block",
+        "  static { Telescope.mapperForward(Address.class, AddressDto.class); }",
+      },
+      new String[] {
+        "a generic helper the class calls from a static field",
+        "  static <X, Y> ForwardMapper<X, Y> make(final Class<X> s, final Class<Y> t, final MapStep... rows) {" +
+          " return Telescope.mapperForward(s, t, rows); }\n" +
+          "  static final ForwardMapper<User, UserDto> SWAP = make(User.class, UserDto.class, drop(User::nick));",
+      },
+      new String[] {
+        "a method, another pair",
+        "  static ForwardMapper<Address, AddressDto> later() {" +
+          " return Telescope.mapperForward(Address.class, AddressDto.class); }",
+      },
+      new String[] {
+        "a lambda",
+        "  static final java.util.function.Supplier<ForwardMapper<Address, AddressDto>> LATER =" +
+          " () -> Telescope.mapperForward(Address.class, AddressDto.class);",
+      },
+      new String[] {
+        "a statically imported factory",
+        "  static Object later() {" +
+          " return io.github.eschizoid.telescope.Telescope.mapperForward(Address.class, AddressDto.class); }",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("unsanctionedCalls")
+  @DisplayName("a class with a @Bridge field builds no other mapper but a static field for another pair")
+  void aClassWithABridgeFieldBuildsNoOtherMapper(final String name, final String member) {
+    final var c = compile(
+      sources(
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge public static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
+          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          member +
+          "\n}\n"
+      )
+    );
+    assertFalse(c.success(), name);
+    assertTrue(
+      c.hasError("so every mapper the class builds is a static field initialised by Telescope.mapper(...)"),
+      c::errorMessages
+    );
+  }
+
   @Test
-  @DisplayName("another mapper of the pair in the declaring class is refused, since it would be handed the bridge")
-  void anotherMapperOfThePairInTheClassIsRefused() throws Exception {
-    final var head =
-      HEADER +
-      "public final class Mappers {\n" +
-      "  @Bridge public static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
-      " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n";
-    final var samePair = compile(
+  @DisplayName("a static field for another pair, and a nested class, may build mappers beside a @Bridge field")
+  void aStaticFieldForAnotherPairIsAllowed() throws Exception {
+    final var c = compile(
       sources(
         "fb.Mappers",
-        head +
-          "  static final ForwardMapper<User, UserDto> OTHER =" +
-          " Telescope.mapperForward(User.class, UserDto.class, drop(User::nick));\n}\n"
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge public static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
+          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          "  public static final ForwardMapper<Address, AddressDto> PLAIN =" +
+          " Telescope.mapperForward(Address.class, AddressDto.class);\n" +
+          "  public static final class Inner {\n" +
+          "    public static final ForwardMapper<User, UserDto> SAME = Telescope.mapperForward(User.class," +
+          " UserDto.class, toOneWay(User::name, UserDto::name, Conv::trim)," +
+          " toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          "  }\n" +
+          "}\n"
       )
     );
-    assertTrue(samePair.hasError("build this one in another class or in a method"), samePair::errorMessages);
-    final var unnamed = compile(
-      sources(
-        "fb.Mappers",
-        head +
-          "  static final Class<User> SOURCE = User.class;\n" +
-          "  static { Telescope.mapperForward(SOURCE, UserDto.class); }\n}\n"
-      )
-    );
-    assertTrue(unnamed.hasError("build this one in another class or in a method"), unnamed::errorMessages);
-    final var inMethod = compile(
-      sources(
-        "fb.Mappers",
-        head +
-          "  public static ForwardMapper<User, UserDto> later() {" +
-          " return Telescope.mapperForward(User.class, UserDto.class, drop(User::nick)," +
-          " toOneWay(User::handle, UserDto::handle, Handle::new)); }\n}\n"
-      )
-    );
-    assertTrue(inMethod.success(), inMethod::errorMessages);
-    try (final var loader = load(inMethod)) {
-      @SuppressWarnings("unchecked")
-      final var later = (ForwardMapper<Object, Object>) loader.loadClass("fb.Mappers").getMethod("later").invoke(null);
-      assertTrue(later.explain().declared().isEmpty(), "a mapper a method builds is the runtime mapper");
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
       @SuppressWarnings("unchecked")
       final var field = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "USER");
       assertEquals(OpticNode.Runs.GENERATED, field.explain().declared().orElseThrow().runs());
+      @SuppressWarnings("unchecked")
+      final var plain = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "PLAIN");
+      assertTrue(plain.explain().declared().isEmpty());
+      @SuppressWarnings("unchecked")
+      final var same = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers$Inner", "SAME");
+      assertTrue(same.explain().declared().isEmpty(), "a nested class is its own caller");
+      final var user = user(loader, "lovelace");
+      assertNotEquals(field.forward(user), same.forward(user), "the nested class's rows run, not the field's bridge");
     }
   }
 
@@ -863,5 +931,26 @@ class BridgeFieldTest {
       }
       assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
     }
+  }
+
+  @Test
+  @DisplayName("a refusal the bridge's planning makes is reported on the field's mapper call, in its rows' terms")
+  void aPlanningRefusalIsReportedOnTheCall() {
+    final var code =
+      HEADER +
+      "public final class Mappers {\n" +
+      "  @Bridge static final Mapper<Address, Wider> WIDER = Telescope.mapper(Address.class, Wider.class);\n" +
+      "}\n";
+    final var c = compile(sources("fb.Wider", "package fb; public record Wider(String city, String zip, String extra) {}", "fb.Mappers", code));
+    assertFalse(c.success());
+    final var refusal = c
+      .errors()
+      .stream()
+      .filter(d -> d.getMessage(Locale.ROOT).startsWith("In the rows of @Bridge field Mappers.WIDER: "))
+      .findFirst()
+      .orElseThrow(() -> new AssertionError(c.errorMessages()));
+    final var expected = position(code, "Telescope.mapper(Address.class, Wider.class)");
+    assertEquals("/fb/Mappers.java", refusal.getSource().getName());
+    assertEquals(expected[0], refusal.getLineNumber(), c::errorMessages);
   }
 }

@@ -142,7 +142,7 @@ public sealed interface Mapping<A, B>
 
   /**
    * As {@link #to(Accessor, Accessor, BridgeFn)}, naming the conversion's class, which is built
-   * through its no-argument constructor the first time the row converts a value.
+   * through its no-argument constructor when the row is.
    *
    * <pre>{@code
    * to(UserEntity::email, UserDto::contact, EmailFn.class)

@@ -56,6 +56,15 @@ public interface BridgeProvider {
   }
 
   /**
+   * For a bridge a field declared, the accessor methods each row of its mapper call names, as
+   * {@code source>target} with an empty side where a row names none, in order. Empty for a bridge a
+   * class declared.
+   */
+  default List<String> rowAccessors() {
+    return List.of();
+  }
+
+  /**
    * For a bridge a field declared, the target's properties, which {@code Mapper.into} writes. Empty
    * for a bridge a class declared.
    */

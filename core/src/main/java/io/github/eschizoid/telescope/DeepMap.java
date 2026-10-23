@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.FixedCheck;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MhIso;
+import io.github.eschizoid.telescope.internal.NativeImage;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.ResultCheck;
@@ -176,12 +177,11 @@ public final class DeepMap {
     }
     final var given = new ArrayList<String>(steps.length);
     for (final var step : steps) given.add(step.getClass().getSimpleName());
-    if (!given.equals(provider.rowKinds())) {
+    final var stale = staleness(provider, steps, given);
+    if (stale != null) {
       final var why =
-        "the bridge on the class path was generated from the rows " +
-        provider.rowKinds() +
-        ", but the mapper is built from " +
-        given +
+        "the bridge on the class path was generated from " +
+        stale +
         "; re-run the annotation processor on " +
         caller.getName();
       LOGGER.log(
@@ -208,6 +208,30 @@ public final class DeepMap {
         "the bridge " + bridgeName + ", generated from the rows of its @Bridge field"
       )
     );
+  }
+
+  /**
+   * How the rows a provider's bridge was generated from differ from {@code steps}, or null when they
+   * agree. The kinds of the rows are compared everywhere. The accessors each row names are compared
+   * on the JVM, where reading them decodes each method reference; inside a native image, which is
+   * built from one compilation and needs no such decoding, they are not.
+   */
+  private static String staleness(final BridgeProvider provider, final MapStep[] steps, final List<String> kinds) {
+    if (!kinds.equals(provider.rowKinds())) {
+      return "the rows " + provider.rowKinds() + ", but the mapper is built from " + kinds;
+    }
+    if (NativeImage.IN_IMAGE) return null;
+    final var accessors = new ArrayList<String>(steps.length);
+    for (final var step : steps) {
+      if (!(step instanceof Mapping<?, ?> row)) return null;
+      accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
+    }
+    if (accessors.equals(provider.rowAccessors())) return null;
+    return "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors;
+  }
+
+  private static String nullToEmpty(final String value) {
+    return value == null ? "" : value;
   }
 
   /**

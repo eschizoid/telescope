@@ -6,3 +6,4 @@ io.github.eschizoid.telescope.conversion.RegistryFixtures$RenamingProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$PointProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$StaleProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$ForwardProvider
+io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$MovedProvider

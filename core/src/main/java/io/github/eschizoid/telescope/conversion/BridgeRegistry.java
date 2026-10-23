@@ -1,8 +1,11 @@
 package io.github.eschizoid.telescope.conversion;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
 /**
@@ -24,6 +27,8 @@ public final class BridgeRegistry {
 
   private BridgeRegistry() {}
 
+  private static final Logger LOGGER = System.getLogger(BridgeRegistry.class.getName());
+
   /**
    * The providers registered for bridges that {@code @Bridge} fields of a class declare, by that
    * class, read once per class: a class's mapper fields are initialised together, so its first
@@ -35,7 +40,23 @@ public final class BridgeRegistry {
       final var loader =
         declaring.getClassLoader() != null ? declaring.getClassLoader() : BridgeRegistry.class.getClassLoader();
       final var found = new ArrayList<BridgeProvider>();
-      for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, loader)) {
+      final var providers = ServiceLoader.load(BridgeProvider.class, loader).iterator();
+      while (true) {
+        final BridgeProvider provider;
+        try {
+          if (!providers.hasNext()) break;
+          provider = providers.next();
+        } catch (final ServiceConfigurationError broken) {
+          // An entry naming a class that is missing or cannot be built says nothing of this class's
+          // bridges, so it is reported and passed over, and every other provider is still read.
+          LOGGER.log(
+            Level.WARNING,
+            () ->
+              "A BridgeProvider registration on the class path cannot be loaded, so it is passed over: " +
+              broken.getMessage()
+          );
+          continue;
+        }
         if (provider.declaringType() == declaring) found.add(provider);
       }
       return List.copyOf(found);

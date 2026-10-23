@@ -171,14 +171,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // silently ignored. Produces a partial-Iso whose backward (BRIDGE.set(source, target))
     // direction is documented as lossy.
     boolean lenient,
-    // The @Bridge field this pair's rows were read from, as declared in the carrier, or null for
-    // a
-    // @Bridge on a class. A field's bridge is named after the field and registered with its
-    // class.
+    // The @Bridge field this pair's rows were read from, as declared in the carrier, or null for a
+    // @Bridge on a class. A field's bridge is named after the field and registered with its class.
     String declaringField,
     // For a field's bridge, the classes of the rows the runtime builds from the field's call, in
-    // order, which its provider records so a provider left over from other rows is refused.
-    List<String> rowKinds
+    // order, and the accessors each row names; its provider records both, so a mapper built from
+    // other rows is not handed a bridge generated from these.
+    List<String> rowKinds,
+    List<String> rowAccessors
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -195,6 +195,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       null,
       false,
       null,
+      List.of(),
       List.of()
     );
 
@@ -223,6 +224,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
         false,
         declaringField,
+        List.of(),
         List.of()
       );
     }
@@ -277,6 +279,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /** The providers of the bridges {@code @Bridge} fields declare, to the class declaring each. */
   private final Map<String, TypeElement> fieldProviders = new LinkedHashMap<>();
+
+  /** The calls refused for a class's {@code @Bridge} fields, as {@code Class@position}, once each. */
+  private final Set<String> reportedCalls = new HashSet<>();
 
   /** The {@code @Bridge} fields, as {@code Carrier#FIELD}, whose sides were checked for Lombok. */
   private final Set<String> lombokWaited = new HashSet<>();
@@ -622,6 +627,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
           lenient,
           null,
+          List.of(),
           List.of()
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
@@ -763,6 +769,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Refused refused) {
+      // A null message is a call javac cannot resolve, which javac reports on its own.
+      if (refused.message() == null) return;
       if (refused.at() == null) error(field, refused.message());
       else errorAt(trees, field, refused.at(), refused.message());
       return;
@@ -820,24 +828,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(field, declaredTwice(pair, held));
       return;
     }
-    for (final var other : rows.otherCallsFor(carrier, parsed.source(), parsed.target(), call)) {
+    var unsanctioned = false;
+    for (final var other : rows.unsanctionedCalls(carrier)) {
+      unsanctioned = true;
+      final var at = trees.getSourcePositions().getStartPosition(trees.getPath(field).getCompilationUnit(), other);
+      if (!reportedCalls.add(carrier.getQualifiedName() + "@" + at)) continue;
       errorAt(
         trees,
         field,
         other,
         carrier.getSimpleName() +
-          " declares @Bridge field " +
-          fieldName +
-          " for " +
-          parsed.source().getSimpleName() +
-          " -> " +
-          parsed.target().getSimpleName() +
-          ", and the runtime hands that field's bridge to a mapper of the pair this class's static" +
-          " initialiser builds; a mapper built there names its classes as literals and another pair, so" +
-          " build this one in another class or in a method"
+          " declares a @Bridge field, and the runtime hands a field's bridge to a mapper of its pair this" +
+          " class builds, so every mapper the class builds is a static field initialised by" +
+          " Telescope.mapper(...) or mapperForward(...) written in place, naming its classes as literals," +
+          " for a pair no @Bridge field of the class declares; build this one in another class"
       );
-      return;
     }
+    if (unsanctioned) return;
     // The pair is held under the field's name while its classes are written.
     configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrier, fieldName));
     seen.add(pair);
@@ -892,7 +899,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       carrier.getQualifiedName().toString(),
       !parsed.strict(),
       fieldName,
-      List.copyOf(parsed.rowKinds())
+      List.copyOf(parsed.rowKinds()),
+      List.copyOf(parsed.rowAccessors())
     );
     if (
       !roundEnv.processingOver() && (carriesLombokTrigger(parsed.source()) || carriesLombokTrigger(parsed.target()))
@@ -1773,7 +1781,65 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return primitiveDefaultLiteral(type.getKind()).orElse("null");
   }
 
+  /**
+   * Plans and writes the bridge of the pair of {@code source} and {@code target}. While a bridge a
+   * {@code @Bridge} field declares is planned, every refusal is reported on that field's mapper
+   * call, which is where its rows are, rather than on a side or in a generated file.
+   */
   private void generate(
+    final TypeElement source,
+    final TypeElement target,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen
+  ) {
+    final var cfg = configOf(new TypePair(source.getQualifiedName().toString(), target.getQualifiedName().toString()));
+    final var previous = fieldOrigin;
+    fieldOrigin = cfg == null || cfg.declaringField() == null ? null : cfg.carrierFq() + "#" + cfg.declaringField();
+    try {
+      generatePair(source, target, pending, seen);
+    } finally {
+      fieldOrigin = previous;
+    }
+  }
+
+  /** The {@code @Bridge} field, as {@code Carrier#FIELD}, whose bridge is being planned, or null. */
+  private String fieldOrigin;
+
+  @Override
+  protected void error(final Element element, final String message) {
+    final var field = fieldOrigin == null ? null : fieldNamed(fieldOrigin);
+    if (field == null) {
+      super.error(element, message);
+      return;
+    }
+    final Trees trees;
+    try {
+      trees = Trees.instance(processingEnv);
+    } catch (final IllegalArgumentException e) {
+      super.error(field, message);
+      return;
+    }
+    final var call = new FieldRows(processingEnv, trees).initializerCall(field);
+    final var text =
+      "In the rows of @Bridge field " + field.getEnclosingElement().getSimpleName() + "." + field.getSimpleName() + ": " + message;
+    if (call == null) super.error(field, text);
+    else errorAt(trees, field, call, text);
+  }
+
+  /** The field {@code key}, as {@code Carrier#FIELD}, names in this round, or null. */
+  private VariableElement fieldNamed(final String key) {
+    final var at = key.lastIndexOf('#');
+    final var owner = processingEnv.getElementUtils().getTypeElement(key.substring(0, at));
+    if (owner == null) return null;
+    for (final var member : owner.getEnclosedElements()) {
+      if (member instanceof VariableElement field && member.getSimpleName().contentEquals(key.substring(at + 1))) {
+        return field;
+      }
+    }
+    return null;
+  }
+
+  private void generatePair(
     final TypeElement source,
     final TypeElement target,
     final Deque<TypePair> pending,
@@ -7124,6 +7190,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println("  @Override");
           out.println("  public List<String> rowKinds() {");
           out.println("    return List.of(" + quotedList(cfg.rowKinds()) + ");");
+          out.println("  }");
+          out.println();
+          out.println("  @Override");
+          out.println("  public List<String> rowAccessors() {");
+          out.println("    return List.of(" + quotedList(cfg.rowAccessors()) + ");");
           out.println("  }");
           out.println();
           out.println("  @Override");

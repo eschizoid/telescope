@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.declaredbridge;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -28,6 +29,73 @@ public final class DeclaredFixtures {
   public record StaleDto(String label) {}
 
   public record Forward(String name) {}
+
+  public record Moved(String name, String alias) {}
+
+  public record MovedDto(String label) {}
+
+  /** A bridge generated when the row read {@code alias}; the field's row now reads {@code name}. */
+  public static final Telescope<Moved, MovedDto> MOVED_BRIDGE = Telescope.bridge(
+    new BridgeFn<Moved, MovedDto>() {
+      @Override
+      public MovedDto forward(final Moved s) {
+        GENERATED_CALLS.incrementAndGet();
+        return new MovedDto(s.alias());
+      }
+
+      @Override
+      public Moved backward(final MovedDto t) {
+        GENERATED_CALLS.incrementAndGet();
+        return new Moved(t.label(), t.label());
+      }
+    }
+  );
+
+  /** A class whose field's row names another accessor than the one its bridge was generated from. */
+  public static final class MovedMappers {
+
+    private MovedMappers() {}
+
+    public static final Mapper<Moved, MovedDto> MOVED = Telescope.mapper(
+      Moved.class,
+      MovedDto.class,
+      to(Moved::name, MovedDto::label),
+      drop(Moved::alias)
+    );
+  }
+
+  public static final class MovedProvider implements BridgeProvider {
+
+    @Override
+    public Class<?> sourceType() {
+      return Moved.class;
+    }
+
+    @Override
+    public Class<?> targetType() {
+      return MovedDto.class;
+    }
+
+    @Override
+    public Class<?> declaringType() {
+      return MovedMappers.class;
+    }
+
+    @Override
+    public List<String> rowKinds() {
+      return List.of("SameTypedTo", "Drop");
+    }
+
+    @Override
+    public List<String> rowAccessors() {
+      return List.of("alias>label", "name>");
+    }
+
+    @Override
+    public Object bridge() {
+      return MOVED_BRIDGE;
+    }
+  }
 
   public record ForwardDto(String label) {}
 
@@ -172,6 +240,11 @@ public final class DeclaredFixtures {
     }
 
     @Override
+    public List<String> rowAccessors() {
+      return List.of("name>label");
+    }
+
+    @Override
     public List<String> targetProperties() {
       return List.of("label", "note");
     }
@@ -230,6 +303,11 @@ public final class DeclaredFixtures {
     @Override
     public List<String> rowKinds() {
       return List.of("SameTypedTo");
+    }
+
+    @Override
+    public List<String> rowAccessors() {
+      return List.of("name>label");
     }
 
     @Override

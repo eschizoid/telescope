@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.codegen;
 
-import com.sun.source.tree.BlockTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
@@ -19,6 +18,7 @@ import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,7 +33,11 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 
@@ -60,6 +64,20 @@ final class FieldRows {
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
+  private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
+  private static final Set<String> ROW_FACTORIES = Set.of(
+    "to",
+    "toOneWay",
+    "toOrElse",
+    "toOrElseGet",
+    "enumTo",
+    "via",
+    "drop",
+    "constant",
+    "compute",
+    "zip",
+    "when"
+  );
 
   /** What the reader found for a field. */
   sealed interface Result permits Parsed, Refused {}
@@ -68,7 +86,8 @@ final class FieldRows {
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
    * classes the rows need written; {@code awaits} the classes, written by this compilation, that
    * must exist before the bridge is planned. {@code rowKinds} are the classes of the rows the
-   * runtime builds from the same call, in order, which the generated provider records.
+   * runtime builds from the same call, in order, and {@code rowAccessors} the accessor methods each
+   * names, as {@code source>target}; the generated provider records both.
    */
   record Parsed(
     TypeElement source,
@@ -82,6 +101,7 @@ final class FieldRows {
     Map<String, String> viaMappers,
     Map<String, String> computes,
     List<String> rowKinds,
+    List<String> rowAccessors,
     List<GeneratedClass> classes,
     Set<String> awaits
   ) implements Result {}
@@ -90,9 +110,14 @@ final class FieldRows {
   record GeneratedClass(String qualifiedName, String source) {}
 
   /**
-   * A row, or the field, the reader refuses, with the tree to report it on (null for the field).
+   * A row, or the field, the reader refuses, with the tree to report it on (null for the field). A
+   * null message is a call javac cannot resolve, which javac reports itself.
    */
-  record Refused(Tree at, String message) implements Result {}
+  record Refused(Tree at, String message) implements Result {
+    static Refused javacReports(final Tree at) {
+      return new Refused(at, null);
+    }
+  }
 
   private final ProcessingEnvironment env;
   private final Trees trees;
@@ -188,42 +213,55 @@ final class FieldRows {
   }
 
   /**
-   * The mapper-factory calls in {@code type}'s static initialiser, other than {@code own}, that the
-   * runtime could hand the bridge of the pair of {@code source} and {@code target}: it finds that
-   * bridge by the class whose static initialiser calls the factory, and the pair, so a call there
-   * for the same pair, or for classes the processor cannot name, would be given the field's bridge.
-   * A call in a method or a lambda never is. The static initialiser is the static fields'
-   * initializers and the static blocks; a nested class has its own.
+   * The {@code Telescope.mapper} and {@code mapperForward} calls in {@code type}, a class that
+   * declares a {@code @Bridge} field, that the class may not make. The runtime hands a field's bridge
+   * to a call from the class's static initialiser for the field's pair, so the class makes only
+   * calls it can be read to make safely: each one the whole initializer of a static field, naming
+   * its classes as literals, for the pair of a {@code @Bridge} field when it is that field, and for
+   * a pair no {@code @Bridge} field of the class declares otherwise. Every other call is returned,
+   * whatever its arguments: one in a method, a lambda or a block, one passed through a helper, one
+   * nested in another call, one naming its classes by a variable. A nested class is its own caller,
+   * with a static initialiser of its own, and is left out.
    *
    * <p>The calls are matched by their names and their class literals resolved by name, so nothing
-   * outside the field's own initializer is attributed during the round: attributing a class body
+   * outside a field's own initializer is attributed during the round: attributing a class body
    * there, a lambda's or an anonymous class's, leaves state the compiler trips over when it
    * attributes the body again.
    */
-  List<MethodInvocationTree> otherCallsFor(
-    final TypeElement type,
-    final TypeElement source,
-    final TypeElement target,
-    final MethodInvocationTree own
-  ) {
+  List<MethodInvocationTree> unsanctionedCalls(final TypeElement type) {
     final var path = trees.getPath(type);
     if (path == null || !(path.getLeaf() instanceof ClassTree declaration)) return List.of();
     final var unit = path.getCompilationUnit();
+    final var declared = new LinkedHashSet<List<TypeElement>>();
+    for (final var member : declaration.getMembers()) {
+      if (
+        member instanceof VariableTree field &&
+        bridgeAnnotated(field) &&
+        field.getInitializer() instanceof MethodInvocationTree call
+      ) {
+        final var pair = literalPair(unit, call, type);
+        if (pair != null) declared.add(pair);
+      }
+    }
+    final var sanctioned = new HashSet<Tree>();
+    for (final var member : declaration.getMembers()) {
+      if (
+        !(member instanceof VariableTree field) ||
+        !field.getModifiers().getFlags().contains(Modifier.STATIC) ||
+        !(field.getInitializer() instanceof MethodInvocationTree call) ||
+        !namesFactory(unit, call)
+      ) {
+        continue;
+      }
+      final var pair = literalPair(unit, call, type);
+      if (pair != null && (bridgeAnnotated(field) || !declared.contains(pair))) sanctioned.add(call);
+    }
     final var found = new ArrayList<MethodInvocationTree>();
     final var scanner = new TreeScanner<Void, Void>() {
       @Override
       public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
-        if (node != own && node.getArguments().size() >= 2 && namesFactory(node)) {
-          final var s = classLiteralByName(unit, node.getArguments().get(0), type);
-          final var t = classLiteralByName(unit, node.getArguments().get(1), type);
-          if (s == null || t == null || (s.equals(source) && t.equals(target))) found.add(node);
-        }
+        if (namesFactory(unit, node) && !sanctioned.contains(node)) found.add(node);
         return super.visitMethodInvocation(node, unused);
-      }
-
-      @Override
-      public Void visitLambdaExpression(final LambdaExpressionTree node, final Void unused) {
-        return null;
       }
 
       @Override
@@ -232,29 +270,52 @@ final class FieldRows {
       }
     };
     for (final var member : declaration.getMembers()) {
-      if (member instanceof VariableTree field && field.getModifiers().getFlags().contains(Modifier.STATIC)) {
-        scanner.scan(field.getInitializer(), null);
-      } else if (member instanceof BlockTree block && block.isStatic()) {
-        scanner.scan(block, null);
-      }
+      if (!(member instanceof ClassTree)) scanner.scan(member, null);
     }
     return found;
   }
 
+  /** The two classes {@code call} names as class literals, resolved by name, or null. */
+  private List<TypeElement> literalPair(
+    final CompilationUnitTree unit,
+    final MethodInvocationTree call,
+    final TypeElement enclosing
+  ) {
+    if (call.getArguments().size() < 2) return null;
+    final var source = classLiteralByName(unit, call.getArguments().get(0), enclosing);
+    final var target = classLiteralByName(unit, call.getArguments().get(1), enclosing);
+    return source == null || target == null ? null : List.of(source, target);
+  }
+
+  /** Whether {@code field} carries {@code @Bridge}, read from its annotation's name. */
+  private static boolean bridgeAnnotated(final VariableTree field) {
+    for (final var annotation : field.getModifiers().getAnnotations()) {
+      final var name = annotation.getAnnotationType().toString();
+      if (name.equals("Bridge") || name.equals(BRIDGE_FQN)) return true;
+    }
+    return false;
+  }
+
   /**
-   * Whether {@code call} is written as a mapper factory: {@code Telescope.mapper(...)}, {@code
-   * mapperForward} or {@code map}, qualified by the class or statically imported.
+   * Whether {@code call} is written as {@code Telescope.mapper(...)} or {@code mapperForward(...)}:
+   * qualified by {@code Telescope}, or by its simple name where the unit imports it statically.
    */
-  private static boolean namesFactory(final MethodInvocationTree call) {
+  private static boolean namesFactory(final CompilationUnitTree unit, final MethodInvocationTree call) {
     final var select = call.getMethodSelect();
     if (select instanceof MemberSelectTree member) {
       final var qualifier = member.getExpression().toString();
       return (
-        FACTORIES.contains(member.getIdentifier().toString()) &&
+        DISPATCHING.contains(member.getIdentifier().toString()) &&
         (qualifier.equals("Telescope") || qualifier.equals(TELESCOPE_FQN))
       );
     }
-    return select instanceof IdentifierTree name && FACTORIES.contains(name.getName().toString());
+    if (!(select instanceof IdentifierTree name) || !DISPATCHING.contains(name.getName().toString())) return false;
+    for (final var imported : unit.getImports()) {
+      if (!imported.isStatic()) continue;
+      final var text = imported.getQualifiedIdentifier().toString();
+      if (text.equals(TELESCOPE_FQN + ".*") || text.equals(TELESCOPE_FQN + "." + name.getName())) return true;
+    }
+    return false;
   }
 
   /** The initializer of {@code field} when it is a mapper-factory call, else null. */
@@ -281,6 +342,14 @@ final class FieldRows {
       );
     }
     final var factory = variable.getInitializer() instanceof MethodInvocationTree call ? factoryOf(unit, call) : null;
+    if (
+      factory == null &&
+      variable.getInitializer() instanceof MethodInvocationTree unresolved &&
+      namesFactory(unit, unresolved) &&
+      elementAt(unit, unresolved.getMethodSelect()) == null
+    ) {
+      return Refused.javacReports(unresolved);
+    }
     if (factory == null || factory.equals("map")) {
       return new Refused(
         variable.getInitializer() == null ? variable : variable.getInitializer(),
@@ -329,6 +398,7 @@ final class FieldRows {
     private final Map<String, String> computes = new LinkedHashMap<>();
     private final Set<String> targetsWritten = new LinkedHashSet<>();
     private final List<String> rowKinds = new ArrayList<>();
+    private final List<String> rowAccessors = new ArrayList<>();
     private final List<GeneratedClass> classes = new ArrayList<>();
     private final Set<String> awaits = new LinkedHashSet<>();
 
@@ -361,6 +431,7 @@ final class FieldRows {
         viaMappers,
         computes,
         rowKinds,
+        rowAccessors,
         classes,
         awaits
       );
@@ -376,6 +447,7 @@ final class FieldRows {
         );
       }
       final var rowElement = elementAt(unit, row.getMethodSelect());
+      if (rowElement == null && ROW_FACTORIES.contains(selectedName(row))) return Refused.javacReports(row);
       if (
         !(rowElement instanceof ExecutableElement rowExec) ||
         !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
@@ -429,6 +501,7 @@ final class FieldRows {
       final var refusal = write(row, ((Accessor) src).property(), ((Accessor) tgt).property(), null);
       if (refusal != null) return refusal;
       rowKinds.add("SameTypedTo");
+      rowAccessors.add(((Accessor) src).method() + ">" + ((Accessor) tgt).method());
       return null;
     }
 
@@ -467,6 +540,7 @@ final class FieldRows {
         classes.add(bridgeFn(name, s.type(), t.type(), ((Call) forward).expression(), backward));
       }
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
       return null;
     }
 
@@ -489,15 +563,8 @@ final class FieldRows {
       final String using;
       final GeneratedClass delegate;
       if (named != null) {
-        if (named.getNestingKind() != NestingKind.TOP_LEVEL || !reachable(named, named)) {
-          return new Refused(
-            conversion,
-            named.getSimpleName() +
-              " cannot be built from the generated bridge in package '" +
-              pkg +
-              "'; declare it as a public top-level class with a public no-argument constructor"
-          );
-        }
+        final var unbuildable = unbuildable(named);
+        if (unbuildable != null) return new Refused(conversion, unbuildable);
         using = named.getQualifiedName().toString();
         delegate = null;
       } else if (
@@ -527,6 +594,7 @@ final class FieldRows {
         if (delegate != null) classes.add(delegate);
       }
       rowKinds.add("TypedTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
       return null;
     }
 
@@ -543,12 +611,14 @@ final class FieldRows {
       final var t = (Accessor) tgt;
       final String fallback;
       if (kind.equals("toOrElse")) {
-        final var value = constantText(args.get(2));
+        final var value = constantText(args.get(2), t);
         if (value instanceof Refused refused) return refused;
         fallback = (String) value;
       } else {
         final var supplier = call(args.get(2), null, 0);
         if (supplier instanceof Refused refused) return refused;
+        final var refusedType = returnFits(args.get(2), ((Call) supplier).method(), t);
+        if (refusedType != null) return refusedType;
         fallback = ((Call) supplier).expression();
       }
       final var refusal = write(row, s.property(), t.property(), row);
@@ -560,6 +630,7 @@ final class FieldRows {
       transforms.put(s.property(), qualified(name));
       classes.add(bridgeFn(name, s.type(), t.type(), "v == null ? " + fallback + " : v", "v"));
       rowKinds.add("TypedTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
       return null;
     }
 
@@ -605,6 +676,7 @@ final class FieldRows {
         awaits.add(via);
       }
       rowKinds.add("Via");
+      rowAccessors.add(((Accessor) src).method() + ">" + ((Accessor) tgt).method());
       return null;
     }
 
@@ -626,6 +698,7 @@ final class FieldRows {
         );
       }
       rowKinds.add("Drop");
+      rowAccessors.add(((Accessor) src).method() + ">");
       return null;
     }
 
@@ -636,12 +709,14 @@ final class FieldRows {
       final var t = (Accessor) tgt;
       final String value;
       if (constant) {
-        final var text = constantText(args.get(1));
+        final var text = constantText(args.get(1), t);
         if (text instanceof Refused refused) return refused;
         value = (String) text;
       } else {
         final var supplier = call(args.get(1), null, 0);
         if (supplier instanceof Refused refused) return refused;
+        final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
+        if (refusedType != null) return refusedType;
         value = ((Call) supplier).expression();
       }
       if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
@@ -651,6 +726,7 @@ final class FieldRows {
       computes.put(t.property(), qualified(name));
       classes.add(supplier(name, t.type(), value));
       rowKinds.add(constant ? "Constant" : "Compute");
+      rowAccessors.add(">");
       return null;
     }
 
@@ -732,14 +808,25 @@ final class FieldRows {
             "; a row keyed to a nested pair has no generated form yet"
         );
       }
-      if (!(trees.getTypeMirror(path) instanceof DeclaredType fn) || fn.getTypeArguments().size() != 2) {
-        return new Refused(arg, "the processor cannot resolve this accessor's type");
+      if (!propertyAccessor(accessor, declaring)) {
+        return new Refused(
+          arg,
+          declaring.getSimpleName() +
+            "::" +
+            accessor.getSimpleName() +
+            " is not the accessor of a property of " +
+            side.getSimpleName() +
+            "; a row names a record component, or a bean's getX() or isX()"
+        );
       }
-      final var type = fn.getTypeArguments().get(1);
+      final var declared = types.asMemberOf((DeclaredType) side.asType(), accessor);
+      final var read = ((ExecutableType) declared).getReturnType();
+      final var type = read.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) read).asType() : read;
       if (!nameable(type)) {
         return new Refused(arg, "the type " + type + " this accessor reads has no name the generated bridge can write");
       }
-      return new Accessor(property(accessor.getSimpleName().toString(), side), type);
+      final var method = accessor.getSimpleName().toString();
+      return new Accessor(property(method, side), type, method);
     }
 
     /**
@@ -809,28 +896,90 @@ final class FieldRows {
       return new Call(text, method);
     }
 
-    /** The Java source of a constant row's value, or the refusal. */
-    private Object constantText(final ExpressionTree arg) {
-      if (arg instanceof LiteralTree literal && literal.getKind() != Tree.Kind.NULL_LITERAL) return literal.toString();
-      if (
+    /**
+     * The Java source of a constant row's value, written into the property {@code into}, or the
+     * refusal: a value that is not a literal or an enum constant, or whose type the property does
+     * not hold.
+     */
+    private Object constantText(final ExpressionTree arg, final Accessor into) {
+      final String text;
+      if (arg instanceof LiteralTree literal && literal.getKind() != Tree.Kind.NULL_LITERAL) {
+        text = literal.toString();
+      } else if (
         arg instanceof UnaryTree unary &&
         unary.getKind() == Tree.Kind.UNARY_MINUS &&
         unary.getExpression() instanceof LiteralTree
       ) {
-        return "(" + unary + ")";
-      }
-      if (
+        text = "(" + unary + ")";
+      } else if (
         (arg instanceof IdentifierTree || arg instanceof MemberSelectTree) &&
         elementAt(unit, arg) instanceof VariableElement constant &&
         constant.getKind() == ElementKind.ENUM_CONSTANT
       ) {
-        return ((TypeElement) constant.getEnclosingElement()).getQualifiedName() + "." + constant.getSimpleName();
+        text = ((TypeElement) constant.getEnclosingElement()).getQualifiedName() + "." + constant.getSimpleName();
+      } else {
+        return new Refused(
+          arg,
+          "a value in a @Bridge mapper must be a literal or an enum constant, which the generated bridge" +
+            " writes in place"
+        );
       }
+      final var valueType = trees.getTypeMirror(TreePath.getPath(unit, arg));
+      if (valueType != null && !env.getTypeUtils().isAssignable(valueType, into.type())) {
+        return new Refused(
+          arg,
+          "the value " +
+            arg +
+            " is " +
+            valueType +
+            ", which the " +
+            into.type() +
+            " property '" +
+            into.property() +
+            "' does not hold; write it as a " +
+            into.type() +
+            " value"
+        );
+      }
+      return text;
+    }
+
+    /** The refusal of a supplier whose result the property {@code into} does not hold, or null. */
+    private Refused returnFits(final ExpressionTree arg, final ExecutableElement method, final Accessor into) {
+      final var types = env.getTypeUtils();
+      final var gives = method.getKind() == ElementKind.CONSTRUCTOR
+        ? method.getEnclosingElement().asType()
+        : method.getReturnType();
+      if (types.isAssignable(types.erasure(gives), types.erasure(into.type()))) return null;
       return new Refused(
         arg,
-        "a value in a @Bridge mapper must be a literal or an enum constant, which the generated bridge" +
-          " writes in place"
+        arg + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
       );
+    }
+
+    /**
+     * Why a {@code BridgeFn} class a row names cannot be built from the generated bridge, or null
+     * when it can: it is top-level, concrete, a {@code BridgeFn}, and has a no-argument constructor
+     * the bridge's package can call.
+     */
+    private String unbuildable(final TypeElement named) {
+      final var types = env.getTypeUtils();
+      final var bridgeFn = env.getElementUtils().getTypeElement("io.github.eschizoid.telescope.conversion.BridgeFn");
+      final var fix = "; declare it as a public top-level class with a public no-argument constructor";
+      if (named.getNestingKind() != NestingKind.TOP_LEVEL || !reachable(named, named)) {
+        return named.getSimpleName() + " cannot be built from the generated bridge in package '" + pkg + "'" + fix;
+      }
+      if (named.getKind() != ElementKind.CLASS || named.getModifiers().contains(Modifier.ABSTRACT)) {
+        return named.getSimpleName() + " is abstract or not a class, so the generated bridge cannot build it" + fix;
+      }
+      if (bridgeFn != null && !types.isAssignable(types.erasure(named.asType()), types.erasure(bridgeFn.asType()))) {
+        return named.getSimpleName() + " is not a BridgeFn, which a two-way conversion row takes";
+      }
+      final var constructors = ElementFilter.constructorsIn(named.getEnclosedElements());
+      for (final var constructor : constructors) {
+        if (constructor.getParameters().isEmpty() && reachable(constructor, named)) return null;
+      }
+      return named.getSimpleName() + " has no no-argument constructor the generated bridge can call" + fix;
     }
 
     /**
@@ -919,7 +1068,8 @@ final class FieldRows {
     }
 
     private boolean nameable(final TypeMirror type) {
-      if (type.getKind() == TypeKind.TYPEVAR || type.getKind() == TypeKind.WILDCARD) return false;
+      if (type.getKind() == TypeKind.ARRAY) return nameable(((ArrayType) type).getComponentType());
+      if (type.getKind() != TypeKind.DECLARED) return type.getKind().isPrimitive();
       if (type instanceof DeclaredType declared) {
         for (final var argument : declared.getTypeArguments()) if (!nameable(argument)) return false;
         return true;
@@ -928,7 +1078,34 @@ final class FieldRows {
     }
   }
 
-  private record Accessor(String property, TypeMirror type) {}
+  private record Accessor(String property, TypeMirror type, String method) {}
+
+  /**
+   * Whether {@code accessor} of {@code declaring} reads a property: a record's component accessor,
+   * or a bean getter ({@code getX()}, or {@code isX()} returning a boolean) that no class but
+   * {@code Object} declares.
+   */
+  private static boolean propertyAccessor(final ExecutableElement accessor, final TypeElement declaring) {
+    if (!accessor.getParameters().isEmpty() || accessor.getModifiers().contains(Modifier.STATIC)) return false;
+    if (accessor.getReturnType().getKind() == TypeKind.VOID) return false;
+    final var name = accessor.getSimpleName().toString();
+    if (declaring.getKind() == ElementKind.RECORD) {
+      for (final var component : declaring.getRecordComponents()) {
+        if (component.getSimpleName().contentEquals(name)) return true;
+      }
+      return false;
+    }
+    if (declaring.getQualifiedName().contentEquals("java.lang.Object")) return false;
+    if (name.startsWith("get") && name.length() > 3 && Character.isUpperCase(name.charAt(3))) return true;
+    return name.startsWith("is") && name.length() > 2 && Character.isUpperCase(name.charAt(2));
+  }
+
+  /** The simple name of the method a call selects, whatever qualifies it. */
+  private static String selectedName(final MethodInvocationTree call) {
+    final var select = call.getMethodSelect();
+    if (select instanceof MemberSelectTree member) return member.getIdentifier().toString();
+    return select instanceof IdentifierTree name ? name.getName().toString() : "";
+  }
 
   private record Call(String expression, ExecutableElement method) {}
 

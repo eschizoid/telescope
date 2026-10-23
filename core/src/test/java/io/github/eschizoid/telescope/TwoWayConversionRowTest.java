@@ -66,26 +66,23 @@ class TwoWayConversionRowTest {
   }
 
   @Test
-  @DisplayName("a class is built once, the first time the row converts, and converts both ways")
-  void aClassIsBuiltOnFirstUse() {
-    final var row = to(Contact::email, ContactDto::address, Lower.class);
+  @DisplayName("a class is built once, when the row is, and converts both ways")
+  void aClassIsBuiltWithTheRow() {
     final var before = BUILT.get();
+    final var row = to(Contact::email, ContactDto::address, Lower.class);
+    assertEquals(before + 1, BUILT.get());
     final var mapper = Telescope.mapper(Contact.class, ContactDto.class, row);
-    assertEquals(before, BUILT.get());
     assertEquals(new ContactDto("x@y.com"), mapper.forward(new Contact("X@Y.com")));
     assertEquals(new Contact("X@Y.COM"), mapper.backward(new ContactDto("x@y.com")));
     assertEquals(before + 1, BUILT.get());
   }
 
   @Test
-  @DisplayName("a class with no no-argument constructor is refused by name when the row first converts")
+  @DisplayName("a class with no no-argument constructor is refused by name when the row is built")
   void aClassWithNoConstructorIsRefused() {
-    final var mapper = Telescope.mapper(
-      Contact.class,
-      ContactDto.class,
+    final var thrown = assertThrows(IllegalArgumentException.class, () ->
       to(Contact::email, ContactDto::address, Unbuildable.class)
     );
-    final var thrown = assertThrows(IllegalArgumentException.class, () -> mapper.forward(new Contact("a")));
     assertTrue(thrown.getMessage().contains("declares no constructor taking no arguments"), thrown.getMessage());
   }
 }
