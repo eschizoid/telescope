@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -372,6 +373,61 @@ class LambdaIntrospectionTest {
       final Fn2<String, String, String> concat = String::concat;
       final var unbound = assertThrows(IllegalArgumentException.class, () -> of(concat));
       assertTrue(unbound.getMessage().contains("takes 1 besides its receiver"), unbound::getMessage);
+    }
+
+    interface Carries<D> {
+      D carried();
+
+      default D dto() {
+        return carried();
+      }
+    }
+
+    record Tagged(String name) implements Carries<String> {
+      @Override
+      public String carried() {
+        return name;
+      }
+    }
+
+    interface Shape {
+      default String label() {
+        return "shape";
+      }
+    }
+
+    record Circle(int r) implements Shape {}
+
+    record Holder<T>(T value) {
+      public T get() {
+        return value;
+      }
+    }
+
+    @Test
+    @DisplayName("an inherited method returning a supertype's variable gives the class the receiver binds it to")
+    void anInheritedGenericReturn() {
+      final Fn<Tagged, String> f = Tagged::dto;
+      assertEquals(String.class, of(f)[1]);
+    }
+
+    @Test
+    @DisplayName("an unbound method takes the class declaring it, not the receiver it was named on")
+    void anUnboundMethodTakesItsDeclaringClass() {
+      final Fn<Circle, String> f = Circle::label;
+      assertEquals(List.of(Shape.class, String.class), List.of(of(f)));
+      assertTrue(LambdaIntrospection.takesReceiver(f));
+      final Fn<CharSequence, Integer> s = ConversionOf::length;
+      assertFalse(LambdaIntrospection.takesReceiver(s));
+    }
+
+    @Test
+    @DisplayName("a return a type variable hides is refused by name")
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    void aHiddenReturnIsRefused() {
+      final Fn raw = (Fn<Holder, Object>) Holder::get;
+      final var refused = assertThrows(IllegalArgumentException.class, () -> of(raw));
+      assertTrue(refused.getMessage().contains("returns, which a type variable names"), refused::getMessage);
     }
 
     @Test
