@@ -612,6 +612,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     // The source properties the rows of the call being verified read, by the nested pair they are
     // keyed to. Read through sourceClaimsAt.
     private Map<String, Set<String>> nestedSourceClaims = Map.of();
+    // The source properties the rows of the call being verified read through an accessor, a rename
+    // or a drop, by the nested pair they are keyed to. Read through consumedAt.
+    private Map<String, Set<String>> nestedConsumed = Map.of();
     // The rows of the call being verified, as the shared walk reads them.
     private List<PairWalk.KeyedRow<TypeMirror>> callRows = List.of();
 
@@ -673,6 +676,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var tgtEl = props.elementOf(tgtType);
       nestedClaims = Map.of();
       nestedSourceClaims = Map.of();
+      nestedConsumed = Map.of();
       callRows = List.of();
       if (srcEl != null && tgtEl != null) nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       if (
@@ -765,7 +769,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var srcSlot = srcEl.getKind() == ElementKind.RECORD ? "field" : "property";
           final var tgtSlot = tgtEl.getKind() == ElementKind.RECORD ? "field" : "property";
           for (final var name : match.unmatchedTargets()) {
-            report(node, PairingMessages.noSameNameSource(srcSimple, tgtSimple, tgtSlot, srcSlot, name));
+            report(
+              node,
+              srcProps.containsKey(name)
+                ? PairingMessages.sameNameSourceRead(srcSimple, tgtSimple, tgtSlot, srcSlot, name)
+                : PairingMessages.noSameNameSource(srcSimple, tgtSimple, tgtSlot, srcSlot, name)
+            );
           }
           for (final var name : match.unmatchedSources()) {
             report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, name));
@@ -1085,6 +1094,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var claims = new HashMap<String, Set<String>>();
       final var sourceClaims = new HashMap<String, Set<String>>();
       nestedSourceClaims = sourceClaims;
+      final var consumed = new HashMap<String, Set<String>>();
+      nestedConsumed = consumed;
       final var all = new ArrayList<PairWalk.KeyedRow<TypeMirror>>();
       callRows = all;
       for (var i = 2; i < args.size(); i++) {
@@ -1107,6 +1118,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         final var read = readsAt(keyed.kind(), keyed.sourceMethod(), keyed.sourcePathStart(), keyed.source());
         if (read != null) sourceClaims.computeIfAbsent(key, __ -> new HashSet<>()).add(read);
+        if (read != null && keyed.kind() != PairWalk.RowKind.PATH) {
+          consumed.computeIfAbsent(key, __ -> new HashSet<>()).add(read);
+        }
       }
       return claims;
     }
@@ -1138,6 +1152,22 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     private Set<String> sourceClaimsAt(final TypeElement source, final TypeElement target) {
       final var all = new HashSet<>(nestedSourceClaims.getOrDefault(pairKey(source, target), Set.of()));
       for (final var row : inheritedAt(source, target)) {
+        final var read = readsAt(row.kind(), row.sourceAccessor(), row.sourcePathStart(), source);
+        if (read != null) all.add(read);
+      }
+      return all;
+    }
+
+    /**
+     * The source properties the rows construction applies to the pair of {@code source} and {@code
+     * target} read through an accessor, a rename or a drop, which keep the target property of each
+     * one's name from pairing with it: those keyed to the pair, and those keyed to two sealed
+     * interfaces its classes implement.
+     */
+    private Set<String> consumedAt(final TypeElement source, final TypeElement target) {
+      final var all = new HashSet<>(nestedConsumed.getOrDefault(pairKey(source, target), Set.of()));
+      for (final var row : inheritedAt(source, target)) {
+        if (row.kind() == PairWalk.RowKind.PATH) continue;
         final var read = readsAt(row.kind(), row.sourceAccessor(), row.sourcePathStart(), source);
         if (read != null) all.add(read);
       }
@@ -1978,7 +2008,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         final var match = PairingRules.matchFields(
           List.copyOf(sides.source().keySet()),
           List.copyOf(sides.target().keySet()),
-          Set.of(),
+          consumedAt(srcEl, tgtEl),
           claimed == null ? Set.of() : claimed
         );
         for (final var name : match.matched()) {

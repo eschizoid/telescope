@@ -1133,6 +1133,20 @@ class PairingRulesTest {
       assertEquals(List.of(), result.unmatchedTargets());
       assertEquals(List.of(), result.unmatchedSources());
     }
+
+    @Test
+    @DisplayName("a target no row writes is not matched with a same-name source a row reads, and is left unmatched")
+    void claimedSourceIsNotMatchedByName() {
+      final var result = PairingRules.matchFields(
+        List.of("id", "n"),
+        List.of("id", "label", "n"),
+        Set.of("n"),
+        Set.of("label")
+      );
+      assertEquals(List.of("id"), result.matched());
+      assertEquals(List.of("n"), result.unmatchedTargets());
+      assertEquals(List.of(), result.unmatchedSources());
+    }
   }
 
   /** Members typed by a variable a subclass passes through or fixes, read off its fields. */

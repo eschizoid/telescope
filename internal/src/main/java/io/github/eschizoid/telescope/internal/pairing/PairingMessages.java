@@ -721,6 +721,34 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * Strict-bijection failure: a target field no row writes, whose same-name source a row renames or
+   * drops, so nothing pairs with it by name.
+   */
+  public static String sameNameSourceRead(
+    final String source,
+    final String target,
+    final String tgtSlot,
+    final String srcSlot,
+    final String name
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": target " +
+      tgtSlot +
+      " '" +
+      name +
+      "' is not paired with the source " +
+      srcSlot +
+      " of its name, which another row reads or drops. Add a row that writes '" +
+      name +
+      "'."
+    );
+  }
+
   /** Strict-bijection failure: a source field has no same-name target and no row. */
   public static String noSameNameTarget(
     final String source,

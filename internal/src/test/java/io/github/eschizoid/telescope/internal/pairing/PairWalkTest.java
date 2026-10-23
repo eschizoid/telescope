@@ -87,6 +87,10 @@ class PairWalkTest {
 
   record BeanOuterDto(LeafBeanDto leaf) {}
 
+  record Relabel(String name) {}
+
+  record RelabelDto(String label, String name) {}
+
   /** A generic bean whose property is typed by its variable. */
   public static class Box<T> {
 
@@ -433,12 +437,31 @@ class PairWalkTest {
   @DisplayName("each property filled is told, a bean's by the property its accessor names")
   void fills() {
     final var answers = plain();
+    final var rows = List.of(row(LeafBean.class, LeafBeanDto.class, RowKind.CONVERTING, "getName", "getTitle"));
+    WALK.walk(BeanOuter.class, BeanOuterDto.class, rows, false, answers);
+    assertEquals(List.of("BeanOuter.leaf -> BeanOuterDto.leaf", "LeafBean.name -> LeafBeanDto.title"), answers.filled);
+  }
+
+  @Test
+  @DisplayName("a dropped property is not paired with the target property of its name, so nothing below it is visited")
+  void droppedPropertyIsNotPairedByName() {
+    final var answers = plain();
     final var rows = List.of(
       row(LeafBean.class, LeafBeanDto.class, RowKind.CONVERTING, "getName", "getTitle"),
       row(BeanOuter.class, BeanOuterDto.class, RowKind.DROP, "leaf", null)
     );
-    WALK.walk(BeanOuter.class, BeanOuterDto.class, rows, false, answers);
-    assertEquals(List.of("BeanOuter.leaf -> BeanOuterDto.leaf", "LeafBean.name -> LeafBeanDto.title"), answers.filled);
+    final var walk = WALK.walk(BeanOuter.class, BeanOuterDto.class, rows, false, answers);
+    assertEquals(List.of(), answers.filled);
+    assertEquals(List.of(rows.getFirst()), walk.neverVisited());
+  }
+
+  @Test
+  @DisplayName("a renamed property is not paired with the target property of its name")
+  void renamedPropertyIsNotPairedByName() {
+    final var answers = plain();
+    final var rows = List.of(row(Relabel.class, RelabelDto.class, RowKind.PASS_THROUGH, "name", "label"));
+    WALK.walk(Relabel.class, RelabelDto.class, rows, false, answers);
+    assertEquals(List.of("Relabel.name -> RelabelDto.label"), answers.filled);
   }
 
   @Test

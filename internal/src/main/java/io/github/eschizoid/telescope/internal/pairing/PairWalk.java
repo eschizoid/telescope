@@ -16,8 +16,9 @@ import java.util.Set;
  *
  * <p>The walk starts at the mapper's own pair. At a pair of records or beans it follows, in order,
  * each row keyed to the pair that passes a property through unchanged, then each target property no
- * row with accessors on both sides claims and the source has under the same name. The two
- * properties of each are read as {@link PairingRules#pairedTypes} reads them, and {@link
+ * row with accessors on both sides claims and the source has under the same name, where no such row
+ * or {@code drop} reads that source property ({@link PairingRules#matchFields}). The two properties
+ * of each are read as {@link PairingRules#pairedTypes} reads them, and {@link
  * PairingRules#decidePair} decides where they lead: a pair of records or beans on to that pair, as
  * its classes whatever type arguments the properties give them; a pair of sealed interfaces on to
  * the pair of each case; an {@code Optional} or a container on to its elements; anything else
@@ -402,6 +403,13 @@ public final class PairWalk<T> {
     return null;
   }
 
+  /** The names of {@code properties}, in their order. */
+  private static <T> List<String> names(final List<Property<T>> properties) {
+    final var names = new ArrayList<String>(properties.size());
+    for (final var property : properties) names.add(property.name());
+    return names;
+  }
+
   /** A class by its binary name, as a refusal names it. */
   private String nameOf(final T cls) {
     return props.typeName(props.rawType(cls));
@@ -458,25 +466,31 @@ public final class PairWalk<T> {
         final var targetProperties = props.properties(target);
         final var rows = rowsAt(key, source, target);
         Set<String> claimed = Set.of();
+        Set<String> read = Set.of();
         if (rows != null) {
           claimed = new HashSet<>();
+          read = new HashSet<>();
           for (final var row : rows) {
+            if (row.kind() == RowKind.DROP) read.add(propertyName(row.sourceAccessor(), source));
             if (row.kind() != RowKind.PASS_THROUGH && row.kind() != RowKind.CONVERTING) continue;
             final var sourceName = propertyName(row.sourceAccessor(), source);
             final var targetName = propertyName(row.targetAccessor(), target);
             claimed.add(targetName);
+            read.add(sourceName);
             decisions.fills(source, target, sourceName, targetName);
             if (row.kind() == RowKind.PASS_THROUGH) {
               property(source, named(sourceProperties, sourceName), target, named(targetProperties, targetName));
             }
           }
         }
+        final var byName = new HashSet<>(
+          PairingRules.matchFields(names(sourceProperties), names(targetProperties), read, claimed).matched()
+        );
         for (final var targetProperty : targetProperties) {
           final var name = targetProperty.name();
-          final var sourceProperty = named(sourceProperties, name);
-          if (claimed.contains(name) || sourceProperty == null) continue;
+          if (!byName.contains(name)) continue;
           decisions.fills(source, target, name, name);
-          property(source, sourceProperty, target, targetProperty);
+          property(source, named(sourceProperties, name), target, targetProperty);
         }
       } finally {
         around.removeLast();

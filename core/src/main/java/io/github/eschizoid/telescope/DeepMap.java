@@ -1482,16 +1482,21 @@ public final class DeepMap {
           )
         );
       }
-      for (final var name : tgtRefl.names(target)) {
+      // A target field no row writes pairs with the source field of its name only when no row
+      // reads that source field, since a row reading it, a rename or a drop, says where it goes.
+      final var tgtNames = tgtRefl.names(target);
+      final var byName = new HashSet<>(
+        PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), claimedSrc, claimedTgt).matched()
+      );
+      for (final var name : tgtNames) {
         if (claimedTgt.contains(name)) continue;
-        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target
-        // fields with no same-name source get a NULLING_ISO placeholder. The post-fixup overlays it
-        // if a TelescopeToTelescope / FromTelescopeTo writes through that field; otherwise the
-        // field
-        // stays null. Telescope rows can't recover their top-level target field name from a
-        // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
-        // every nested write. Without any telescope row, the strict same-name check still fires.
-        if (!srcNameSet.contains(name)) {
+        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, a
+        // target field nothing pairs with by name gets a NULLING_ISO placeholder. The post-fixup
+        // overlays it if a TelescopeToTelescope / FromTelescopeTo writes through that field;
+        // otherwise the field stays null. Telescope rows can't recover their top-level target field
+        // name from a Telescope<B, X> at runtime (generics erased), so we permit the gap instead of
+        // failing on every nested write. Without any telescope row, the strict check still fires.
+        if (!byName.contains(name)) {
           // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
           // topStepsOut) was never explicitly configured by the user — it was visited because a
           // parent field's genericType is reflectable. An unmatched target field there should stay
@@ -1532,13 +1537,21 @@ public final class DeepMap {
             continue;
           }
           throw new IllegalStateException(
-            PairingMessages.noSameNameSource(
-              source.getSimpleName(),
-              target.getSimpleName(),
-              slot(tgtRefl),
-              slot(srcRefl),
-              name
-            )
+            srcNameSet.contains(name)
+              ? PairingMessages.sameNameSourceRead(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(tgtRefl),
+                  slot(srcRefl),
+                  name
+                )
+              : PairingMessages.noSameNameSource(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(tgtRefl),
+                  slot(srcRefl),
+                  name
+                )
           );
         }
         final var autoPaired = Reflective.pairedTypes(srcRefl, source, name, tgtRefl, target, name);
