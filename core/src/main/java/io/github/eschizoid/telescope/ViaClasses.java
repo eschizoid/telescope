@@ -67,11 +67,20 @@ final class ViaClasses {
     final String tgtField
   ) {
     final var using = row.using();
-    final var forwards = candidates(using, "forward");
-    final var backwards = candidates(using, "backward");
-    final var prefix = "Deep map " + source + " → " + target + ": via(...) of '" + srcField + "': ";
-    if (forwards.isEmpty()) throw new IllegalArgumentException(prefix + using.getName() + " declares no forward");
-    if (backwards.isEmpty()) throw new IllegalArgumentException(prefix + using.getName() + " declares no backward");
+    // A method reference is spun in the package of the class it is written in, which is where the
+    // row is declared, and the package the generated bridge of a @Bridge field is written into.
+    final var caller = row.src().getClass().getPackageName();
+    final var forwards = candidates(using, "forward", caller);
+    final var backwards = candidates(using, "backward", caller);
+    final var name = using.getName();
+    if (forwards.isEmpty()) {
+      throw new IllegalArgumentException(PairingMessages.viaClassDeclaresNo(source, target, srcField, name, "forward"));
+    }
+    if (backwards.isEmpty()) {
+      throw new IllegalArgumentException(
+        PairingMessages.viaClassDeclaresNo(source, target, srcField, name, "backward")
+      );
+    }
     if (
       srcElement != null &&
       tgtElement != null &&
@@ -81,16 +90,17 @@ final class ViaClasses {
       final var backward = elementMethods(backwards, tgtElement, tgtType);
       if (!forward.isEmpty() && !backward.isEmpty()) {
         if (forward.size() > 1 || backward.size() > 1) {
-          final var name = forward.size() > 1 ? "forward" : "backward";
+          final var method = forward.size() > 1 ? "forward" : "backward";
           final var container = forward.size() > 1 ? srcType : tgtType;
           throw new IllegalArgumentException(
-            prefix +
-              using.getName() +
-              "'s " +
-              name +
-              " has several overloads that take an element of " +
-              container.getTypeName() +
-              ", so the one an element's class calls for cannot be chosen"
+            PairingMessages.viaClassRefused(
+              source,
+              target,
+              srcField,
+              name,
+              method,
+              PairingMessages.viaSeveralElementOverloads(container.getTypeName())
+            )
           );
         }
         return via(
@@ -109,13 +119,20 @@ final class ViaClasses {
     final var forward = call(forwards, srcType, srcHeld);
     if (forward == null) {
       throw new IllegalArgumentException(
-        prefix + using.getName() + "'s forward takes no value of " + srcType.getTypeName()
+        PairingMessages.viaClassRefused(source, target, srcField, name, "forward", unbound(forwards, srcType, srcHeld))
       );
     }
     final var backward = call(backwards, tgtType, tgtHeld);
     if (backward == null) {
       throw new IllegalArgumentException(
-        prefix + using.getName() + "'s backward takes no value of " + tgtType.getTypeName()
+        PairingMessages.viaClassRefused(
+          source,
+          target,
+          srcField,
+          name,
+          "backward",
+          unbound(backwards, tgtType, tgtHeld)
+        )
       );
     }
     return via(row, forward, backward, boxed(forward.getParameterTypes()[0]), boxed(backward.getParameterTypes()[0]));
@@ -139,26 +156,41 @@ final class ViaClasses {
     return new Via(row.src(), row.tgt(), mapper);
   }
 
-  /** Every static method of {@code using} named {@code name} that takes one value. */
-  private static List<Method> candidates(final Class<?> using, final String name) {
+  /**
+   * Every static method named {@code name} taking one value that code in the package {@code caller}
+   * calls on {@code using}: of the members {@code using} declares or inherits from a superclass,
+   * those that are public, and those that are neither public nor private and declared in {@code
+   * caller}. A superclass's method is inherited unless a method a subclass declares with the same
+   * parameter hides it, and, where it is package-private, only through classes all in its package.
+   * These are the members the generated bridge, written into that package, can call by the class's
+   * name.
+   */
+  private static List<Method> candidates(final Class<?> using, final String name, final String caller) {
     final var found = new ArrayList<Method>();
-    for (final var method : using.getMethods()) {
-      if (
-        method.getName().equals(name) && method.getParameterCount() == 1 && Modifier.isStatic(method.getModifiers())
-      ) {
-        found.add(method);
-      }
-    }
-    for (final var method : using.getDeclaredMethods()) {
-      if (
-        method.getName().equals(name) &&
-        method.getParameterCount() == 1 &&
-        Modifier.isStatic(method.getModifiers()) &&
-        !Modifier.isPublic(method.getModifiers()) &&
-        !Modifier.isPrivate(method.getModifiers()) &&
-        !method.isSynthetic()
-      ) {
-        found.add(method);
+    final var hidden = new ArrayList<Class<?>>();
+    var onePackage = true;
+    for (Class<?> type = using; type != null && type != Object.class; type = type.getSuperclass()) {
+      onePackage &= type.getPackageName().equals(using.getPackageName());
+      for (final var method : type.getDeclaredMethods()) {
+        final var modifiers = method.getModifiers();
+        if (
+          !method.getName().equals(name) ||
+          method.getParameterCount() != 1 ||
+          !Modifier.isStatic(modifiers) ||
+          method.isSynthetic()
+        ) {
+          continue;
+        }
+        final var parameter = method.getParameterTypes()[0];
+        if (hidden.contains(parameter)) continue;
+        hidden.add(parameter);
+        if (Modifier.isPrivate(modifiers)) continue;
+        if (Modifier.isPublic(modifiers)) {
+          found.add(method);
+          continue;
+        }
+        final var inherited = type == using || Modifier.isProtected(modifiers) || onePackage;
+        if (inherited && type.getPackageName().equals(caller)) found.add(method);
       }
     }
     return found;
@@ -244,14 +276,34 @@ final class ViaClasses {
   }
 
   /**
+   * Why {@link #call} binds none of {@code methods} for a value of {@code own}, held as {@code
+   * held}: several that its class alone could tell apart, or none taking it.
+   */
+  private static String unbound(final List<Method> methods, final Type own, final Class<?> held) {
+    final var phrase = mentionsVariable(own)
+      ? PairingMessages.heldPhrase(own.getTypeName(), held.getTypeName())
+      : own.getTypeName();
+    return blind(methods, own, held)
+      ? PairingMessages.viaChoosesBlind(phrase)
+      : PairingMessages.viaTakesNoValue(phrase);
+  }
+
+  /**
+   * Whether a value of {@code own} held as {@code held} reaches several of {@code methods} that
+   * nothing but its class tells apart: a variable with no bound is held as {@code Object}.
+   */
+  private static boolean blind(final List<Method> methods, final Type own, final Class<?> held) {
+    return methods.size() > 1 && own instanceof TypeVariable<?> && held == Object.class;
+  }
+
+  /**
    * The method of {@code methods} a call handed a value of {@code own}, held as {@code held},
    * binds, or null where it binds none. A value typed by a variable with no bound is held as {@code
    * Object}, which tells several overloads apart by nothing, so there the call binds only the one
    * method a value can be an instance of the parameter of.
    */
   private static Method call(final List<Method> methods, final Type own, final Class<?> held) {
-    final var blind = methods.size() > 1 && own instanceof TypeVariable<?> && held == Object.class;
-    if (!blind) {
+    if (!blind(methods, own, held)) {
       final var bound = mostSpecific(methods, held);
       if (bound != null) return bound;
       final var inferring = inferring(methods, held);

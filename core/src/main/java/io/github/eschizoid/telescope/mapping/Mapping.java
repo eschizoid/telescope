@@ -537,8 +537,10 @@ public sealed interface Mapping<A, B>
    * {@code forward} taking the source's element and a {@code backward} taking the target's, the row
    * converts element by element; a class whose {@code forward} and {@code backward} each have an
    * overload taking one side's container and giving the other side's converts the property as it
-   * is. Otherwise each direction calls the overload Java would bind for the property's value. A
-   * null value, or a null element, stays null and is not handed to either method.
+   * is. Otherwise each direction calls the overload Java would bind for the property's value. The
+   * methods are those code in the row's package can call on the class: public, or package-private
+   * in that package, declared by the class or inherited from a superclass. A null value, or a null
+   * element, stays null and is not handed to either method.
    *
    * <pre>{@code
    * via(Order::lines, OrderDto::lines, LineMapper.class) // LineMapper.forward(Line), backward(LineDto)

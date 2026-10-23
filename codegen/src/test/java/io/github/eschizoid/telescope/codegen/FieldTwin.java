@@ -65,7 +65,30 @@ final class FieldTwin {
   /** How many pairs naming a class were run on the runtime path against the class form's bridge. */
   static final AtomicInteger RUN_BOTH_WAYS = new AtomicInteger();
 
+  /**
+   * How many pairs naming a class were not run, for want of a source sample or a generated bridge.
+   */
+  static final AtomicInteger UNSAMPLED = new AtomicInteger();
+
   private static final Pattern FIELD_PREFIX = Pattern.compile("^In the rows of @Bridge field \\w+\\.\\w+: ");
+
+  /**
+   * Where a refusal of a class converting one property places it: a {@code @ViaMapper} names the
+   * annotation, and a {@code via} row the pair and the row. The rest of the sentence is the same.
+   */
+  private static final Pattern VIA_SITE = Pattern.compile(
+    "^(?:@ViaMapper field=\"(\\w+)\": |Deep map \\w+ → \\w+: via\\(\\.\\.\\.\\) of '(\\w+)': )"
+  );
+
+  /**
+   * {@code refusal} with the site of a class converting one property written the same for both
+   * forms.
+   */
+  private static String sameSite(final String refusal) {
+    final var m = VIA_SITE.matcher(refusal);
+    if (!m.find()) return refusal;
+    return "via " + (m.group(1) != null ? m.group(1) : m.group(2)) + ": " + refusal.substring(m.end());
+  }
 
   private FieldTwin() {}
 
@@ -109,11 +132,11 @@ final class FieldTwin {
       // is read without its prefix. It refuses earlier in two cases: a side nested in another
       // class, which a field's side may not be, and a conversion the class form refuses because
       // the target has no property to write it into, which a field's row cannot name at all.
-      final var refusal = original.errors().getFirst().getMessage(Locale.ROOT);
+      final var refusal = sameSite(original.errors().getFirst().getMessage(Locale.ROOT));
       final var twinRefusals = compiled
         .errors()
         .stream()
-        .map(d -> FIELD_PREFIX.matcher(d.getMessage(Locale.ROOT)).replaceFirst(""))
+        .map(d -> sameSite(FIELD_PREFIX.matcher(d.getMessage(Locale.ROOT)).replaceFirst("")))
         .toList();
       final var earlier = twinRefusals
         .stream()
@@ -189,7 +212,10 @@ final class FieldTwin {
       for (final var pair : pairs) {
         final var sourceSample = sample(generated, pair.source());
         final var bridge = bridgeOf(generated, pair);
-        if (sourceSample == null || bridge == null) continue;
+        if (sourceSample == null || bridge == null) {
+          UNSAMPLED.incrementAndGet();
+          continue;
+        }
         final var mapper = outcomeOf(() -> built.loadClass(pair.carrier()).getField(pair.field()).get(null));
         if (!(mapper.value() instanceof Mapper<?, ?>) && !(mapper.value() instanceof ForwardMapper<?, ?>)) {
           throw new AssertionError("the runtime path does not build " + pair + ": " + mapper);
@@ -229,7 +255,7 @@ final class FieldTwin {
     try {
       final var value = attempt.get();
       return new Outcome(value, describe(value, 0));
-    } catch (final Exception e) {
+    } catch (final Exception | LinkageError e) {
       Throwable cause = e;
       while (
         (cause instanceof InvocationTargetException || cause instanceof ExceptionInInitializerError) &&

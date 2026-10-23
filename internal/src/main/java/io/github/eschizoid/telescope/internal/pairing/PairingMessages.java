@@ -218,6 +218,82 @@ public final class PairingMessages {
   }
 
   /**
+   * A {@code via} row naming a class whose methods named {@code method} cannot convert {@code
+   * property}: {@code why} says how, and finishes the sentence that starts with the method's name.
+   * Both paths refuse with these words.
+   */
+  public static String viaClassRefused(
+    final String source,
+    final String target,
+    final String property,
+    final String using,
+    final String method,
+    final String why
+  ) {
+    return viaClassPrefix(source, target, property) + using + "'s " + method + " " + why;
+  }
+
+  /**
+   * A {@code via} row naming a class that has no static method named {@code method}, of one
+   * parameter, that the code converting the row can call. Both paths refuse with these words.
+   */
+  public static String viaClassDeclaresNo(
+    final String source,
+    final String target,
+    final String property,
+    final String using,
+    final String method
+  ) {
+    return viaClassPrefix(source, target, property) + using + " declares no " + method;
+  }
+
+  /**
+   * Why a class's methods of one name convert no value of {@code value}: none of them takes it. The
+   * end of a {@link #viaClassRefused} sentence.
+   */
+  public static String viaTakesNoValue(final String value) {
+    return "takes no value of " + value;
+  }
+
+  /**
+   * Why a class's methods of one name convert no value held as {@code value}: there are several,
+   * and the class of a value held as {@code Object} is all that could tell them apart. The end of a
+   * {@link #viaClassRefused} sentence.
+   */
+  public static String viaChoosesBlind(final String value) {
+    return (
+      "has several overloads, and the value is held as " +
+      value +
+      ", so the overload its class calls for cannot be chosen before the value is seen"
+    );
+  }
+
+  /**
+   * Why a class's methods of one name convert no element of {@code container}: several take an
+   * element, and which one an element calls for depends on its class. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaSeveralElementOverloads(final String container) {
+    return (
+      "has several overloads that take an element of " +
+      container +
+      ", so the one an element's class calls for cannot be chosen before the element is seen"
+    );
+  }
+
+  /**
+   * How a refusal of a value of the type named {@code declared} names it: as it is, followed by the
+   * class it is held as where the two differ, as they do for a type naming a type variable.
+   */
+  public static String heldPhrase(final String declared, final String held) {
+    return declared.equals(held) ? declared : declared + " (held as its erasure " + held + ")";
+  }
+
+  private static String viaClassPrefix(final String source, final String target, final String property) {
+    return "Deep map " + source + " → " + target + ": via(...) of '" + property + "': ";
+  }
+
+  /**
    * A {@code via} row, or a {@code @ViaMapper}, whose mapper is handed one side's property as it
    * is, though no value of that property can be an instance of the class the mapper converts on
    * that side: the property is not a List, Set, Optional or a map's values the mapper's elements

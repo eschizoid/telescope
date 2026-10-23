@@ -14,6 +14,8 @@ import io.github.eschizoid.telescope.examples.graphql.model.Badge;
 import io.github.eschizoid.telescope.examples.graphql.model.Booking;
 import io.github.eschizoid.telescope.examples.graphql.model.BookingView;
 import io.github.eschizoid.telescope.examples.graphql.model.Crewmate;
+import io.github.eschizoid.telescope.examples.graphql.model.Itinerary;
+import io.github.eschizoid.telescope.examples.graphql.model.ItineraryView;
 import io.github.eschizoid.telescope.examples.graphql.model.Label;
 import io.github.eschizoid.telescope.examples.graphql.model.Role;
 import io.github.eschizoid.telescope.examples.graphql.model.Shift;
@@ -22,6 +24,7 @@ import io.github.eschizoid.telescope.examples.graphql.model.Tagged;
 import io.github.eschizoid.telescope.examples.graphql.model.Ticket;
 import io.github.eschizoid.telescope.examples.graphql.model.TicketToTicketViewBridge;
 import io.github.eschizoid.telescope.examples.graphql.model.TicketView;
+import io.github.eschizoid.telescope.examples.graphql.model.TicketViews;
 import io.github.eschizoid.telescope.examples.graphql.model.User;
 import io.github.eschizoid.telescope.examples.graphql.model.UserFromMap;
 import io.github.eschizoid.telescope.examples.graphql.model.UserTelescope;
@@ -86,6 +89,10 @@ import java.util.Map;
  *   <li><b>{@code @Bridge} mapper field with a via row of two methods</b> — {@code Booking.VIEW}:
  *       the generated bridge calls {@code TicketViews.forward} and {@code backward} on each ticket,
  *       and the row's method references are never decoded, so they need no serialization entry.
+ *   <li><b>runtime via row naming a class</b> — {@code via(Itinerary::legs, ItineraryView::legs,
+ *       TicketViews.class)} built on the runtime path: the mapper reads {@link TicketViews}'s
+ *       methods reflectively, which needs the class registered for its declared methods, and calls
+ *       them through method handles.
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
@@ -150,6 +157,12 @@ public final class NativeVerify {
       guard(
         "@Bridge mapper field with a via row of two methods runs its bridge, the methods never read",
         NativeVerify::bridgeFieldViaMethods
+      )
+    );
+    results.add(
+      guard(
+        "runtime mapper with a via row naming a class finds its methods and calls them on each element",
+        NativeVerify::runtimeViaClass
       )
     );
 
@@ -374,6 +387,32 @@ public final class NativeVerify {
       "via-row field forward mismatch: " + view
     );
     expect(booking.equals(mapper.backward(view)), "via-row field backward mismatch");
+  }
+
+  // (o) a runtime mapper whose via row names the class converting each ticket: the mapper finds
+  // the class's forward and backward reflectively when it is built and calls them through method
+  // handles, so the image needs the class registered for its declared methods.
+  private static void runtimeViaClass() {
+    final var mapper = Telescope.mapper(
+      Itinerary.class,
+      ItineraryView.class,
+      Mapping.via(Itinerary::legs, ItineraryView::legs, TicketViews.class)
+    );
+    expect(
+      mapper
+        .explain()
+        .declared()
+        .map(d -> d.runs() == OpticNode.Runs.RUNTIME)
+        .orElse(true),
+      "via-class mapper is not on the runtime path: " + mapper.explain()
+    );
+    final var itinerary = new Itinerary("I1", List.of(new Ticket("K7", "12A"), new Ticket("K8", "12B")));
+    final var view = mapper.forward(itinerary);
+    expect(
+      new ItineraryView("I1", List.of(new TicketView("K7", "12A"), new TicketView("K8", "12B"))).equals(view),
+      "via-class mapper forward mismatch: " + view
+    );
+    expect(itinerary.equals(mapper.backward(view)), "via-class mapper backward mismatch");
   }
 
   // "native-image" when running as a compiled binary, otherwise "JVM" — a green JVM run only

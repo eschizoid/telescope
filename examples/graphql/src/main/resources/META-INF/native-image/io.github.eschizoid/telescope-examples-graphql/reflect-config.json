@@ -60,6 +60,22 @@
     "allDeclaredFields": true
   },
   {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.Itinerary",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.ItineraryView",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.examples.graphql.model.TicketViews",
+    "allDeclaredMethods": true
+  },
+  {
     "name": "java.lang.String"
   },
   {

@@ -261,8 +261,8 @@ class ViaMapperContainerShapeTest {
       compilation.hasError(
         "@ViaMapper field=\"children\": " +
           PACKAGE +
-          ".WtChMap's forward has several overloads that take an element of java.util.List<X>, so the one an" +
-          " element's class calls for cannot be chosen when the bridge is compiled"
+          ".WtChMap's forward " +
+          PairingMessages.viaSeveralElementOverloads("java.util.List<X>")
       ),
       compilation::errorMessages
     );
@@ -390,8 +390,8 @@ class ViaMapperContainerShapeTest {
       compilation.hasError(
         "@ViaMapper field=\"children\": " +
           PACKAGE +
-          ".WrChMap's backward has several overloads that take an element of java.util.List<Y>, so the one an" +
-          " element's class calls for cannot be chosen when the bridge is compiled"
+          ".WrChMap's backward " +
+          PairingMessages.viaSeveralElementOverloads("java.util.List<Y>")
       ),
       compilation::errorMessages
     );
@@ -606,10 +606,10 @@ class ViaMapperContainerShapeTest {
   }
 
   @Test
-  @DisplayName("a mapper of an array refused against a List names the array")
+  @DisplayName("a mapper of an array refused against a List names the array as the runtime path names it")
   void arrayParameterIsNamed() {
     assertEquals(
-      PairingMessages.viaMapperNeverFits("WaSrc", "WaTgt", "source", "children", PACKAGE + ".WaCh[]"),
+      PairingMessages.viaMapperNeverFits("WaSrc", "WaTgt", "source", "children", "WaCh[]"),
       neverFits(
         "Wa",
         "  public static %1$sChDto forward(final %1$sCh[] c) { return null; }\n" +

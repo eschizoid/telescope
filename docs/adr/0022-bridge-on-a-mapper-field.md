@@ -124,18 +124,19 @@ the existing emitter without a second one.
 > **Amendment: a `via` row naming a class.** `via(src, tgt, Hw.class)` names the class itself, as
 > `@ViaMapper(using = Hw.class)` does, and leaves the choice of its methods to the property's types. In a `@Bridge`
 > mapper it compiles to the configuration the annotation names, so the generated bridge is the one the class form
-> writes. On the runtime path it holds the class alone until the runtime path builds a mapper, and then chooses the
-> methods as the processor does: where both sides are containers of one kind and the class has a `forward` taking the
-> source's element and a `backward` taking the target's, and not a pair of overloads converting the whole property both
-> ways, it converts element by element, an element's own class chosen before a class the element is one of, and two
-> methods a name has for an element refused by name; otherwise each direction calls the overload Java binds for the
-> property's value, then a generic one whose variable admits it, then the one method a value can be an instance of the
-> parameter of, which the call checks. It calls them through a function `LambdaMetafactory` spins on the JVM and a
-> method-handle closure inside a native image. So the classes the method-reference row has no form for convert on both
-> paths alike: a `backward` returning a class `forward` does not take, a generic `forward` returning its own type
-> variable with a generic `backward`, and a class with both element and whole-container overloads. The cross-path corpus
-> twins every `@ViaMapper` naming a hand-written class as this row, and runs each twin whose classes give a sample on
-> the runtime path against the class form's generated bridge.
+> writes. On the runtime path it holds the class alone until the runtime path builds a mapper, and then chooses, of the
+> static methods code in the row's package can call on the class, declared or inherited, the ones the processor does:
+> where both sides are containers of one kind and the class has a `forward` taking the source's element and a `backward`
+> taking the target's, and not a pair of overloads converting the whole property both ways, it converts element by
+> element, an element's own class chosen before a class the element is one of, and two methods a name has for an element
+> refused by name; otherwise each direction calls the overload Java binds for the property's value, then a generic one
+> whose variable admits it, then the one method a value can be an instance of the parameter of, which the call checks.
+> It calls them through a function `LambdaMetafactory` spins on the JVM and a method-handle closure inside a native
+> image. So the classes the method-reference row has no form for convert on both paths alike: a `backward` returning a
+> class `forward` does not take, a generic `forward` returning its own type variable with a generic `backward`, and a
+> class with both element and whole-container overloads. The cross-path corpus twins every `@ViaMapper` naming a
+> hand-written class as this row, and runs each twin whose classes give a sample on the runtime path against the class
+> form's generated bridge.
 
 ### Amendments to ADR-0018
 

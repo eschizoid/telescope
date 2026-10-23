@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.viaclass.OtherPackageHw;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -426,5 +427,46 @@ class ViaClassRowTest {
     final var bag = new Bag<>(List.of(new Circle("a")));
     assertEquals(new BagDto(List.of(new ShapeDto("A"))), mapper.forward(bag));
     assertEquals(bag, mapper.backward(new BagDto(List.of(new ShapeDto("A")))));
+  }
+
+  @Test
+  @DisplayName("a package-private overload of a class in another package is not one the row calls")
+  void anotherPackagesPackagePrivateOverloadIsNotCalled() {
+    final var mapper = Telescope.mapper(
+      OtherPackageHw.Purse.class,
+      OtherPackageHw.PurseDto.class,
+      via(OtherPackageHw.Purse::coin, OtherPackageHw.PurseDto::coin, OtherPackageHw.class)
+    );
+    assertEquals(
+      new OtherPackageHw.PurseDto(new OtherPackageHw.CoinDto("object:a")),
+      mapper.forward(new OtherPackageHw.Purse(new OtherPackageHw.Coin("a")))
+    );
+  }
+
+  static class PackageBase {
+
+    static ShapeDto forward(final Shape shape) {
+      return new ShapeDto("base:" + shape.name());
+    }
+
+    static Circle backward(final ShapeDto dto) {
+      return new Circle(dto.name());
+    }
+  }
+
+  public static final class Inheriting extends PackageBase {}
+
+  @Test
+  @DisplayName("a package-private static a class inherits in the row's package is one the row calls")
+  void anInheritedPackagePrivateStaticIsCalled() {
+    final var mapper = Telescope.mapper(
+      Circles.class,
+      CirclesDto.class,
+      via(Circles::shapes, CirclesDto::shapes, Inheriting.class)
+    );
+    assertEquals(
+      new CirclesDto(List.of(new ShapeDto("base:a"))),
+      mapper.forward(new Circles(List.of(new Circle("a"))))
+    );
   }
 }

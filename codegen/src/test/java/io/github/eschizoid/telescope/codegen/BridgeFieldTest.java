@@ -1013,41 +1013,104 @@ class BridgeFieldTest {
     final String methods,
     final String sample
   ) throws Exception {
-    final var model = new String[] {
-      "fb.Item",
-      "package fb; public record Item(String name) {}",
-      "fb.ItemDto",
-      "package fb; public record ItemDto(String label) {}",
-      "fb.Named4",
-      "package fb; public interface Named4 { String name(); }",
-      "fb.Shape4",
-      "package fb; public class Shape4 {\n" +
-      "  private final String name;\n" +
-      "  public Shape4(final String name) { this.name = name; }\n" +
-      "  public String name() { return name; }\n" +
-      "  @Override public String toString() { return getClass().getSimpleName() + \"(\" + name + \")\"; }\n}\n",
-      "fb.NamedShape4",
-      "package fb; public class NamedShape4 extends Shape4 implements Named4 {\n" +
-      "  public NamedShape4(final String name) { super(name); }\n}\n",
-      "fb.Hw",
-      "package fb; public final class Hw {\n" + methods + "}\n",
-      "fb.Src",
-      "package fb; public record Src(" + sourceType + " value) {}",
-      "fb.Dst",
-      "package fb; public record Dst(" + targetType + " value) {}",
-      "fb.Plain",
-      HEADER +
-      "public final class Plain {\n" +
-      "  public static Mapper<Src, Dst> build() {" +
-      " return Telescope.mapper(Src.class, Dst.class, via(Src::value, Dst::value, Hw.class)); }\n" +
-      "  public static String run(final Mapper<Src, Dst> m) {\n" +
-      "    final var d = m.forward(new Src(" +
-      sample +
-      "));\n" +
-      "    return d + \" | \" + m.backward(d);\n" +
-      "  }\n" +
-      "}\n",
-    };
+    agreesOnBothPaths(
+      shape,
+      sourceType,
+      targetType,
+      List.of("fb.Hw", "package fb; public final class Hw {\n" + methods + "}\n"),
+      "Hw",
+      sample
+    );
+  }
+
+  static List<Object[]> classesTheBridgeCalls() {
+    return List.of(
+      new Object[] {
+        "a package-private overload of a class in another package is one the bridge cannot call",
+        List.of(
+          "fb.other.OtherHw",
+          "package fb.other; import fb.Item; import fb.ItemDto; public final class OtherHw {\n" +
+            "  static ItemDto forward(final Item i) { return new ItemDto(\"other:\" + i.name()); }\n" +
+            "  public static ItemDto forward(final Object o) { return new ItemDto(\"obj:\" + o); }\n" +
+            "  public static Item backward(final ItemDto d) { return new Item(d.label()); }\n}\n"
+        ),
+        "fb.other.OtherHw",
+      },
+      new Object[] {
+        "a package-private static a class inherits in the row's package is one the bridge calls",
+        List.of(
+          "fb.HwBase",
+          "package fb; class HwBase {\n" +
+            "  static ItemDto forward(final Item i) { return new ItemDto(\"base:\" + i.name()); }\n" +
+            "  static Item backward(final ItemDto d) { return new Item(\"base:\" + d.label()); }\n}\n",
+          "fb.Hw",
+          "package fb; public final class Hw extends HwBase {}\n"
+        ),
+        "Hw",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("classesTheBridgeCalls")
+  @DisplayName("a via row naming a class chooses among the methods the generated bridge can call, on both paths")
+  void aViaRowChoosesTheMethodsTheBridgeCanCall(final String shape, final List<String> classes, final String using)
+    throws Exception {
+    agreesOnBothPaths(shape, "Item", "ItemDto", classes, using, "new Item(\"a\")");
+  }
+
+  /**
+   * Converts {@code sample} through a via row naming {@code using}, one of {@code classes}, built
+   * on the runtime path and generated from a {@code @Bridge} field, and holds the two results
+   * equal.
+   */
+  private static void agreesOnBothPaths(
+    final String shape,
+    final String sourceType,
+    final String targetType,
+    final List<String> classes,
+    final String using,
+    final String sample
+  ) throws Exception {
+    final var modelList = new ArrayList<>(
+      List.of(
+        "fb.Item",
+        "package fb; public record Item(String name) {}",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.Named4",
+        "package fb; public interface Named4 { String name(); }",
+        "fb.Shape4",
+        "package fb; public class Shape4 {\n" +
+          "  private final String name;\n" +
+          "  public Shape4(final String name) { this.name = name; }\n" +
+          "  public String name() { return name; }\n" +
+          "  @Override public String toString() { return getClass().getSimpleName() + \"(\" + name + \")\"; }\n}\n",
+        "fb.NamedShape4",
+        "package fb; public class NamedShape4 extends Shape4 implements Named4 {\n" +
+          "  public NamedShape4(final String name) { super(name); }\n}\n",
+        "fb.Src",
+        "package fb; public record Src(" + sourceType + " value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(" + targetType + " value) {}",
+        "fb.Plain",
+        HEADER +
+          "public final class Plain {\n" +
+          "  public static Mapper<Src, Dst> build() {" +
+          " return Telescope.mapper(Src.class, Dst.class, via(Src::value, Dst::value, " +
+          using +
+          ".class)); }\n" +
+          "  public static String run(final Mapper<Src, Dst> m) {\n" +
+          "    final var d = m.forward(new Src(" +
+          sample +
+          "));\n" +
+          "    return d + \" | \" + m.backward(d);\n" +
+          "  }\n" +
+          "}\n"
+      )
+    );
+    modelList.addAll(classes);
+    final var model = modelList.toArray(String[]::new);
     final var all = new ArrayList<>(List.of(model));
     all.addAll(
       List.of(
@@ -1055,7 +1118,9 @@ class BridgeFieldTest {
         HEADER +
           "public final class Fields {\n" +
           "  @Bridge public static final Mapper<Src, Dst> GEN =" +
-          " Telescope.mapper(Src.class, Dst.class, via(Src::value, Dst::value, Hw.class));\n}\n"
+          " Telescope.mapper(Src.class, Dst.class, via(Src::value, Dst::value, " +
+          using +
+          ".class));\n}\n"
       )
     );
     final var generated = compile(sources(all.toArray(String[]::new)));
@@ -1074,9 +1139,64 @@ class BridgeFieldTest {
     }
   }
 
-  @Test
-  @DisplayName("a via row naming a class whose element method cannot be chosen is refused on both paths alike")
-  void aViaRowNamingAnAmbiguousClassIsRefusedOnBothPaths() throws Exception {
+  static List<String[]> classesARowCannotChooseFrom() {
+    return List.of(
+      new String[] {
+        "an element method that cannot be chosen",
+        "java.util.List<Item5>",
+        "java.util.List<ItemDto5>",
+        "  public static ItemDto5 forward(final Named5 n) { return new ItemDto5(n.name()); }\n" +
+        "  public static ItemDto5 forward(final Labelled5 l) { return new ItemDto5(l.name()); }\n" +
+        "  public static Item5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n",
+        "Deep map Src → Dst: via(...) of 'value': fb.Hw5's forward has several overloads that take an element of" +
+        " java.util.List<fb.Item5>, so the one an element's class calls for cannot be chosen before the element is seen",
+      },
+      new String[] {
+        "no forward",
+        "Item5",
+        "ItemDto5",
+        "  public static Item5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n",
+        "Deep map Src → Dst: via(...) of 'value': fb.Hw5 declares no forward",
+      },
+      new String[] {
+        "an instance forward",
+        "Item5",
+        "ItemDto5",
+        "  public ItemDto5 forward(final Item5 i) { return new ItemDto5(i.name()); }\n" +
+        "  public static Item5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n",
+        "Deep map Src → Dst: via(...) of 'value': fb.Hw5 declares no forward",
+      },
+      new String[] {
+        "a forward no value of the property reaches through one overload",
+        "Named5",
+        "ItemDto5",
+        "  public static ItemDto5 forward(final Item5 i) { return new ItemDto5(i.name()); }\n" +
+        "  public static ItemDto5 forward(final Other5 o) { return new ItemDto5(o.name()); }\n" +
+        "  public static Named5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n",
+        "Deep map Src → Dst: via(...) of 'value': fb.Hw5's forward takes no value of fb.Named5",
+      },
+      new String[] {
+        "an array parameter the property never holds",
+        "Item5",
+        "ItemDto5",
+        "  public static ItemDto5 forward(final Item5... i) { return new ItemDto5(i[0].name()); }\n" +
+        "  public static Item5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n",
+        "Deep map Src → Dst: via row hands the source's 'value' to a mapper of Item5[], but it never holds a" +
+        " Item5[]",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("classesARowCannotChooseFrom")
+  @DisplayName("a via row naming a class it cannot choose methods of is refused on both paths in the same words")
+  void aViaRowNamingAClassItCannotChooseFromIsRefusedAlike(
+    final String shape,
+    final String sourceType,
+    final String targetType,
+    final String methods,
+    final String words
+  ) throws Exception {
     final var model = new String[] {
       "fb.Named5",
       "package fb; public interface Named5 { String name(); }",
@@ -1084,17 +1204,16 @@ class BridgeFieldTest {
       "package fb; public interface Labelled5 { String name(); }",
       "fb.Item5",
       "package fb; public record Item5(String name) implements Named5, Labelled5 {}",
+      "fb.Other5",
+      "package fb; public record Other5(String name) implements Named5 {}",
       "fb.ItemDto5",
       "package fb; public record ItemDto5(String label) {}",
       "fb.Hw5",
-      "package fb; public final class Hw5 {\n" +
-      "  public static ItemDto5 forward(final Named5 n) { return new ItemDto5(n.name()); }\n" +
-      "  public static ItemDto5 forward(final Labelled5 l) { return new ItemDto5(l.name()); }\n" +
-      "  public static Item5 backward(final ItemDto5 d) { return new Item5(d.label()); }\n}\n",
+      "package fb; public final class Hw5 {\n" + methods + "}\n",
       "fb.Src",
-      "package fb; public record Src(java.util.List<Item5> value) {}",
+      "package fb; public record Src(" + sourceType + " value) {}",
       "fb.Dst",
-      "package fb; public record Dst(java.util.List<ItemDto5> value) {}",
+      "package fb; public record Dst(" + targetType + " value) {}",
       "fb.Plain",
       HEADER +
       "public final class Plain {\n" +
@@ -1111,16 +1230,25 @@ class BridgeFieldTest {
           " Telescope.mapper(Src.class, Dst.class, via(Src::value, Dst::value, Hw5.class));\n}\n"
       )
     );
-    final var words = "fb.Hw5's forward has several overloads that take an element of java.util.List<fb.Item5>";
     final var generated = compile(sources(all.toArray(String[]::new)));
-    assertFalse(generated.success());
-    assertTrue(generated.hasError(words), generated::errorMessages);
+    assertFalse(generated.success(), shape);
+    final var refusals = generated
+      .errors()
+      .stream()
+      .map(d -> d.getMessage(Locale.ROOT).replaceFirst("^In the rows of @Bridge field Fields\\.GEN: ", ""))
+      .toList();
     final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), sources(model));
+    assertTrue(runtime.success(), runtime::errorMessages);
     try (final var loader = load(runtime)) {
       final var refused = assertThrows(InvocationTargetException.class, () ->
         loader.loadClass("fb.Plain").getMethod("build").invoke(null)
       );
-      assertTrue(refused.getCause().getMessage().contains(words), refused.getCause()::getMessage);
+      final var said = refused.getCause().getMessage();
+      assertTrue(said.startsWith(words), () -> shape + ": " + said);
+      assertTrue(
+        refusals.contains(said),
+        () -> shape + ": the runtime says\n  " + said + "\nthe processor\n  " + refusals
+      );
     }
   }
 

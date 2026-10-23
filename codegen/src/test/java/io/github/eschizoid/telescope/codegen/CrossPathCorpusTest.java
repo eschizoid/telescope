@@ -427,6 +427,8 @@ class CrossPathCorpusTest {
     assertTrue(untwinned <= 104, () -> "cells with no field twin rose to " + untwinned);
     final var run = FieldTwin.RUN_BOTH_WAYS.get();
     assertTrue(run >= 49, () -> "field twins naming a class run on the runtime path fell to " + run);
+    final var unsampled = FieldTwin.UNSAMPLED.get();
+    assertTrue(unsampled <= 0, () -> "field twins naming a class not run, for want of a sample, rose to " + unsampled);
   }
 
   private static final int FIELD_TWIN_CORPUS = 600;
