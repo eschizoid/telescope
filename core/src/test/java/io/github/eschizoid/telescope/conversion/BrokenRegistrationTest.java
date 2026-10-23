@@ -17,7 +17,9 @@ import org.junit.jupiter.api.Test;
  */
 class BrokenRegistrationTest {
 
-  /** A class defined by the loader that carries the broken entry, so the lookup reads that loader. */
+  /**
+   * A class defined by the loader that carries the broken entry, so the lookup reads that loader.
+   */
   public static final class Probe {}
 
   @Test
@@ -49,8 +51,11 @@ class BrokenRegistrationTest {
       assertTrue(BridgeRegistry.declaredBy(probe, String.class, String.class).isEmpty());
       assertEquals(
         RegistryFixtures.BRIDGE,
-        BridgeRegistry.find(RegistryFixtures.Source.class, RegistryFixtures.Target.class, getClass().getClassLoader())
-          .orElseThrow()
+        BridgeRegistry.find(
+          RegistryFixtures.Source.class,
+          RegistryFixtures.Target.class,
+          getClass().getClassLoader()
+        ).orElseThrow()
       );
     } catch (final IOException e) {
       throw new AssertionError(e);

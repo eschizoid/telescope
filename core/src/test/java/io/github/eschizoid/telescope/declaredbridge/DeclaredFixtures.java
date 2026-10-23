@@ -51,7 +51,9 @@ public final class DeclaredFixtures {
     }
   );
 
-  /** A class whose field's row names another accessor than the one its bridge was generated from. */
+  /**
+   * A class whose field's row names another accessor than the one its bridge was generated from.
+   */
   public static final class MovedMappers {
 
     private MovedMappers() {}

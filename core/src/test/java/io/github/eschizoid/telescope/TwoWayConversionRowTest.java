@@ -71,7 +71,9 @@ class TwoWayConversionRowTest {
   }
 
   @Test
-  @DisplayName("a class whose constructor throws fails where the row is built, as the generated bridge fails where it is")
+  @DisplayName(
+    "a class whose constructor throws fails where the row is built, as the generated bridge fails where it is"
+  )
   void aThrowingConstructorFailsWithTheRow() {
     final var thrown = assertThrows(IllegalStateException.class, () ->
       to(Contact::email, ContactDto::address, Throwing.class)

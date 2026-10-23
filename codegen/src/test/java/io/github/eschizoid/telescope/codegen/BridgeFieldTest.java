@@ -384,37 +384,34 @@ class BridgeFieldTest {
       new String[] {
         "the same pair in a static field",
         "  static final ForwardMapper<User, UserDto> OTHER = Telescope.mapperForward(User.class, UserDto.class," +
-          " drop(User::nick), toOneWay(User::handle, UserDto::handle, Handle::new));",
+        " drop(User::nick), toOneWay(User::handle, UserDto::handle, Handle::new));",
       },
       new String[] {
         "classes held in a variable",
         "  static final Class<User> SOURCE = User.class;\n" +
-          "  static final ForwardMapper<User, UserDto> OTHER = Telescope.mapperForward(SOURCE, UserDto.class);",
+        "  static final ForwardMapper<User, UserDto> OTHER = Telescope.mapperForward(SOURCE, UserDto.class);",
       },
-      new String[] {
-        "a static block",
-        "  static { Telescope.mapperForward(Address.class, AddressDto.class); }",
-      },
+      new String[] { "a static block", "  static { Telescope.mapperForward(Address.class, AddressDto.class); }" },
       new String[] {
         "a generic helper the class calls from a static field",
         "  static <X, Y> ForwardMapper<X, Y> make(final Class<X> s, final Class<Y> t, final MapStep... rows) {" +
-          " return Telescope.mapperForward(s, t, rows); }\n" +
-          "  static final ForwardMapper<User, UserDto> SWAP = make(User.class, UserDto.class, drop(User::nick));",
+        " return Telescope.mapperForward(s, t, rows); }\n" +
+        "  static final ForwardMapper<User, UserDto> SWAP = make(User.class, UserDto.class, drop(User::nick));",
       },
       new String[] {
         "a method, another pair",
         "  static ForwardMapper<Address, AddressDto> later() {" +
-          " return Telescope.mapperForward(Address.class, AddressDto.class); }",
+        " return Telescope.mapperForward(Address.class, AddressDto.class); }",
       },
       new String[] {
         "a lambda",
         "  static final java.util.function.Supplier<ForwardMapper<Address, AddressDto>> LATER =" +
-          " () -> Telescope.mapperForward(Address.class, AddressDto.class);",
+        " () -> Telescope.mapperForward(Address.class, AddressDto.class);",
       },
       new String[] {
         "a statically imported factory",
         "  static Object later() {" +
-          " return io.github.eschizoid.telescope.Telescope.mapperForward(Address.class, AddressDto.class); }",
+        " return io.github.eschizoid.telescope.Telescope.mapperForward(Address.class, AddressDto.class); }",
       }
     );
   }
@@ -941,7 +938,14 @@ class BridgeFieldTest {
       "public final class Mappers {\n" +
       "  @Bridge static final Mapper<Address, Wider> WIDER = Telescope.mapper(Address.class, Wider.class);\n" +
       "}\n";
-    final var c = compile(sources("fb.Wider", "package fb; public record Wider(String city, String zip, String extra) {}", "fb.Mappers", code));
+    final var c = compile(
+      sources(
+        "fb.Wider",
+        "package fb; public record Wider(String city, String zip, String extra) {}",
+        "fb.Mappers",
+        code
+      )
+    );
     assertFalse(c.success());
     final var refusal = c
       .errors()

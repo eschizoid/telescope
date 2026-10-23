@@ -66,10 +66,7 @@ class DeclaredBridgeTest {
     assumeTrue(System.getProperty("org.graalvm.nativeimage.imagecode") == null);
     final var mapper = DeclaredFixtures.MovedMappers.MOVED;
     final var before = DeclaredFixtures.GENERATED_CALLS.get();
-    assertEquals(
-      new DeclaredFixtures.MovedDto("n"),
-      mapper.forward(new DeclaredFixtures.Moved("n", "a"))
-    );
+    assertEquals(new DeclaredFixtures.MovedDto("n"), mapper.forward(new DeclaredFixtures.Moved("n", "a")));
     assertEquals(0, DeclaredFixtures.GENERATED_CALLS.get() - before);
     final var declared = mapper.explain().declared().orElseThrow();
     assertEquals(OpticNode.Runs.RUNTIME, declared.runs());

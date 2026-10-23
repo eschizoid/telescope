@@ -211,10 +211,10 @@ public final class DeepMap {
   }
 
   /**
-   * How the rows a provider's bridge was generated from differ from {@code steps}, or null when they
-   * agree. The kinds of the rows are compared everywhere. The accessors each row names are compared
-   * on the JVM, where reading them decodes each method reference; inside a native image, which is
-   * built from one compilation and needs no such decoding, they are not.
+   * How the rows a provider's bridge was generated from differ from {@code steps}, or null when
+   * they agree. The kinds of the rows are compared everywhere. The accessors each row names are
+   * compared on the JVM, where reading them decodes each method reference; inside a native image,
+   * which is built from one compilation and needs no such decoding, they are not.
    */
   private static String staleness(final BridgeProvider provider, final MapStep[] steps, final List<String> kinds) {
     if (!kinds.equals(provider.rowKinds())) {
@@ -227,7 +227,9 @@ public final class DeepMap {
       accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
     }
     if (accessors.equals(provider.rowAccessors())) return null;
-    return "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors;
+    return (
+      "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors
+    );
   }
 
   private static String nullToEmpty(final String value) {

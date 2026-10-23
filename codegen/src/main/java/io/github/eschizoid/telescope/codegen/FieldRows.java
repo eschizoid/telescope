@@ -33,13 +33,13 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
-import javax.lang.model.util.ElementFilter;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
 
 /**
  * Reads the rows of a {@code @Bridge} field's {@code Telescope.mapper(...)} or {@code
@@ -215,14 +215,14 @@ final class FieldRows {
 
   /**
    * The {@code Telescope.mapper} and {@code mapperForward} calls in {@code type}, a class that
-   * declares a {@code @Bridge} field, that the class may not make. The runtime hands a field's bridge
-   * to a call from the class's static initialiser for the field's pair, so the class makes only
-   * calls it can be read to make safely: each one the whole initializer of a static field, naming
-   * its classes as literals, for the pair of a {@code @Bridge} field when it is that field, and for
-   * a pair no {@code @Bridge} field of the class declares otherwise. Every other call is returned,
-   * whatever its arguments: one in a method, a lambda or a block, one passed through a helper, one
-   * nested in another call, one naming its classes by a variable. A nested class is its own caller,
-   * with a static initialiser of its own, and is left out.
+   * declares a {@code @Bridge} field, that the class may not make. The runtime hands a field's
+   * bridge to a call from the class's static initialiser for the field's pair, so the class makes
+   * only calls it can be read to make safely: each one the whole initializer of a static field,
+   * naming its classes as literals, for the pair of a {@code @Bridge} field when it is that field,
+   * and for a pair no {@code @Bridge} field of the class declares otherwise. Every other call is
+   * returned, whatever its arguments: one in a method, a lambda or a block, one passed through a
+   * helper, one nested in another call, one naming its classes by a variable. A nested class is its
+   * own caller, with a static initialiser of its own, and is left out.
    *
    * <p>The calls are matched by their names and their class literals resolved by name, so nothing
    * outside a field's own initializer is attributed during the round: attributing a class body
@@ -969,9 +969,8 @@ final class FieldRows {
     /** The refusal of a supplier whose result the property {@code into} does not hold, or null. */
     private Refused returnFits(final ExpressionTree arg, final ExecutableElement method, final Accessor into) {
       final var types = env.getTypeUtils();
-      final var gives = method.getKind() == ElementKind.CONSTRUCTOR
-        ? method.getEnclosingElement().asType()
-        : method.getReturnType();
+      final var gives =
+        method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
       if (types.isAssignable(types.erasure(gives), types.erasure(into.type()))) return null;
       return new Refused(
         arg,

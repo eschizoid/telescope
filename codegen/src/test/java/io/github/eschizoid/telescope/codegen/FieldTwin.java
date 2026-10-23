@@ -65,14 +65,19 @@ final class FieldTwin {
       return;
     }
     final var compiled = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), twin.get());
-    // A class the conversion's row cannot take at its types, a generic BridgeFn or one wider than
-    // the properties, which @Transform checks itself, is a carrier javac refuses: no row of the same
-    // meaning exists.
+    // A class the conversion's row cannot take at its types, a generic BridgeFn or one wider
+    // than the properties, which @Transform checks itself, is a carrier javac refuses: no row of
+    // the same meaning exists.
     if (
       compiled
         .errors()
         .stream()
-        .anyMatch(d -> d.getSource() != null && d.getSource().getName().endsWith("/" + CARRIER + ".java") && d.getMessage(Locale.ROOT).contains("cannot infer type-variable"))
+        .anyMatch(
+          d ->
+            d.getSource() != null &&
+            d.getSource().getName().endsWith("/" + CARRIER + ".java") &&
+            d.getMessage(Locale.ROOT).contains("cannot infer type-variable")
+        )
     ) {
       UNTWINNED.incrementAndGet();
       return;
@@ -92,7 +97,14 @@ final class FieldTwin {
       if (e.getKey().startsWith(CARRIER) && e.getKey().endsWith("BridgeProvider")) continue;
       actual.put(untwinned(e.getKey()), untwinned(e.getValue()));
     }
-    assertEquals(expected, actual, () -> "the field twin generates other code than the class form:\n" + difference(expected, actual) + compiled.errorMessages());
+    assertEquals(
+      expected,
+      actual,
+      () ->
+        "the field twin generates other code than the class form:\n" +
+        difference(expected, actual) +
+        compiled.errorMessages()
+    );
   }
 
   /** The first file the two compilations generate differently, and its first differing line. */
@@ -106,7 +118,9 @@ final class FieldTwin {
       for (var i = 0; i < Math.max(a.size(), x.size()); i++) {
         final var left = i < x.size() ? x.get(i) : "";
         final var right = i < a.size() ? a.get(i) : "";
-        if (!left.equals(right)) return e.getKey() + " line " + (i + 1) + "\n  class: " + left + "\n  field: " + right + "\n";
+        if (!left.equals(right)) return (
+          e.getKey() + " line " + (i + 1) + "\n  class: " + left + "\n  field: " + right + "\n"
+        );
       }
     }
     return "";
@@ -136,9 +150,17 @@ final class FieldTwin {
       }
     }
     if (declared.isEmpty()) return Optional.empty();
-    // A source naming a bridge the class form writes refers to a class the field form names otherwise.
+    // A source naming a bridge the class form writes refers to a class the field form names
+    // otherwise.
     for (final var e : codes.entrySet()) {
-      final var stripped = withoutBridges(e.getValue(), declared.values().stream().filter(d -> d.file() == e.getKey()).toList());
+      final var stripped = withoutBridges(
+        e.getValue(),
+        declared
+          .values()
+          .stream()
+          .filter(d -> d.file() == e.getKey())
+          .toList()
+      );
       for (final var name : declared.keySet()) {
         if (Pattern.compile("\\b" + name + "(To\\w+)?Bridge\\b").matcher(stripped).find()) return Optional.empty();
       }
@@ -151,7 +173,11 @@ final class FieldTwin {
     }
     final var twin = new ArrayList<JavaFileObject>();
     for (final var e : codes.entrySet()) {
-      final var own = declared.values().stream().filter(d -> d.file() == e.getKey()).toList();
+      final var own = declared
+        .values()
+        .stream()
+        .filter(d -> d.file() == e.getKey())
+        .toList();
       twin.add(ProcessorHarness.source(binaryName(e.getKey()), withoutBridges(e.getValue(), own)));
     }
     for (final var e : fields.entrySet()) {
@@ -184,7 +210,9 @@ final class FieldTwin {
     return out;
   }
 
-  /** The field declaring {@code d}'s pair with rows of the same meaning, or null when there is none. */
+  /**
+   * The field declaring {@code d}'s pair with rows of the same meaning, or null when there is none.
+   */
   private static String fieldOf(
     final Declared d,
     final Map<String, Declared> declared,
@@ -227,7 +255,10 @@ final class FieldTwin {
                 final var using = attributes.get("using");
                 if (using == null || !using.endsWith(".class")) return null;
                 if (attributes.containsKey("method")) {
-                  methods.put(attributes.get("field"), using.substring(0, using.length() - ".class".length()) + "::" + attributes.get("method"));
+                  methods.put(
+                    attributes.get("field"),
+                    using.substring(0, using.length() - ".class".length()) + "::" + attributes.get("method")
+                  );
                   continue;
                 }
                 if ("true".equals(attributes.get("forwardOnly"))) return null;
@@ -236,10 +267,16 @@ final class FieldTwin {
               default -> {
                 final var using = attributes.get("using");
                 if (using == null || !using.endsWith("Bridge.class")) return null;
-                final var simple = using.substring(using.lastIndexOf('.', using.length() - 7) + 1, using.length() - "Bridge.class".length());
+                final var simple = using.substring(
+                  using.lastIndexOf('.', using.length() - 7) + 1,
+                  using.length() - "Bridge.class".length()
+                );
                 final var nested = declared.get(simple);
                 if (nested == null) return null;
-                vias.put(attributes.get("field"), (nested.pkg().isEmpty() ? "" : nested.pkg() + ".") + CARRIER + "." + fieldName(simple));
+                vias.put(
+                  attributes.get("field"),
+                  (nested.pkg().isEmpty() ? "" : nested.pkg() + ".") + CARRIER + "." + fieldName(simple)
+                );
               }
             }
           }
@@ -308,7 +345,9 @@ final class FieldTwin {
     return Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
   }
 
-  /** The attributes of a nested annotation, by name: a quoted value unquoted, any other as written. */
+  /**
+   * The attributes of a nested annotation, by name: a quoted value unquoted, any other as written.
+   */
   private static Map<String, String> attributesOf(final String text) {
     final var out = new LinkedHashMap<String, String>();
     final var m = ATTRIBUTE.matcher(text);

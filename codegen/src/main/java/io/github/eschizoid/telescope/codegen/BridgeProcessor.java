@@ -171,8 +171,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // silently ignored. Produces a partial-Iso whose backward (BRIDGE.set(source, target))
     // direction is documented as lossy.
     boolean lenient,
-    // The @Bridge field this pair's rows were read from, as declared in the carrier, or null for a
-    // @Bridge on a class. A field's bridge is named after the field and registered with its class.
+    // The @Bridge field this pair's rows were read from, as declared in the carrier, or null
+    // for a @Bridge on a class. A field's bridge is named after the field and registered with
+    // its class.
     String declaringField,
     // For a field's bridge, the classes of the rows the runtime builds from the field's call, in
     // order, and the accessors each row names; its provider records both, so a mapper built from
@@ -280,7 +281,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The providers of the bridges {@code @Bridge} fields declare, to the class declaring each. */
   private final Map<String, TypeElement> fieldProviders = new LinkedHashMap<>();
 
-  /** The calls refused for a class's {@code @Bridge} fields, as {@code Class@position}, once each. */
+  /**
+   * The calls refused for a class's {@code @Bridge} fields, as {@code Class@position}, once each.
+   */
   private final Set<String> reportedCalls = new HashSet<>();
 
   /** The {@code @Bridge} fields, as {@code Carrier#FIELD}, whose sides were checked for Lombok. */
@@ -951,8 +954,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The target, among {@code targets}, of a pair whose source is {@code source} and which a {@code
-   * @Bridge} field declares, or null.
+   * The target, among {@code targets}, of a pair whose source is {@code source} and which a
+   * {@code @Bridge} field declares, or null.
    */
   private TypeMirror fieldDeclaredTarget(final TypeElement source, final Set<String> targets) {
     final var sourceFq = source.getQualifiedName().toString();
@@ -1820,7 +1823,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
   }
 
-  /** The {@code @Bridge} field, as {@code Carrier#FIELD}, whose bridge is being planned, or null. */
+  /**
+   * The {@code @Bridge} field, as {@code Carrier#FIELD}, whose bridge is being planned, or null.
+   */
   private String fieldOrigin;
 
   @Override
@@ -1839,7 +1844,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var call = new FieldRows(processingEnv, trees).initializerCall(field);
     final var text =
-      "In the rows of @Bridge field " + field.getEnclosingElement().getSimpleName() + "." + field.getSimpleName() + ": " + message;
+      "In the rows of @Bridge field " +
+      field.getEnclosingElement().getSimpleName() +
+      "." +
+      field.getSimpleName() +
+      ": " +
+      message;
     if (call == null) super.error(field, text);
     else errorAt(trees, field, call, text);
   }

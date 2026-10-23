@@ -145,9 +145,9 @@ program works on the JVM. Only the image is missing something, and only the regi
 bridge a `@Bridge` field of that class declares for the pair through `ServiceLoader`. Both work in an image: the image
 builder registers the providers in `META-INF/services`, and the caller class needs no registration. The field's rows are
 built but never decoded, so the method references they name need no `serialization-config.json` entry, except a
-`constant` or `compute` row, which decodes its target accessor when it is built. A `to(src, tgt, Fn.class)` row
-builds `Fn` through its no-argument constructor when the row is built, which needs the constructor registered; a row
-given an instance needs nothing. The mapper then runs the generated bridge, which is typed method calls.
+`constant` or `compute` row, which decodes its target accessor when it is built. A `to(src, tgt, Fn.class)` row builds
+`Fn` through its no-argument constructor when the row is built, which needs the constructor registered; a row given an
+instance needs nothing. The mapper then runs the generated bridge, which is typed method calls.
 
 A class compiled without the javac tree API, by Eclipse's compiler for one, has its rows read by no processor, and its
 mapper is built on the runtime path, which needs the registrations a runtime mapper needs. The processor marks such a

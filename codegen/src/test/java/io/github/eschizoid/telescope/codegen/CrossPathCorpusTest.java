@@ -413,8 +413,8 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * The bridges the whole corpus compiles that are held to a field twin, at least, and those with no
-   * row of the same meaning, at most. A run of a few cells compiles too few to say, so the bound
+   * The bridges the whole corpus compiles that are held to a field twin, at least, and those with
+   * no row of the same meaning, at most. A run of a few cells compiles too few to say, so the bound
    * holds once the corpus compiles at least {@link #FIELD_TWIN_CORPUS} bridges. A change that stops
    * a cell being twinned fails here, and a change that twins more raises the floor.
    */

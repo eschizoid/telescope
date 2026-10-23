@@ -47,8 +47,9 @@ public final class BridgeRegistry {
           if (!providers.hasNext()) break;
           provider = providers.next();
         } catch (final ServiceConfigurationError broken) {
-          // An entry naming a class that is missing or cannot be built says nothing of this class's
-          // bridges, so it is reported and passed over, and every other provider is still read.
+          // An entry naming a class that is missing or cannot be built says nothing of this
+          // class's bridges, so it is reported and passed over, and every other provider is
+          // still read.
           LOGGER.log(
             Level.WARNING,
             () ->

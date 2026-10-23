@@ -36,9 +36,9 @@ the existing emitter without a second one.
    through a `@Transform` class today, so every type check the emitter makes applies unchanged.
 
    Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
-   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the
-   mapper-wide hints `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated
-   path is added to this list then.
+   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the mapper-wide hints
+   `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated path is added to
+   this list then.
 
 3. **Everything else is refused by name at compile time, on the row.** An inline lambda, a row built by a helper method,
    a loop or a variable, a row keyed to a nested pair, a non-literal constant, an initializer that is not the factory
@@ -79,9 +79,9 @@ the existing emitter without a second one.
 > warning, and `explain()` says why. The rows are what the author wrote, so they are the declaration to honour. The note
 > on a compiler without the tree API is a warning on each field, so it is seen where the field is. A named module that
 > does not `provides` the generated bridges gets a mandatory warning naming the line to add, since `ServiceLoader`
-> ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its
-> class, on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge
-> builds it when the bridge is initialised.
+> ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its class,
+> on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge builds it
+> when the bridge is initialised.
 
 ### Amendments to ADR-0018
 
@@ -102,8 +102,8 @@ the existing emitter without a second one.
 - A call site keeps working unchanged when the processor is removed; it runs the runtime mapper instead.
 - Building a mapper costs one stack walk and one `ServiceLoader` scan more than today, once per mapper.
 - The generated path needs no reflection configuration inside a native image: `ServiceLoader` providers are registered
-  by the image builder, `StackWalker` is supported there, and the rows are built but not decoded, except a `constant`
-  or `compute` row, which decodes its target accessor. The `NativeVerify` binary covers a field-declared mapper.
+  by the image builder, `StackWalker` is supported there, and the rows are built but not decoded, except a `constant` or
+  `compute` row, which decodes its target accessor. The `NativeVerify` binary covers a field-declared mapper.
 - A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
   generated from. The provider records the kind of each row and the accessors it names; on the JVM the factory compares
   both with the rows it is given, and builds the runtime mapper from those rows when they differ. What the comparison
