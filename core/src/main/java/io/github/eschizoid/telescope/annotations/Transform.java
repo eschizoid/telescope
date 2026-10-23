@@ -32,8 +32,11 @@ import java.lang.annotation.Target;
  *       static instance per transformed field)
  * </ul>
  *
- * <p>{@code field} names the source side. Pair with a sibling {@link Rename} when the target's
- * matching field has a different name.
+ * <p>{@code field} names the source side. Pair it with a {@link Rename} on the same field when the
+ * target's field has a different name: forward writes the converted value into the field the rename
+ * names, and backward reads it from there. With a forward-only fan-out, several renames from one
+ * source, forward writes the converted value into every target field and backward reads the first
+ * rename declared.
  *
  * <h2>Forward-only transforms</h2>
  *

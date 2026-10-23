@@ -100,12 +100,25 @@ references, so IDE rename refactors follow and typos fail at javac, not at annot
 keyed by (sourceClass, targetClass) and applies at every depth where the pair recurses — less repetition than a @Mapping
 per mapper method, at the cost of broader scope when two usages of the same pair need different renames.
 
+On `@Bridge`, `@Rename(source = "email", target = "contactEmail")` names the pair of fields. A `@Transform` or a
+`@ViaMapper` on the same source field converts the value on the way, so one field is renamed and converted the way the
+four-argument `to(...)` row and `via(...)` do it on the runtime path; the generated code is the same direct call it is
+for a field that is not renamed. A forward-only fan-out (several renames from one source) through a transform writes the
+converted value into every target, and reads the source back from the first rename declared. A rename onto the target of
+another source field left under its own name is refused by that field's name by a strict bridge and the strict
+`Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the field would have nowhere
+to be written; a lenient bridge, like `mapperForward`, leaves it unread instead. A lenient bridge refuses a `@Transform`
+or `@ViaMapper` on a field it would leave unread, by the field's name, rather than drop the conversion.
+
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
 type); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the test '5-level nesting with two renames
 — every field threads through correctly' (to(CompanyEntity::founded, CompanyDto::since) rename in 5-level nesting);
 core/src/main/java/io/github/eschizoid/telescope/Telescope.java, the javadoc on `map(Class, Class, MapStep...)` (a
-rename row applies wherever recursion lands on that type pair)</sub>
+rename row applies wherever recursion lands on that type pair);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a property both renamed
+and converted by its own conversion converts the same way on both paths' and 'a property left under its own name whose
+target a rename of another property fills is refused by name, the same way on both paths'</sub>
 
 ### Nested source path
 

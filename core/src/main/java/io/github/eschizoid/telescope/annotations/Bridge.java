@@ -40,8 +40,10 @@ import java.lang.annotation.Target;
  * <p>This is the reflection-free, compile-checked counterpart to the runtime {@link
  * io.github.eschizoid.telescope.Telescope#map(Class, Class,
  * io.github.eschizoid.telescope.mapping.MapStep...)} — that single factory handles record↔record,
- * POJO↔POJO, and POJO↔record at any depth. For renames or per-field transforms (which can't be
- * expressed in an annotation), use the runtime form instead.
+ * POJO↔POJO, and POJO↔record at any depth. Renames, per-field conversions and nested-bridge
+ * overrides are declared here too, through {@link #renames()}, {@link #transforms()} and {@link
+ * #viaMappers()}; a rename and a conversion on the same field compose, so one field can be renamed
+ * and converted at once.
  *
  * <pre>{@code
  * // Source — the entity points at the DTO it bridges to:
@@ -150,7 +152,8 @@ public @interface Bridge {
    *
    * <p>Each transform's field must be a real field on the annotated source. A field with a
    * transform is exempt from the same-type check that other fields go through; the transform's
-   * input/output types are the bridge contract for that slot.
+   * input/output types are the bridge contract for that slot. The slot is the target field of the
+   * same name, or the one a {@link Rename} on the same field names.
    */
   Transform[] transforms() default {};
 

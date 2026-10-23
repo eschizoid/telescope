@@ -103,6 +103,91 @@ class VerifierSilenceAgreementTest {
     assertEquals(List.of(), outcome.warnings());
   }
 
+  /** A pair renaming {@code n} onto {@code label}, beside a source {@code label} no row reads. */
+  private static final String KEPT = """
+    record @@Src(String n, String label) {}
+    record @@Tgt(String label, String z) {}
+    record @@Outer(@@Src in) {}
+    record @@OuterDto(@@Tgt in) {}
+    """;
+
+  @Nested
+  @DisplayName("A source property no row reads, whose same-named target a row of its pair fills, is refused by both")
+  class KeptName {
+
+    @Test
+    @DisplayName("on the mapper's own pair, beside a compute row")
+    void besideACompute() {
+      assertBothRefuse(
+        verified(
+          "VsN",
+          KEPT +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::label), compute(@@Tgt::z, () -> \"z\"))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("on a nested pair with a row of its own")
+    void onANestedPair() {
+      assertBothRefuse(
+        verified("VsO", KEPT + holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::label))"))
+      );
+    }
+
+    // The kept property's type differs from its same-named target's: the row claims the target,
+    // so the one refusal is the kept-name one, with no complaint about the two types.
+    @Test
+    @DisplayName("on a nested pair whose kept property is of another type than its same-named target")
+    void ofAnotherType() {
+      assertBothRefuse(
+        verified(
+          "VsK",
+          """
+            record @@Inner(String a, Integer b) {}
+            record @@InnerDto(String b) {}
+            record @@Outer(@@Inner inner) {}
+            record @@OuterDto(@@InnerDto inner) {}
+            """ +
+            holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::a, @@InnerDto::b))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not on a nested pair whose rows swap two properties, since each is read")
+    void notASwap() {
+      assertBothAccept(
+        verified(
+          "VsQ",
+          """
+            record @@Inner(String n, String label) {}
+            record @@InnerDto(String n, String label) {}
+            record @@Outer(@@Inner in) {}
+            record @@OuterDto(@@InnerDto in) {}
+            """ +
+            holder(
+              "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::n, @@InnerDto::label)," +
+                " to(@@Inner::label, @@InnerDto::n))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not on a mapperForward call, which leaves it unread")
+    void notForwardOnly() {
+      assertBothAccept(
+        verified(
+          "VsP",
+          KEPT + holder("Telescope.mapperForward(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::label))")
+        )
+      );
+    }
+  }
+
   @Nested
   @DisplayName("A property left to same-name matching that construction refuses is refused by both")
   class SameNamed {
@@ -242,23 +327,6 @@ class VerifierSilenceAgreementTest {
     @DisplayName("a mapperForward call given no rows, converted through its own pair's bridge")
     void rootThroughItsBridge() {
       assertBothAccept(bridged("VsJ", CROSSWISE + holder("Telescope.mapperForward(@@Inner.class, @@InnerDto.class)")));
-    }
-
-    @Test
-    @DisplayName("a nested pair whose same-named property a row keyed to the pair claims")
-    void nestedPropertyClaimedByARow() {
-      assertBothAccept(
-        verified(
-          "VsK",
-          """
-            record @@Inner(String a, Integer b) {}
-            record @@InnerDto(String b) {}
-            record @@Outer(@@Inner inner) {}
-            record @@OuterDto(@@InnerDto inner) {}
-            """ +
-            holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::a, @@InnerDto::b))")
-        )
-      );
     }
   }
 

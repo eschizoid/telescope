@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.ResultCheck;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.KeptNames;
 import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
@@ -1264,6 +1265,27 @@ public final class DeepMap {
 
       final var srcNames = srcRefl.names(source);
       final var srcNameSet = new HashSet<>(List.of(srcNames));
+      // A source field no row reads whose same-named target a row reading another source field
+      // writes has nowhere to go. Only a pair with rows of its own can have such a target, and the
+      // user configured that pair, at whatever depth it is met, so a strict mapper refuses it
+      // whatever other rows the pair has. A forward-only mapper leaves it unread, below: `lenient`
+      // says so for its own pair, and `forwardOnly` for every pair below it.
+      if (!lenient && !forwardOnly) {
+        final var kept = new ArrayList<String>();
+        for (final var name : srcNames) {
+          if (!claimedSrc.contains(name) && !telescopeReadsSrc.contains(name)) kept.add(name);
+        }
+        final var taken = KeptNames.taken(kept, claimedTgt);
+        if (!taken.isEmpty()) throw new IllegalStateException(
+          PairingMessages.noSameNameTarget(
+            source.getSimpleName(),
+            target.getSimpleName(),
+            slot(srcRefl),
+            slot(tgtRefl),
+            taken.getFirst()
+          )
+        );
+      }
       for (final var name : tgtRefl.names(target)) {
         if (claimedTgt.contains(name)) continue;
         // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target

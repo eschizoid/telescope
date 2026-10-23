@@ -172,6 +172,29 @@ class OwnBridgeAgreementTest {
     }
 
     @Test
+    @DisplayName("a property the bridge transforms into the target property a rename on it names")
+    void renamedAndTransformed() {
+      // Walked, the target's part would pair with the source's part, which is dropped by the
+      // bridge, and the row would apply there.
+      assertBothRefuse(
+        outcome(
+          "ObR",
+          """
+            record @@Outer(@@Inner in) {}
+            record @@OuterDto(@@InnerDto in) {}
+            record @@InnerDto(@@PartDto part, @@Part spare) {}
+            """ +
+            TRANSFORM_PART +
+            "@Bridge(value = @@InnerDto.class, drops = \"part\"," +
+            " renames = @Rename(source = \"piece\", target = \"part\")," +
+            " transforms = @Transform(field = \"piece\", using = @@PartFn.class))\n" +
+            "record @@Inner(@@Part piece, @@Part part, @@Part spare) {}\n" +
+            holder(CALL)
+        )
+      );
+    }
+
+    @Test
     @DisplayName("a property the bridge drops, on a pair on a cycle whose bridge takes the active path")
     void onACycle() {
       assertBothRefuse(

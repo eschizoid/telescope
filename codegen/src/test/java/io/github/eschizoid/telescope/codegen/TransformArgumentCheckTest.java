@@ -84,6 +84,32 @@ class TransformArgumentCheckTest {
   }
 
   @Test
+  @DisplayName("a renamed property's backward check names the target property the rename names")
+  void aRenamedPropertyIsCheckedByItsTargetName() {
+    final var compilation = compile(
+      fn("String"),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        @io.github.eschizoid.telescope.annotations.Bridge(value = demo.Tgt.class,
+          renames = @io.github.eschizoid.telescope.annotations.Rename(source = "value", target = "label"),
+          transforms = @io.github.eschizoid.telescope.annotations.Transform(field = "value", using = demo.Fn.class))
+        public record Src<X>(X value) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt<Y>(Y label) {}")
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    assertTrue(
+      method(compilation, "backward").contains(
+        "((java.lang.String) " + CHECK + "__bt_value, java.lang.String.class, demo.Tgt.class, \"label\"))"
+      ),
+      () -> method(compilation, "backward")
+    );
+  }
+
+  @Test
   @DisplayName("a forward-only row checks the read it emits and nothing for the backward it does not")
   void aForwardOnlyRowChecksOnlyForward() {
     final var sources = pair("<X>", "X", ", forwardOnly = true");
