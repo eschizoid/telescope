@@ -34,6 +34,7 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
 | Row typed by a type argument      | `Mapping.to` rows typed by `Tagged<String>` and `Tagged<Badge>`, loading each class by name to check it  |
 | `@Bridge` mapper field            | `Ticket.VIEW` found by `StackWalker` and `ServiceLoader`, over records with no registration              |
+| Runtime via row naming a class    | `via(..., TicketViews.class)` choosing the class's methods reflectively and calling them through handles |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -197,6 +198,22 @@ A class that is not registered fails the mapper's construction with an `IllegalS
 method reference, and under GraalVM's strict missing-registration mode the image's own missing-registration error passes
 through instead. `NativeVerify` builds two such rows over the example's `Tagged` record, one reading it as `String` and
 one as the example's `Badge` record, with both classes in the example's `reflect-config.json`.
+
+## A via row naming a class
+
+A runtime mapper with a `via(src, tgt, Hw.class)` row reads `Hw`'s declared methods when it is built, to choose the
+`forward` and `backward` the property's types call for, and calls them through method handles. In an image, a class that
+is not registered for reflection declares no methods as far as the mapper can see, so it refuses the row with
+`declares no forward`. Register the class with its declared methods, and each superclass it inherits a static `forward`
+or `backward` from:
+
+```json
+{ "name": "com.example.Hw", "allDeclaredMethods": true }
+```
+
+A `@Bridge` field with the same row needs none of this: its generated bridge calls the methods by name. `NativeVerify`
+builds the row on the runtime path over the example's `Itinerary` record, with `TicketViews` in the example's
+`reflect-config.json`.
 
 ## The order a bean's properties convert in
 

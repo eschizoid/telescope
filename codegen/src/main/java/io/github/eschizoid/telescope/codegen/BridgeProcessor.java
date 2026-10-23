@@ -2720,7 +2720,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // pairs them by, and the casts that reading them through raw classes needs.
     final var ownConversions = new HashSet<>(transforms.keySet());
     ownConversions.addAll(viaMappers.keySet());
-    final var viaLifts = viaLifts(source, sourceFields, targetFields, renames, viaMappers, bridgePackage);
+    final var rowSites = cfg.declaringField() != null;
+    final var viaLifts = viaLifts(
+      source,
+      target,
+      rowSites,
+      sourceFields,
+      targetFields,
+      renames,
+      viaMappers,
+      bridgePackage
+    );
     if (viaLifts == null) return;
     final var paired = pairedFields(
       source,
@@ -2744,7 +2754,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       viaLifts,
       sourceRebuild,
       targetRebuild,
-      bridgePackage
+      bridgePackage,
+      rowSites
     );
     if (viaCasts == null) return;
 
@@ -2943,7 +2954,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (forward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
         for (final var written : targetsOf.apply(v)) {
           final var result = viaResult(
-            v,
+            viaSite(v, source, target, rowSites),
             mapper,
             "forward",
             bound.member(),
@@ -2969,7 +2980,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           : inferringFn(mapper, "backward", given, bridgePackage);
       if (backward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
         final var result = viaResult(
-          v,
+          viaSite(v, source, target, rowSites),
           mapper,
           "backward",
           bound.member(),
@@ -5395,7 +5406,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, ViaLift> viaLifts,
     final Rebuild sourceRebuild,
     final Rebuild targetRebuild,
-    final PackageElement bridgePackage
+    final PackageElement bridgePackage,
+    final boolean rows
   ) {
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
@@ -5407,6 +5419,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var sourceOwn = fieldByName(sourceFields, field).type();
       final var targetOwn = fieldByName(targetFields, tgtName).type();
       final var mapper = processingEnv.getElementUtils().getTypeElement(entry.getValue());
+      final var site = viaSite(field, source, target, rows);
       final var unfit = viaNeverFits(source, target, field, tgtName, mapper, sourceOwn, targetOwn, bridgePackage);
       if (unfit != null) {
         error(source, unfit);
@@ -5422,7 +5435,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // instance method is one it cannot call, though javac would bind it on an instance.
       for (final var name : List.of("forward", "backward")) {
         if (viaCandidates(mapper, name, bridgePackage).isEmpty()) {
-          error(source, unboundRefusal(field, mapper, name, sourceOwn, sourceHeld, bridgePackage));
+          error(source, unboundRefusal(site, mapper, name, sourceOwn, sourceHeld, bridgePackage));
           return null;
         }
       }
@@ -5430,8 +5443,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var forward = viaCall(mapper, "forward", sourceOwn, sourceHeld, bridgePackage);
       final var refusal =
         forward == null
-          ? unboundRefusal(field, mapper, "forward", sourceOwn, sourceHeld, bridgePackage)
-          : viaResultRefusal(field, mapper, "forward", forward, source, target, targetRebuild, tgtName, bridgePackage);
+          ? unboundRefusal(site, mapper, "forward", sourceOwn, sourceHeld, bridgePackage)
+          : viaResultRefusal(site, mapper, "forward", forward, source, target, targetRebuild, tgtName, bridgePackage);
       if (refusal != null) {
         error(source, refusal);
         return null;
@@ -5439,8 +5452,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backward = viaCall(mapper, "backward", targetOwn, targetHeld, bridgePackage);
       final var backRefusal =
         backward == null
-          ? unboundRefusal(field, mapper, "backward", targetOwn, targetHeld, bridgePackage)
-          : viaResultRefusal(field, mapper, "backward", backward, source, target, sourceRebuild, field, bridgePackage);
+          ? unboundRefusal(site, mapper, "backward", targetOwn, targetHeld, bridgePackage)
+          : viaResultRefusal(site, mapper, "backward", backward, source, target, sourceRebuild, field, bridgePackage);
       if (backRefusal != null) {
         error(source, backRefusal);
         return null;
@@ -5475,6 +5488,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private Map<String, ViaLift> viaLifts(
     final TypeElement source,
+    final TypeElement target,
+    final boolean rows,
     final List<Field> sourceFields,
     final List<Field> targetFields,
     final Map<String, String> renames,
@@ -5485,7 +5500,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var entry : viaMappers.entrySet()) {
       final var field = entry.getKey();
       final var lift = viaLift(
-        field,
+        viaSite(field, source, target, rows),
         processingEnv.getElementUtils().getTypeElement(entry.getValue()),
         fieldByName(sourceFields, field).type(),
         fieldByName(targetFields, renames.getOrDefault(field, field)).type(),
@@ -5515,7 +5530,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * since the one an element's class calls for cannot be chosen when the bridge is compiled.
    */
   private ViaLift viaLift(
-    final String field,
+    final ViaSite site,
     final TypeElement mapper,
     final TypeMirror sourceOwn,
     final TypeMirror targetOwn,
@@ -5539,14 +5554,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return new ViaLift(
         null,
         null,
-        viaRefusal(
-          field,
-          mapper,
-          name,
-          "has several overloads that take an element of " +
-            container +
-            ", so the one an element's class calls for cannot be chosen when the bridge is compiled"
-        )
+        site.refused(mapper, name, PairingMessages.viaSeveralElementOverloads(container.toString()))
       );
     }
     return new ViaLift(forwards.getFirst(), backwards.getFirst(), null);
@@ -5609,8 +5617,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (takes.isEmpty()) return null;
     final var held = boxedErasure(own);
     if (takes.stream().anyMatch(parameter -> mayShareInstance(held, parameter))) return null;
-    final var first = processingEnv.getTypeUtils().asElement(takes.getFirst());
-    return first == null ? takes.getFirst().toString() : first.getSimpleName().toString();
+    return simpleNameOf(takes.getFirst());
   }
 
   /**
@@ -5828,17 +5835,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * #viaUnbound}.
    */
   private String unboundRefusal(
-    final String field,
+    final ViaSite site,
     final TypeElement mapper,
     final String name,
     final TypeMirror own,
     final TypeMirror held,
     final PackageElement bridgePackage
   ) {
-    if (viaCandidates(mapper, name, bridgePackage).isEmpty()) {
-      return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + " declares no " + name;
-    }
-    return viaRefusal(field, mapper, name, viaUnbound(mapper, name, own, held, bridgePackage));
+    if (viaCandidates(mapper, name, bridgePackage).isEmpty()) return site.declaresNo(mapper, name);
+    return site.refused(mapper, name, viaUnbound(mapper, name, own, held, bridgePackage));
   }
 
   /** Why {@link #viaCall} bound no method, for the refusal. */
@@ -5850,13 +5855,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final PackageElement bridgePackage
   ) {
     if (choosesBlind(own, held, viaCandidates(mapper, name, bridgePackage).size())) {
-      return (
-        "has several overloads, and the bridge holds the value as " +
-        heldPhrase(own, held) +
-        ", so the overload its class calls for cannot be chosen when the bridge is compiled"
-      );
+      return PairingMessages.viaChoosesBlind(heldPhrase(own, held));
     }
-    return "takes no value of " + heldPhrase(own, held);
+    return PairingMessages.viaTakesNoValue(heldPhrase(own, held));
   }
 
   /**
@@ -5867,7 +5868,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * returns that class, with the same message.
    */
   private String viaResultRefusal(
-    final String field,
+    final ViaSite site,
     final TypeElement mapper,
     final String name,
     final ViaCall call,
@@ -5894,8 +5895,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         simpleNameOf(taken)
       );
     }
-    return viaRefusal(
-      field,
+    return site.refused(
       mapper,
       name,
       "returns " +
@@ -5925,7 +5925,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * call.
    */
   private ViaResult viaResult(
-    final String field,
+    final ViaSite site,
     final TypeElement mapper,
     final String name,
     final ExecutableType member,
@@ -5944,7 +5944,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (gives == null) {
       return new ViaResult(
         declared,
-        viaRefusal(field, mapper, name, "returns " + declared + unfixedTail(owner, property, chosen))
+        site.refused(mapper, name, "returns " + declared + unfixedTail(owner, property, chosen))
       );
     }
     if (mirrorProps().mentionsTypeVariable(gives)) return new ViaResult(declared, null);
@@ -5964,7 +5964,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         property +
         " through does not take: it takes " +
         chosen;
-    return new ViaResult(declared, viaRefusal(field, mapper, name, why));
+    return new ViaResult(declared, site.refused(mapper, name, why));
   }
 
   /**
@@ -6025,14 +6025,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return specific.size() == 1 ? new Resolution.Bound(specific.getFirst()) : null;
   }
 
-  private static String viaRefusal(final String field, final TypeElement mapper, final String name, final String why) {
-    return "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + "'s " + name + " " + why;
+  /**
+   * Where a class converting one property is named: the property, the pair's simple names, and
+   * whether a {@code via} row of a {@code @Bridge} field names it rather than a {@code @ViaMapper}.
+   * A row is refused in the words the runtime path refuses the same row in.
+   */
+  private record ViaSite(String field, String source, String target, boolean row) {
+    String refused(final TypeElement mapper, final String name, final String why) {
+      return row
+        ? PairingMessages.viaClassRefused(source, target, field, mapper.getQualifiedName().toString(), name, why)
+        : "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + "'s " + name + " " + why;
+    }
+
+    String declaresNo(final TypeElement mapper, final String name) {
+      return row
+        ? PairingMessages.viaClassDeclaresNo(source, target, field, mapper.getQualifiedName().toString(), name)
+        : "@ViaMapper field=\"" + field + "\": " + mapper.getQualifiedName() + " declares no " + name;
+    }
+  }
+
+  /** The site of the {@code @ViaMapper} or {@code via} row converting {@code field}. */
+  private static ViaSite viaSite(
+    final String field,
+    final TypeElement source,
+    final TypeElement target,
+    final boolean row
+  ) {
+    return new ViaSite(field, source.getSimpleName().toString(), target.getSimpleName().toString(), row);
   }
 
   /** {@code declared}, followed by the type the bridge holds it as where the two differ. */
   private String heldPhrase(final TypeMirror declared, final TypeMirror held) {
     if (processingEnv.getTypeUtils().isSameType(declared, held)) return declared.toString();
-    return declared + " (held as its erasure " + held + ")";
+    return PairingMessages.heldPhrase(declared.toString(), held.toString());
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {

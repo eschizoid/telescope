@@ -35,7 +35,9 @@ public class ViaRowBenchmark {
   private VbTgt target;
   private Mapper<VbSrc, VbTgt> runtimeMapper;
   private VbFieldSrc fieldSrc;
+  private VbClassSrc classSrc;
   private Mapper<VbSrc, VbTgt> runtimeMethods;
+  private Mapper<VbSrc, VbTgt> runtimeNamed;
 
   @Setup
   public void setup() {
@@ -53,6 +55,14 @@ public class ViaRowBenchmark {
       )
     );
     fieldSrc = new VbFieldSrc(items);
+    classSrc = new VbClassSrc(items);
+    runtimeNamed = Telescope.mapper(VbSrc.class, VbTgt.class, via(VbSrc::items, VbTgt::items, VbItemMap.class));
+    if (
+      VbMappers.NAMED.explain().declared().map(OpticNode.Declared::runs).orElse(OpticNode.Runs.RUNTIME) !=
+      OpticNode.Runs.GENERATED
+    ) {
+      throw new IllegalStateException(VbMappers.NAMED.explain().toString());
+    }
     runtimeMethods = Telescope.mapper(
       VbSrc.class,
       VbTgt.class,
@@ -102,5 +112,20 @@ public class ViaRowBenchmark {
   @Benchmark
   public VbTgt runtime_via_methods_forward() {
     return runtimeMethods.forward(src);
+  }
+
+  @Benchmark
+  public VbTgt field_via_class_forward() {
+    return VbMappers.NAMED.forward(classSrc);
+  }
+
+  @Benchmark
+  public VbClassSrc field_via_class_backward() {
+    return VbMappers.NAMED.backward(target);
+  }
+
+  @Benchmark
+  public VbTgt runtime_via_class_forward() {
+    return runtimeNamed.forward(src);
   }
 }
