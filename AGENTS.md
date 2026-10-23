@@ -728,6 +728,11 @@ JVM/codegen-only under AOT).
 21. **0021 — Mapped Spring MVC request bodies.** (Accepted, shipped.) `@TelescopeRequestBody(from = Wire.class)` or a
     `TelescopeRequest<S, T>` parameter: the body is read and validated as the wire type by Spring's own `@RequestBody`
     processor, then mapped before the handler runs.
+22. **0022 — `@Bridge` on a runtime mapper field.** (Accepted.) `@Bridge` on a `static final` field initialised by
+    `Telescope.mapper(...)` compiles that call's rows into the generated bridge; the factory finds the bridge by its
+    calling class and pair, once, and builds the runtime mapper from the same rows when the processor did not run. Rows
+    the bridge cannot express are refused by name. Retires the string-keyed per-field annotations and amends ADR-0018's
+    steps 3 to 6.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

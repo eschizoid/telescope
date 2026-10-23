@@ -1,0 +1,105 @@
+# ADR-0022: `@Bridge` on a runtime mapper field
+
+**Status:** Accepted · **Date:** 2026-10-23
+
+## Context
+
+A generated mapper is declared today with `@Bridge(Target.class)` on the source class, and every override is a per-field
+annotation that names fields as strings: `@Rename`, `@Transform`, `@ViaMapper`, `@Compute`, `@Constant` and `@Default`.
+The runtime mapper says the same things with typed rows: `to(User::id, UserDto::userId)`, `via(...)`, `drop(...)`,
+`constant(...)`. A user who wants both paths writes the mapping twice, in two vocabularies, and the two can drift.
+
+The rows are plain Java expressions in a field initializer. `MapperVerifierProcessor` already reads them at compile time
+through the javac tree API, resolving each method reference to the accessor it names. The tree API answers the same
+questions during a processing round, when generated sources can still be written: javac attributes the expression on
+demand, so `User::id` resolves to `User.id()` and `String::toLowerCase` to the overload a `Function<String, String>`
+takes. `BridgeProcessor` builds every bridge from one per-pair configuration, so rows read into that configuration feed
+the existing emitter without a second one.
+
+## Decision
+
+1. **`@Bridge` may annotate a `static final` field initialised in place by `Telescope.mapper(...)` or
+   `Telescope.mapperForward(...)`.** The processor reads the rows of that call and generates the bridge from them. The
+   field form takes no attributes; the rows are the whole declaration. `mapper` gives a strict bridge, `mapperForward` a
+   lenient one, as on the runtime path.
+2. **The rows the processor compiles** are those whose every argument it can name at compile time, and whose meaning the
+   bridge emitter already has:
+   - `to` between two accessors, which renames when the names differ;
+   - `to` with a forward and a backward converter, and `toOneWay` with a forward one, which convert and may also rename;
+   - `via` naming another `@Bridge` field, whose generated bridge converts the property;
+   - `drop` of a source property, `constant` of a literal, `toOrElse` with a literal default, and `compute` with a
+     supplier.
+
+   Accessors are method references (`User::id`). Converters and suppliers are references to a static method
+   (`Conversions::lower`), to an unbound instance method (`String::toLowerCase`) or to a constructor (`UserId::new`);
+   the processor writes a small generated class that calls the reference, and the bridge converts through it as it does
+   through a `@Transform` class today, so every type check the emitter makes applies unchanged.
+
+   Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
+   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, `toOrElseGet`, and the
+   mapper-wide hints `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated
+   path is added to this list then.
+
+3. **Everything else is refused by name at compile time, on the row.** An inline lambda, a row built by a helper method,
+   a loop or a variable, a row keyed to a nested pair, a non-literal constant, an initializer that is not the factory
+   call itself (a `mapperBuilder` chain included), a field that is not `static final`, and the runtime-only rows
+   (`when`, `zip`) each get a message naming what the processor needs instead. A refused row never falls back to the
+   runtime path silently: the build fails, so the field never claims generated code it does not have.
+4. **Dispatch is by the calling class and the pair.** The bridge's generated `BridgeProvider` names the class that
+   declares the field. `Telescope.mapper` and `mapperForward` read their caller with `StackWalker` once, when the mapper
+   is built, and look the provider up by that class and the pair through `ServiceLoader`. When one is found the factory
+   returns a mapper over the generated bridge and builds nothing reflective; when none is found, because the processor
+   did not run, it builds the runtime mapper from the same rows. The processor refuses a class that declares a `@Bridge`
+   field for a pair and also calls a mapper factory for that pair anywhere else in the class, so the lookup cannot hand
+   the generated bridge to a call with other rows.
+5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
+   pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a
+   compilation, which is the rule carrier bridges already follow at run time. When the processor did not run, such a
+   mapper converts the pair by its own rows instead, as with a `@Bridge` on a class; a `via` row naming the field holds
+   the same in both cases.
+6. **The generated mapper costs what today's `@Bridge` costs per call.** The dispatched mapper holds the generated
+   `BridgeFn` and calls it directly; the lookup happens once, when the field is initialised.
+7. **The per-field annotations are retired** once the field form compiles what they express: `@Rename`, `@Transform`,
+   `@ViaMapper`, `@Constant`, `@Default` and `@Compute`, together with the `@Bridge` attributes that hold them and
+   `drops`, with no deprecated aliases. The class form of `@Bridge` keeps `value`, `writeStrategy` and `lenient` for a
+   pair declared with no rows.
+8. **Only javac reads the rows.** On a compiler without the tree API the processor prints one note and generates nothing
+   for the field, and the runtime mapper runs, which the cross-path corpus holds to the same result.
+
+### Amendments to ADR-0018
+
+- **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the
+  converter, so no `target` attribute is added to `@Transform` or `@ViaMapper`.
+- **Step 4** (values computed from the source) becomes a `compute` row that takes a function of the source, added to
+  both paths together.
+- **Step 5** (nested paths) is a row whose source is a telescope path written inline. Reading through a path is compiled
+  first; writing through one follows.
+- **Step 6** (update in place) is `Mapper.into` on the mapper a field declares, generated rather than written through
+  reflection when that step lands.
+
+## Consequences
+
+- One declaration runs on both paths, so the two cannot drift. The cross-path corpus checks every shape it covers with a
+  field-declared bridge against the runtime mapper built from the same rows.
+- Every field name in a mapping is a method reference the compiler checks.
+- A call site keeps working unchanged when the processor is removed; it runs the runtime mapper instead.
+- Building a mapper costs one stack walk and one `ServiceLoader` scan more than today, once per mapper.
+- The generated path needs no reflection configuration inside a native image: the rows are constructed but never
+  decoded, `ServiceLoader` providers are registered by the image builder, and `StackWalker` is supported there. The
+  `NativeVerify` binary covers a field-declared mapper.
+- A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
+  generated from. The provider records the kinds of the rows it was generated from, and the runtime refuses a mismatch
+  by name rather than running a stale bridge.
+
+## Alternatives considered
+
+- **Key the generated bridge by a fingerprint of the rows.** Rejected: computing the fingerprint at run time means
+  decoding every accessor's `SerializedLambda`, which needs reflection configuration in a native image, and a converter
+  is a plain `Function` with no identity to fingerprint, so two mappers that differ only in a converter would collide.
+- **Have the user reference a generated constant (`Mappers_Generated.USER`).** Rejected as the default: it gives up the
+  point of the design, one expression that runs either way. It stays possible, because the generated bridge class is
+  public, for code that must fail to compile when the processor did not run.
+- **Key the bridge by the line of the call.** Rejected: it depends on line tables, which a build may strip, and breaks
+  for two calls on one line.
+- **Rewrite the field initializer at compile time.** Rejected: rewriting another class's syntax tree is outside JSR-269
+  and is what makes Lombok fragile.
