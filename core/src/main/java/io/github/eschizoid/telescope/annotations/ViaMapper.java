@@ -55,7 +55,8 @@ import java.lang.annotation.Target;
  * </ul>
  *
  * <p>A field listed in {@code viaMappers} cannot also appear in {@link Bridge#drops()} or {@link
- * Bridge#defaults()} for the same pair — pick one mechanism per field.
+ * Bridge#defaults()} for the same pair — pick one mechanism per field. A {@link Rename} on the same
+ * field names the target field the class converts into and back from.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target({})

@@ -347,12 +347,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     for (final var drop : listValue(bridge, "drops")) {
       if (drop.getValue() instanceof String field) drops.add(field);
     }
+    final var renamedTo = new HashMap<String, List<String>>();
+    for (final var each : listValue(bridge, "renames")) {
+      if (!(each.getValue() instanceof AnnotationMirror rename)) continue;
+      final var from = stringValue(rename, "source");
+      final var to = stringValue(rename, "target");
+      if (from != null && to != null) renamedTo.computeIfAbsent(from, k -> new ArrayList<>()).add(to);
+    }
     final var unwalked = BridgeProcessor.Unwalked.of(
       drops,
       fieldsNamed(bridge, "transforms"),
       fieldsNamed(bridge, "viaMappers"),
       fieldsNamed(bridge, "constants"),
-      fieldsNamed(bridge, "computes")
+      fieldsNamed(bridge, "computes"),
+      renamedTo
     );
     final var key = pairKey(source, target);
     final var takesPath = bridges.takesActivePath(source, target);

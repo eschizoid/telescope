@@ -2668,6 +2668,61 @@ class BridgeProcessorTest {
   class Renames {
 
     @Test
+    @DisplayName("a renamed transform emits the calls a transform on a same-named field emits, under the target's name")
+    void aRenamedTransformEmitsTheSameCallsAsASameNamedOne() {
+      final var fn = source(
+        "demo.TagFn",
+        """
+        package demo;
+        public final class TagFn implements io.github.eschizoid.telescope.conversion.BridgeFn<Integer, String> {
+          public TagFn() {}
+          @Override public String forward(final Integer a) { return "#" + a; }
+          @Override public Integer backward(final String b) { return Integer.valueOf(b.substring(1)); }
+        }
+        """
+      );
+      final var sameNamed = compile(
+        fn,
+        source(
+          "demo.A",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(value = demo.B.class,
+            transforms = @io.github.eschizoid.telescope.annotations.Transform(field = "n", using = demo.TagFn.class))
+          public record A(String id, Integer n) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String id, String n) {}")
+      );
+      final var renamed = compile(
+        fn,
+        source(
+          "demo.A",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(value = demo.B.class,
+            renames = @io.github.eschizoid.telescope.annotations.Rename(source = "n", target = "label"),
+            transforms = @io.github.eschizoid.telescope.annotations.Transform(field = "n", using = demo.TagFn.class))
+          public record A(String id, Integer n) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String id, String label) {}")
+      );
+      assertTrue(sameNamed.success(), sameNamed::errorMessages);
+      assertTrue(renamed.success(), renamed::errorMessages);
+      final var expected = sameNamed.generated().get("demo.ABridge");
+      final var actual = renamed.generated().get("demo.ABridge");
+      // The bodies end where the BridgeFn wrapper begins; the wrapper names the unwalked target
+      // properties, which differ by the rename alone.
+      final var end = "  /** One concrete BridgeFn type per @Bridge";
+      assertEquals(
+        expected.substring(0, expected.indexOf(end)),
+        actual.substring(0, actual.indexOf(end)).replace("label", "n")
+      );
+      assertTrue(actual.contains("java.util.Set.of(\"label\")"), actual);
+    }
+
+    @Test
     @DisplayName("@Rename matches source.orderNumber to target.referenceCode in both directions")
     void renameMapsBothDirections() {
       final var compilation = compile(
@@ -4487,47 +4542,6 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("VM1: @ViaMapper + @Rename on the same field rejected at build")
-    void viaMapperAndRenameOnSameFieldRejected() {
-      final var compilation = compile(
-        source(
-          "demo.AddressBridge",
-          """
-          package demo;
-          public final class AddressBridge {
-            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
-            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
-          }
-          """
-        ),
-        source("demo.Address", "package demo; public record Address(String line) {}"),
-        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
-        source(
-          "demo.Order",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(
-            value = demo.OrderDto.class,
-            renames = { @Rename(source = "address", target = "shipping") },
-            viaMappers = { @ViaMapper(field = "address", using = demo.AddressBridge.class) }
-          )
-          public record Order(String id, demo.Address address) {}
-          """
-        ),
-        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto shipping) {}")
-      );
-
-      assertFalse(compilation.success(), "viaMappers + renames overlap should fail");
-      assertTrue(
-        compilation.hasError("appears in both viaMappers and renames"),
-        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
     @DisplayName("VM2: @ViaMapper + @Default on the same field rejected at build")
     void viaMapperAndDefaultsOnSameFieldRejected() {
       final var compilation = compile(
@@ -5246,47 +5260,6 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.hasError("primitives cannot be null"),
         () -> "expected primitive-rejection diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("OL-1: @Rename + @Transform on the same source field rejected at build")
-    void renamesAndTransformsOnSameFieldRejected() {
-      final var compilation = compile(
-        source(
-          "demo.NoopFn",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.conversion.BridgeFn;
-          public final class NoopFn implements BridgeFn<String, String> {
-            public NoopFn() {}
-            @Override public String forward(String x) { return x; }
-            @Override public String backward(String x) { return x; }
-          }
-          """
-        ),
-        source(
-          "demo.A",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(
-            value = demo.B.class,
-            renames    = { @Rename(source    = "name", target = "label") },
-            transforms = { @Transform(field  = "name", using  = demo.NoopFn.class) }
-          )
-          public record A(String name) {}
-          """
-        ),
-        source("demo.B", "package demo; public record B(String label) {}")
-      );
-
-      assertFalse(compilation.success(), "renames + transforms overlap should fail");
-      assertTrue(
-        compilation.hasError("appears in both renames and transforms"),
-        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
 

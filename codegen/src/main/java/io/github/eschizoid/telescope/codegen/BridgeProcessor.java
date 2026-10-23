@@ -1485,12 +1485,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The properties the bridge converts by a conversion of its own, drops, or fills without
     // reading the source: a runtime mapper looks below the rest only, when it decides whether the
     // bridge may convert this pair for it.
+    final var renamedTo = new HashMap<String, List<String>>();
+    for (final var rename : renames.entrySet()) {
+      final var filled = new ArrayList<String>();
+      filled.add(rename.getValue());
+      filled.addAll(renameFanouts.getOrDefault(rename.getKey(), List.of()));
+      renamedTo.put(rename.getKey(), filled);
+    }
     final var unwalked = Unwalked.of(
       drops,
       transforms.keySet(),
       viaMappers.keySet(),
       rawConstants.keySet(),
-      computes.keySet()
+      computes.keySet(),
+      renamedTo
     );
     final var unwalkedSource = unwalked.source();
     final var unwalkedTarget = unwalked.target();
@@ -1526,10 +1534,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // cannot be resolved -- they can. The block short-circuits before resolution runs when there
       // are no type arguments to read, so nothing reaches the part that would have caught it.
       //
-      // Renamed fields are skipped because the target slot is looked up by the source name,
-      // which a rename has moved — and the pairing is rejected a few loops down anyway.
+      // The target slot is the one a rename on the same field names, and the same-named one
+      // otherwise.
+      final var tName = renames.getOrDefault(t, t);
       final var txMethod = cfg.transformMethods().get(t);
-      if ((txMethod == null || txMethod.isEmpty()) && !renames.containsKey(t)) {
+      if (txMethod == null || txMethod.isEmpty()) {
         final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
         final var fn = usingEl == null ? null : bridgeFnInstantiation(usingEl.asType());
         if (fn == null) {
@@ -1548,7 +1557,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .type();
         final var tfField = targetFields
           .stream()
-          .filter(f -> f.name().equals(t))
+          .filter(f -> f.name().equals(tName))
           .findFirst()
           .orElse(null);
         // A class implementing the raw BridgeFn has no type arguments to read, but it still
@@ -1653,7 +1662,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // about does carry. Asking a slot about that hands a null to the resolver, which is a
           // crash inside the processor rather than a refusal from it. Forward has no such arm --
           // past that guard it always has either a bound member or the arguments it required.
-          final var targetSlot = heldAs(writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage));
+          final var targetSlot = heldAs(writeSlotType(target, targetRebuild, tName, fwdGives, bridgePackage));
           final var sourceSlot =
             bwdGives == null ? null : heldAs(writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage));
           final var storesInto = targetSlot == null ? tfHeld : targetSlot;
@@ -1664,7 +1673,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // arguments to show it fits those the member fixes, and is refused as one no cast
           // reaches. Its arguments are held to the member the property's type chooses, which every
           // path writes through, whichever overload javac would bind the result to.
-          final var forwardChosen = chosenParameter(target, targetRebuild, t, targetSlot);
+          final var forwardChosen = chosenParameter(target, targetRebuild, tName, targetSlot);
           final var backwardChosen = bwdGives == null ? null : chosenParameter(source, sourceRebuild, t, sourceSlot);
           final var forwardStores =
             (types.isAssignable(fwdGives, storesInto) &&
@@ -1732,17 +1741,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return;
           }
           if (forwardChecked) forwardArguments.put(t, argumentCheck(fwdAccepts, source, t));
-          if (backwardChecked) backwardArguments.put(t, argumentCheck(bwdAccepts, target, t));
+          if (backwardChecked) backwardArguments.put(t, argumentCheck(bwdAccepts, target, tName));
         }
       }
     }
 
-    // Validate viaMappers fields exist and don't overlap with drops, transforms, renames, or
-    // defaults. VM1 (renames overlap) and VM2 (defaults overlap) from the round-2 review: each
-    // combination produces structurally valid emission with undefined or wrong semantics —
-    // rename-overlap dispatches via the user-named bridge on the renamed-source-name slot;
-    // default-overlap passes a literal-typed value to the bridge expecting the source type. Both
-    // are silent-wrong paths until the user hits the generated-file diagnostic — too late.
+    // Validate viaMappers fields exist and don't overlap with drops, transforms, or defaults. A
+    // default substitutes a literal of the source's type, which the mapper's forward does not
+    // take. A rename on the same field names the target slot the mapper writes, as it does for a
+    // transform.
     for (final var v : viaMappers.keySet()) {
       if (sourceFields.stream().noneMatch(f -> f.name().equals(v))) {
         error(
@@ -1762,10 +1769,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (transforms.containsKey(v)) {
         error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and transforms — pick one.");
-        return;
-      }
-      if (renames.containsKey(v)) {
-        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and renames — pick one.");
         return;
       }
       if (rawDefaults.containsKey(v)) {
@@ -1817,20 +1820,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (drops.contains(e.getKey())) {
         error(source, "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one.");
-        return;
-      }
-      // OL-1: renames + transforms on the same source field is undefined behavior. The transform
-      // dispatches on the source field name; the rename relabels the TARGET slot. Together they
-      // accidentally compile to correct code in scalar cases but the combination has no documented
-      // contract — reject explicitly so the user picks one.
-      if (transforms.containsKey(e.getKey())) {
-        error(
-          source,
-          "@Bridge field \"" +
-            e.getKey() +
-            "\" appears in both renames and transforms — pick one (the transform consumes the" +
-            " source field; the target slot name comes from the bijection, not @Rename)."
-        );
         return;
       }
     }
@@ -6984,8 +6973,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The properties of each side a generated bridge does not walk, in name order: on the source,
    * those it drops, transforms or converts through a {@code @ViaMapper}; on the target, those it
    * fills with a constant or a computed value, and those a transformed or {@code @ViaMapper}
-   * property fills, which carry that property's name because the bridge refuses a converted
-   * property that is also renamed.
+   * property fills. A converted property fills the target properties {@code renamedTo} lists for
+   * it, and the property of its own name where it lists none.
    */
   record Unwalked(Set<String> source, Set<String> target) {
     static Unwalked of(
@@ -6993,15 +6982,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final Collection<String> transformed,
       final Collection<String> viaMapped,
       final Collection<String> constants,
-      final Collection<String> computes
+      final Collection<String> computes,
+      final Map<String, ? extends Collection<String>> renamedTo
     ) {
       final var source = new TreeSet<String>(drops);
       source.addAll(transformed);
       source.addAll(viaMapped);
       final var target = new TreeSet<String>(constants);
       target.addAll(computes);
-      target.addAll(transformed);
-      target.addAll(viaMapped);
+      for (final var converted : List.of(transformed, viaMapped)) {
+        for (final var name : converted) {
+          final var filled = renamedTo.get(name);
+          if (filled == null) target.add(name);
+          else target.addAll(filled);
+        }
+      }
       return new Unwalked(source, target);
     }
   }
