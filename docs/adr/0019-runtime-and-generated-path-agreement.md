@@ -1,6 +1,6 @@
 # ADR-0019: Which differences between the runtime and generated paths may remain
 
-**Status:** Proposed · **Date:** 2026-10-10
+**Status:** Accepted · **Date:** 2026-10-10
 
 ## Context
 
