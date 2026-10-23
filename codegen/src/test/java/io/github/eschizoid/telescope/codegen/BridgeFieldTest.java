@@ -3,12 +3,14 @@ package io.github.eschizoid.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -773,6 +775,164 @@ class BridgeFieldTest {
       assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs(), shape);
       assertTrue(runtime.explain().declared().isEmpty(), shape);
       assertEquals(run.invoke(null, runtime), run.invoke(null, generated), shape);
+    }
+  }
+
+  private static final String SHAPES =
+    "package fb;\n" + "public sealed interface Shape3 permits Circle3, Square3 { String name(); }\n";
+
+  private static final String SHAPE_MAP =
+    "package fb;\n" +
+    "public final class ShapeMap {\n" +
+    "  public static ShapeDto3 forward(final Shape3 s) { return new ShapeDto3(s.name()); }\n" +
+    "  public static Circle3 backward(final ShapeDto3 d) { return new Circle3(d.name()); }\n" +
+    "}\n";
+
+  private static final String GENERIC_SHAPE_MAP =
+    "package fb;\n" +
+    "public final class ShapeMap {\n" +
+    "  public static <T extends Shape3> ShapeDto3 forward(final T s) { return new ShapeDto3(s.name()); }\n" +
+    "  public static Circle3 backward(final ShapeDto3 d) { return new Circle3(d.name()); }\n" +
+    "}\n";
+
+  private static final String WHOLE_MAP =
+    "package fb;\n" +
+    "public final class ShapeMap {\n" +
+    "  public static java.util.List<ShapeDto3> forward(final java.util.List<Circle3> s) {\n" +
+    "    return s.stream().map(c -> new ShapeDto3(c.name())).toList();\n" +
+    "  }\n" +
+    "  public static java.util.ArrayList<Circle3> backward(final java.util.List<ShapeDto3> d) {\n" +
+    "    return new java.util.ArrayList<>(d.stream().map(x -> new Circle3(x.name())).toList());\n" +
+    "  }\n" +
+    "}\n";
+
+  static List<String[]> viaClassTakenShapes() {
+    final var mixed = "java.util.List.of(new Circle3(\"a\"), new Square3(\"b\"))";
+    final var circles = "java.util.List.of(new Circle3(\"a\"), new Circle3(\"b\"))";
+    return List.of(
+      new String[] {
+        "a narrowed forward over a scalar",
+        "Shape3",
+        "ShapeDto3",
+        SHAPE_MAP,
+        "new Square3(\"a\")",
+        "Shape3",
+      },
+      new String[] {
+        "a narrowed forward over a list of the interface",
+        "java.util.List<Shape3>",
+        "java.util.List<ShapeDto3>",
+        SHAPE_MAP,
+        mixed,
+        "Shape3",
+      },
+      new String[] {
+        "a narrowed forward over a list of the interface holding one subclass",
+        "java.util.List<Shape3>",
+        "java.util.List<ShapeDto3>",
+        SHAPE_MAP,
+        circles,
+        "Shape3",
+      },
+      new String[] {
+        "a narrowed whole-container forward",
+        "java.util.List<Circle3>",
+        "java.util.List<ShapeDto3>",
+        WHOLE_MAP,
+        circles,
+        "List",
+      },
+      new String[] {
+        "a forward of a supertype over a list of the class backward returns",
+        "java.util.List<Circle3>",
+        "java.util.List<ShapeDto3>",
+        SHAPE_MAP,
+        circles,
+        "",
+      },
+      new String[] {
+        "a generic forward over a list of the class backward returns",
+        "java.util.List<Circle3>",
+        "java.util.List<ShapeDto3>",
+        GENERIC_SHAPE_MAP,
+        circles,
+        "",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("viaClassTakenShapes")
+  @DisplayName("a via row of two methods converts on both paths, or is refused on both in the same words")
+  void aViaRowOfTwoMethodsAgreesOnTheClassItTakes(
+    final String shape,
+    final String sourceType,
+    final String targetType,
+    final String shapeMap,
+    final String sample,
+    final String refusedFor
+  ) throws Exception {
+    final var model = new String[] {
+      "fb.Shape3",
+      SHAPES,
+      "fb.Circle3",
+      "package fb; public record Circle3(String name) implements Shape3 {}",
+      "fb.Square3",
+      "package fb; public record Square3(String name) implements Shape3 {}",
+      "fb.ShapeDto3",
+      "package fb; public record ShapeDto3(String name) {}",
+      "fb.ShapeMap",
+      shapeMap,
+      "fb.Src",
+      "package fb; public record Src(" + sourceType + " value) {}",
+      "fb.Dst",
+      "package fb; public record Dst(" + targetType + " value) {}",
+      "fb.Plain",
+      HEADER +
+      "public final class Plain {\n" +
+      "  public static Mapper<Src, Dst> build() { return Telescope.mapper(Src.class, Dst.class," +
+      " via(Src::value, Dst::value, ShapeMap::forward, ShapeMap::backward)); }\n" +
+      "  public static String run(final Mapper<Src, Dst> m) {\n" +
+      "    final var d = m.forward(new Src(" +
+      sample +
+      "));\n" +
+      "    return d + \" | \" + m.backward(d);\n" +
+      "  }\n" +
+      "}\n",
+    };
+    final var fields = new String[] {
+      "fb.Fields",
+      HEADER +
+      "public final class Fields {\n" +
+      "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class," +
+      " via(Src::value, Dst::value, ShapeMap::forward, ShapeMap::backward));\n}\n",
+    };
+    final var all = new ArrayList<>(List.of(model));
+    all.addAll(List.of(fields));
+    final var generated = compile(sources(all.toArray(String[]::new)));
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), sources(model));
+    assertTrue(runtime.success(), runtime::errorMessages);
+    try (final var loader = load(runtime)) {
+      final var build = loader.loadClass("fb.Plain").getMethod("build");
+      if (!refusedFor.isEmpty()) {
+        final var words = "have backward return " + refusedFor + ", or name the class: via(src, tgt, Hw.class)";
+        assertFalse(generated.success(), shape);
+        assertTrue(generated.hasError(words), generated::errorMessages);
+        final var refused = assertThrows(InvocationTargetException.class, () -> build.invoke(null));
+        assertTrue(refused.getCause().getMessage().contains(words), refused.getCause()::getMessage);
+        final var shared = refused.getCause().getMessage().substring(refused.getCause().getMessage().indexOf(": ") + 2);
+        assertTrue(generated.hasError(shared), () -> shared + "\nvs\n" + generated.errorMessages());
+        return;
+      }
+      assertTrue(generated.success(), generated::errorMessages);
+      final var run = loader.loadClass("fb.Plain").getMethod("run", Mapper.class);
+      final var fromRuntime = run.invoke(null, build.invoke(null));
+      try (final var generatedLoader = load(generated)) {
+        final var field = (Mapper<?, ?>) field(generatedLoader, "fb.Fields", "GEN");
+        assertEquals(OpticNode.Runs.GENERATED, field.explain().declared().orElseThrow().runs(), shape);
+        final var runGenerated = generatedLoader.loadClass("fb.Plain").getMethod("run", Mapper.class);
+        assertEquals(fromRuntime, runGenerated.invoke(null, field), shape);
+      }
     }
   }
 

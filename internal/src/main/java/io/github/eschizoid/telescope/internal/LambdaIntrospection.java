@@ -191,8 +191,10 @@ public final class LambdaIntrospection {
    * @param to the class the method returns, or the bound of the type variable it returns
    * @param resultInferred whether the method returns its own type variable, whose class the call
    *     site infers from where the result goes
+   * @param declared the class the method itself takes, its parameter or declaring class, which
+   *     {@code from} narrows
    */
-  public record Conversion(Class<?> from, Class<?> to, boolean resultInferred) {}
+  public record Conversion(Class<?> from, Class<?> to, boolean resultInferred, Class<?> declared) {}
 
   /**
    * What a Serializable method reference converting one value takes and gives. It takes a static
@@ -224,11 +226,16 @@ public final class LambdaIntrospection {
     }
     final var unbound = takesReceiver(lambda);
     final Class<?> from;
+    final Class<?> declaredClass;
     // The lambda javac builds for the reference casts its argument to the instantiation's
     // parameter, or receiver, which the call site's inference may have narrowed below the method's.
-    if (unbound && type.parameterCount() == 0) from = receiverClassOf(lambda);
-    else if (!unbound && type.parameterCount() == 1) from = instantiatedParameterOf(lambda, type.parameterType(0));
-    else throw new IllegalArgumentException(
+    if (unbound && type.parameterCount() == 0) {
+      from = receiverClassOf(lambda);
+      declaredClass = implClassOf(lambda);
+    } else if (!unbound && type.parameterCount() == 1) {
+      from = instantiatedParameterOf(lambda, type.parameterType(0));
+      declaredClass = type.parameterType(0);
+    } else throw new IllegalArgumentException(
       "Expected a method reference converting one value, such as Hw::forward; " +
         metadata.implName() +
         "::" +
@@ -238,19 +245,18 @@ public final class LambdaIntrospection {
         (unbound ? " besides its receiver" : "")
     );
     final var takes = MethodType.methodType(from).wrap().returnType();
+    final var declared = MethodType.methodType(declaredClass).wrap().returnType();
     if (metadata.implKind() == MethodHandleInfo.REF_newInvokeSpecial) {
-      return new Conversion(takes, implClassOf(lambda), false);
+      return new Conversion(takes, implClassOf(lambda), false, declared);
     }
     final var erased = type.returnType();
     final var narrowed = narrowedReturnOf(lambda, erased);
-    if (narrowed != null) return new Conversion(takes, narrowed, false);
+    if (narrowed != null) return new Conversion(takes, narrowed, false, declared);
     final var gives = MethodType.methodType(erased).wrap().returnType();
     final var variable = returnedVariable(implClassOf(lambda), metadata.methodName(), type);
-    if (variable != null && variable.getGenericDeclaration() instanceof Method) return new Conversion(
-      takes,
-      gives,
-      true
-    );
+    if (variable != null && variable.getGenericDeclaration() instanceof Method) {
+      return new Conversion(takes, gives, true, declared);
+    }
     if (variable != null && erased == Object.class) {
       throw new IllegalArgumentException(
         "Cannot read the class " +
@@ -261,7 +267,7 @@ public final class LambdaIntrospection {
           " the class, such as a static one"
       );
     }
-    return new Conversion(takes, gives, false);
+    return new Conversion(takes, gives, false, declared);
   }
 
   /**

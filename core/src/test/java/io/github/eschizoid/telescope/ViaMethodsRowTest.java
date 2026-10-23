@@ -142,6 +142,34 @@ class ViaMethodsRowTest {
     assertEquals(new Counts2(Arrays.asList(1, null, 3)), mapper.backward(dto));
   }
 
+  public static final class Inferred {
+
+    private Inferred() {}
+
+    @SuppressWarnings("unchecked")
+    public static <D> D forward(final Item item) {
+      return (D) item.toDto();
+    }
+
+    public static Item backward(final ItemDto dto) {
+      return dto.toItem();
+    }
+  }
+
+  @Test
+  @DisplayName("a forward returning its own type variable converts each element into the target's element class")
+  void anInferredResultConvertsEachElement() {
+    final var mapper = Telescope.mapper(
+      Box.class,
+      BoxDto.class,
+      via(Box::items, BoxDto::items, Inferred::forward, Inferred::backward)
+    );
+    final var box = new Box(Arrays.asList(new Item("a"), null));
+    final var dto = mapper.forward(box);
+    assertEquals(new BoxDto(Arrays.asList(new ItemDto("A"), null)), dto);
+    assertEquals(box, mapper.backward(dto));
+  }
+
   @Test
   @DisplayName("a lambda is refused by name, since the row reads the classes from a method reference")
   void aLambdaIsRefused() {
@@ -231,10 +259,13 @@ class ViaMethodsRowTest {
         Telescope.mapper(Shapes.class, ShapesDto.class, row)
       );
       assertTrue(
-        refused.getMessage().contains("forward takes only Circle, narrower than the Shape"),
+        refused.getMessage().contains("taking only Circle, and the source's 'shapes' holds Shape"),
         refused::getMessage
       );
-      assertTrue(refused.getMessage().contains("Have backward return Shape"), refused::getMessage);
+      assertTrue(
+        refused.getMessage().contains("have backward return Shape, or name the class: via(src, tgt, Hw.class)"),
+        refused::getMessage
+      );
     }
   }
 

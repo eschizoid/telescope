@@ -838,12 +838,75 @@ final class FieldRows {
             " class, as Hw::forward, Hw::backward, which the generated bridge calls on each value"
         );
       }
+      final var narrowed = narrowedBy(src, f, b);
+      if (narrowed != null) return new Refused(args.get(3), narrowed);
       final var refusal = write(row, src.property(), tgt.property(), owner);
       if (refusal != null) return refusal;
       if (!viaMappers.containsKey(src.property())) viaMappers.put(src.property(), owner.getQualifiedName().toString());
       rowKinds.add("ViaMethods");
       rowAccessors.add(src.method() + ">" + tgt.method());
       return null;
+    }
+
+    /**
+     * The refusal of a via row of two methods whose {@code backward} returns a class narrower than
+     * what {@code src} holds, or null. The compiler types {@code forward} as taking what {@code
+     * backward} returns, and the lambda it builds casts each value to that class, so the row is
+     * refused where neither the property's elements nor the property are one, in the words the
+     * runtime path refuses with. A {@code forward} whose own parameter admits neither is left to
+     * the bridge's refusal of a class that never fits.
+     */
+    private String narrowedBy(final Accessor src, final ExecutableElement forward, final ExecutableElement backward) {
+      final var types = env.getTypeUtils();
+      final var takes = boxedErasure(backward.getReturnType());
+      final var declared = boxedErasure(forward.getParameters().getFirst().asType());
+      final var property = boxedErasure(src.type());
+      final var element = elementOf(src.type());
+      if (element != null && types.isAssignable(element, takes)) return null;
+      if (types.isAssignable(property, takes)) return null;
+      final var forElement = element != null && types.isAssignable(element, declared);
+      if (!forElement && !types.isAssignable(property, declared)) return null;
+      return PairingMessages.viaMethodsNarrowed(
+        simple(source),
+        simple(target),
+        src.property(),
+        simpleNameOf(takes),
+        simpleNameOf(forElement ? element : property)
+      );
+    }
+
+    /** {@code type}'s wrapper class where it is a primitive, and its erasure otherwise. */
+    private TypeMirror boxedErasure(final TypeMirror type) {
+      final var types = env.getTypeUtils();
+      return type.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) type).asType() : types.erasure(type);
+    }
+
+    /**
+     * The erased class of the elements of {@code type} when it is a {@code List}, {@code Set} or
+     * {@code Optional}, or of its values when it is a {@code Map}, or null.
+     */
+    private TypeMirror elementOf(final TypeMirror type) {
+      if (!(type instanceof DeclaredType declared)) return null;
+      final var types = env.getTypeUtils();
+      final var elements = env.getElementUtils();
+      final var erased = types.erasure(type);
+      final int index;
+      if (types.isAssignable(erased, types.erasure(elements.getTypeElement("java.util.Map").asType()))) index = 1;
+      else if (
+        types.isAssignable(erased, types.erasure(elements.getTypeElement("java.util.List").asType())) ||
+        types.isAssignable(erased, types.erasure(elements.getTypeElement("java.util.Set").asType())) ||
+        types.isAssignable(erased, types.erasure(elements.getTypeElement("java.util.Optional").asType()))
+      ) index = 0;
+      else return null;
+      final var arguments = declared.getTypeArguments();
+      if (arguments.size() <= index || !(arguments.get(index) instanceof DeclaredType argument)) return null;
+      return types.erasure(argument);
+    }
+
+    /** The simple name of the class {@code type} erases to. */
+    private String simpleNameOf(final TypeMirror type) {
+      final var element = env.getTypeUtils().asElement(type);
+      return element == null ? type.toString() : element.getSimpleName().toString();
     }
 
     private Refused drop(final MethodInvocationTree row) {

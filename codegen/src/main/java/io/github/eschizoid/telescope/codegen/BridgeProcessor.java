@@ -5702,7 +5702,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return method.getReturnType().getKind() == TypeKind.TYPEVAR;
   }
 
-  /** The static methods of {@code mapper} named {@code name} that take one {@code element}. */
+  /**
+   * The static methods of {@code mapper} named {@code name} that take one {@code element}: those
+   * taking the element's own class where there are any, and otherwise those taking a class the
+   * element is one of. A primitive parameter takes its wrapper's elements, unboxed one at a time, a
+   * null left as it is.
+   */
   private List<ExecutableElement> elementMethods(
     final TypeElement mapper,
     final String name,
@@ -5710,11 +5715,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror container,
     final PackageElement bridgePackage
   ) {
-    return viaCandidates(mapper, name, bridgePackage)
+    final var types = processingEnv.getTypeUtils();
+    final var candidates = viaCandidates(mapper, name, bridgePackage);
+    final var exact = candidates
       .stream()
-      // A primitive parameter takes the wrapper's elements, unboxed one at a time, null left as
-      // it is.
       .filter(m -> elementTaken(element, boxedErasure(m.getParameters().getFirst().asType()), container))
+      .toList();
+    if (!exact.isEmpty() || element.getKind() == TypeKind.TYPEVAR) return exact;
+    final var erasedContainer = types.erasure(container);
+    return candidates
+      .stream()
+      .filter(m -> {
+        final var parameter = boxedErasure(m.getParameters().getFirst().asType());
+        return types.isAssignable(types.erasure(element), parameter) && !types.isSubtype(erasedContainer, parameter);
+      })
       .toList();
   }
 

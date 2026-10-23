@@ -2403,7 +2403,7 @@ public final class DeepMap {
     // finds the kinds equal, and reaches a lift no allocator answers for.
     final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
     final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
-    if (methods != null) refuseNarrowedInput(sides, srcShape, tgtShape, srcType, mapperSrc);
+    if (methods != null) refuseNarrowedInput(sides, srcShape, tgtShape, srcType, methods);
     if (
       srcShape != null &&
       tgtShape != null &&
@@ -2443,43 +2443,41 @@ public final class DeepMap {
   }
 
   /**
-   * Refuses a via row of two methods whose {@code forward} takes only {@code takes}, a class
-   * narrower than the property's element, or than the property itself: the lambda javac builds for
-   * the reference casts each value to {@code takes}, so a value of another subclass would throw a
-   * {@code ClassCastException}. javac narrows it so when {@code backward} returns that class.
+   * Refuses a via row of two method references whose {@code forward} takes only {@code methods}'
+   * class, the class {@code backward} returns, when that class admits neither the property's
+   * elements nor the property itself: the lambda the compiler builds for {@code forward} casts each
+   * value to it, so some value the property holds would not convert. A {@code forward} whose own
+   * parameter admits neither is left to the refusal of a mapper that never fits.
    */
   private static void refuseNarrowedInput(
     final RowSides sides,
     final ContainerView<Type> srcShape,
     final ContainerView<Type> tgtShape,
     final Type srcType,
-    final Class<?> takes
+    final LambdaIntrospection.Conversion methods
   ) {
-    final Class<?> held =
-      srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()
-        ? srcShape.elementType() instanceof Class<?> element
-          ? element
-          : null
-        : heldClassOf(srcType);
-    if (held == null || boxed(held) == takes || !boxed(held).isAssignableFrom(takes)) return;
+    final var takes = methods.from();
+    final Class<?> element =
+      srcShape != null &&
+      tgtShape != null &&
+      srcShape.kind() == tgtShape.kind() &&
+      srcShape.elementType() instanceof Class<?> held
+        ? boxed(held)
+        : null;
+    final var property = boxed(heldClassOf(srcType));
+    if (element != null && takes.isAssignableFrom(element)) return;
+    if (takes.isAssignableFrom(property)) return;
+    final var forElement = element != null && methods.declared().isAssignableFrom(element);
+    if (!forElement && !methods.declared().isAssignableFrom(property)) return;
+    final var held = forElement ? element : property;
     throw new IllegalArgumentException(
-      "Deep map " +
-        sides.source().getSimpleName() +
-        " → " +
-        sides.target().getSimpleName() +
-        ": the via row's forward takes only " +
-        takes.getSimpleName() +
-        ", narrower than the " +
-        held.getSimpleName() +
-        " the source's '" +
-        sides.srcField() +
-        "' holds, because backward returns " +
-        takes.getSimpleName() +
-        "; another " +
-        held.getSimpleName() +
-        " would not convert. Have backward return " +
-        held.getSimpleName() +
-        ", which forward takes."
+      PairingMessages.viaMethodsNarrowed(
+        sides.source().getSimpleName(),
+        sides.target().getSimpleName(),
+        sides.srcField(),
+        takes.getSimpleName(),
+        held.getSimpleName()
+      )
     );
   }
 

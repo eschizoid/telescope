@@ -499,9 +499,11 @@ public sealed interface Mapping<A, B>
    *
    * <p>What {@code backward} returns must be a value {@code forward} takes, which is what lets a
    * generic {@code forward} be named without its type argument, and the compiler then types {@code
-   * forward} as taking that class. Have {@code backward} return the class the property's elements
-   * are: one returning a subclass narrows {@code forward} to it, and a property holding another
-   * subclass is refused by name when the mapper is built.
+   * forward} as taking exactly that class. The row is valid when that class admits everything the
+   * property holds, its elements when the row converts them one by one and the property itself
+   * otherwise; a {@code backward} returning a narrower class is refused by name, in a
+   * {@code @Bridge} mapper at compile time and otherwise when the mapper is built. Have {@code
+   * backward} return the wider class, or name the class with {@code via(src, tgt, Hw.class)}.
    *
    * <pre>{@code
    * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line
