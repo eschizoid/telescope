@@ -733,6 +733,10 @@ JVM/codegen-only under AOT).
     calling class and pair, once, and builds the runtime mapper from the same rows when the processor did not run. Rows
     the bridge cannot express are refused by name. Retires the string-keyed per-field annotations and amends ADR-0018's
     steps 3 to 6.
+23. **0023 — A generated `Mappings` interface.** (Accepted, not built.) The processor generates `<Source>Mappings` with
+    a default method `to<Target>()` per `@Bridge` field, so a type that implements it converts itself
+    (`invoice.toInvoiceDto()`); a two-way mapper adds `to<Source>()` on `<Target>Mappings`. No new `@Bridge` attribute;
+    a name clash is refused by name.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
