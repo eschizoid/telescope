@@ -503,7 +503,7 @@ public sealed interface Mapping<A, B>
    * property holds, its elements when the row converts them one by one and the property itself
    * otherwise; a {@code backward} returning a narrower class is refused by name, in a
    * {@code @Bridge} mapper at compile time and otherwise when the mapper is built. Have {@code
-   * backward} return the wider class, or name the class with {@code via(src, tgt, Hw.class)}.
+   * backward} return the wider class.
    *
    * <pre>{@code
    * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line

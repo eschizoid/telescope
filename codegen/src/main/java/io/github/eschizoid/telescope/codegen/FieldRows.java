@@ -462,7 +462,7 @@ final class FieldRows {
     }
     final var pkg = env.getElementUtils().getPackageOf(field.getEnclosingElement()).getQualifiedName().toString();
     final var bridgeName = bridgeSimpleName(source, target);
-    final var rows = new Rows(unit, source, target, strict, pkg, bridgeName);
+    final var rows = new Rows(unit, source, target, strict, pkg, bridgeName, fieldName);
     for (var i = 2; i < args.size(); i++) {
       final var refused = rows.read(args.get(i));
       if (refused != null) return refused;
@@ -493,13 +493,17 @@ final class FieldRows {
     private final List<GeneratedClass> classes = new ArrayList<>();
     private final Set<String> awaits = new LinkedHashSet<>();
 
+    /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
+    private final String fieldName;
+
     Rows(
       final CompilationUnitTree unit,
       final TypeElement source,
       final TypeElement target,
       final boolean strict,
       final String pkg,
-      final String bridgeName
+      final String bridgeName,
+      final String fieldName
     ) {
       this.unit = unit;
       this.source = source;
@@ -507,6 +511,7 @@ final class FieldRows {
       this.strict = strict;
       this.pkg = pkg;
       this.bridgeName = bridgeName;
+      this.fieldName = fieldName;
     }
 
     Parsed parsed() {
@@ -839,7 +844,10 @@ final class FieldRows {
         );
       }
       final var narrowed = narrowedBy(src, f, b);
-      if (narrowed != null) return new Refused(args.get(3), narrowed);
+      if (narrowed != null) return new Refused(
+        args.get(3),
+        "In the rows of @Bridge field " + fieldName + ": " + narrowed
+      );
       final var refusal = write(row, src.property(), tgt.property(), owner);
       if (refusal != null) return refusal;
       if (!viaMappers.containsKey(src.property())) viaMappers.put(src.property(), owner.getQualifiedName().toString());

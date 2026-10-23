@@ -915,9 +915,13 @@ class BridgeFieldTest {
     try (final var loader = load(runtime)) {
       final var build = loader.loadClass("fb.Plain").getMethod("build");
       if (!refusedFor.isEmpty()) {
-        final var words = "have backward return " + refusedFor + ", or name the class: via(src, tgt, Hw.class)";
+        final var words = "which is not one; have backward return " + refusedFor;
         assertFalse(generated.success(), shape);
         assertTrue(generated.hasError(words), generated::errorMessages);
+        assertTrue(
+          generated.hasError("In the rows of @Bridge field Fields.GEN: Deep map Src"),
+          generated::errorMessages
+        );
         final var refused = assertThrows(InvocationTargetException.class, () -> build.invoke(null));
         assertTrue(refused.getCause().getMessage().contains(words), refused.getCause()::getMessage);
         final var shared = refused.getCause().getMessage().substring(refused.getCause().getMessage().indexOf(": ") + 2);

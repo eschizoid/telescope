@@ -105,7 +105,7 @@ the existing emitter without a second one.
 > admits everything the property holds: each element of a `List`, `Set` or `Optional`, or each value of a `Map`, when
 > the row converts element by element, and the property itself when it converts the whole property. Otherwise both paths
 > refuse it in the same words, the generated path on the row at compile time and the runtime path when the mapper is
-> built: have `backward` return the wider class, or name the class with `via(src, tgt, Hw.class)`.
+> built: have `backward` return the wider class.
 >
 > A valid row converts on both paths alike. On the runtime path it reads its method references when the runtime path
 > builds a mapper from it and not before, so a mapper on the generated path, inside a native image included, never
