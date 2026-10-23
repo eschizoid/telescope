@@ -1047,6 +1047,19 @@ class BridgeFieldTest {
           "package fb; public final class Hw extends HwBase {}\n"
         ),
         "Hw",
+      },
+      new Object[] {
+        "a static a subclass declares hides the superclass's of the same parameter",
+        List.of(
+          "fb.HwBase",
+          "package fb; public class HwBase {\n" +
+            "  public static ItemDto forward(final Item i) { return new ItemDto(\"base:\" + i.name()); }\n" +
+            "  public static Item backward(final ItemDto d) { return new Item(\"base:\" + d.label()); }\n}\n",
+          "fb.Hw",
+          "package fb; public final class Hw extends HwBase {\n" +
+            "  public static ItemDto forward(final Item i) { return new ItemDto(\"sub:\" + i.name()); }\n}\n"
+        ),
+        "Hw",
       }
     );
   }

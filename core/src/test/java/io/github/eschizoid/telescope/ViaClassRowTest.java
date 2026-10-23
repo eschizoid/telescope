@@ -469,4 +469,33 @@ class ViaClassRowTest {
       mapper.forward(new Circles(List.of(new Circle("a"))))
     );
   }
+
+  public static class HiddenBase {
+
+    public static ShapeDto forward(final Shape shape) {
+      return new ShapeDto("base:" + shape.name());
+    }
+
+    public static Circle backward(final ShapeDto dto) {
+      return new Circle(dto.name());
+    }
+  }
+
+  public static final class Hiding extends HiddenBase {
+
+    public static ShapeDto forward(final Shape shape) {
+      return new ShapeDto("sub:" + shape.name());
+    }
+  }
+
+  @Test
+  @DisplayName("a static a subclass declares hides the superclass's of the same parameter")
+  void aSubclassStaticHidesTheSuperclasss() {
+    final var mapper = Telescope.mapper(
+      Holder.class,
+      HolderDto.class,
+      via(Holder::shape, HolderDto::shape, Hiding.class)
+    );
+    assertEquals(new HolderDto(new ShapeDto("sub:a")), mapper.forward(new Holder(new Circle("a"))));
+  }
 }
