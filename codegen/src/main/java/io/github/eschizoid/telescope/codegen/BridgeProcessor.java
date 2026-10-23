@@ -54,6 +54,7 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.element.VariableElement;
 import javax.tools.Diagnostic;
 import javax.tools.StandardLocation;
 
@@ -163,7 +164,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // components take their JLS default in the forward direction; unmatched source components are
     // silently ignored. Produces a partial-Iso whose backward (BRIDGE.set(source, target))
     // direction is documented as lossy.
-    boolean lenient
+    boolean lenient,
+    // SPIKE: the @Bridge field this pair's rows were read from, or null for an annotated class.
+    String declaringField
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -178,7 +181,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       Map.of(),
       null,
-      false
+      false,
+      null
     );
 
     /**
@@ -199,7 +203,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Map.of(),
         Map.of(),
         carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
-        false
+        false,
+        null
       );
     }
   }
@@ -243,6 +248,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * the type is looked up again.
    */
   private final Set<String> viaMapperRetries = new LinkedHashSet<>();
+
+  /** SPIKE: {@code @Bridge} fields read again next round, as {@code Carrier#FIELD}. */
+  private final Set<String> fieldRetries = new LinkedHashSet<>();
+
+  private boolean fieldRoundOver;
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
   // generate(...) / generateSealed(...) / planFieldSubBridges(...) / planElementSubBridge(...)
@@ -359,8 +369,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (retriedEl != null) elements.add(retriedEl);
     }
     viaMapperRetries.clear();
+    for (final var retried : fieldRetries) {
+      final var at = retried.lastIndexOf('#');
+      final var owner = processingEnv.getElementUtils().getTypeElement(retried.substring(0, at));
+      if (owner == null) continue;
+      for (final var member : owner.getEnclosedElements()) {
+        if (member.getKind() == ElementKind.FIELD && member.getSimpleName().contentEquals(retried.substring(at + 1))) {
+          elements.add(member);
+        }
+      }
+    }
+    fieldRetries.clear();
+    fieldRoundOver = roundEnv.processingOver();
 
     for (final var element : elements) {
+      if (element.getKind() == ElementKind.FIELD) {
+        registerFieldBridge((VariableElement) element, pending, seen);
+        continue;
+      }
       final var kind = element.getKind();
       final var isSealedInterface = kind == ElementKind.INTERFACE && element.getModifiers().contains(Modifier.SEALED);
       if (kind != ElementKind.RECORD && kind != ElementKind.CLASS && !isSealedInterface) {
@@ -561,7 +587,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           computes,
           transformSet.methodsByField(),
           carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
-          lenient
+          lenient,
+          null
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
@@ -628,6 +655,72 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       reachable.clear();
     }
     return true;
+  }
+
+  /**
+   * SPIKE: reads a {@code @Bridge} field's mapper rows into the pair's configuration, as the
+   * carrier form's, with the field's class as the carrier. A row the bridge cannot express is
+   * refused on the row.
+   */
+  private void registerFieldBridge(
+    final VariableElement field,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen
+  ) {
+    final var carrier = (TypeElement) field.getEnclosingElement();
+    if (carrier.getNestingKind() != NestingKind.TOP_LEVEL) {
+      error(field, "a @Bridge field must be declared in a top-level class");
+      return;
+    }
+    final var read = new FieldRows(processingEnv).read(field);
+    if (read instanceof FieldRows.Refused refused) {
+      if (refused.at() == null) {
+        error(field, refused.message());
+      } else {
+        com.sun.source.util.Trees.instance(processingEnv).printMessage(
+          Diagnostic.Kind.ERROR,
+          refused.message(),
+          refused.at(),
+          com.sun.source.util.Trees.instance(processingEnv).getPath(field).getCompilationUnit()
+        );
+      }
+      return;
+    }
+    final var parsed = (FieldRows.Parsed) read;
+    // A via row names another field's bridge, which a drain of this round writes; its class
+    // resolves only in the next round.
+    for (final var via : parsed.viaMappers().values()) {
+      if (processingEnv.getElementUtils().getTypeElement(via) == null && !fieldRoundOver) {
+        fieldRetries.add(carrier.getQualifiedName() + "#" + field.getSimpleName());
+        return;
+      }
+    }
+    final var pair = new TypePair(
+      parsed.source().getQualifiedName().toString(),
+      parsed.target().getQualifiedName().toString()
+    );
+    if (configOf(pair) != null) {
+      error(field, "another @Bridge in this compilation already declares " + pair.sourceFq() + " -> " + pair.targetFq());
+      return;
+    }
+    final var config = new BridgeConfig(
+      parsed.drops(),
+      parsed.renames(),
+      Map.of(),
+      parsed.transformClasses(),
+      Set.copyOf(parsed.transformMethods().keySet()),
+      Map.of(),
+      parsed.viaMappers(),
+      "AUTO",
+      parsed.constants(),
+      Map.of(),
+      parsed.transformMethods(),
+      carrier.getQualifiedName().toString(),
+      !parsed.strict(),
+      field.getSimpleName().toString()
+    );
+    configsByPair.put(pair, config);
+    if (seen.add(pair)) pending.add(pair);
   }
 
   /**
@@ -2548,7 +2641,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
     if (carrierEl != null) {
-      emitBridgeProvider(source, target, bridgeName, pkg);
+      emitBridgeProvider(
+        source,
+        target,
+        bridgeName,
+        pkg,
+        cfgForEmission.declaringField() == null ? null : carrierEl.getSimpleName().toString()
+      );
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
 
@@ -2847,7 +2946,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form umbrella lives beside its carrier like any carrier-form bridge, so it is
     // registered for the same ServiceLoader lookup.
     if (configsByPair.getOrDefault(new TypePair(sourceFq, targetFq), BridgeConfig.EMPTY).carrierFq() != null) {
-      emitBridgeProvider(source, target, bridgeName, bridge.pkg());
+      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), null);
     }
 
     writeClass(
@@ -6611,7 +6710,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (carrierEl != null) {
       return new BridgeName(
         elements.getPackageOf(carrierEl).getQualifiedName().toString(),
-        carrierEl.getSimpleName() + "Bridge"
+        carrierEl.getSimpleName() +
+          (cfg.declaringField() == null ? "" : FieldRows.camel(cfg.declaringField())) +
+          "Bridge"
       );
     }
     final var pkg = elements.getPackageOf(source).getQualifiedName().toString();
@@ -6679,7 +6780,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement source,
     final TypeElement target,
     final String bridgeName,
-    final String pkg
+    final String pkg,
+    final String declaringSimple
   ) {
     final var providerName = bridgeName + "Provider";
     final var qualifiedProvider = pkg.isEmpty() ? providerName : pkg + "." + providerName;
@@ -6711,6 +6813,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    return " + target.getSimpleName() + ".class;");
         out.println("  }");
         out.println();
+        if (declaringSimple != null) {
+          out.println("  @Override");
+          out.println("  public Class<?> declaringType() {");
+          out.println("    return " + declaringSimple + ".class;");
+          out.println("  }");
+          out.println();
+        }
         out.println("  @Override");
         out.println("  public Object bridge() {");
         out.println("    return " + bridgeName + ".BRIDGE;");

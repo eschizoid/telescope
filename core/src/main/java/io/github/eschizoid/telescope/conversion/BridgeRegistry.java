@@ -23,6 +23,24 @@ public final class BridgeRegistry {
   private BridgeRegistry() {}
 
   /**
+   * SPIKE: the bridge a {@code @Bridge} field of {@code declaring} generated for {@code (source,
+   * target)}, or empty when the processor did not run on that class.
+   */
+  public static Optional<Object> findDeclared(
+    final Class<?> declaring,
+    final Class<?> source,
+    final Class<?> target
+  ) {
+    final var loader = declaring.getClassLoader() != null ? declaring.getClassLoader() : BridgeRegistry.class.getClassLoader();
+    for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, loader)) {
+      if (provider.declaringType() == declaring && provider.sourceType() == source && provider.targetType() == target) {
+        return Optional.of(provider.bridge());
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
    * The {@code bridge()} value of the unique {@link BridgeProvider} registered for {@code (source,
    * target)} on {@code loader}, or {@link Optional#empty()} when none is registered.
    *
@@ -39,6 +57,7 @@ public final class BridgeRegistry {
     Object match = null;
     for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, effective)) {
       if (provider.sourceType() != source || provider.targetType() != target) continue;
+      if (provider.declaringType() != null) continue;
       if (match != null) {
         throw new IllegalStateException(
           "Ambiguous @Bridge providers for (" +

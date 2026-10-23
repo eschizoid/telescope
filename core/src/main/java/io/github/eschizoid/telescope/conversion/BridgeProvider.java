@@ -27,4 +27,12 @@ public interface BridgeProvider {
 
   /** The generated {@code BRIDGE} constant — a {@code Telescope<Source, Target>}, opaque here. */
   Object bridge();
+
+  /**
+   * SPIKE: the class whose {@code @Bridge} field declared this bridge, or null for a bridge an
+   * annotated class declared. A field's bridge stands only for the mapper that field builds.
+   */
+  default Class<?> declaringType() {
+    return null;
+  }
 }

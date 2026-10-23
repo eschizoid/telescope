@@ -63,7 +63,7 @@ import java.lang.annotation.Target;
  *     io.github.eschizoid.telescope.mapping.MapStep...)
  */
 @Retention(RetentionPolicy.SOURCE)
-@Target(ElementType.TYPE)
+@Target({ ElementType.TYPE, ElementType.FIELD })
 @Repeatable(Bridges.class)
 public @interface Bridge {
   /**

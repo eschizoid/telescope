@@ -132,6 +132,26 @@ public final class DeepMap {
     return Telescope.mapped(r.iso, r.trail);
   }
 
+  /** SPIKE: the bridge a {@code @Bridge} field of {@code caller} declares for the pair, or null. */
+  static Object declaredBridge(final Class<?> caller, final Class<?> source, final Class<?> target) {
+    return BridgeRegistry.findDeclared(caller, source, target).orElse(null);
+  }
+
+  /** SPIKE: the mapper over the bridge a {@code @Bridge} field of {@code caller} declares, or null. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  static <A, B> Mapper<A, B> declaredBridgeMapper(final Class<?> caller, final Class<A> source, final Class<B> target) {
+    final var bridge = declaredBridge(caller, source, target);
+    if (bridge == null) return null;
+    final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
+    return Mapper.ofPatcher(
+      Iso.of(fn::forward, fn::backward),
+      source,
+      target,
+      Telescope.bridgePatch((Telescope) bridge),
+      List.of(pickReflective(target, null).names(target))
+    );
+  }
+
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.

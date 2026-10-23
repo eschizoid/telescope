@@ -944,6 +944,9 @@ public sealed class Telescope<
    */
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
     rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
+    // SPIKE: a mapper a @Bridge field declares runs the bridge generated from the same rows.
+    final var declared = DeepMap.declaredBridgeMapper(CALLER.getCallerClass(), source, target);
+    if (declared != null) return declared;
     return DeepMap.resolveMapper(source, target, steps);
   }
 
@@ -1067,6 +1070,12 @@ public sealed class Telescope<
     // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
+    final var declared = DeepMap.declaredBridge(CALLER.getCallerClass(), source, target);
+    if (declared != null) {
+      @SuppressWarnings("unchecked")
+      final var bridge = (Telescope<A, B>) declared;
+      return ForwardMapper.create(bridge::read, source, target);
+    }
     if (steps.length == 0) {
       // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
       // declares the pair: the holder beside the source, then a carrier registered by (source,
@@ -3078,10 +3087,14 @@ public sealed class Telescope<
     };
   }
 
+  /** SPIKE: names the class whose code called a mapper factory, once per mapper built. */
+  private static final StackWalker CALLER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
+
   /**
    * The {@link BridgeFn} behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, or
    * null.
    */
+
   static BridgeFn<?, ?> bridgeFnOf(final Object bridge) {
     return bridge instanceof BridgeTelescope<?, ?> generated ? generated.fn : null;
   }
