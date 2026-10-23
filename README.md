@@ -100,11 +100,14 @@ mapper. The field then runs the generated code, and the call site does not chang
 and add `@Bridge` later, when that code needs the speed.
 
 ```java
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+
 public record InvoiceDto(Long invoiceId, String customer, String currency, long totalCents) {}
 
 public record Invoice(Long id, String customer, String currency, long totalCents) {
   @Bridge
-  static final Mapper<Invoice, InvoiceDto> DTO = Telescope.mapper(Invoice.class, InvoiceDto.class,
+  static final Mapper<Invoice, InvoiceDto> DTO = mapper(Invoice.class, InvoiceDto.class,
       to(Invoice::id, InvoiceDto::invoiceId),
       to(Invoice::currency, InvoiceDto::currency, CurrencyFn.class)); // CurrencyFn is a BridgeFn<String, String>
 }
@@ -114,20 +117,30 @@ Invoice back   = Invoice.DTO.backward(dto);
 Invoice.DTO.explain();                         // "Runs: generated — the bridge InvoiceToInvoiceDtoBridge, ..."
 ```
 
+If you would rather write `invoice.toDto()`, add a one-line method to the record yourself. It costs nothing, since it
+calls the `static final` field, and the DTO can carry the reverse. Telescope can't generate these, because an annotation
+processor can't add methods to your record.
+
+```java
+public InvoiceDto toDto() {
+  return DTO.forward(this);
+} // on Invoice
+
+public Invoice toInvoice() {
+  return Invoice.DTO.backward(this);
+} // on InvoiceDto
+```
+
 The field can sit on the source itself, as here, or with other mappers in a class or an interface of their own. A field
 of an interface is `static final` without saying so:
 
 ```java
 interface Mappers {
   @Bridge
-  Mapper<Invoice, InvoiceDto> INVOICE = Telescope.mapper(
-    Invoice.class,
-    InvoiceDto.class,
-    to(Invoice::id, InvoiceDto::invoiceId)
-  );
+  Mapper<Invoice, InvoiceDto> INVOICE = mapper(Invoice.class, InvoiceDto.class, to(Invoice::id, InvoiceDto::invoiceId));
 
   @Bridge
-  Mapper<Customer, CustomerDto> CUSTOMER = Telescope.mapper(Customer.class, CustomerDto.class);
+  Mapper<Customer, CustomerDto> CUSTOMER = mapper(Customer.class, CustomerDto.class);
 }
 ```
 

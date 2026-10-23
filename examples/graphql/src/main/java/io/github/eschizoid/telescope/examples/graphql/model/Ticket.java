@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope.examples.graphql.model;
 
+import static io.github.eschizoid.telescope.Telescope.mapper;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
-import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.conversion.Mapper;
 
@@ -16,7 +16,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
  */
 public record Ticket(String code, String seat) {
   @Bridge
-  public static final Mapper<Ticket, TicketView> VIEW = Telescope.mapper(
+  public static final Mapper<Ticket, TicketView> VIEW = mapper(
     Ticket.class,
     TicketView.class,
     to(Ticket::code, TicketView::reference)

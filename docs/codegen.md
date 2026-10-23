@@ -131,9 +131,12 @@ after its pair, in the package of the class declaring the field (`UserToUserDtoB
 returns a mapper over that bridge when the field is initialised. Nothing references the generated class.
 
 ```java
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.*;
+
 public record User(Long id, String email, String nickname, String passwordHash, Address address) {
   @Bridge
-  static final Mapper<User, UserDto> DTO = Telescope.mapper(
+  static final Mapper<User, UserDto> DTO = mapper(
     User.class,
     UserDto.class,
     to(User::id, UserDto::userId), // a rename

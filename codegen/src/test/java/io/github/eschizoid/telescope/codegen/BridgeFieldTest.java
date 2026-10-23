@@ -571,6 +571,37 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName("a field initialised by a statically imported factory runs its bridge")
+  void aStaticallyImportedFactoryRunsItsBridge() throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Ticket",
+        "package fb;\n" +
+          "import static io.github.eschizoid.telescope.Telescope.mapper;\n" +
+          "import static io.github.eschizoid.telescope.mapping.Mapping.to;\n" +
+          "import io.github.eschizoid.telescope.annotations.Bridge;\n" +
+          "import io.github.eschizoid.telescope.conversion.Mapper;\n" +
+          "public record Ticket(Long id, String title) {\n" +
+          "  @Bridge public static final Mapper<Ticket, TicketView> VIEW =" +
+          " mapper(Ticket.class, TicketView.class, to(Ticket::id, TicketView::ticketId));\n" +
+          "  public TicketView toView() { return VIEW.forward(this); }\n" +
+          "}\n",
+        "fb.TicketView",
+        "package fb; public record TicketView(Long ticketId, String title) {}"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.TicketToTicketViewBridge"), c.generated()::toString);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var view = (Mapper<Object, Object>) field(loader, "fb.Ticket", "VIEW");
+      assertEquals(OpticNode.Runs.GENERATED, view.explain().declared().orElseThrow().runs());
+      final var ticket = loader.loadClass("fb.Ticket").getConstructors()[0].newInstance(3L, "t");
+      assertEquals("TicketView[ticketId=3, title=t]", ticket.getClass().getMethod("toView").invoke(ticket).toString());
+    }
+  }
+
+  @Test
   @DisplayName("a @Bridge field of an interface is static final without saying so, and runs its bridge")
   void anInterfaceFieldIsStaticFinal() throws Exception {
     final var c = compile(

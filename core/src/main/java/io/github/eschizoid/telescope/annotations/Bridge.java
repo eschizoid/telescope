@@ -71,9 +71,12 @@ import java.lang.annotation.Target;
  * rows.
  *
  * <pre>{@code
+ * import static io.github.eschizoid.telescope.Telescope.mapper;
+ * import static io.github.eschizoid.telescope.mapping.Mapping.*;
+ *
  * public record User(Long id, String email, Address address) {
  *   @Bridge
- *   static final Mapper<User, UserDto> DTO = Telescope.mapper(User.class, UserDto.class,
+ *   static final Mapper<User, UserDto> DTO = mapper(User.class, UserDto.class,
  *       to(User::id, UserDto::userId),
  *       to(User::email, UserDto::contact, Emails::normalise, Emails::normalise),
  *       via(User::address, UserDto::address, Address.DTO));
