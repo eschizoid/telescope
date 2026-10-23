@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10269,9 +10270,11 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A strict pair renaming one source property onto the target of another left under its own name,
-   * which then has nowhere to be written: the declarations, each with {@code %1$s} as the row's
-   * prefix and the last of them the runtime row, and the property both paths refuse by name.
+   * A pair renaming one source property onto the target of another left under its own name, which
+   * then has nowhere to be written: the declarations, each with {@code %1$s} as the row's prefix
+   * and the last of them the runtime row, and the property both paths refuse by name. A strict pair
+   * refuses it whatever other rows it has; a kept property with a conversion of its own is a second
+   * write into the target, which a lenient pair refuses too.
    */
   private record KeptName(String name, String kept, List<String> declarations) {}
 
@@ -10321,6 +10324,119 @@ class CrossPathCorpusTest {
       )
     ),
     new KeptName(
+      "a plain rename beside a value computed into another property",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\")," +
+          " computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"z\", using = %1$sMade.class))\n" +
+          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sTgt(String label, String z) {}\n",
+        MADE,
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::z, new %1$sMade())"
+        )
+      )
+    ),
+    new KeptName(
+      "a plain rename beside a constant on another property",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\")," +
+          " constants = @io.github.eschizoid.telescope.annotations.Constant(field = \"z\", value = \"k\"))\n" +
+          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sTgt(String label, String z) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::z, \"k\")"
+        )
+      )
+    ),
+    new KeptName(
+      "a rename through a transform beside a value computed into another property",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
+          transformOn("n", false) +
+          ", computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"z\", using = %1$sMade.class))\n" +
+          "public record %1$sSrc(Integer n, String label) {}\n",
+        "public record %1$sTgt(String label, String z) {}\n",
+        MADE,
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
+        runtimeMapper(
+          false,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::label, fn::forward, fn::backward)",
+          "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::z, new %1$sMade())"
+        )
+      )
+    ),
+    new KeptName(
+      "a kept property with a transform of its own",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
+          transformOn("label", false) +
+          ")\n" +
+          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sTgt(String label) {}\n",
+        transformFn("String", "String", "\"#\" + a", "b.substring(1)"),
+        runtimeMapper(
+          false,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String, String>to(%1$sSrc::label, %1$sTgt::label, fn::forward, fn::backward)"
+        )
+      )
+    ),
+    new KeptName(
+      "a lenient pair's kept property with a transform of its own",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
+          transformOn("label", false) +
+          ")\n" +
+          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sTgt(String label) {}\n",
+        transformFn("String", "String", "\"#\" + a", "b.substring(1)"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String, String>to(%1$sSrc::label, %1$sTgt::label, fn::forward, fn::backward)"
+        )
+      )
+    ),
+    new KeptName(
+      "a lenient pair's kept property with a @ViaMapper of its own",
+      "b",
+      List.of(
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        VIA_IN_OUT,
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"a\", target = \"b\"), viaMappers =" +
+          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"b\", using = %1$sVia.class))\n" +
+          "public record %1$sSrc(%1$sOut a, %1$sIn b) {}\n",
+        "public record %1$sTgt(%1$sOut b) {}\n",
+        runtimeMapper(
+          true,
+          viaMapperOf("%1$sIn", "%1$sOut"),
+          "<%1$sSrc, %1$sTgt, %1$sOut>to(%1$sSrc::a, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::b, %1$sTgt::b, via)"
+        )
+      )
+    ),
+    new KeptName(
       "a rename into a bean",
       "value",
       List.of(
@@ -10332,6 +10448,88 @@ class CrossPathCorpusTest {
       )
     )
   );
+
+  @Test
+  @DisplayName("a lenient bridge leaves a kept field a rename takes the target of unread, backward too")
+  void aLenientBridgeLeavesAKeptFieldARenameTakesUnread() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var sources = List.of(
+      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
+        " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
+        "public record %1$sSrc(String n, String label) {}\n",
+      "public record %1$sTgt(String label) {}\n"
+    )
+      .stream()
+      .map(declaration -> declaration.formatted("Rl0"))
+      .map(code -> source(declaredName(code), head + code))
+      .toArray(JavaFileObject[]::new);
+    final var compilation = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var classes = compilation.define(MethodHandles.lookup());
+    final var src = classes.get(PACKAGE + ".Rl0Src");
+    final var tgt = classes.get(PACKAGE + ".Rl0Tgt");
+    final var bridge = classes.get(PACKAGE + ".Rl0SrcBridge");
+    final Attempt forward = () ->
+      bridge
+        .getMethod("forward", src)
+        .invoke(null, src.getConstructor(String.class, String.class).newInstance("7", "own"));
+    final Attempt backward = () ->
+      bridge.getMethod("backward", tgt).invoke(null, tgt.getConstructor(String.class).newInstance("q"));
+    assertEquals("#0(label=\"7\")", shapeOf(forward));
+    assertEquals("#0(n=\"q\", label=null)", shapeOf(backward));
+  }
+
+  @Test
+  @DisplayName("a lenient bridge refuses a conversion on a field it leaves unread, by the field's name")
+  void aLenientBridgeRefusesAConversionOnAFieldItLeavesUnread() {
+    final var rows = List.of(
+      List.of(
+        "@Transform",
+        "n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, transforms = " +
+          transformOn("n", false) +
+          ")\npublic record %1$sSrc(String id, Integer n) {}\n",
+        "public record %1$sTgt(String id) {}\n",
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))")
+      ),
+      List.of(
+        "@ViaMapper",
+        "b",
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        VIA_IN_OUT,
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, viaMappers =" +
+          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"b\", using = %1$sVia.class))\n" +
+          "public record %1$sSrc(String id, %1$sIn b) {}\n",
+        "public record %1$sTgt(String id) {}\n"
+      )
+    );
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : rows) {
+      final var prefix = "Ru" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = row
+        .subList(2, row.size())
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var processed = bridged(sources);
+      final var owed =
+        "@Bridge field \"" +
+        row.get(1) +
+        "\" has a " +
+        row.get(0) +
+        ", but " +
+        prefix +
+        "Tgt has no field it is written into";
+      if (processed.success() || !processed.hasError(owed)) {
+        failures.add(row.get(0) + ": owed a refusal naming " + owed + ", saw " + describe(processed));
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
 
   @Test
   @DisplayName(

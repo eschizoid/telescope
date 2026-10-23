@@ -105,8 +105,10 @@ On `@Bridge`, `@Rename(source = "email", target = "contactEmail")` names the pai
 four-argument `to(...)` row and `via(...)` do it on the runtime path; the generated code is the same direct call it is
 for a field that is not renamed. A forward-only fan-out (several renames from one source) through a transform writes the
 converted value into every target, and reads the source back from the first rename declared. A rename onto the target of
-another source field left under its own name is refused by that field's name on both paths, since the field would have
-nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
+another source field left under its own name is refused by that field's name by a strict bridge and the strict
+`Telescope.mapper`, whatever other rows the mapper has, since the field would have nowhere to be written; a lenient
+bridge, like `mapperForward`, leaves it unread instead. A lenient bridge refuses a `@Transform` or `@ViaMapper` on a
+field it would leave unread, by the field's name, rather than drop the conversion.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change

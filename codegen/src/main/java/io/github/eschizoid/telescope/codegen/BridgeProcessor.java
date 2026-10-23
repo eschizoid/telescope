@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.KeptNames;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -2065,15 +2066,55 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // through unchanged. Produces a partial-Iso: see @Bridge#lenient javadoc for the round-trip
     // warning. Mutates `drops`, `parsedConstants`, and `injectedTargetFields` so the downstream
     // generation code sees a strict-shape config and needs no further plumbing.
+    //
+    // A source property left under its own name whose same-named target a rename of another
+    // property fills has nowhere to be written. One with a conversion of its own declares a second
+    // write into that target, which the runtime refuses as a duplicate row whether or not the
+    // mapper is lenient.
+    final var kept = new ArrayList<String>();
+    for (final var sf : sourceFields) {
+      if (!drops.contains(sf.name()) && !renames.containsKey(sf.name())) kept.add(sf.name());
+    }
+    final var taken = KeptNames.taken(kept, renameTargetNames);
+    for (final var name : taken) {
+      if (!transforms.containsKey(name) && !viaMappers.containsKey(name)) continue;
+      error(
+        source,
+        PairingMessages.duplicateTargetRow(source.getSimpleName().toString(), target.getSimpleName().toString(), name)
+      );
+      return;
+    }
     final var effectiveDrops = lenient ? new LinkedHashSet<>(drops) : drops;
     if (lenient) {
       final var targetFieldNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
       for (final var sf : sourceFields) {
         if (effectiveDrops.contains(sf.name())) continue;
         final var mappedTarget = renames.getOrDefault(sf.name(), sf.name());
-        // A property whose same-named target another property is renamed onto has no target of
-        // its own, as one with no same-named target has none.
-        if (!targetFieldNames.contains(mappedTarget) || writtenByARename(sf.name(), renames, renameTargetNames)) {
+        if (!targetFieldNames.contains(mappedTarget) || taken.contains(sf.name())) {
+          // A conversion declared on a property the bridge leaves unread would never run.
+          final var conversion = transforms.containsKey(sf.name())
+            ? "@Transform"
+            : viaMappers.containsKey(sf.name())
+              ? "@ViaMapper"
+              : null;
+          if (conversion != null) {
+            error(
+              source,
+              "@Bridge field \"" +
+                sf.name() +
+                "\" has a " +
+                conversion +
+                ", but " +
+                target.getSimpleName() +
+                " has no field it is written into, so the lenient bridge would leave it unread and" +
+                " never run the conversion. Remove the " +
+                conversion +
+                ", or rename the field onto a field of " +
+                target.getSimpleName() +
+                "."
+            );
+            return;
+          }
           effectiveDrops.add(sf.name());
         }
       }
@@ -2103,11 +2144,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !effectiveDrops.contains(f.name()))
           .toList();
-    // A source property left under its own name whose same-named target another property is
-    // renamed onto has no target to be written into, which the runtime mapper refuses by the
-    // property's name.
-    for (final var sf : nonDroppedSourceFields) {
-      if (!writtenByARename(sf.name(), renames, renameTargetNames)) continue;
+    // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
+    // mapper does, by the property's name.
+    if (!lenient && !taken.isEmpty()) {
       error(
         source,
         PairingMessages.noSameNameTarget(
@@ -2115,7 +2154,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           target.getSimpleName().toString(),
           slotWord(source),
           slotWord(target),
-          sf.name()
+          taken.getFirst()
         )
       );
       return;
@@ -8611,18 +8650,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         tn
     );
     return false;
-  }
-
-  /**
-   * Whether source property {@code name}, left under its own name, has its same-named target
-   * written by a rename of another property.
-   */
-  private static boolean writtenByARename(
-    final String name,
-    final Map<String, String> renames,
-    final Set<String> renameTargetNames
-  ) {
-    return !renames.containsKey(name) && renameTargetNames.contains(name);
   }
 
   /**

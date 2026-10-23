@@ -19,10 +19,13 @@ import java.lang.annotation.Target;
  * <p>Both names must be real field names on their respective sides. A misspelled name on either
  * side is a compile error. Multiple renames cannot reference the same target name. A source field
  * left under its own name cannot have its same-named target taken by another field's rename: it
- * would have nowhere to be written, so a strict bridge refuses it by name, as the runtime mapper
- * does, and a lenient one leaves it unread. Drop it or rename it too. By default two renames cannot
- * share the same source either — set {@link #forwardOnly()} to {@code true} on both (or all) of
- * them to enable forward-only fan-out where one source field feeds multiple target columns.
+ * would have nowhere to be written, so a strict bridge refuses it by name, as the strict {@code
+ * Telescope.mapper} does, and a lenient one leaves it unread, as {@code Telescope.mapperForward}
+ * does. Drop it or rename it too. Such a field with a {@link Transform} or {@link ViaMapper} of its
+ * own is refused either way, since that would be a second write into the same target. By default
+ * two renames cannot share the same source either — set {@link #forwardOnly()} to {@code true} on
+ * both (or all) of them to enable forward-only fan-out where one source field feeds multiple target
+ * columns.
  *
  * <h2>Forward-only fan-out</h2>
  *
