@@ -946,7 +946,7 @@ public sealed class Telescope<
     rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
     // A @Bridge field of the calling class declares this mapper when the processor generated a
     // bridge from its rows; the caller is read here, in the factory the field's initializer calls.
-    final var declaration = DeepMap.declaration(CALLER.getCallerClass(), source, target, steps);
+    final var declaration = DeepMap.declaration(initialisingCaller(), source, target, steps);
     if (declaration.provider() != null) return DeepMap.declaredMapper(declaration, source, target);
     return DeepMap.resolveMapper(source, target, steps, declaration.node());
   }
@@ -1071,7 +1071,7 @@ public sealed class Telescope<
     // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
-    final var declaration = DeepMap.declaration(CALLER.getCallerClass(), source, target, steps);
+    final var declaration = DeepMap.declaration(initialisingCaller(), source, target, steps);
     if (declaration.provider() != null) return DeepMap.declaredForwardMapper(declaration, source, target);
     if (steps.length == 0 && declaration.node() == null) {
       // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
@@ -3084,8 +3084,24 @@ public sealed class Telescope<
     };
   }
 
-  /** Names the class that called a mapper factory, read once per mapper built. */
   private static final StackWalker CALLER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
+
+  /**
+   * The class whose static initialiser called the mapper factory that calls this, or null when the
+   * call came from anywhere else. Only a static initialiser initialises a {@code @Bridge} field, so a
+   * mapper built in a method or a lambda is never handed a field's bridge. Read once per mapper
+   * built.
+   */
+  private static Class<?> initialisingCaller() {
+    return CALLER.walk(frames ->
+      frames
+        .skip(2)
+        .findFirst()
+        .filter(frame -> frame.getMethodName().equals("<clinit>"))
+        .map(StackWalker.StackFrame::getDeclaringClass)
+        .orElse(null)
+    );
+  }
 
   /**
    * The {@link BridgeFn} behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, or

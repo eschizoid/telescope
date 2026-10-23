@@ -109,6 +109,11 @@ public final class DeclaredFixtures {
       PointDto.class,
       to(Point::name, PointDto::label)
     );
+
+    /** The same mapper built by a method of the declaring class, which no field initialises. */
+    public static Mapper<Point, PointDto> later() {
+      return Telescope.mapper(Point.class, PointDto.class, to(Point::name, PointDto::label));
+    }
   }
 
   /** Another class building the same mapper, which no field of its own declares. */
@@ -126,9 +131,11 @@ public final class DeclaredFixtures {
 
     private StaleMappers() {}
 
-    public static Mapper<Stale, StaleDto> stale() {
-      return Telescope.mapper(Stale.class, StaleDto.class, to(Stale::name, StaleDto::label));
-    }
+    public static final Mapper<Stale, StaleDto> STALE = Telescope.mapper(
+      Stale.class,
+      StaleDto.class,
+      to(Stale::name, StaleDto::label)
+    );
   }
 
   public static final class ForwardMappers {

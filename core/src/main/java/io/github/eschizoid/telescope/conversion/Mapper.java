@@ -103,6 +103,31 @@ public final class Mapper<A, B> {
   // a mapper runs has none, so its forward skips the logger as a bridge called directly does.
   private final boolean traced;
 
+  // The generated bridge this mapper converts through, when it is one with no hooks: forward and
+  // backward call it directly, as a bridge called on its own is, since it already returns null for
+  // null. Null for every other mapper.
+  private final BridgeFn<A, B> generated;
+
+  /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
+  private static final class GeneratedIso<A, B> implements Iso<A, B> {
+
+    private final BridgeFn<A, B> fn;
+
+    GeneratedIso(final BridgeFn<A, B> fn) {
+      this.fn = fn;
+    }
+
+    @Override
+    public B to(final A source) {
+      return fn.forward(source);
+    }
+
+    @Override
+    public A from(final B value) {
+      return fn.backward(value);
+    }
+  }
+
   private static boolean traced(final List<OpticNode> trail) {
     for (final var node : trail) if (!(node instanceof OpticNode.Declared)) return true;
     return false;
@@ -169,6 +194,14 @@ public final class Mapper<A, B> {
     this.postBackward = postBackward;
     this.explainTrail = List.copyOf(explainTrail);
     this.traced = traced(this.explainTrail);
+    this.generated =
+      iso instanceof GeneratedIso<A, B> bridge &&
+        preForward == null &&
+        postForward == null &&
+        preBackward == null &&
+        postBackward == null
+        ? bridge.fn
+        : null;
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
     // Structure once at DEBUG (skip the trail-less lifted shells, which would just log "(empty
     // optic)"). Guarded so the Supplier isn't built when DEBUG is off.
@@ -300,6 +333,22 @@ public final class Mapper<A, B> {
     final List<String> intoNames
   ) {
     return ofPatcher(iso, sourceClass, targetClass, patcher, intoNames, List.of());
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> A mapper over a generated bridge: {@code
+   * forward} and {@code backward} call {@code bridge} directly, {@link #patch} is {@code patcher},
+   * and {@link #explain()} reports {@code explainTrail}.
+   */
+  public static <A, B> Mapper<A, B> ofGenerated(
+    final BridgeFn<A, B> bridge,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final BiFunction<A, B, A> patcher,
+    final List<String> intoNames,
+    final List<OpticNode> explainTrail
+  ) {
+    return ofPatcher(new GeneratedIso<>(bridge), sourceClass, targetClass, patcher, intoNames, explainTrail);
   }
 
   /**
@@ -521,6 +570,8 @@ public final class Mapper<A, B> {
     // JPA "no row" idiom adopters rely on. The hook chain is skipped on null since neither
     // pre/postForward has a sensible meaning when no value flowed through.
     if (a == null) return null;
+    final var direct = generated;
+    if (direct != null) return direct.forward(a);
     final A a1 = preForward == null ? a : preForward.apply(a);
     // Post-hook null guard: a preForward that returns null (e.g. a normalisation hook that maps
     // sentinel-empty to null) must propagate as null, not NPE in iso.to(null). postForward is
@@ -709,6 +760,8 @@ public final class Mapper<A, B> {
   public A backward(final B b) {
     // Null in, null out — symmetric with forward(). See the rationale on forward(Object) above.
     if (b == null) return null;
+    final var direct = generated;
+    if (direct != null) return direct.backward(b);
     final B b1 = preBackward == null ? b : preBackward.apply(b);
     if (b1 == null) return null;
     final A a = iso.from(b1);

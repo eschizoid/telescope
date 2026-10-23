@@ -44,7 +44,7 @@ class DeclaredBridgeTest {
   @Test
   @DisplayName("a bridge generated from other rows than the call's is passed over, and explain says why")
   void aStaleBridgeIsPassedOver() {
-    final var mapper = StaleMappers.stale();
+    final var mapper = StaleMappers.STALE;
     final var before = DeclaredFixtures.GENERATED_CALLS.get();
     assertEquals(new DeclaredFixtures.StaleDto("s"), mapper.forward(new DeclaredFixtures.Stale("s")));
     assertEquals(0, DeclaredFixtures.GENERATED_CALLS.get() - before);
@@ -63,7 +63,22 @@ class DeclaredBridgeTest {
     assertEquals(OpticNode.Runs.GENERATED, declared.runs());
     assertEquals(PointMappers.class.getName(), declared.declaredBy());
     assertTrue(OtherMappers.point().explain().declared().isEmpty());
+    assertTrue(PointMappers.later().explain().declared().isEmpty(), "a method of the class builds the runtime mapper");
     assertTrue(PointMappers.POINT.trace(new Point("a", "n")).toString().contains("runs generated"));
+  }
+
+  @Test
+  @DisplayName("hooks on the declaring class's mapper run around the generated bridge")
+  void hooksRunAroundTheBridge() {
+    final var hooked = PointMappers.POINT
+      .beforeForward(p -> new Point(p.name().trim(), p.note()))
+      .afterForward(d -> new PointDto(d.label().toUpperCase(), d.note()))
+      .beforeBackward(d -> new PointDto(d.label().trim(), d.note()))
+      .afterBackward(p -> new Point(p.name().toLowerCase(), p.note()));
+    final var before = DeclaredFixtures.GENERATED_CALLS.get();
+    assertEquals(new PointDto("A", "n"), hooked.forward(new Point(" a ", "n")));
+    assertEquals(new Point("b", "m"), hooked.backward(new PointDto(" B ", "m")));
+    assertEquals(2, DeclaredFixtures.GENERATED_CALLS.get() - before);
   }
 
   @Test

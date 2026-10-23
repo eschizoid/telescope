@@ -776,10 +776,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       final var path = trees.getPath(field);
       if (call == null || path == null || call.getArguments().size() < 2) continue;
       final var unit = path.getCompilationUnit();
-      final var source = rows.classLiteral(unit, call.getArguments().get(0));
-      final var target = rows.classLiteral(unit, call.getArguments().get(1));
-      if (source == null || target == null) continue;
       final var owner = (TypeElement) field.getEnclosingElement();
+      // Resolved by name: attributing the call would resolve its accessor references too, which
+      // reports an error for a getter Lombok has not written yet.
+      final var source = rows.classLiteralByName(unit, call.getArguments().get(0), owner);
+      final var target = rows.classLiteralByName(unit, call.getArguments().get(1), owner);
+      if (source == null || target == null) continue;
       final var pkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
       fieldBridges
         .computeIfAbsent(source.getQualifiedName().toString(), unused -> new LinkedHashMap<>())

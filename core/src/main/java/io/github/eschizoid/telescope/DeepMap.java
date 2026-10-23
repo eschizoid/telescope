@@ -43,6 +43,7 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.lang.invoke.MethodType;
@@ -51,6 +52,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -157,9 +159,10 @@ public final class DeepMap {
     final Class<?> target,
     final MapStep[] steps
   ) {
+    if (caller == null) return Declaration.NONE;
     final var provider = BridgeRegistry.declaredBy(caller, source, target).orElse(null);
     if (provider == null) {
-      if (!UNREAD_ROWS.get(caller)) return Declaration.NONE;
+      if (!UNREAD_ROWS.get(caller).contains(source.getName() + " -> " + target.getName())) return Declaration.NONE;
       return new Declaration(
         null,
         new OpticNode.Declared(
@@ -208,14 +211,21 @@ public final class DeepMap {
   }
 
   /**
-   * Whether the telescope processor recorded that {@code type} was compiled without the javac tree
-   * API, so its {@code @Bridge} fields' rows were read by nobody. Read once per class.
+   * The pairs, as {@code source -> target} binary names, of the {@code @Bridge} fields the telescope
+   * processor recorded as read by nobody, because {@code type} was compiled without the javac tree
+   * API; empty when it recorded none. Read once per class.
    */
-  private static final ClassValue<Boolean> UNREAD_ROWS = new ClassValue<>() {
+  private static final ClassValue<Set<String>> UNREAD_ROWS = new ClassValue<>() {
     @Override
-    protected Boolean computeValue(final Class<?> type) {
+    protected Set<String> computeValue(final Class<?> type) {
       final var loader = type.getClassLoader() != null ? type.getClassLoader() : DeepMap.class.getClassLoader();
-      return loader.getResource(BridgeProvider.UNREAD_ROWS_PREFIX + type.getName()) != null;
+      final var resource = loader.getResource(BridgeProvider.UNREAD_ROWS_PREFIX + type.getName());
+      if (resource == null) return Set.of();
+      try (final var in = resource.openStream()) {
+        return Set.copyOf(new String(in.readAllBytes(), StandardCharsets.UTF_8).lines().map(String::strip).toList());
+      } catch (final IOException e) {
+        return Set.of();
+      }
     }
   };
 
@@ -230,8 +240,8 @@ public final class DeepMap {
   ) {
     final var bridge = declaration.provider().bridge();
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
-    return Mapper.ofPatcher(
-      new BridgeFnIso<>(fn),
+    return Mapper.ofGenerated(
+      fn,
       source,
       target,
       Telescope.bridgePatch((Telescope) bridge),
@@ -248,27 +258,7 @@ public final class DeepMap {
     final Class<B> target
   ) {
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(declaration.provider().bridge());
-    return ForwardMapper.create(fn::forward, source, target, List.of(declaration.node()));
-  }
-
-  /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
-  private static final class BridgeFnIso<A, B> implements Iso<A, B> {
-
-    private final BridgeFn<A, B> fn;
-
-    BridgeFnIso(final BridgeFn<A, B> fn) {
-      this.fn = fn;
-    }
-
-    @Override
-    public B to(final A source) {
-      return fn.forward(source);
-    }
-
-    @Override
-    public A from(final B value) {
-      return fn.backward(value);
-    }
+    return ForwardMapper.ofGenerated(fn, source, target, List.of(declaration.node()));
   }
 
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {

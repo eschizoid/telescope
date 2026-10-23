@@ -421,8 +421,11 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var path = trees.getPath(field);
     if (call == null || path == null || call.getArguments().size() < 2) return null;
     final var unit = path.getCompilationUnit();
-    final var source = rows.classLiteral(unit, call.getArguments().get(0));
-    final var target = rows.classLiteral(unit, call.getArguments().get(1));
+    // Resolved by name: attributing the call would resolve its accessor references too, which
+    // reports an error for a getter Lombok has not written yet.
+    final var owner = (TypeElement) field.getEnclosingElement();
+    final var source = rows.classLiteralByName(unit, call.getArguments().get(0), owner);
+    final var target = rows.classLiteralByName(unit, call.getArguments().get(1), owner);
     if (source == null || target == null || !same(source.asType(), from)) return null;
     if (!same(target.asType(), to)) return null;
     final var pkg = processingEnv

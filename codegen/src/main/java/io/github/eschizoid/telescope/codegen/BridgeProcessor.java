@@ -278,8 +278,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The providers of the bridges {@code @Bridge} fields declare, to the class declaring each. */
   private final Map<String, TypeElement> fieldProviders = new LinkedHashMap<>();
 
-  /** The binary names of the classes recorded as compiled without the javac tree API. */
-  private final Set<String> unreadRows = new HashSet<>();
+  /** The {@code @Bridge} fields, as {@code Carrier#FIELD}, whose sides were checked for Lombok. */
+  private final Set<String> lombokWaited = new HashSet<>();
+
+  /** The pairs of the {@code @Bridge} fields no processor read rows from, by their class. */
+  private final Map<TypeElement, Set<String>> unreadRows = new LinkedHashMap<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
   // generate(...) / generateSealed(...) / planFieldSubBridges(...) / planElementSubBridge(...)
@@ -734,10 +737,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             " generate it.",
           field
         );
-      recordUnreadRows(carrier);
+      recordUnreadRows(carrier, field);
       return;
     }
     final var rows = new FieldRows(processingEnv, trees);
+    // A side Lombok fills in may not have its getters in the round the field is first seen, so its
+    // accessors would not resolve. The sides are read by name, without attributing the call, and
+    // such a field is read a round later, once Lombok has patched the classes of the round before.
+    final var key = carrier.getQualifiedName() + "#" + field.getSimpleName();
+    final var initializer = rows.initializerCall(field);
+    if (
+      !roundEnv.processingOver() &&
+      initializer != null &&
+      initializer.getArguments().size() >= 2 &&
+      lombokWaited.add(key)
+    ) {
+      final var unit = trees.getPath(field).getCompilationUnit();
+      for (final var side : initializer.getArguments().subList(0, 2)) {
+        final var named = rows.classLiteralByName(unit, side, carrier);
+        if (named != null && carriesLombokTrigger(named)) {
+          fieldRetries.add(key);
+          return;
+        }
+      }
+    }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Refused refused) {
       if (refused.at() == null) error(field, refused.message());
@@ -809,8 +832,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parsed.source().getSimpleName() +
           " -> " +
           parsed.target().getSimpleName() +
-          ", and the runtime hands that field's bridge to every mapper of the pair this class builds;" +
-          " build this one in another class"
+          ", and the runtime hands that field's bridge to a mapper of the pair this class's static" +
+          " initialiser builds; a mapper built there names its classes as literals and another pair, so" +
+          " build this one in another class or in a method"
       );
       return;
     }
@@ -842,7 +866,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           field,
           "@Bridge field " +
             fieldName +
-            " needs classes that only a later round could compile; the final round has none"
+            " converts through " +
+            String.join(", ", parsed.awaits()) +
+            ", a bridge written only in the final round because a side of its pair carries a Lombok" +
+            " annotation, and a bridge written then cannot be called from another; declare this field's" +
+            " rows without that via(...), or give both pairs Lombok-free sides"
         );
         return;
       }
@@ -878,22 +906,42 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Writes the resource that tells the runtime {@code carrier}'s {@code @Bridge} fields were read
-   * by no processor, once per class.
+   * Records the pair of {@code field}, read from its declared {@code Mapper<A, B>} or {@code
+   * ForwardMapper<A, B>} type, as one whose rows no processor read. The records are written once,
+   * per class, in the final round ({@link #writeUnreadRows}).
    */
-  private void recordUnreadRows(final TypeElement carrier) {
-    final var name = processingEnv.getElementUtils().getBinaryName(carrier).toString();
-    if (!unreadRows.add(name)) return;
-    try {
-      final var file = processingEnv
-        .getFiler()
-        .createResource(StandardLocation.CLASS_OUTPUT, "", BridgeProvider.UNREAD_ROWS_PREFIX + name, carrier);
-      try (final var out = file.openWriter()) {
-        out.write(name + "\n");
-      }
-    } catch (final IOException e) {
-      // The marker only names why explain() reports the runtime path; the mapper runs without it.
+  private void recordUnreadRows(final TypeElement carrier, final VariableElement field) {
+    if (!(field.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) return;
+    final var elements = processingEnv.getElementUtils();
+    final var names = new ArrayList<String>();
+    for (final var argument : declared.getTypeArguments()) {
+      if (!(argument instanceof DeclaredType side) || !(side.asElement() instanceof TypeElement type)) return;
+      names.add(elements.getBinaryName(type).toString());
     }
+    unreadRows
+      .computeIfAbsent(carrier, unused -> new LinkedHashSet<>())
+      .add(names.get(0) + " -> " + names.get(1));
+  }
+
+  /**
+   * Writes, for each class recorded by {@link #recordUnreadRows}, the resource listing the pairs
+   * whose rows no processor read, which {@code explain()} on those mappers reports.
+   */
+  private void writeUnreadRows() {
+    for (final var entry : unreadRows.entrySet()) {
+      final var name = processingEnv.getElementUtils().getBinaryName(entry.getKey()).toString();
+      try {
+        final var file = processingEnv
+          .getFiler()
+          .createResource(StandardLocation.CLASS_OUTPUT, "", BridgeProvider.UNREAD_ROWS_PREFIX + name, entry.getKey());
+        try (final var out = file.openWriter()) {
+          for (final var pair : entry.getValue()) out.write(pair + "\n");
+        }
+      } catch (final IOException e) {
+        // The record only names why explain() reports the runtime path; the mapper runs without it.
+      }
+    }
+    unreadRows.clear();
   }
 
   /** Why a pair a {@code @Bridge} field declares cannot be declared again. */
@@ -7143,6 +7191,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private void writeBridgeServices() {
     reportUndeclaredFieldProviders();
+    writeUnreadRows();
     if (bridgeProviders.isEmpty()) return;
     final var service = "io.github.eschizoid.telescope.conversion.BridgeProvider";
     try {

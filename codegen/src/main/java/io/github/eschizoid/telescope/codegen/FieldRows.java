@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.BlockTree;
+import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
@@ -12,7 +14,7 @@ import com.sun.source.tree.Tree;
 import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
-import com.sun.source.util.TreePathScanner;
+import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
@@ -186,12 +188,17 @@ final class FieldRows {
   }
 
   /**
-   * The mapper-factory calls in {@code type}'s source for the pair of {@code source} and {@code
-   * target}, other than {@code own}. A call there would be handed the bridge the field generates,
-   * since the runtime finds that bridge by the calling class and the pair. The calls are matched by
-   * their names and their class literals resolved by name, so nothing outside the field's own
-   * initializer is attributed during the round: attributing a class body there, a lambda's or an
-   * anonymous class's, leaves state the compiler trips over when it attributes the body again.
+   * The mapper-factory calls in {@code type}'s static initialiser, other than {@code own}, that the
+   * runtime could hand the bridge of the pair of {@code source} and {@code target}: it finds that
+   * bridge by the class whose static initialiser calls the factory, and the pair, so a call there
+   * for the same pair, or for classes the processor cannot name, would be given the field's bridge.
+   * A call in a method or a lambda never is. The static initialiser is the static fields'
+   * initializers and the static blocks; a nested class has its own.
+   *
+   * <p>The calls are matched by their names and their class literals resolved by name, so nothing
+   * outside the field's own initializer is attributed during the round: attributing a class body
+   * there, a lambda's or an anonymous class's, leaves state the compiler trips over when it
+   * attributes the body again.
    */
   List<MethodInvocationTree> otherCallsFor(
     final TypeElement type,
@@ -200,21 +207,37 @@ final class FieldRows {
     final MethodInvocationTree own
   ) {
     final var path = trees.getPath(type);
-    if (path == null) return List.of();
+    if (path == null || !(path.getLeaf() instanceof ClassTree declaration)) return List.of();
     final var unit = path.getCompilationUnit();
     final var found = new ArrayList<MethodInvocationTree>();
-    new TreePathScanner<Void, Void>() {
+    final var scanner = new TreeScanner<Void, Void>() {
       @Override
       public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
         if (node != own && node.getArguments().size() >= 2 && namesFactory(node)) {
           final var s = classLiteralByName(unit, node.getArguments().get(0), type);
           final var t = classLiteralByName(unit, node.getArguments().get(1), type);
-          if (Objects.equals(s, source) && Objects.equals(t, target)) found.add(node);
+          if (s == null || t == null || (s.equals(source) && t.equals(target))) found.add(node);
         }
         return super.visitMethodInvocation(node, unused);
       }
+
+      @Override
+      public Void visitLambdaExpression(final LambdaExpressionTree node, final Void unused) {
+        return null;
+      }
+
+      @Override
+      public Void visitClass(final ClassTree node, final Void unused) {
+        return null;
+      }
+    };
+    for (final var member : declaration.getMembers()) {
+      if (member instanceof VariableTree field && field.getModifiers().getFlags().contains(Modifier.STATIC)) {
+        scanner.scan(field.getInitializer(), null);
+      } else if (member instanceof BlockTree block && block.isStatic()) {
+        scanner.scan(block, null);
+      }
     }
-      .scan(path, null);
     return found;
   }
 
@@ -592,7 +615,16 @@ final class FieldRows {
       }
       final var src = accessor(args.get(0), source);
       if (src instanceof Refused refused) return refused;
-      drops.add(((Accessor) src).property());
+      final var property = ((Accessor) src).property();
+      if (written.containsKey(property) || !drops.add(property)) {
+        return new Refused(
+          row,
+          "drop(...) of '" +
+            property +
+            "', which another row of this mapper also names; a property is dropped once, by a row of" +
+            " its own"
+        );
+      }
       rowKinds.add("Drop");
       return null;
     }
@@ -629,6 +661,9 @@ final class FieldRows {
     private Refused write(final Tree row, final String src, final String tgt, final Object conversion) {
       if (!targetsWritten.add(tgt)) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), tgt));
+      }
+      if (drops.contains(src)) {
+        return new Refused(row, "'" + src + "' is dropped by another row of this mapper, so no row can write it");
       }
       final var primary = written.get(src);
       if (primary == null) {
@@ -798,14 +833,18 @@ final class FieldRows {
       );
     }
 
+    /**
+     * Whether code in the bridge's package can name {@code member} of {@code owner}: neither it nor
+     * any class enclosing it is private, and each is public or in that package.
+     */
     private boolean reachable(final Element member, final TypeElement owner) {
-      if (member.getModifiers().contains(Modifier.PUBLIC) && owner.getModifiers().contains(Modifier.PUBLIC)) {
-        return true;
+      final var samePackage = env.getElementUtils().getPackageOf(owner).getQualifiedName().contentEquals(pkg);
+      for (Element at = member; at != null && at.getKind() != ElementKind.PACKAGE; at = at.getEnclosingElement()) {
+        if (at.getModifiers().contains(Modifier.PRIVATE)) return false;
+        if (!at.getModifiers().contains(Modifier.PUBLIC) && !samePackage) return false;
+        if (at == owner && owner.getNestingKind() == NestingKind.TOP_LEVEL) break;
       }
-      if (member.getModifiers().contains(Modifier.PRIVATE) || owner.getModifiers().contains(Modifier.PRIVATE)) {
-        return false;
-      }
-      return env.getElementUtils().getPackageOf(owner).getQualifiedName().contentEquals(pkg);
+      return true;
     }
 
     private String unreachable(final TypeElement owner, final CharSequence member) {

@@ -105,6 +105,20 @@ public final class ForwardMapper<A, B> {
   }
 
   /**
+   * <b>Module-internal seam — NOT public API.</b> A forward mapper over a generated bridge, whose
+   * {@code forward} calls {@code bridge} directly, reporting {@code explainTrail}.
+   */
+  public static <A, B> ForwardMapper<A, B> ofGenerated(
+    final BridgeFn<A, B> bridge,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
+    final Getter<A, B> getter = bridge::forward;
+    return new ForwardMapper<>(getter, sourceClass, targetClass, explainTrail);
+  }
+
+  /**
    * <b>Module-internal seam — NOT public API.</b> Same as {@link #create(Function, Class, Class)}
    * plus the introspection trail the deep-mapping engine resolved, so {@link #explain()} can
    * surface the forward-only mapper's field decisions.

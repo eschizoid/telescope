@@ -22,9 +22,9 @@ import java.util.List;
  */
 public interface BridgeProvider {
   /**
-   * The resource path the processor writes a class's binary name under when it compiled the class
-   * without the javac tree API, so the rows of the class's {@code @Bridge} fields were not
-   * compiled.
+   * The resource path, followed by a class's binary name, under which the processor lists the pairs
+   * of the class's {@code @Bridge} fields, one {@code source -> target} line each, when it compiled
+   * the class without the javac tree API and so compiled none of their rows.
    */
   String UNREAD_ROWS_PREFIX = "META-INF/telescope/unread-bridge-fields/";
 

@@ -285,6 +285,9 @@ class BridgeFieldTest {
         "drop(User::secret, Address.class)",
         "drop(...) keyed to a nested pair has no generated form yet",
       },
+      new String[] { "drop(User::secret), drop(User::secret)", "a property is dropped once, by a row of its own" },
+      new String[] { "to(User::name, UserDto::name), drop(User::name)", "a property is dropped once, by a row of its own" },
+      new String[] { "drop(User::name), to(User::name, UserDto::name)", "'name' is dropped by another row of this mapper" },
       new String[] {
         "toOneWay(User::name, UserDto::name, Mappers::lower)",
         "Mappers.lower cannot be called from the generated bridge in package 'fb'",
@@ -356,20 +359,48 @@ class BridgeFieldTest {
 
   @Test
   @DisplayName("another mapper of the pair in the declaring class is refused, since it would be handed the bridge")
-  void anotherMapperOfThePairInTheClassIsRefused() {
-    final var c = compile(
+  void anotherMapperOfThePairInTheClassIsRefused() throws Exception {
+    final var head =
+      HEADER +
+      "public final class Mappers {\n" +
+      "  @Bridge public static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
+      " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n";
+    final var samePair = compile(
       sources(
         "fb.Mappers",
-        HEADER +
-          "public final class Mappers {\n" +
-          "  @Bridge static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class, UserDto.class," +
-          " drop(User::secret));\n" +
-          "  static ForwardMapper<User, UserDto> other() {" +
-          " return Telescope.mapperForward(User.class, UserDto.class, to(User::id, UserDto::userId)); }\n" +
-          "}\n"
+        head +
+          "  static final ForwardMapper<User, UserDto> OTHER =" +
+          " Telescope.mapperForward(User.class, UserDto.class, drop(User::nick));\n}\n"
       )
     );
-    assertTrue(c.hasError("build this one in another class"), c::errorMessages);
+    assertTrue(samePair.hasError("build this one in another class or in a method"), samePair::errorMessages);
+    final var unnamed = compile(
+      sources(
+        "fb.Mappers",
+        head +
+          "  static final Class<User> SOURCE = User.class;\n" +
+          "  static { Telescope.mapperForward(SOURCE, UserDto.class); }\n}\n"
+      )
+    );
+    assertTrue(unnamed.hasError("build this one in another class or in a method"), unnamed::errorMessages);
+    final var inMethod = compile(
+      sources(
+        "fb.Mappers",
+        head +
+          "  public static ForwardMapper<User, UserDto> later() {" +
+          " return Telescope.mapperForward(User.class, UserDto.class, drop(User::nick)," +
+          " toOneWay(User::handle, UserDto::handle, Handle::new)); }\n}\n"
+      )
+    );
+    assertTrue(inMethod.success(), inMethod::errorMessages);
+    try (final var loader = load(inMethod)) {
+      @SuppressWarnings("unchecked")
+      final var later = (ForwardMapper<Object, Object>) loader.loadClass("fb.Mappers").getMethod("later").invoke(null);
+      assertTrue(later.explain().declared().isEmpty(), "a mapper a method builds is the runtime mapper");
+      @SuppressWarnings("unchecked")
+      final var field = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "USER");
+      assertEquals(OpticNode.Runs.GENERATED, field.explain().declared().orElseThrow().runs());
+    }
   }
 
   @Test
@@ -449,11 +480,18 @@ class BridgeFieldTest {
         HEADER +
           "public final class Mappers {\n  @Bridge public static final ForwardMapper<User, UserDto> USER = " +
           USER_ROWS +
+          "  public static final ForwardMapper<Address, AddressDto> PLAIN =" +
+          " Telescope.mapperForward(Address.class, AddressDto.class);\n" +
           "}\n"
       )
     );
     assertTrue(c.success(), c::errorMessages);
     assertFalse(c.generated().containsKey("fb.MappersUserBridge"));
+    assertEquals(
+      "fb.User -> fb.UserDto\n",
+      c.resources().get("META-INF/telescope/unread-bridge-fields/fb.Mappers"),
+      c.resources()::toString
+    );
     final var warnings = c
       .diagnostics()
       .stream()
@@ -471,6 +509,9 @@ class BridgeFieldTest {
       final var declared = mapper.explain().declared().orElseThrow();
       assertEquals(OpticNode.Runs.RUNTIME, declared.runs());
       assertTrue(declared.why().contains("was compiled without the javac tree API"), declared::why);
+      @SuppressWarnings("unchecked")
+      final var plain = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "PLAIN");
+      assertTrue(plain.explain().declared().isEmpty(), "a pair no field declares carries no node");
       assertEquals(
         "UserDto[userId=7, contact=ada@example.com, name=ada, nick=lovelace, kind=web, region=eu," +
           " handle=Handle[value=@ada], address=Address[city=Paris, zip=75001]]",
