@@ -732,6 +732,51 @@ class BridgeFieldTest {
     }
   }
 
+  static List<String[]> viaMethodRefusals() {
+    return List.of(
+      new String[] { "methods with other names", "Conv2::up, Conv2::down" },
+      new String[] { "a backward of another class", "ItemMap::forward, Conv2::down" },
+      new String[] { "a backward of another name", "ItemMap::forward, ItemMap::back" },
+      new String[] { "an instance method", "Item::toDto, ItemMap::backward" }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("viaMethodRefusals")
+  @DisplayName("a via row of two methods in a @Bridge mapper takes only one class's static forward and backward")
+  void aViaRowOfOtherMethodsIsRefused(final String name, final String methods) {
+    final var c = compile(
+      sources(
+        "fb.Item",
+        "package fb; public record Item(String name) { public ItemDto toDto() { return new ItemDto(name); } }",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.ItemMap",
+        ITEM_MAP.replace(
+          "  public static Item backward(",
+          "  public static Item back(final ItemDto d) { return new Item(d.label()); }\n  public static Item backward("
+        ),
+        "fb.Conv2",
+        "package fb; public final class Conv2 {\n" +
+          "  public static ItemDto up(final Item i) { return new ItemDto(i.name()); }\n" +
+          "  public static Item down(final ItemDto d) { return new Item(d.label()); }\n}\n",
+        "fb.Src",
+        "package fb; public record Src(Item value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(ItemDto value) {}",
+        "fb.Fields",
+        HEADER +
+          "public final class Fields {\n" +
+          "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class," +
+          " via(Src::value, Dst::value, " +
+          methods +
+          "));\n}\n"
+      )
+    );
+    assertFalse(c.success(), name);
+    assertTrue(c.hasError("takes the static forward and backward methods of one class"), c::errorMessages);
+  }
+
   @Test
   @DisplayName("a via row of two methods converts each element as the runtime path does, and refuses other methods")
   void aViaRowOfTwoMethodsConvertsEachElement() throws Exception {

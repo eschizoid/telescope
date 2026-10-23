@@ -13,6 +13,7 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.DisplayName;
@@ -295,4 +296,89 @@ class LambdaIntrospectionTest {
   }
 
   static class SubBean extends SuperBean {}
+
+  /** The classes a method reference converting one value takes and gives. */
+  @Nested
+  class ConversionOf {
+
+    interface Fn<A, B> extends Function<A, B>, Serializable {}
+
+    interface Fn2<A, B, C> extends BiFunction<A, B, C>, Serializable {}
+
+    static Integer length(final CharSequence s) {
+      return s.length();
+    }
+
+    static <T extends CharSequence> Integer generic(final T s) {
+      return s.length();
+    }
+
+    static long twice(final int n) {
+      return n * 2L;
+    }
+
+    private static Class<?>[] of(final Serializable reference) {
+      return LambdaIntrospection.conversionOf(reference);
+    }
+
+    @Test
+    @DisplayName("a static method takes its parameter's class and gives its return's")
+    void aStaticMethod() {
+      final Fn<CharSequence, Integer> f = ConversionOf::length;
+      assertEquals(List.of(CharSequence.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a parameter typed by a type variable takes its bound")
+    void aGenericMethod() {
+      final Fn<String, Integer> f = ConversionOf::generic;
+      assertEquals(List.of(CharSequence.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a primitive parameter and return are their wrappers")
+    void primitives() {
+      final Fn<Integer, Long> f = ConversionOf::twice;
+      assertEquals(List.of(Integer.class, Long.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("an unbound instance method takes its receiver")
+    void anUnboundMethod() {
+      final Fn<String, Integer> f = String::length;
+      assertEquals(List.of(String.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a constructor gives the class it constructs")
+    void aConstructor() {
+      final Fn<String, StringBuilder> f = StringBuilder::new;
+      assertEquals(List.of(String.class, StringBuilder.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a method bound to a receiver takes its one parameter")
+    void aBoundMethod() {
+      final Fn<String, String> f = "a"::concat;
+      assertEquals(List.of(String.class, String.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a method taking two values is refused by name, a receiver's included")
+    void twoValuesAreRefused() {
+      final Fn2<Integer, Integer, Integer> sum = Integer::sum;
+      final var refused = assertThrows(IllegalArgumentException.class, () -> of(sum));
+      assertTrue(refused.getMessage().contains("java.lang.Integer::sum takes 2"), refused::getMessage);
+      final Fn2<String, String, String> concat = String::concat;
+      final var unbound = assertThrows(IllegalArgumentException.class, () -> of(concat));
+      assertTrue(unbound.getMessage().contains("takes 1 besides its receiver"), unbound::getMessage);
+    }
+
+    @Test
+    @DisplayName("a lambda is refused, since only a method reference names its classes")
+    void aLambdaIsRefused() {
+      final Fn<String, Integer> f = x -> x.length();
+      assertThrows(IllegalArgumentException.class, () -> of(f));
+    }
+  }
 }
