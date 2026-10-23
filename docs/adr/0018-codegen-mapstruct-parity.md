@@ -57,6 +57,12 @@ cannot do is refused by name at compile time.
 6. **Update in place.** For a target written through setters, the processor generates `into(target, source)`, which
    writes into an existing instance. That is the form a managed JPA entity needs.
 
+> **Amendment (2026-10-23).** ADR-0022 declares a generated mapper as a `@Bridge` field initialised by the runtime
+> mapper call, so steps 3 to 6 are answered by rows rather than by new annotation attributes: a converting `to` row
+> renames and converts in one row, `compute` takes a function of the source on both paths, a row's source may be a
+> telescope path written inline, and `into` is generated for the mapper a field declares. Each step still lands on its
+> own.
+
 Multiple source parameters, context parameters and conditional mapping stay on the runtime path for now. Each is decided
 in its own ADR when an adopter needs it on the generated path.
 
