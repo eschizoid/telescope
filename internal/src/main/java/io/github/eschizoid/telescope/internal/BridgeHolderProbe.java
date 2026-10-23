@@ -84,7 +84,7 @@ public final class BridgeHolderProbe {
    * the bridge whether it declares its pair.
    *
    * <p>A short-form class with no {@code BRIDGE} field is not a holder, such as a hand-written
-   * {@code @ViaMapper} class, and reads as absent. A holder under either name whose {@code BRIDGE}
+   * class a {@code via} row names, and reads as absent. A holder under either name whose {@code BRIDGE}
    * field is typed to another target reads as absent too: the long name carries only the target's
    * simple name, which a class in another package can share. A {@code BRIDGE} field with the wrong
    * modifiers or a null value, and a long-form class with no {@code BRIDGE} field, throw on every
@@ -102,8 +102,8 @@ public final class BridgeHolderProbe {
 
   /**
    * As {@link #probeFor}, reading only the long form {@code <Source>To<Target>Bridge}. A class
-   * under that name with no {@code BRIDGE} field is not a holder, such as a hand-written
-   * {@code @ViaMapper} class, and reads as absent, as a short-form one does.
+   * under that name with no {@code BRIDGE} field is not a holder, such as a hand-written class a
+   * {@code via} row names, and reads as absent, as a short-form one does.
    */
   public static Optional<BridgeRef> longFormFor(final Class<?> sourceClass, final Class<?> targetClass) {
     return memoised(LONG_FORM_CACHE, sourceClass, targetClass, Lookup.LONG);

@@ -330,15 +330,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<TypePair> lenientPairs = new HashSet<>();
 
   /**
-   * Qualified names of {@code @Bridge} types read again next round, because a {@code @ViaMapper},
-   * {@code @Transform} or {@code @Compute} on them names a class that does not exist yet. javac
-   * hands such a class literal to a processor as a {@code String} rather than a {@link TypeMirror},
-   * and re-attributes every source between rounds, so a class another round writes resolves when
-   * the type is looked up again.
-   */
-  private final Set<String> viaMapperRetries = new LinkedHashSet<>();
-
-  /**
    * The {@code @Bridge} fields read again next round, as {@code Carrier#FIELD}: their rows name a
    * class this compilation writes, a converter class of their own or another field's bridge, which
    * resolves only once a round has written it.
@@ -504,11 +495,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // javac wraps multiple @Bridge into when the user declares more than one on the same type).
     final var elements = new LinkedHashSet<Element>(roundEnv.getElementsAnnotatedWith(anno));
     if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
-    for (final var retried : viaMapperRetries) {
-      final var retriedEl = processingEnv.getElementUtils().getTypeElement(retried);
-      if (retriedEl != null) elements.add(retriedEl);
-    }
-    viaMapperRetries.clear();
     for (final var retried : fieldRetries) {
       final var at = retried.lastIndexOf('#');
       final var owner = processingEnv.getElementUtils().getTypeElement(retried.substring(0, at));
@@ -677,58 +663,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, declaredTwice(pair, configOf(pair)));
           continue;
         }
-        // The pair is registered and seen while it waits, so a parent reaching it this round names
-        // it as its @Bridge will, and does not write it with no config. The placeholder declares
-        // the pair and carries its carrier, the two things bridgeNameOf reads; the next round's
-        // parse replaces it.
-        final var unresolved = unresolvedUsing(bridgeAm);
-        if (unresolved != null) {
-          if (!roundEnv.processingOver()) {
-            viaMapperRetries.add(((TypeElement) element).getQualifiedName().toString());
-            seen.add(pair);
-            configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrierEl));
-          } else {
-            processingEnv
-              .getMessager()
-              .printMessage(
-                Diagnostic.Kind.ERROR,
-                unresolvedUsingMessage(sourceEl, unresolved),
-                element,
-                unresolved.row()
-              );
-          }
-          continue;
-        }
-        final var drops = dropsFromMirror(bridgeAm);
-        final var renameSet = renamesFromMirror(element, bridgeAm);
-        if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
-        final var transformSet = transformsFromMirror(element, bridgeAm);
-        if (transformSet == null) continue; // invalid transform — already reported, skip this pair
-        final var constants = constantsFromMirror(element, bridgeAm);
-        if (constants == null) continue; // invalid constant — already reported, skip this pair
-        final var computes = computesFromMirror(element, bridgeAm);
-        if (computes == null) continue; // invalid compute — already reported, skip this pair
-        final var rawDefaults = defaultsFromMirror(element, bridgeAm);
-        if (rawDefaults == null) continue; // invalid default — already reported, skip this pair
-        final var viaMappers = viaMappersFromMirror(element, bridgeAm);
-        if (viaMappers == null) continue; // invalid viaMapper — already reported, skip this pair
         final var rawWriteStrategy = writeStrategyFromMirror(bridgeAm);
         final var writeStrategy = (rawWriteStrategy == null || "AUTO".equals(rawWriteStrategy))
           ? "AUTO"
           : rawWriteStrategy;
         final var lenient = lenientFromMirror(bridgeAm);
         final var builtConfig = new BridgeConfig(
-          drops,
-          renameSet.bySource(),
-          renameSet.fanoutExtras(),
-          transformSet.byField(),
-          transformSet.forwardOnlyFields(),
-          rawDefaults,
-          viaMappers,
+          Set.of(),
+          Map.of(),
+          Map.of(),
+          Map.of(),
+          Set.of(),
+          Map.of(),
+          Map.of(),
           writeStrategy,
-          constants,
-          computes,
-          transformSet.methodsByField(),
+          Map.of(),
+          Map.of(),
+          Map.of(),
           carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
           lenient,
           null,
@@ -1203,21 +1154,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return el instanceof TypeElement te && te.getQualifiedName().contentEquals("java.lang.Void");
   }
 
-  private Set<String> dropsFromMirror(final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (entry.getKey().getSimpleName().contentEquals("drops")) {
-        @SuppressWarnings("unchecked")
-        final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-        final var result = new LinkedHashSet<String>();
-        for (final var av : list) result.add((String) av.getValue());
-        return result;
-      }
-    }
-    return Set.of();
-  }
-
-  // Reads @Bridge(lenient = true). Default false preserves the historical strict-bijection
-  // semantics: every existing @Bridge user keeps the round-trip safety net unless they opt in.
   private boolean lenientFromMirror(final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
       if (entry.getKey().getSimpleName().contentEquals("lenient")) {
@@ -1225,218 +1161,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return false;
-  }
-
-  // Result of parsing a @Bridge's renames list. `bySource` holds the first-declared target per
-  // source (the slot that backward direction reads from). `fanoutExtras` holds the extra targets
-  // declared via @Rename(forwardOnly = true) sharing the same source — those targets receive the
-  // same source value during forward emission but are invisible to backward. Empty fanoutExtras
-  // means no fan-out was declared.
-  private record RenameSet(Map<String, String> bySource, Map<String, List<String>> fanoutExtras) {
-    static RenameSet empty() {
-      return new RenameSet(Map.of(), Map.of());
-    }
-  }
-
-  // Read renames from a @Bridge mirror. Returns null when a rename is malformed (already reported
-  // via error()) so the caller can skip the pair; returns an empty RenameSet when no renames are
-  // present. Forward-only fan-out: when two renames share a source and BOTH set forwardOnly = true,
-  // the second target lands in fanoutExtras. A source-collision with any rename not flagged
-  // forwardOnly is still an error — the user must opt in on every conflicting entry.
-  private RenameSet renamesFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("renames")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var primary = new LinkedHashMap<String, String>();
-      final var fanoutExtras = new LinkedHashMap<String, List<String>>();
-      final var seenTargets = new HashSet<String>();
-      final var sourceForwardOnly = new HashMap<String, Boolean>();
-      for (final var av : list) {
-        final var renameAm = (AnnotationMirror) av.getValue();
-        String src = null;
-        String tgt = null;
-        Boolean forwardOnly = Boolean.FALSE;
-        for (final var re : renameAm.getElementValues().entrySet()) {
-          final var k = re.getKey().getSimpleName().toString();
-          switch (k) {
-            case "source" -> src = (String) re.getValue().getValue();
-            case "target" -> tgt = (String) re.getValue().getValue();
-            case "forwardOnly" -> forwardOnly = (Boolean) re.getValue().getValue();
-            default -> {
-            }
-          }
-        }
-        if (src == null || tgt == null || src.isEmpty() || tgt.isEmpty()) {
-          error(element, "@Rename requires both `source` and `target` field names");
-          return null;
-        }
-        if (!seenTargets.add(tgt)) {
-          error(element, "@Rename target \"" + tgt + "\" appears twice in the renames list");
-          return null;
-        }
-        if (primary.containsKey(src)) {
-          if (!Boolean.TRUE.equals(forwardOnly) || !Boolean.TRUE.equals(sourceForwardOnly.get(src))) {
-            error(
-              element,
-              "@Rename source \"" +
-                src +
-                "\" appears twice in the renames list — set forwardOnly = true on every" +
-                " conflicting entry to opt into forward-only fan-out"
-            );
-            return null;
-          }
-          fanoutExtras.computeIfAbsent(src, __ -> new ArrayList<>()).add(tgt);
-        } else {
-          primary.put(src, tgt);
-          sourceForwardOnly.put(src, forwardOnly);
-        }
-      }
-      return new RenameSet(primary, fanoutExtras);
-    }
-    return RenameSet.empty();
-  }
-
-  // Result of parsing a @Bridge's transforms list. `byField` carries the source-field → using
-  // class FQN map (the long-standing shape); `forwardOnlyFields` carries the subset of source
-  // field names whose @Transform was declared with forwardOnly = true or with a non-empty `method`
-  // attribute (qualifier dispatch is implicitly forward-only); `methodsByField` carries the
-  // qualifier method name when set, empty when the row uses the BridgeFn shape.
-  private record TransformSet(
-    Map<String, String> byField,
-    Set<String> forwardOnlyFields,
-    Map<String, String> methodsByField
-  ) {
-    static TransformSet empty() {
-      return new TransformSet(Map.of(), Set.of(), Map.of());
-    }
-  }
-
-  // Read transforms from a @Bridge mirror. Returns null on a malformed transform (already reported)
-  // so the caller can skip the pair. Empty TransformSet when no transforms are present.
-  private TransformSet transformsFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("transforms")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      final var forwardOnlySet = new LinkedHashSet<String>();
-      final var methodsByField = new LinkedHashMap<String, String>();
-      for (final var av : list) {
-        final var transformAm = (AnnotationMirror) av.getValue();
-        String field = null;
-        TypeMirror using = null;
-        Boolean forwardOnly = Boolean.FALSE;
-        String method = "";
-        for (final var te : transformAm.getElementValues().entrySet()) {
-          final var k = te.getKey().getSimpleName().toString();
-          switch (k) {
-            case "field" -> field = (String) te.getValue().getValue();
-            case "using" -> using = te.getValue().getValue() instanceof TypeMirror tm ? tm : null;
-            case "forwardOnly" -> forwardOnly = (Boolean) te.getValue().getValue();
-            case "method" -> method = (String) te.getValue().getValue();
-            default -> {
-            }
-          }
-        }
-        if (field == null || field.isEmpty()) {
-          error(element, "@Transform requires a non-empty `field` name");
-          return null;
-        }
-        if (using == null || using.getKind() != TypeKind.DECLARED) {
-          error(
-            element,
-            "@Transform `using` must be a class (BridgeFn implementor, or any class when `method`" + " is set)"
-          );
-          return null;
-        }
-        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
-        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
-          error(element, "@Transform `using` must be a top-level class");
-          return null;
-        }
-        if (result.containsKey(field)) {
-          error(element, "@Transform field=\"" + field + "\" is declared more than once");
-          return null;
-        }
-        // Validate `method` is either empty (legacy BridgeFn shape) or a syntactically clean Java
-        // identifier — whitespace, punctuation, or reserved-word inputs would otherwise produce
-        // emit-time syntactic garbage at the generated bridge body that javac surfaces with a
-        // cryptic "identifier expected" pointing at synthetic source the user never wrote.
-        //
-        // Diagnostic shape, in order: BLANK > WHITESPACE-PADDED > INVALID-IDENTIFIER > MISSING-
-        // METHOD > NON-STATIC. Each level gives the user a precise fix to apply.
-        final var hasMethod = method != null && !method.isEmpty();
-        if (hasMethod && method.isBlank()) {
-          error(element, "@Transform `method` must not be blank (was \"" + method + "\")");
-          return null;
-        }
-        if (hasMethod && !method.equals(method.strip())) {
-          error(
-            element,
-            "@Transform `method` must not have leading/trailing whitespace (was \"" + method + "\"). Trim and retry."
-          );
-          return null;
-        }
-        if (hasMethod && !SourceVersion.isIdentifier(method)) {
-          error(element, "@Transform `method` must be a valid Java identifier (was \"" + method + "\")");
-          return null;
-        }
-        if (hasMethod) {
-          // Validate the named method exists, is static, and takes exactly one argument. Defers the
-          // parameter / return type compatibility check to javac at the generated bridge body —
-          // that depends on the source/target field types and javac resolves it precisely there.
-          // What we catch here: typos, instance methods (would emit static-call syntax against an
-          // instance method → cryptic generated-source error), and arity mismatches.
-          final var matches = new ArrayList<ExecutableElement>();
-          for (final var e : usingEl.getEnclosedElements()) {
-            if (!(e instanceof ExecutableElement m)) continue;
-            if (!m.getSimpleName().contentEquals(method)) continue;
-            if (m.getParameters().size() != 1) continue;
-            matches.add(m);
-          }
-          if (matches.isEmpty()) {
-            error(
-              element,
-              "@Transform `method` not found: " +
-                usingEl.getQualifiedName() +
-                "." +
-                method +
-                "(<one arg>) does not exist. Add a public static method with exactly one" +
-                " parameter."
-            );
-            return null;
-          }
-          // Pick the first match that is static; report a clear error if none are static.
-          ExecutableElement staticMatch = null;
-          for (final var m : matches) {
-            if (m.getModifiers().contains(Modifier.STATIC)) {
-              staticMatch = m;
-              break;
-            }
-          }
-          if (staticMatch == null) {
-            error(
-              element,
-              "@Transform `method` " +
-                usingEl.getQualifiedName() +
-                "." +
-                method +
-                "(...) exists but is not static. Qualifier dispatch emits a static-method" +
-                " call; mark it `public static`."
-            );
-            return null;
-          }
-        }
-        result.put(field, usingEl.getQualifiedName().toString());
-        // Qualifier dispatch (method != "") is inherently forward-only. forwardOnly = true is the
-        // user-explicit form; non-empty method implies the same.
-        if (Boolean.TRUE.equals(forwardOnly) || hasMethod) forwardOnlySet.add(field);
-        if (hasMethod) methodsByField.put(field, method);
-      }
-      return new TransformSet(result, forwardOnlySet, methodsByField);
-    }
-    return TransformSet.empty();
   }
 
   // Read writeStrategy from a @Bridge mirror. Returns the enum name (AUTO / CONSTRUCTOR / BUILDER
@@ -1449,249 +1173,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return val == null ? null : val.toString();
     }
     return null;
-  }
-
-  /**
-   * A {@code @ViaMapper}, {@code @Transform} or {@code @Compute} row whose {@code using} names a
-   * class that does not resolve. javac hands the processor no name for such a class, only a
-   * placeholder, so the annotation and its field are what identify it.
-   */
-  private record UnresolvedUsing(AnnotationMirror row, String annotation, String field) {}
-
-  /** The {@code @Bridge} attributes whose rows name a class in {@code using}, by row annotation. */
-  private static final Map<String, String> ROWS_WITH_USING = Map.of(
-    "viaMappers",
-    "@ViaMapper",
-    "transforms",
-    "@Transform",
-    "computes",
-    "@Compute"
-  );
-
-  /**
-   * The first row on {@code am} whose {@code using} class does not resolve, or {@code null} when
-   * every one does. An unresolvable class literal reaches a processor as a {@code String}, or as a
-   * type of kind {@link TypeKind#ERROR}, instead of a declared type.
-   */
-  private UnresolvedUsing unresolvedUsing(final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      final var annotation = ROWS_WITH_USING.get(entry.getKey().getSimpleName().toString());
-      if (annotation == null || !(entry.getValue().getValue() instanceof List<?> list)) continue;
-      for (final var item : list) {
-        if (!(item instanceof AnnotationValue av) || !(av.getValue() instanceof AnnotationMirror row)) continue;
-        String field = "";
-        AnnotationValue using = null;
-        for (final var ve : row.getElementValues().entrySet()) {
-          final var k = ve.getKey().getSimpleName().toString();
-          if (k.equals("field") && ve.getValue().getValue() instanceof String f) field = f;
-          else if (k.equals("using")) using = ve.getValue();
-        }
-        if (using == null) continue;
-        final var value = using.getValue();
-        final var resolved = value instanceof TypeMirror tm && tm.getKind() != TypeKind.ERROR;
-        if (!resolved) return new UnresolvedUsing(row, annotation, field);
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Why {@code unresolved} still names no class in the final round. A source field whose type is
-   * the source of a pair held back for Lombok has a bridge, but the final round's drain writes it
-   * after every {@code @Bridge} has been read, and nothing in the same module can name it.
-   */
-  private String unresolvedUsingMessage(final TypeElement source, final UnresolvedUsing unresolved) {
-    final var head = unresolved.annotation() + "(field = \"" + unresolved.field() + "\") names a `using` class";
-    if (!unresolved.annotation().equals("@Compute")) {
-      final var fieldType = fieldsOf(source)
-        .stream()
-        .filter(f -> f.name().equals(unresolved.field()))
-        .map(f -> processingEnv.getTypeUtils().erasure(f.type()))
-        .filter(t -> t.getKind() == TypeKind.DECLARED)
-        .map(t -> ((TypeElement) ((DeclaredType) t).asElement()).getQualifiedName().toString())
-        .findFirst()
-        .orElse(null);
-      final var elements = processingEnv.getElementUtils();
-      for (final var deferred : deferredPairs) {
-        if (!deferred.sourceFq().equals(fieldType)) continue;
-        final var deferredSource = elements.getTypeElement(deferred.sourceFq());
-        final var deferredTarget = elements.getTypeElement(deferred.targetFq());
-        if (deferredSource == null || deferredTarget == null) continue;
-        return (
-          head +
-          " that does not exist when this @Bridge is read. If it is " +
-          bridgeNameOf(deferredSource, deferredTarget).qualified() +
-          ", that bridge is written only in the final round, because its pair carries a Lombok" +
-          " annotation, and no code in the same module can name it. Drop the row and let the" +
-          " nested pair convert through its own bridge, or declare that pair in another module."
-        );
-      }
-    }
-    return (
-      head +
-      " that does not exist: not in this compilation, not on the classpath, and not among the" +
-      " bridges @Bridge generates. Check the name in `using`, or declare the @Bridge that" +
-      " generates it."
-    );
-  }
-
-  // Read viaMappers from a @Bridge mirror. Returns source-field-name -> bridge-class FQN. The
-  // referenced class's signatures are validated at the generated code level — if the static
-  // forward/backward methods don't exist or don't match the field types, javac surfaces the error
-  // at the generated bridge body. Returns null on a structural error (already reported).
-  private Map<String, String> viaMappersFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("viaMappers")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      for (final var av : list) {
-        final var viaAm = (AnnotationMirror) av.getValue();
-        String field = null;
-        TypeMirror using = null;
-        for (final var ve : viaAm.getElementValues().entrySet()) {
-          final var k = ve.getKey().getSimpleName().toString();
-          if (k.equals("field")) field = (String) ve.getValue().getValue();
-          else if (k.equals("using") && ve.getValue().getValue() instanceof TypeMirror tm) using = tm;
-        }
-        if (field == null || field.isEmpty()) {
-          error(element, "@ViaMapper requires a non-empty `field` name");
-          return null;
-        }
-        if (using == null || using.getKind() != TypeKind.DECLARED) {
-          error(element, "@ViaMapper `using` must be a class (typically a generated <X>Bridge)");
-          return null;
-        }
-        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
-        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
-          error(element, "@ViaMapper `using` must be a top-level class");
-          return null;
-        }
-        if (result.containsKey(field)) {
-          error(element, "@ViaMapper field=\"" + field + "\" is declared more than once");
-          return null;
-        }
-        result.put(field, usingEl.getQualifiedName().toString());
-      }
-      return result;
-    }
-    return Map.of();
-  }
-
-  // Read defaults from a @Bridge mirror. Returns the raw source-field-name -> raw-string-value
-  // map. Per-pair validation (field exists on source, type is reference-typed, value parses
-  // against the field type) happens in generate() where the source TypeElement is available.
-  // Returns null on a structural error (already reported).
-  private Map<String, String> defaultsFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("defaults")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      for (final var av : list) {
-        final var defAm = (AnnotationMirror) av.getValue();
-        String field = null;
-        String value = null;
-        for (final var de : defAm.getElementValues().entrySet()) {
-          final var k = de.getKey().getSimpleName().toString();
-          if (k.equals("field")) field = (String) de.getValue().getValue();
-          else if (k.equals("value")) value = (String) de.getValue().getValue();
-        }
-        if (field == null || field.isEmpty()) {
-          error(element, "@Default requires a non-empty `field` name");
-          return null;
-        }
-        if (value == null) {
-          error(element, "@Default requires a `value`");
-          return null;
-        }
-        if (result.containsKey(field)) {
-          error(element, "@Default field=\"" + field + "\" is declared more than once");
-          return null;
-        }
-        result.put(field, value);
-      }
-      return result;
-    }
-    return Map.of();
-  }
-
-  // Read constants from a @Bridge mirror. Returns the raw target-field-name -> raw-string-value
-  // map. Per-pair validation (field exists on target, value parses against the field type) happens
-  // in generate() where the target TypeElement is available. Returns null on a structural error
-  // (already reported).
-  private Map<String, String> constantsFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("constants")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      for (final var av : list) {
-        final var constAm = (AnnotationMirror) av.getValue();
-        String field = null;
-        String value = null;
-        for (final var ce : constAm.getElementValues().entrySet()) {
-          final var k = ce.getKey().getSimpleName().toString();
-          if (k.equals("field")) field = (String) ce.getValue().getValue();
-          else if (k.equals("value")) value = (String) ce.getValue().getValue();
-        }
-        if (field == null || field.isEmpty()) {
-          error(element, "@Constant requires a non-empty `field` name");
-          return null;
-        }
-        if (value == null) {
-          error(element, "@Constant requires a `value`");
-          return null;
-        }
-        if (result.containsKey(field)) {
-          error(element, "@Constant field=\"" + field + "\" is declared more than once");
-          return null;
-        }
-        result.put(field, value);
-      }
-      return result;
-    }
-    return Map.of();
-  }
-
-  // Read computes from a @Bridge mirror. Target field name -> Supplier class FQN.
-  private Map<String, String> computesFromMirror(final Element element, final AnnotationMirror am) {
-    for (final var entry : am.getElementValues().entrySet()) {
-      if (!entry.getKey().getSimpleName().contentEquals("computes")) continue;
-      @SuppressWarnings("unchecked")
-      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      for (final var av : list) {
-        final var compAm = (AnnotationMirror) av.getValue();
-        String field = null;
-        TypeMirror using = null;
-        for (final var ce : compAm.getElementValues().entrySet()) {
-          final var k = ce.getKey().getSimpleName().toString();
-          if (k.equals("field")) field = (String) ce.getValue().getValue();
-          else if (k.equals("using") && ce.getValue().getValue() instanceof TypeMirror tm) using = tm;
-        }
-        if (field == null || field.isEmpty()) {
-          error(element, "@Compute requires a non-empty `field` name");
-          return null;
-        }
-        if (using == null || using.getKind() != TypeKind.DECLARED) {
-          error(element, "@Compute `using` must be a class implementing Supplier");
-          return null;
-        }
-        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
-        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
-          error(element, "@Compute `using` must be a top-level class");
-          return null;
-        }
-        if (result.containsKey(field)) {
-          error(element, "@Compute field=\"" + field + "\" is declared more than once");
-          return null;
-        }
-        result.put(field, usingEl.getQualifiedName().toString());
-      }
-      return result;
-    }
-    return Map.of();
   }
 
   // Parse an annotation's string value against a field's declared type. Returns the Java-source

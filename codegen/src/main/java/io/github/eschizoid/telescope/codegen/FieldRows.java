@@ -971,11 +971,17 @@ final class FieldRows {
         if (text instanceof Refused refused) return refused;
         value = (String) text;
       } else {
-        final var supplier = call(args.get(1), null, 0);
-        if (supplier instanceof Refused refused) return refused;
-        final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
-        if (refusedType != null) return refusedType;
-        value = ((Call) supplier).expression();
+        final var held = heldSupplier(args.get(1), t);
+        if (held instanceof Refused refused) return refused;
+        if (held instanceof String read) {
+          value = read;
+        } else {
+          final var supplier = call(args.get(1), null, 0);
+          if (supplier instanceof Refused refused) return refused;
+          final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
+          if (refusedType != null) return refusedType;
+          value = ((Call) supplier).expression();
+        }
       }
       if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
@@ -988,6 +994,46 @@ final class FieldRows {
       rowKinds.add(constant ? "Constant" : "Compute");
       rowAccessors.add(">");
       return null;
+    }
+
+    /**
+     * The expression a {@code compute} row reads its value with when its supplier is a {@code static
+     * final} field, {@code Clock.NOW} or {@code NOW}: a call of that field's {@code get()}, which a
+     * generated class makes, as the runtime path calls the same instance. The refusal where the
+     * field is not static and final, the generated bridge cannot reach it, or its supplier gives a
+     * value the target's property does not hold; null where {@code arg} names no field.
+     */
+    private Object heldSupplier(final ExpressionTree arg, final Accessor into) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (!(elementAt(unit, arg) instanceof VariableElement held) || held.getKind() != ElementKind.FIELD) return null;
+      if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper computes a value from a supplier the generated bridge can name: a method" +
+            " reference (Clock::now), or a static final field holding the supplier; " +
+            held.getSimpleName() +
+            " is not static and final"
+        );
+      }
+      final var owner = (TypeElement) held.getEnclosingElement();
+      if (!reachable(held, owner)) return new Refused(arg, unreachable(owner, held.getSimpleName()));
+      final var types = env.getTypeUtils();
+      final var get = env
+        .getElementUtils()
+        .getTypeElement("java.util.function.Supplier")
+        .getEnclosedElements()
+        .stream()
+        .filter(e -> e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals("get"))
+        .findFirst()
+        .orElseThrow();
+      final var gives = ((ExecutableType) types.asMemberOf((DeclaredType) held.asType(), get)).getReturnType();
+      if (!types.isAssignable(types.erasure(gives), types.erasure(into.type()))) {
+        return new Refused(
+          arg,
+          arg + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+        );
+      }
+      return owner.getQualifiedName() + "." + held.getSimpleName() + ".get()";
     }
 
     /**

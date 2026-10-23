@@ -1045,11 +1045,10 @@ public sealed class Telescope<
    * source} class has a sibling {@code <Source>To<Target>Bridge.BRIDGE} or {@code
    * <Source>Bridge.BRIDGE} constant emitted by the {@code @Bridge} annotation processor, tried in
    * that order, or a carrier registered for the pair, the forward direction routes through that
-   * bridge directly. The bridge's full configuration is surfaced in the result — {@code @Rename}
-   * (including {@code forwardOnly} fan-out), {@code @Transform}, {@code @Constant},
-   * {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the {@code
-   * writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
-   * encoded inside the bridge and apply to every {@code mapperForward(source, target)} call. The
+   * bridge directly. The bridge's full configuration is surfaced in the result — the rows of a
+   * {@code @Bridge} field, the {@code writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the
+   * {@code lenient} flag are all encoded inside the bridge and apply to every {@code
+   * mapperForward(source, target)} call. The
    * annotation's defaults are NOT the same as this method's lenient-by-default —
    * {@code @Bridge(lenient = false)} (the annotation's default) produces a strict bijection bridge,
    * so the resulting mapper rejects mappings the row-free fallback would have accepted. To keep the

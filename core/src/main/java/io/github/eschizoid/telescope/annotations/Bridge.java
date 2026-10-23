@@ -40,10 +40,9 @@ import java.lang.annotation.Target;
  * <p>This is the reflection-free, compile-checked counterpart to the runtime {@link
  * io.github.eschizoid.telescope.Telescope#map(Class, Class,
  * io.github.eschizoid.telescope.mapping.MapStep...)} — that single factory handles record↔record,
- * POJO↔POJO, and POJO↔record at any depth. Renames, per-field conversions and nested-bridge
- * overrides are declared here too, through {@link #renames()}, {@link #transforms()} and {@link
- * #viaMappers()}; a rename and a conversion on the same field compose, so one field can be renamed
- * and converted at once.
+ * POJO↔POJO, and POJO↔record at any depth. On a type, the annotation declares a pair whose
+ * properties line up by name; a pair that renames, converts, drops or fills a property declares its
+ * rows on a mapper field instead, as below.
  *
  * <pre>{@code
  * // Source — the entity points at the DTO it bridges to:
@@ -144,133 +143,6 @@ public @interface Bridge {
   Class<?> target() default Void.class;
 
   /**
-   * Source field names that exist on the annotated source but not on the target. Forward conversion
-   * skips them; backward conversion fills the dropped slot with {@code null} for reference types,
-   * {@code 0} for numeric primitives, {@code false} for {@code boolean}, and {@code '\0'} (the NUL
-   * character) for {@code char}. Use this when the source carries fields the target shape
-   * legitimately doesn't (e.g. an internal-only field that the partner DTO does not carry).
-   *
-   * <p>Drops do not need a counterpart on the other side — they relax the strict-bijection check by
-   * exactly the names listed. A drop name that is not actually present on the source is a compile
-   * error.
-   */
-  String[] drops() default {};
-
-  /**
-   * Source-to-target name remappings — pairs whose source field name and target field name differ.
-   * The bijection check considers a renamed source name and its mapped target name as matched. See
-   * {@link Rename} for the per-pair shape.
-   *
-   * <pre>{@code
-   * @Bridge(value = OrderEntity.class, renames = {
-   *   @Rename(source = "orderNumber", target = "referenceCode")
-   * })
-   * }</pre>
-   *
-   * <p>Each rename's source must name a real field on the annotated source; each target must name a
-   * real field on the bridge target. No two renames may share the same target. By default no two
-   * renames may share the same source either; opt into forward-only fan-out by setting {@link
-   * Rename#forwardOnly()} on all conflicting renames — backward then reads from the first declared
-   * fan-out target. The non-fan-out case stays a strict bijection within the rename set.
-   */
-  Rename[] renames() default {};
-
-  /**
-   * Per-field typed conversions — for cases where the two sides name compatible fields but the
-   * types differ (e.g. {@code BigDecimal} on the source, {@code long} on the target). Each {@link
-   * Transform} names a source field and a {@link io.github.eschizoid.telescope.conversion.BridgeFn}
-   * class whose {@code forward}/{@code backward} convert the value in each direction.
-   *
-   * <pre>{@code
-   * @Bridge(value = LineItemEntity.class, transforms = {
-   *   @Transform(field = "unitPrice", using = CentsConverter.class)
-   * })
-   * }</pre>
-   *
-   * <p>Each transform's field must be a real field on the annotated source. A field with a
-   * transform is exempt from the same-type check that other fields go through; the transform's
-   * input/output types are the bridge contract for that slot. The slot is the target field of the
-   * same name, or the one a {@link Rename} on the same field names.
-   */
-  Transform[] transforms() default {};
-
-  /**
-   * Forward-only target-field literal injections. Each {@link Constant} names a target field that
-   * doesn't exist on the source and a string literal value the emitted forward direction will set
-   * on that field. The backward direction silently drops the slot — the source has no field to
-   * reconstruct from.
-   *
-   * <pre>{@code
-   * @Bridge(value = LineItemEntity.class, constants = {
-   *   @Constant(field = "source", value = "API")
-   * })
-   * }</pre>
-   *
-   * <p>The named target field is exempt from the strict-bijection check. A target field listed in
-   * {@code constants} may not also appear in {@link #computes()}, {@link #renames()}, or {@link
-   * #drops()} for the same pair.
-   */
-  Constant[] constants() default {};
-
-  /**
-   * Forward-only target-field computed injections. Each {@link Compute} names a target field that
-   * doesn't exist on the source and a {@link java.util.function.Supplier} class whose {@code get()}
-   * the emitted forward direction will call to produce the value. The backward direction silently
-   * drops the slot.
-   *
-   * <pre>{@code
-   * @Bridge(value = LineItemEntity.class, computes = {
-   *   @Compute(field = "createdAt", using = NowSupplier.class)
-   * })
-   * }</pre>
-   *
-   * <p>The named target field is exempt from the strict-bijection check. A target field listed in
-   * {@code computes} may not also appear in {@link #constants()}, {@link #renames()}, or {@link
-   * #drops()} for the same pair.
-   */
-  Compute[] computes() default {};
-
-  /**
-   * Null-coalescing default values for source fields. Each {@link Default} names a source field and
-   * a fallback literal that the forward direction substitutes when the source value is {@code
-   * null}. Mirrors MapStruct's {@code @Mapping(defaultValue = …)} and the runtime {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse(
-   * io.github.eschizoid.telescope.Telescope.Accessor,
-   * io.github.eschizoid.telescope.Telescope.Accessor, Object) Mapping.toOrElse(srcAcc, tgtAcc,
-   * defaultValue)} factory.
-   *
-   * <pre>{@code
-   * @Bridge(value = UserEntity.class, defaults = {
-   *   @Default(field = "region", value = "EMEA")
-   * })
-   * public record User(String id, String region) {}
-   * }</pre>
-   *
-   * <p>Backward direction is identity — the substituted default round-trips back to the source slot
-   * as itself. A field listed in {@code defaults} cannot also appear in {@link #drops()} for this
-   * pair (the two mechanisms have incompatible semantics).
-   */
-  Default[] defaults() default {};
-
-  /**
-   * Per-field nested-bridge overrides. Each {@link ViaMapper} names a source field and a bridge
-   * class to delegate to — escape hatch when the auto-recursion can't reach the nested type or when
-   * the user wants to point at a specific {@code BRIDGE} constant. Mirrors the runtime {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#via(
-   * io.github.eschizoid.telescope.Telescope.Accessor,
-   * io.github.eschizoid.telescope.Telescope.Accessor,
-   * io.github.eschizoid.telescope.conversion.Mapper) Mapping.via(srcAcc, tgtAcc, mapper)} factory.
-   *
-   * <pre>{@code
-   * @Bridge(value = OrderEntity.class, viaMappers = {
-   *   @ViaMapper(field = "address", using = AddressBridge.class)
-   * })
-   * public record Order(String id, Address address) {}
-   * }</pre>
-   */
-  ViaMapper[] viaMappers() default {};
-
-  /**
    * Override for the POJO construction strategy when emitting the target's rebuild block. Records
    * always use the canonical constructor and ignore this setting. Default {@link
    * WriteStrategy#AUTO} runs the priority ladder (static builder() → name-matched ctor → no-arg +
@@ -282,15 +154,15 @@ public @interface Bridge {
 
   /**
    * Skip the strict-bijection check. When {@code lenient = true}, the processor emits writes only
-   * for the components named in {@link #renames()} / {@link #transforms()} plus same-name
-   * auto-matches that exist on both sides; unmatched target components take their JLS default (zero
-   * for primitives, {@code null} for every reference type, collections included); unmatched source
-   * components are silently ignored.
+   * for the same-name matches that exist on both sides; unmatched target components take their JLS
+   * default (zero for primitives, {@code null} for every reference type, collections included);
+   * unmatched source components are silently ignored.
    *
    * <p>Designed for the small-DTO → large-entity pattern (e.g. mapping a 7-field DTO into a
    * 135-field entity whose 128 unmatched slots should stay at default). Without {@code lenient},
-   * each of those 128 slots would need an explicit {@link #drops()} or {@link Constant @Constant}
-   * entry to satisfy the bijection.
+   * each of those 128 slots would need a row of its own, a {@code drop} or a {@code constant} on a
+   * mapper field, to satisfy the bijection. A mapper field built by {@code
+   * Telescope.mapperForward(...)} is lenient in the same way.
    *
    * <p><b>Round-trip-loss warning, by direction name.</b> {@code lenient = true} produces a
    * <em>partial-Iso</em>. The forward direction {@code BRIDGE.read(source)} is fine — unmatched
@@ -302,9 +174,8 @@ public @interface Bridge {
    * NOT set {@code lenient}. The generated {@code <X>Bridge} class javadoc carries a matching
    * warning so the asymmetry is unambiguous in IDE auto-complete.
    *
-   * <p>Same-name auto-matches and declared renames still go through their normal type-safety
-   * pipeline — {@code lenient} only removes the bijection-completeness check, never the per-pair
-   * type checks.
+   * <p>Same-name matches still go through their normal type-safety pipeline — {@code lenient} only
+   * removes the bijection-completeness check, never the per-pair type checks.
    *
    * <p>An enum pair converts by constant name. A strict bridge needs a counterpart for every
    * constant on each side; a lenient one needs one for every source constant only, so a target enum

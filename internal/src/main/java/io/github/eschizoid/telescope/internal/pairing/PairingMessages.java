@@ -294,7 +294,7 @@ public final class PairingMessages {
   }
 
   /**
-   * A {@code via} row, or a {@code @ViaMapper}, whose mapper is handed one side's property as it
+   * A {@code via} row whose mapper is handed one side's property as it
    * is, though no value of that property can be an instance of the class the mapper converts on
    * that side: the property is not a List, Set, Optional or a map's values the mapper's elements
    * lift over, so every call would fail.
@@ -325,7 +325,7 @@ public final class PairingMessages {
   }
 
   /**
-   * A {@code via} row, or a {@code @ViaMapper}, whose mapper's result is written into one side's
+   * A {@code via} row whose mapper's result is written into one side's
    * property, though no value of the class the mapper returns can be an instance of the class the
    * property takes there, the class that side fixes the property's type variable to among them:
    * every write would fail.
