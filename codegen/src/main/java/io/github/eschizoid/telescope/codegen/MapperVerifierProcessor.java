@@ -352,44 +352,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     final var value = annotationValue(bridge, "value");
     if (!(value != null && value.getValue() instanceof DeclaredType declared)) return;
     if (!(declared.asElement() instanceof TypeElement target)) return;
-    final var drops = new ArrayList<String>();
-    for (final var drop : listValue(bridge, "drops")) {
-      if (drop.getValue() instanceof String field) drops.add(field);
-    }
-    final var renamedTo = new HashMap<String, List<String>>();
-    for (final var each : listValue(bridge, "renames")) {
-      if (!(each.getValue() instanceof AnnotationMirror rename)) continue;
-      final var from = stringValue(rename, "source");
-      final var to = stringValue(rename, "target");
-      if (from != null && to != null) renamedTo.computeIfAbsent(from, k -> new ArrayList<>()).add(to);
-    }
-    final var unwalked = BridgeProcessor.Unwalked.of(
-      drops,
-      fieldsNamed(bridge, "transforms"),
-      fieldsNamed(bridge, "viaMappers"),
-      fieldsNamed(bridge, "constants"),
-      fieldsNamed(bridge, "computes"),
-      renamedTo
-    );
+    // A bridge on a class has no rows, so it walks every property of both sides.
     final var key = pairKey(source, target);
     final var takesPath = bridges.takesActivePath(source, target);
-    final var setting = new OwnBridgeRule.Bridge(true, unwalked.source(), unwalked.target(), takesPath);
+    final var setting = new OwnBridgeRule.Bridge(true, Set.of(), Set.of(), takesPath);
     if (settings.putIfAbsent(key, setting) != null) {
       twice.add(key);
     }
-  }
-
-  /**
-   * The {@code field} each annotation in the list {@code bridge} holds under {@code name} names.
-   */
-  private static List<String> fieldsNamed(final AnnotationMirror bridge, final String name) {
-    final var fields = new ArrayList<String>();
-    for (final var each : listValue(bridge, name)) {
-      if (each.getValue() instanceof AnnotationMirror mirror && stringValue(mirror, "field") != null) {
-        fields.add(stringValue(mirror, "field"));
-      }
-    }
-    return fields;
   }
 
   private static AnnotationValue annotationValue(final AnnotationMirror mirror, final String name) {
@@ -408,11 +377,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       return values;
     }
     return List.of(value);
-  }
-
-  private static String stringValue(final AnnotationMirror mirror, final String name) {
-    final var value = annotationValue(mirror, name);
-    return value != null && value.getValue() instanceof String string ? string : null;
   }
 
   private void collectBridges(final TypeElement type, final Set<String> named) {
