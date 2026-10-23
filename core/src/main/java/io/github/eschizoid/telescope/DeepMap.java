@@ -2348,12 +2348,8 @@ public final class DeepMap {
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
       case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, null);
-      case ViaClass<?, ?> r -> liftViaIfNeeded(
-        (Via<?, ?>) resolvedRow(r, srcType, tgtType, sides),
-        srcType,
-        tgtType,
-        sides,
-        null
+      case ViaClass<?, ?> __ -> throw new IllegalStateException(
+        "A via row naming a class reaches its field's iso only as the row resolvedRow makes of it"
       );
       case ViaMethods<?, ?> r -> liftViaIfNeeded(
         r.resolved(),

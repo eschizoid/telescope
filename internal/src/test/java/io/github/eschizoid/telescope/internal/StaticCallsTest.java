@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,16 @@ class StaticCallsTest {
   void anotherClassIsRefused() throws Exception {
     final var f = StaticCalls.function(StaticCallsTest.class.getMethod("shout", CharSequence.class));
     assertThrows(ClassCastException.class, () -> f.apply(1));
+  }
+
+  @Test
+  @DisplayName("a method of a class whose module does not open its package is refused with the remedy")
+  void aClassNotOpenedIsRefusedWithTheRemedy() throws Exception {
+    final var refused = assertThrows(IllegalStateException.class, () ->
+      StaticCalls.function(Math.class.getMethod("abs", int.class))
+    );
+    assertTrue(refused.getMessage().startsWith("Cannot call java.lang.Math.abs. "), refused::getMessage);
+    assertTrue(refused.getMessage().contains("java.lang"), refused::getMessage);
   }
 
   @Test
