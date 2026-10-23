@@ -815,7 +815,7 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
-    assertThat(result.generated().get("demo.AccountMapperImpl")).contains("MappersAccountBridge.forward(input)");
+    assertThat(result.generated().get("demo.AccountMapperImpl")).contains("AccountToAccountDtoBridge.forward(input)");
   }
 
   @Test

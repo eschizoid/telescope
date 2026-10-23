@@ -787,7 +787,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         .computeIfAbsent(source.getQualifiedName().toString(), unused -> new LinkedHashMap<>())
         .putIfAbsent(
           target.getQualifiedName().toString(),
-          (pkg.isEmpty() ? "" : pkg + ".") + FieldRows.bridgeSimpleName(field)
+          (pkg.isEmpty() ? "" : pkg + ".") + FieldRows.bridgeSimpleName(source, target)
         );
     }
   }

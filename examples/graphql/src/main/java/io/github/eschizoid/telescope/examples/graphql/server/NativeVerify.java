@@ -18,6 +18,7 @@ import io.github.eschizoid.telescope.examples.graphql.model.Shift;
 import io.github.eschizoid.telescope.examples.graphql.model.ShiftTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.Tagged;
 import io.github.eschizoid.telescope.examples.graphql.model.Ticket;
+import io.github.eschizoid.telescope.examples.graphql.model.TicketToTicketViewBridge;
 import io.github.eschizoid.telescope.examples.graphql.model.TicketView;
 import io.github.eschizoid.telescope.examples.graphql.model.User;
 import io.github.eschizoid.telescope.examples.graphql.model.UserFromMap;
@@ -75,10 +76,10 @@ import java.util.Map;
  *   <li><b>navigator-only multi-edit</b> — {@code Telescope.all(over(ShiftTelescope.of()...), ...)}
  *       over {@link Shift} and {@link Crewmate}, which have no reflection registration: the fused
  *       pass has to rebuild each record level through the navigators' own generated setters.
- *   <li><b>{@code @Bridge} mapper field</b> — {@code TicketMappers.TICKET}: the factory finds the
- *       bridge generated from the field's rows by the calling class through {@code StackWalker} and
- *       {@code ServiceLoader}, in the image. {@link Ticket} and {@link TicketView} have no
- *       reflection registration, so a mapper that fell back to the runtime path fails here.
+ *   <li><b>{@code @Bridge} mapper field</b> — {@code Ticket.VIEW}: the factory finds the bridge
+ *       generated from the field's rows by the calling class through {@code StackWalker} and {@code
+ *       ServiceLoader}, in the image. {@link Ticket} and {@link TicketView} have no reflection
+ *       registration, so a mapper that fell back to the runtime path fails here.
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
@@ -331,11 +332,11 @@ public final class NativeVerify {
   // field holds converts through the bridge generated from its rows, both ways and in patch, and
   // agrees with that bridge called directly.
   private static void bridgeField() {
-    final var mapper = TicketMappers.TICKET;
+    final var mapper = Ticket.VIEW;
     final var ticket = new Ticket("K7", "12A");
     final var view = mapper.forward(ticket);
     expect(new TicketView("K7", "12A").equals(view), "bridge field forward mismatch: " + view);
-    expect(view.equals(TicketMappersTicketBridge.forward(ticket)), "bridge field disagrees with its bridge");
+    expect(view.equals(TicketToTicketViewBridge.forward(ticket)), "bridge field disagrees with its bridge");
     expect(ticket.equals(mapper.backward(view)), "bridge field backward mismatch");
     final var patched = mapper.patch(ticket, new TicketView(null, "3C"));
     expect(new Ticket("K7", "3C").equals(patched), "bridge field patch mismatch: " + patched);

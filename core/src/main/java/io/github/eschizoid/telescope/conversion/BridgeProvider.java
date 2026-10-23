@@ -73,17 +73,19 @@ public interface BridgeProvider {
   }
 
   /**
-   * The mapper a {@code Telescope.mapper} call for this bridge's pair returns, given {@code built},
-   * the mapper over this bridge. For a bridge a field declared, an instance of the class generated
-   * for the field, whose {@code forward}, {@code backward} and {@code patch} call the bridge
-   * directly; {@code built} itself otherwise.
+   * Codegen-support seam: the mapper a {@code Telescope.mapper} call for this bridge's pair
+   * returns, given {@code built}, the mapper over this bridge, and {@code grant}, which {@link
+   * BridgeRegistry#specialise(BridgeProvider, Mapper)} hands only to a registered provider. For a
+   * bridge a field declared, an instance of the class generated for the field, whose {@code
+   * forward}, {@code backward} and {@code patch} call the bridge directly; {@code built} itself
+   * otherwise.
    */
-  default Mapper<?, ?> mapper(final Mapper<?, ?> built) {
+  default Mapper<?, ?> mapper(final Mapper<?, ?> built, final BridgeGrant grant) {
     return built;
   }
 
   /** As {@link #mapper}, for a {@code Telescope.mapperForward} call and its forward mapper. */
-  default ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built) {
+  default ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built, final BridgeGrant grant) {
     return built;
   }
 }

@@ -133,6 +133,13 @@ class BridgeFieldTest {
     return loader.loadClass(owner).getField(name).get(null);
   }
 
+  /** A field that is not public, read as code of its own package would. */
+  private static Object packageField(final ClassLoader loader, final String owner, final String name) throws Exception {
+    final var field = loader.loadClass(owner).getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(null);
+  }
+
   private static Object user(final ClassLoader loader, final String nick) throws Exception {
     final var address = loader.loadClass("fb.Address").getConstructors()[0].newInstance("Paris", "75001");
     return loader
@@ -173,8 +180,8 @@ class BridgeFieldTest {
       )
     );
     assertTrue(c.success(), c::errorMessages);
-    assertTrue(c.generated().containsKey("fb.MappersUserBridge"), c.generated()::toString);
-    assertTrue(c.generated().containsKey("fb.MappersViewBridge"), c.generated()::toString);
+    assertTrue(c.generated().containsKey("fb.UserToUserDtoBridge"), c.generated()::toString);
+    assertTrue(c.generated().containsKey("fb.UserToUserViewBridge"), c.generated()::toString);
     try (final var loader = load(c)) {
       for (final var nick : new String[] { "lovelace", null }) {
         final var user = user(loader, nick);
@@ -192,12 +199,12 @@ class BridgeFieldTest {
         assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
         assertTrue(runtime.explain().declared().isEmpty());
         assertTrue(
-          generatedCallers.stream().allMatch(n -> n.startsWith("fb.MappersUserBridge")),
+          generatedCallers.stream().allMatch(n -> n.startsWith("fb.UserToUserDtoBridge")),
           generatedCallers::toString
         );
         assertFalse(runtimeCallers.isEmpty());
         assertTrue(
-          runtimeCallers.stream().noneMatch(n -> n.startsWith("fb.MappersUserBridge")),
+          runtimeCallers.stream().noneMatch(n -> n.startsWith("fb.UserToUserDtoBridge")),
           runtimeCallers::toString
         );
       }
@@ -515,6 +522,55 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName("a @Bridge field on the source record itself runs its bridge, and gives the runtime mapper's result")
+  void aFieldOnTheSourceRecordRunsItsBridge() throws Exception {
+    final var ticket =
+      HEADER +
+      "public record Ticket(Long id, String title, String secret) {\n" +
+      "  @Bridge static final Mapper<Ticket, TicketView> TO_VIEW = Telescope.mapper(Ticket.class, TicketView.class,\n" +
+      "      to(Ticket::id, TicketView::ticketId), to(Ticket::title, TicketView::title, Conv::trim, Conv::pad)," +
+      " drop(Ticket::secret));\n" +
+      "}\n";
+    final var view = "package fb; public record TicketView(Long ticketId, String title) {}";
+    final var generated = compile(sources("fb.Ticket", ticket, "fb.TicketView", view));
+    assertTrue(generated.success(), generated::errorMessages);
+    assertTrue(generated.generated().containsKey("fb.TicketToTicketViewBridge"), generated.generated()::toString);
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Ticket", ticket, "fb.TicketView", view)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final Object fromGenerated;
+    final Object back;
+    try (final var loader = load(generated)) {
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) packageField(loader, "fb.Ticket", "TO_VIEW");
+      assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+      assertEquals("fb.TicketToTicketViewBridgeProvider$FieldMapper", mapper.getClass().getName());
+      final var t = loader.loadClass("fb.Ticket").getConstructors()[0].newInstance(5L, " Ada ", "s");
+      callers(loader).clear();
+      fromGenerated = mapper.forward(t).toString();
+      back = mapper.backward(mapper.forward(t)).toString();
+      assertTrue(
+        callers(loader)
+          .stream()
+          .allMatch(n -> n.startsWith("fb.TicketToTicketViewBridge")),
+        callers(loader)::toString
+      );
+    }
+    try (final var loader = load(runtime)) {
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) packageField(loader, "fb.Ticket", "TO_VIEW");
+      assertTrue(mapper.explain().declared().isEmpty());
+      final var t = loader.loadClass("fb.Ticket").getConstructors()[0].newInstance(5L, " Ada ", "s");
+      assertEquals(fromGenerated, mapper.forward(t).toString());
+      assertEquals(back, mapper.backward(mapper.forward(t)).toString());
+    }
+    assertEquals("TicketView[ticketId=5, title=Ada]", fromGenerated);
+  }
+
+  @Test
   @DisplayName("a @Bridge field of an interface is static final without saying so, and runs its bridge")
   void anInterfaceFieldIsStaticFinal() throws Exception {
     final var c = compile(
@@ -540,28 +596,74 @@ class BridgeFieldTest {
   }
 
   @Test
-  @DisplayName("two fields whose bridges take one name are refused in the terms of a field")
+  @DisplayName("a field's bridge is named by its pair, and two pairs taking one name are refused in a field's terms")
   void aBridgeNameTakenTwiceIsRefusedForTheField() {
-    final var c = compile(
+    final var view = "package fb; public record TicketView(Long ticketId, String title) {}";
+    final var named = compile(
       sources(
+        "fb.TicketView",
+        view,
+        "fb.Ticket",
+        "package fb; public record Ticket(Long ticketId, String title) {}",
         "fb.Mappers",
         HEADER +
           "public final class Mappers {\n" +
-          "  @Bridge static final ForwardMapper<User, UserDto> USER_VIEW = Telescope.mapperForward(User.class," +
-          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
-          "}\n",
-        "fb.MappersUser",
-        HEADER +
-          "public final class MappersUser {\n" +
-          "  @Bridge static final ForwardMapper<User, UserView> VIEW =" +
-          " Telescope.mapperForward(User.class, UserView.class, drop(User::name));\n" +
+          "  @Bridge static final Mapper<Ticket, TicketView> TICKET = Telescope.mapper(Ticket.class, TicketView.class);\n" +
           "}\n"
       )
     );
-    assertFalse(c.success());
-    assertTrue(c.hasError("fb.MappersUserViewBridge is claimed by two different type pairs"), c::errorMessages);
-    assertTrue(c.hasError("rename the field or the type"), c::errorMessages);
-    assertFalse(c.hasError("Declare an explicit @Bridge"), c::errorMessages);
+    assertTrue(named.success(), named::errorMessages);
+    assertTrue(named.generated().containsKey("fb.TicketToTicketViewBridge"), named.generated()::toString);
+    final var twoPackages = compile(
+      sources(
+        "fb.TicketView",
+        view,
+        "fb.a.Ticket",
+        "package fb.a; public record Ticket(Long ticketId, String title) {}",
+        "fb.b.Ticket",
+        "package fb.b; public record Ticket(Long ticketId, String title) {}",
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge static final Mapper<fb.a.Ticket, TicketView> FIRST =" +
+          " Telescope.mapper(fb.a.Ticket.class, TicketView.class);\n" +
+          "  @Bridge static final Mapper<fb.b.Ticket, TicketView> SECOND =" +
+          " Telescope.mapper(fb.b.Ticket.class, TicketView.class);\n" +
+          "}\n"
+      )
+    );
+    assertFalse(twoPackages.success());
+    assertTrue(
+      twoPackages.hasError("fb.TicketToTicketViewBridge is claimed by two different type pairs"),
+      twoPackages::errorMessages
+    );
+    assertTrue(twoPackages.hasError("In the rows of @Bridge field Mappers."), twoPackages::errorMessages);
+    assertTrue(
+      twoPackages.hasError("declare one of the two in a class of another package"),
+      twoPackages::errorMessages
+    );
+    assertFalse(twoPackages.hasError("Declare an explicit @Bridge"), twoPackages::errorMessages);
+    final var classForm = compile(
+      sources(
+        "fb.TicketView",
+        view,
+        "fb.Ticket",
+        "package fb; public record Ticket(Long ticketId, String title) {}",
+        "fb.TicketToTicketView",
+        "package fb; @io.github.eschizoid.telescope.annotations.Bridge(TicketView.class)" +
+          " public record TicketToTicketView(Long ticketId, String title) {}",
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge static final Mapper<Ticket, TicketView> TICKET = Telescope.mapper(Ticket.class, TicketView.class);\n" +
+          "}\n"
+      )
+    );
+    assertFalse(classForm.success());
+    assertTrue(
+      classForm.hasError("fb.TicketToTicketViewBridge is claimed by two different type pairs"),
+      classForm::errorMessages
+    );
   }
 
   @Test
@@ -569,16 +671,16 @@ class BridgeFieldTest {
   void aFieldsMapperIsTheGeneratedClass() throws Exception {
     final var c = compile(sources());
     assertTrue(c.success(), c::errorMessages);
-    final var provider = c.generated().get("fb.AddressMappersAddressBridgeProvider");
+    final var provider = c.generated().get("fb.AddressToAddressDtoBridgeProvider");
     assertTrue(
       provider.contains("static final class FieldMapper extends io.github.eschizoid.telescope.conversion.Mapper"),
       provider
     );
-    assertTrue(provider.contains("return AddressMappersAddressBridge.BRIDGE_FN.forward(source);"), provider);
+    assertTrue(provider.contains("return AddressToAddressDtoBridge.BRIDGE_FN.forward(source);"), provider);
     try (final var loader = load(c)) {
       @SuppressWarnings("unchecked")
       final var address = (Mapper<Object, Object>) field(loader, "fb.AddressMappers", "ADDRESS");
-      assertEquals("fb.AddressMappersAddressBridgeProvider$FieldMapper", address.getClass().getName());
+      assertEquals("fb.AddressToAddressDtoBridgeProvider$FieldMapper", address.getClass().getName());
       final var a = loader.loadClass("fb.Address").getConstructors()[0].newInstance("Oslo", "0150");
       final var dto = loader.loadClass("fb.AddressDto").getConstructors()[0].newInstance(null, "0151");
       assertEquals(a, address.backward(address.forward(a)));
@@ -621,7 +723,7 @@ class BridgeFieldTest {
   void theProviderRecordsTheDeclaration() {
     final var c = compile(sources());
     assertTrue(c.success(), c::errorMessages);
-    final var provider = c.generated().get("fb.AddressMappersAddressBridgeProvider");
+    final var provider = c.generated().get("fb.AddressToAddressDtoBridgeProvider");
     assertTrue(provider.contains("return AddressMappers.class;"), provider);
     assertTrue(provider.contains("public List<String> rowKinds() {\n    return List.of();"), provider);
     assertTrue(provider.contains("return List.of(\"city\", \"zip\");"), provider);
@@ -629,7 +731,7 @@ class BridgeFieldTest {
       c
         .resources()
         .get("META-INF/services/io.github.eschizoid.telescope.conversion.BridgeProvider")
-        .contains("fb.AddressMappersAddressBridgeProvider")
+        .contains("fb.AddressToAddressDtoBridgeProvider")
     );
   }
 
@@ -649,12 +751,12 @@ class BridgeFieldTest {
     assertTrue(
       c
         .generated()
-        .get("fb.MappersUserBridgeProvider")
+        .get("fb.UserToUserDtoBridgeProvider")
         .contains(
           "List.of(\"SameTypedTo\", \"ForwardOnlyTransformTo\", \"TypedTransformTo\", \"TypedTransformTo\"," +
             " \"ForwardOnlyTransformTo\", \"Drop\", \"Constant\", \"Compute\")"
         ),
-      c.generated().get("fb.MappersUserBridgeProvider")
+      c.generated().get("fb.UserToUserDtoBridgeProvider")
     );
   }
 
@@ -675,7 +777,7 @@ class BridgeFieldTest {
       )
     );
     assertTrue(c.success(), c::errorMessages);
-    assertFalse(c.generated().containsKey("fb.MappersUserBridge"));
+    assertFalse(c.generated().containsKey("fb.UserToUserDtoBridge"));
     assertEquals(
       "fb.User -> fb.UserDto\n",
       c.resources().get("META-INF/telescope/unread-bridge-fields/fb.Mappers"),
@@ -810,7 +912,7 @@ class BridgeFieldTest {
     );
     assertTrue(c.success(), c::errorMessages);
     assertTrue(
-      c.generated().get("fb.SpotTelescope").contains("path.then(fb.SpotsSpotBridge.BRIDGE)"),
+      c.generated().get("fb.SpotTelescope").contains("path.then(fb.SpotToSpotDtoBridge.BRIDGE)"),
       c.generated().get("fb.SpotTelescope")
     );
     try (final var loader = load(c)) {
@@ -938,7 +1040,7 @@ class BridgeFieldTest {
       "}\n";
     final var c = compile(sources("fb.Moved", "package fb; public record Moved(String mail) {}", "fb.Mappers", code));
     assertFalse(c.success(), "a row naming an accessor that is gone must not compile");
-    assertFalse(c.generated().containsKey("fb.MappersMovedBridge"), "nothing is generated from a broken row");
+    assertFalse(c.generated().containsKey("fb.MovedToUserDtoBridge"), "nothing is generated from a broken row");
     final var expected = position(code, "Moved::email");
     assertTrue(
       c

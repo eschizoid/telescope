@@ -100,24 +100,45 @@ mapper. The field then runs the generated code, and the call site does not chang
 and add `@Bridge` later, when that code needs the speed.
 
 ```java
-public record Invoice(Long id, String customer, String currency, long totalCents) {}
-
 public record InvoiceDto(Long invoiceId, String customer, String currency, long totalCents) {}
 
-final class Mappers {
-
+public record Invoice(Long id, String customer, String currency, long totalCents) {
   @Bridge
-  static final Mapper<Invoice, InvoiceDto> INVOICE = Telescope.mapper(
-    Invoice.class,
-    InvoiceDto.class,
-    to(Invoice::id, InvoiceDto::invoiceId),
-    to(Invoice::currency, InvoiceDto::currency, Currencies.CODE) // a BridgeFn<String, String>
-  );
+  static final Mapper<Invoice, InvoiceDto> DTO = Telescope.mapper(Invoice.class, InvoiceDto.class,
+      to(Invoice::id, InvoiceDto::invoiceId),
+      to(Invoice::currency, InvoiceDto::currency, CurrencyFn.class)); // CurrencyFn is a BridgeFn<String, String>
 }
 
-InvoiceDto dto = Mappers.INVOICE.forward(invoice); // the generated code when the processor ran
-Mappers.INVOICE.explain();                         // "Runs: generated — the bridge MappersInvoiceBridge, ..."
+InvoiceDto dto = Invoice.DTO.forward(invoice); // the generated code when the processor ran
+Invoice back   = Invoice.DTO.backward(dto);
+Invoice.DTO.explain();                         // "Runs: generated — the bridge InvoiceToInvoiceDtoBridge, ..."
 ```
+
+The field can sit on the source itself, as here, or with other mappers in a class or an interface of their own. A field
+of an interface is `static final` without saying so:
+
+```java
+interface Mappers {
+  @Bridge
+  Mapper<Invoice, InvoiceDto> INVOICE = Telescope.mapper(
+    Invoice.class,
+    InvoiceDto.class,
+    to(Invoice::id, InvoiceDto::invoiceId)
+  );
+
+  @Bridge
+  Mapper<Customer, CustomerDto> CUSTOMER = Telescope.mapper(Customer.class, CustomerDto.class);
+}
+```
+
+### Why mappers work this way here
+
+Java annotations only accept constants, so a mapper configured through annotations has to name its fields as strings.
+Telescope keeps the mapping out of the annotation. You write it as an ordinary Java expression of method references and
+assign it to a `static final` field, so the compiler checks every reference and an IDE rename carries through. Put
+`@Bridge` on that field, and a standard annotation processor reads the expression and generates a mapper with no
+reflection in it. Leave the processor out, and the same expression runs as a runtime mapper with the same result. Either
+way, the call site doesn't change.
 
 The same field without the processor builds the runtime mapper from the same rows, so removing the processor leaves the
 field's own results as they were. A mapper elsewhere that meets the pair nested then converts it by its own rules rather
@@ -127,12 +148,14 @@ for one, is refused in favour of a method reference such as `String::trim`. The 
 javac tree API. A compiler without it, such as Eclipse's, reports a warning on each `@Bridge` field and leaves the
 mapper on the runtime path, which `explain()` reports.
 
+### How the two paths are checked
+
 Two tests run the same input through both kinds of mapper and fail when they disagree. `CrossPathCorpusTest` covers
 container shapes, how a target is constructed, same-typed container copies, object graphs that lead back to an object
-being converted, `patch`, and enum pairs. Every bridge it compiles from a `@Bridge` on a class that declares only
-renames and drops is compiled again from the same declaration written as a mapper field, and the two must generate the
-same code. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run as part of `./gradlew check`,
-which is what CI runs. Null strategies and defaults aren't cross-checked by them.
+being converted, `patch`, and enum pairs. Every bridge it compiles from a `@Bridge` on a class whose declaration a
+mapper's rows can express is compiled again from the same declaration written as mapper fields, and the two must
+generate the same code. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run as part of
+`./gradlew check`, which is what CI runs. Null strategies and defaults aren't cross-checked by them.
 
 The tests record each known difference between the two paths, and they fail when a recorded difference goes away, so the
 list stays accurate.

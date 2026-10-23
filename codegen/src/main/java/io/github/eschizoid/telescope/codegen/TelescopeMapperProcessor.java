@@ -365,7 +365,8 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   /**
    * The qualified name of the generated bridge for {@code from -> to}, or null when there is none.
    * The names follow {@code BridgeProcessor}: a carrier's bridge is {@code <Carrier>Bridge} in the
-   * carrier's package; a source declaring several targets gets {@code <Source>To<Target>Bridge}; a
+   * carrier's package; a field's is {@code <Source>To<Target>Bridge} in the package of the class
+   * declaring it; a source declaring several targets gets {@code <Source>To<Target>Bridge}; a
    * source declaring one gets {@code <Source>Bridge}. A bridge compiled into a dependency has no
    * annotation left to read, so the two source-anchored names are also probed as classes.
    */
@@ -433,7 +434,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       .getPackageOf(field.getEnclosingElement())
       .getQualifiedName()
       .toString();
-    final var name = FieldRows.bridgeSimpleName(field);
+    final var name = FieldRows.bridgeSimpleName(source, target);
     return pkg.isEmpty() ? name : pkg + "." + name;
   }
 

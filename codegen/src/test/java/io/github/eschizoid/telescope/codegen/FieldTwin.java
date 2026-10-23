@@ -44,7 +44,6 @@ final class FieldTwin {
   private static final Pattern ATTRIBUTE = Pattern.compile("(\\w+)\\s*=\\s*(\"(\\w+)\"|[\\w.]+)");
   private static final Pattern QUOTED = Pattern.compile("\"(\\w+)\"");
   private static final Pattern PLACEHOLDER = Pattern.compile("%(\\w+)%:(\\w+)");
-  private static final Pattern TWIN_BRIDGE = Pattern.compile("TwinCarrier(\\w+?)Bridge(?!\\w)");
   private static final String CARRIER = "TwinCarrier";
 
   /** How many compilations were held to a field twin, and how many had none. */
@@ -59,7 +58,8 @@ final class FieldTwin {
    * field's bridge under the name the class's had, or a refusal where the class form was refused.
    */
   static void assertAgrees(final ProcessorHarness.Compilation original, final JavaFileObject... sources) {
-    final var twin = twinOf(sources);
+    final var names = new LinkedHashMap<String, String>();
+    final var twin = twinOf(names, sources);
     if (twin.isEmpty()) {
       UNTWINNED.incrementAndGet();
       return;
@@ -91,11 +91,25 @@ final class FieldTwin {
       return;
     }
     final var expected = new TreeMap<>(original.generated());
+    // A field's bridge is named by its pair; the class form names a single-target source's bridge
+    // after the source alone, and that is the name each field bridge is compared under.
+    final var renamed = new LinkedHashMap<Pattern, String>();
+    for (final var e : names.entrySet()) {
+      final var classForm = e.getValue();
+      if (
+        expected
+          .keySet()
+          .stream()
+          .anyMatch(k -> k.equals(classForm) || k.endsWith("." + classForm))
+      ) {
+        renamed.put(Pattern.compile("\\b" + Pattern.quote(e.getKey()) + "(?!\\w)"), classForm);
+      }
+    }
     final var actual = new TreeMap<String, String>();
     for (final var e : compiled.generated().entrySet()) {
-      if (e.getKey().contains("." + CARRIER) && e.getKey().endsWith("BridgeProvider")) continue;
-      if (e.getKey().startsWith(CARRIER) && e.getKey().endsWith("BridgeProvider")) continue;
-      actual.put(untwinned(e.getKey()), untwinned(e.getValue()));
+      final var simple = e.getKey().substring(e.getKey().lastIndexOf('.') + 1);
+      if (simple.endsWith("BridgeProvider") && names.containsKey(simple.substring(0, simple.length() - 8))) continue;
+      actual.put(untwinned(e.getKey(), renamed), untwinned(e.getValue(), renamed));
     }
     assertEquals(
       expected,
@@ -127,14 +141,20 @@ final class FieldTwin {
   }
 
   /** {@code text} with every field bridge's name written as the class-form bridge's. */
-  private static String untwinned(final String text) {
-    return TWIN_BRIDGE.matcher(text).replaceAll("$1Bridge");
+  private static String untwinned(final String text, final Map<Pattern, String> renamed) {
+    var out = text;
+    for (final var e : renamed.entrySet()) out = e.getKey().matcher(out).replaceAll(e.getValue());
+    return out;
   }
 
   /** A class-form {@code @Bridge}, the file holding it, and that file's package. */
   private record Declared(JavaFileObject file, String pkg, Annotated annotated) {}
 
-  private static Optional<JavaFileObject[]> twinOf(final JavaFileObject... sources) {
+  /**
+   * The field twin of {@code sources}, recording in {@code names} each field bridge's name against
+   * the class form's name for its single-target source, or empty when there is none.
+   */
+  private static Optional<JavaFileObject[]> twinOf(final Map<String, String> names, final JavaFileObject... sources) {
     final var codes = new LinkedHashMap<JavaFileObject, String>();
     for (final var source : sources) codes.put(source, text(source));
     final var declared = new LinkedHashMap<String, Declared>();
@@ -167,7 +187,7 @@ final class FieldTwin {
     }
     final var fields = new LinkedHashMap<String, List<String>>();
     for (final var d : declared.values()) {
-      final var field = fieldOf(d, declared, codes);
+      final var field = fieldOf(d, declared, codes, names);
       if (field == null) return Optional.empty();
       fields.computeIfAbsent(d.pkg(), unused -> new ArrayList<>()).add(field);
     }
@@ -216,7 +236,8 @@ final class FieldTwin {
   private static String fieldOf(
     final Declared d,
     final Map<String, Declared> declared,
-    final Map<JavaFileObject, String> codes
+    final Map<JavaFileObject, String> codes,
+    final Map<String, String> names
   ) {
     final var root = d.annotated();
     String target = null;
@@ -291,6 +312,7 @@ final class FieldTwin {
     // A method converts forward only, which a mapper converting both ways refuses.
     if (!methods.isEmpty() && !lenient) return null;
     final var targetSimple = target.substring(target.lastIndexOf('.') + 1);
+    names.put(root.name() + "To" + targetSimple + "Bridge", root.name() + "Bridge");
     final var rows = new ArrayList<String>();
     final var converted = new LinkedHashSet<String>();
     for (final var e : transforms.entrySet()) {

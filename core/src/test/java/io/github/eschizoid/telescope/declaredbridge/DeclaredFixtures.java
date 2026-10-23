@@ -5,12 +5,14 @@ import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.BridgeGrant;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Stand-ins for what the processor writes for a {@code @Bridge} field: a bridge over a pair, and a
@@ -101,6 +103,11 @@ public final class DeclaredFixtures {
   }
 
   public record ForwardDto(String label) {}
+
+  /**
+   * The grant a registered provider was handed when a field's factory call was dispatched to it.
+   */
+  public static final AtomicReference<BridgeGrant> HANDED = new AtomicReference<>();
 
   /** Calls into the stand-in generated bridges. */
   public static final AtomicInteger GENERATED_CALLS = new AtomicInteger();
@@ -228,8 +235,8 @@ public final class DeclaredFixtures {
   /** What the processor writes for a field's mapper: each direction one call into the bridge. */
   public static final class PointFieldMapper extends Mapper<Point, PointDto> {
 
-    public PointFieldMapper(final Mapper<Point, PointDto> built) {
-      super(built);
+    public PointFieldMapper(final Mapper<Point, PointDto> built, final BridgeGrant grant) {
+      super(built, grant);
     }
 
     @Override
@@ -251,8 +258,8 @@ public final class DeclaredFixtures {
   /** As {@link PointFieldMapper}, for a forward mapper. */
   public static final class ForwardFieldMapper extends ForwardMapper<Forward, ForwardDto> {
 
-    public ForwardFieldMapper(final ForwardMapper<Forward, ForwardDto> built) {
-      super(built);
+    public ForwardFieldMapper(final ForwardMapper<Forward, ForwardDto> built, final BridgeGrant grant) {
+      super(built, grant);
     }
 
     @Override
@@ -333,8 +340,9 @@ public final class DeclaredFixtures {
 
     @Override
     @SuppressWarnings("unchecked")
-    public Mapper<?, ?> mapper(final Mapper<?, ?> built) {
-      return new PointFieldMapper((Mapper<Point, PointDto>) built);
+    public Mapper<?, ?> mapper(final Mapper<?, ?> built, final BridgeGrant grant) {
+      HANDED.set(grant);
+      return new PointFieldMapper((Mapper<Point, PointDto>) built, grant);
     }
   }
 
@@ -400,8 +408,8 @@ public final class DeclaredFixtures {
 
     @Override
     @SuppressWarnings("unchecked")
-    public ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built) {
-      return new ForwardFieldMapper((ForwardMapper<Forward, ForwardDto>) built);
+    public ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built, final BridgeGrant grant) {
+      return new ForwardFieldMapper((ForwardMapper<Forward, ForwardDto>) built, grant);
     }
   }
 }

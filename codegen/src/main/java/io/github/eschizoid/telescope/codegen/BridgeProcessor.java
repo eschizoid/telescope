@@ -7139,6 +7139,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * <ul>
    *   <li>A pair a carrier declares is {@code <Carrier>Bridge}, beside the carrier.
+   *   <li>A pair a {@code @Bridge} field declares is {@code <Source>To<Target>Bridge}, beside the
+   *       class declaring the field: one declaration per pair keeps it unique there, and renaming
+   *       or moving the field within the package leaves it as it is.
    *   <li>A pair its source declares is {@code <Source>Bridge}, beside the source, unless the
    *       source declares more than one target: the short name can belong to only one pair, so then
    *       every one of them takes the long name.
@@ -7161,9 +7164,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (carrierEl != null) {
       return new BridgeName(
         elements.getPackageOf(carrierEl).getQualifiedName().toString(),
-        carrierEl.getSimpleName() +
-          (cfg.declaringField() == null ? "" : FieldRows.camel(cfg.declaringField())) +
-          "Bridge"
+        cfg.declaringField() == null ? carrierEl.getSimpleName() + "Bridge" : FieldRows.bridgeSimpleName(source, target)
       );
     }
     final var pkg = elements.getPackageOf(source).getQualifiedName().toString();
@@ -7199,7 +7200,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         " -> " +
         thisPair.targetFq() +
         (fieldOrigin != null
-          ? ". A field's bridge is named after its class and the field; rename the field or the type."
+          ? ". A field's bridge is named after its pair's simple names, in its class's package; declare one" +
+            " of the two in a class of another package, or rename a type."
           : ". Auto-derived names use the simple names, so types sharing a simple name across" +
             " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
             " type.")
@@ -7308,6 +7310,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
   }
 
+  /** The capability the class generated for a field passes to the mapper it extends. */
+  private static final String GRANT = "io.github.eschizoid.telescope.conversion.BridgeGrant";
+
   /**
    * Writes, into a field bridge's provider, the class the field's factory call returns and the
    * provider method that builds it. The class takes the state of the mapper the runtime built over
@@ -7338,17 +7343,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         (cfg.lenient() ? "forwardMapper" : "mapper") +
         "(final " +
         base +
-        "<?, ?> built) {"
+        "<?, ?> built, final " +
+        GRANT +
+        " grant) {"
     );
-    out.println("    return new FieldMapper((" + base + "<" + s + ", " + t + ">) built);");
+    out.println("    return new FieldMapper((" + base + "<" + s + ", " + t + ">) built, grant);");
     out.println("  }");
     out.println();
     out.println("  /** The mapper the @Bridge field holds: each direction is one call into " + bridgeName + ". */");
     out.println("  @SuppressWarnings(\"rawtypes\")");
     out.println("  static final class FieldMapper extends " + base + "<" + s + ", " + t + "> {");
     out.println();
-    out.println("    FieldMapper(final " + base + "<" + s + ", " + t + "> built) {");
-    out.println("      super(built);");
+    out.println("    FieldMapper(final " + base + "<" + s + ", " + t + "> built, final " + GRANT + " grant) {");
+    out.println("      super(built, grant);");
     out.println("    }");
     out.println();
     out.println("    @Override");

@@ -4,11 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.BridgeGrant;
+import io.github.eschizoid.telescope.conversion.BridgeProvider;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.Forward;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.ForwardDto;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.ForwardMappers;
@@ -18,6 +26,7 @@ import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.PointDto;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.PointMappers;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.StaleMappers;
 import io.github.eschizoid.telescope.introspection.OpticNode;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -127,13 +136,70 @@ class DeclaredBridgeTest {
   @Test
   @DisplayName("only a mapper over a generated bridge with no hooks can be taken by a generated class")
   void onlyAGeneratedMapperIsSpecialised() {
-    assertThrows(IllegalArgumentException.class, () -> new DeclaredFixtures.PointFieldMapper(OtherMappers.point()));
+    // Initialising the declaring class dispatches its field's factory call to the provider.
+    assertNotNull(PointMappers.POINT);
+    final var grant = DeclaredFixtures.HANDED.get();
+    assertNotNull(grant, "the registered provider is handed the grant at dispatch");
     assertThrows(IllegalArgumentException.class, () ->
-      new DeclaredFixtures.PointFieldMapper(PointMappers.POINT.beforeForward(p -> p))
+      new DeclaredFixtures.PointFieldMapper(OtherMappers.point(), grant)
     );
     assertThrows(IllegalArgumentException.class, () ->
-      new DeclaredFixtures.ForwardFieldMapper(Telescope.mapperForward(Forward.class, ForwardDto.class))
+      new DeclaredFixtures.PointFieldMapper(PointMappers.POINT.beforeForward(p -> p), grant)
     );
+    assertThrows(IllegalArgumentException.class, () ->
+      new DeclaredFixtures.ForwardFieldMapper(Telescope.mapperForward(Forward.class, ForwardDto.class), grant)
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a class written by hand cannot wrap a field's mapper, and an unregistered provider is never handed the grant"
+  )
+  void aHandWrittenClassHoldsNoGrant() {
+    final var refused = assertThrows(IllegalArgumentException.class, () ->
+      new DeclaredFixtures.PointFieldMapper(PointMappers.POINT, null)
+    );
+    assertTrue(refused.getMessage().contains("with the grant its provider is handed"), refused::getMessage);
+    assertThrows(IllegalArgumentException.class, () ->
+      new DeclaredFixtures.ForwardFieldMapper(ForwardMappers.FORWARD, null)
+    );
+    final var captured = new AtomicReference<BridgeGrant>();
+    final var unregistered = new BridgeProvider() {
+      @Override
+      public Class<?> sourceType() {
+        return Point.class;
+      }
+
+      @Override
+      public Class<?> targetType() {
+        return PointDto.class;
+      }
+
+      @Override
+      public Class<?> declaringType() {
+        return PointMappers.class;
+      }
+
+      @Override
+      public Object bridge() {
+        return DeclaredFixtures.POINT_BRIDGE;
+      }
+
+      @Override
+      public Mapper<?, ?> mapper(final Mapper<?, ?> built, final BridgeGrant grant) {
+        captured.set(grant);
+        return built;
+      }
+
+      @Override
+      public ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built, final BridgeGrant grant) {
+        captured.set(grant);
+        return built;
+      }
+    };
+    assertSame(PointMappers.POINT, BridgeRegistry.specialise(unregistered, PointMappers.POINT));
+    assertSame(ForwardMappers.FORWARD, BridgeRegistry.specialise(unregistered, ForwardMappers.FORWARD));
+    assertNull(captured.get());
   }
 
   @Test

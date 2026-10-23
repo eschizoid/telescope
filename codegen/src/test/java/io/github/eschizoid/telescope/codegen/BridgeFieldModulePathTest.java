@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 class BridgeFieldModulePathTest {
 
   private static final String LINE =
-    "provides io.github.eschizoid.telescope.conversion.BridgeProvider with demo.MappersPointBridgeProvider;";
+    "provides io.github.eschizoid.telescope.conversion.BridgeProvider with demo.PointToPointDtoBridgeProvider;";
 
   private static ProcessorHarness.Compilation compileModule(final String directives) {
     return ProcessorHarness.compileFully(

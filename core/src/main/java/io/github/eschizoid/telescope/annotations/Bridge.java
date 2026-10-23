@@ -71,14 +71,17 @@ import java.lang.annotation.Target;
  * rows.
  *
  * <pre>{@code
- * final class Mappers {
+ * public record User(Long id, String email, Address address) {
  *   @Bridge
- *   static final Mapper<User, UserDto> USER = Telescope.mapper(User.class, UserDto.class,
+ *   static final Mapper<User, UserDto> DTO = Telescope.mapper(User.class, UserDto.class,
  *       to(User::id, UserDto::userId),
  *       to(User::email, UserDto::contact, Emails::normalise, Emails::normalise),
- *       via(User::address, UserDto::address, AddressMappers.ADDRESS));
+ *       via(User::address, UserDto::address, Address.DTO));
  * }
  * }</pre>
+ *
+ * <p>The field may sit on any class or interface; the bridge is named after the pair, {@code
+ * UserToUserDtoBridge} here, in the package of the class declaring the field.
  *
  * <p>The rows compiled are {@code to}, with or without converters, {@code toOneWay}, {@code
  * toOrElse}, {@code toOrElseGet}, {@code via} naming another {@code @Bridge} field, {@code drop},

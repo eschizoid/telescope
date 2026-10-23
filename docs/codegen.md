@@ -127,24 +127,26 @@ UserBeanTelescope.of().email().update(user, String::toLowerCase);   // direct ge
 
 `@Bridge` on a `static final` field initialised by `Telescope.mapper(...)` or `Telescope.mapperForward(...)` is the
 whole declaration of a generated mapper. The processor reads the rows of that call and compiles them into a bridge named
-after the class and the field (`MappersUserBridge` for `Mappers.USER`), and the factory returns a mapper over that
-bridge when the field is initialised. Nothing references the generated class.
+after its pair, in the package of the class declaring the field (`UserToUserDtoBridge` for `User.DTO`), and the factory
+returns a mapper over that bridge when the field is initialised. Nothing references the generated class.
 
 ```java
-final class Mappers {
-
+public record User(Long id, String email, String nickname, String passwordHash, Address address) {
   @Bridge
-  static final Mapper<User, UserDto> USER = Telescope.mapper(
+  static final Mapper<User, UserDto> DTO = Telescope.mapper(
     User.class,
     UserDto.class,
     to(User::id, UserDto::userId), // a rename
     to(User::email, UserDto::contact, EmailFn.class), // a rename converted by one BridgeFn
     toOrElse(User::nickname, UserDto::nickname, "anonymous"),
-    via(User::address, UserDto::address, AddressMappers.ADDRESS),
+    via(User::address, UserDto::address, Address.DTO),
     drop(User::passwordHash)
   );
 }
 ```
+
+The field can sit on the source, as here, or with other mappers in a class or an interface of their own, whose fields
+are `static final` without saying so.
 
 The rows the processor compiles are `to` (with no converter, with a forward and a backward method reference, or with one
 `BridgeFn` class or `static final` field), `toOneWay`, `toOrElse`, `toOrElseGet`, `via` naming another `@Bridge` field,

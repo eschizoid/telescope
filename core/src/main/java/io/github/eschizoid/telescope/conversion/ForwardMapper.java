@@ -103,16 +103,20 @@ public class ForwardMapper<A, B> {
   }
 
   /**
-   * <b>Module-internal seam — NOT public API.</b> The state of {@code built}, a forward mapper
-   * {@link #ofGenerated} built over a generated bridge, for the class the {@code @Bridge} processor
-   * generates for a field: that class overrides {@link #forward} with one static call into the
-   * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
-   * and inlines. Every other method is this class's own.
+   * Codegen-support seam: the state of {@code built}, a forward mapper {@link #ofGenerated} built
+   * over a generated bridge, for the class the {@code @Bridge} processor generates for a field.
+   * That class overrides {@link #forward} with one static call into the field's bridge, so a call
+   * through the field's constant is a call the JIT resolves to the bridge and inlines; every other
+   * method is this class's own, and final. {@code grant} is as for the matching {@link Mapper}
+   * constructor.
    *
-   * @throws IllegalArgumentException if {@code built} is not a forward mapper over a generated
-   *     bridge
+   * @throws IllegalArgumentException if {@code grant} is not the one core hands out, or {@code
+   *     built} is not a forward mapper over a generated bridge
    */
-  protected ForwardMapper(final ForwardMapper<A, B> built) {
+  protected ForwardMapper(final ForwardMapper<A, B> built, final BridgeGrant grant) {
+    if (grant != BridgeGrant.INSTANCE) throw new IllegalArgumentException(
+      "Only the class generated for a @Bridge field extends ForwardMapper, with the grant its provider is handed"
+    );
     if (!built.generated) throw new IllegalArgumentException(
       "Only a forward mapper over a generated bridge is specialised by a generated class"
     );

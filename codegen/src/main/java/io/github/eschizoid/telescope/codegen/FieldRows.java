@@ -130,10 +130,37 @@ final class FieldRows {
   }
 
   /**
-   * The simple name of the bridge a {@code @Bridge} field generates: its class, its name, Bridge.
+   * The simple name of the bridge a {@code @Bridge} field declares for {@code source} and {@code
+   * target}, written in the package of the field's class: named by the pair, which one declaration
+   * per pair keeps unique, so renaming or moving the field leaves it as it is.
    */
-  static String bridgeSimpleName(final VariableElement field) {
-    return field.getEnclosingElement().getSimpleName() + camel(field.getSimpleName().toString()) + "Bridge";
+  static String bridgeSimpleName(final TypeElement source, final TypeElement target) {
+    return source.getSimpleName() + "To" + target.getSimpleName() + "Bridge";
+  }
+
+  /**
+   * The simple name of the bridge {@code field} declares, read from the pair its {@code Mapper<A,
+   * B>} or {@code ForwardMapper<A, B>} type names, else from the class literals of its initializer,
+   * or null when neither names the pair.
+   */
+  String bridgeSimpleName(final VariableElement field) {
+    if (field.asType() instanceof DeclaredType declared && declared.getTypeArguments().size() == 2) {
+      final var source = declared.getTypeArguments().get(0);
+      final var target = declared.getTypeArguments().get(1);
+      if (
+        source instanceof DeclaredType s &&
+        s.asElement() instanceof TypeElement sourceType &&
+        target instanceof DeclaredType t &&
+        t.asElement() instanceof TypeElement targetType
+      ) {
+        return bridgeSimpleName(sourceType, targetType);
+      }
+    }
+    final var call = initializerCall(field);
+    final var path = trees.getPath(field);
+    if (call == null || path == null) return null;
+    final var pair = literalPair(path.getCompilationUnit(), call, (TypeElement) field.getEnclosingElement());
+    return pair == null ? null : bridgeSimpleName(pair.get(0), pair.get(1));
   }
 
   /** {@code USER_DTO} as {@code UserDto}, and {@code userDto} as {@code UserDto}. */
@@ -434,7 +461,7 @@ final class FieldRows {
       );
     }
     final var pkg = env.getElementUtils().getPackageOf(field.getEnclosingElement()).getQualifiedName().toString();
-    final var bridgeName = bridgeSimpleName(field);
+    final var bridgeName = bridgeSimpleName(source, target);
     final var rows = new Rows(unit, source, target, strict, pkg, bridgeName);
     for (var i = 2; i < args.size(); i++) {
       final var refused = rows.read(args.get(i));
@@ -743,7 +770,18 @@ final class FieldRows {
       if (refusal != null) return refusal;
       final var owner = (TypeElement) mapperField.getEnclosingElement();
       final var ownerPkg = env.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
-      final var via = (ownerPkg.isEmpty() ? "" : ownerPkg + ".") + bridgeSimpleName(mapperField);
+      final var viaName = bridgeSimpleName(mapperField);
+      if (viaName == null) {
+        return new Refused(
+          args.get(2),
+          "via(...) names " +
+            owner.getSimpleName() +
+            "." +
+            mapperField.getSimpleName() +
+            ", whose type does not name its pair; declare it as Mapper<Source, Target>"
+        );
+      }
+      final var via = (ownerPkg.isEmpty() ? "" : ownerPkg + ".") + viaName;
       if (!viaMappers.containsKey(s)) viaMappers.put(s, via);
       if (env.getElementUtils().getTypeElement(via) == null) {
         if (trees.getTree(mapperField) == null) {

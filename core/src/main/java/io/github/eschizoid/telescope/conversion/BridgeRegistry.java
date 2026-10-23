@@ -81,6 +81,29 @@ public final class BridgeRegistry {
   }
 
   /**
+   * Codegen-support seam: the mapper a factory call dispatched to {@code provider} returns. A
+   * provider {@code ServiceLoader} registered for its declaring class is handed {@code built} and
+   * the {@link BridgeGrant} that lets it build the class generated for the field; any other
+   * provider is not called, and {@code built} is returned.
+   */
+  public static Mapper<?, ?> specialise(final BridgeProvider provider, final Mapper<?, ?> built) {
+    return registered(provider) ? provider.mapper(built, BridgeGrant.INSTANCE) : built;
+  }
+
+  /** As {@link #specialise(BridgeProvider, Mapper)}, for a forward mapper. */
+  public static ForwardMapper<?, ?> specialise(final BridgeProvider provider, final ForwardMapper<?, ?> built) {
+    return registered(provider) ? provider.forwardMapper(built, BridgeGrant.INSTANCE) : built;
+  }
+
+  /** Whether {@code provider} is the instance this registry read for its declaring class. */
+  private static boolean registered(final BridgeProvider provider) {
+    final var declaring = provider.declaringType();
+    if (declaring == null) return false;
+    for (final var each : DECLARED.get(declaring)) if (each == provider) return true;
+    return false;
+  }
+
+  /**
    * The {@code bridge()} value of the unique {@link BridgeProvider} registered for {@code (source,
    * target)} on {@code loader}, or {@link Optional#empty()} when none is registered.
    *

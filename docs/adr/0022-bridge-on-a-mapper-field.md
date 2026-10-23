@@ -21,7 +21,11 @@ the existing emitter without a second one.
 1. **`@Bridge` may annotate a `static final` field initialised in place by `Telescope.mapper(...)` or
    `Telescope.mapperForward(...)`.** The processor reads the rows of that call and generates the bridge from them. The
    field form takes no attributes; the rows are the whole declaration. `mapper` gives a strict bridge, `mapperForward` a
-   lenient one, as on the runtime path.
+   lenient one, as on the runtime path. The field may sit on the source itself or on any class or interface, and the
+   bridge is named by its pair, `<Source>To<Target>Bridge`, in the package of the class declaring the field. One
+   declaration per pair keeps the name unique there, and renaming the field or moving it within the package leaves the
+   name as it is. Two pairs whose simple names agree, declared from one package, take one name, and the second is
+   refused by name on its field.
 2. **The rows the processor compiles** are those whose every argument it can name at compile time, and whose meaning the
    bridge emitter already has:
    - `to` between two accessors, which renames when the names differ;
@@ -56,8 +60,11 @@ the existing emitter without a second one.
    field builds every other mapper as a static field initialised in place by the factory, naming literal classes of a
    pair no `@Bridge` field of the class declares. Every other call in the class is refused: by name during the round,
    and again once javac has attributed the class, by the method each call or method reference resolves to, whatever its
-   receiver. The runtime guard holds every call whose frame below the factory is not a static initialiser; the
-   compile-time guard holds every call and reference written in the declaring class, a helper's included. A nested class
+   receiver. The runtime guard holds every call whose frame below the factory is not a static initialiser. The
+   compile-time guard holds every call and reference written in the declaring class, a helper's included, only when
+   javac's analysis runs with the processor attached. A split build that runs the processor with `-proc:only` and
+   compiles with `-proc:none` gets the name pass alone, so there a static initialiser's call that does not name the
+   factory, such as one through a receiver expression, is not refused and is handed the field's bridge. A nested class
    is a class of its own on both sides.
 5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
    pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a

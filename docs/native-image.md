@@ -33,7 +33,7 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Generated `@Focus` navigator      | `UserTelescope.of().address().city()` read and update, with the navigator in `serialization-config.json` |
 | Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
 | Row typed by a type argument      | `Mapping.to` rows typed by `Tagged<String>` and `Tagged<Badge>`, loading each class by name to check it  |
-| `@Bridge` mapper field            | `TicketMappers.TICKET` found by `StackWalker` and `ServiceLoader`, over records with no registration     |
+| `@Bridge` mapper field            | `Ticket.VIEW` found by `StackWalker` and `ServiceLoader`, over records with no registration              |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /

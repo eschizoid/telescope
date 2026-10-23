@@ -289,6 +289,12 @@ from "compile-checked" to "runtime-checked" is a regression.
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
   that writes more makes `Telescope.all` fuse to a different result than the sequential fold.
+- The protected `Mapper(Mapper, BridgeGrant)` and `ForwardMapper(ForwardMapper, BridgeGrant)` constructors: the class
+  the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
+  call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
+  constructor. `BridgeRegistry.specialise` hands it, at dispatch, only to a provider `ServiceLoader` registered for the
+  field's class, and a constructor given any other value refuses it. Only a mapper a registered provider builds can
+  extend either class, so wrapping a field's mapper in a class of one's own fails at construction.
 
 ### Zero runtime-check points: codegen path
 

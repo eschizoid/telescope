@@ -211,16 +211,21 @@ public class Mapper<A, B> {
   }
 
   /**
-   * <b>Module-internal seam — NOT public API.</b> The state of {@code built}, a mapper over a
-   * generated bridge with no hooks, for the class the {@code @Bridge} processor generates for a
-   * field: that class overrides {@link #forward}, {@link #backward} and {@link #patch} with one
-   * static call each into the field's bridge, so a call through the field's constant is a call the
-   * JIT resolves to the bridge and inlines. Every other method is this class's own.
+   * Codegen-support seam: the state of {@code built}, a mapper over a generated bridge with no
+   * hooks, for the class the {@code @Bridge} processor generates for a field. That class overrides
+   * {@link #forward}, {@link #backward} and {@link #patch} with one static call each into the
+   * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
+   * and inlines; every other method is this class's own, and final. {@code grant} is the {@link
+   * BridgeGrant} the field's provider is handed when the field's factory call is dispatched to it,
+   * which code outside a registered provider does not hold.
    *
-   * @throws IllegalArgumentException if {@code built} is not a mapper over a generated bridge with
-   *     no hooks
+   * @throws IllegalArgumentException if {@code grant} is not the one core hands out, or {@code
+   *     built} is not a mapper over a generated bridge with no hooks
    */
-  protected Mapper(final Mapper<A, B> built) {
+  protected Mapper(final Mapper<A, B> built, final BridgeGrant grant) {
+    if (grant != BridgeGrant.INSTANCE) throw new IllegalArgumentException(
+      "Only the class generated for a @Bridge field extends Mapper, with the grant its provider is handed"
+    );
     if (built.generated == null) throw new IllegalArgumentException(
       "Only a mapper over a generated bridge with no hooks is specialised by a generated class"
     );
