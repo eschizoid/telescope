@@ -1379,17 +1379,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (sourceFields.stream().noneMatch(f -> f.name().equals(t))) {
         error(
           source,
-          "@Bridge transforms field=\"" +
+          "a converting row reads '" +
             t +
-            "\" is not a field of " +
+            "', which is not a property the bridge reads on " +
             source.getSimpleName() +
-            " — known fields: " +
+            "; its properties are " +
             sourceFields.stream().map(Field::name).collect(Collectors.toSet())
         );
-        return;
-      }
-      if (drops.contains(t)) {
-        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
         return;
       }
       // BridgeFn-shape transforms (no `method` qualifier): what the using class's forward and
@@ -1412,7 +1408,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (fn == null) {
           error(
             source,
-            "@Transform field=\"" + t + "\" `using` class " + transforms.get(t) + " does not implement BridgeFn"
+            "a converting row of '" + t + "': " + transforms.get(t) + " does not implement BridgeFn"
           );
           return;
         }
@@ -1469,9 +1465,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             final var amb = (Resolution.Ambiguous) (forward ? fwdRes : bwdRes);
             error(
               source,
-              "@Transform field=\"" +
+              "a converting row of '" +
                 t +
-                "\": " +
+                "': " +
                 transforms.get(t) +
                 "'s " +
                 (forward ? "forward" : "backward") +
@@ -1587,9 +1583,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 : ", and the member it is written through takes " + slot;
             error(
               source,
-              "@Transform field=\"" +
+              "a converting row of '" +
                 t +
-                "\" does not fit " +
+                "' does not fit " +
                 direction +
                 ": " +
                 transforms.get(t) +
@@ -1604,7 +1600,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                   ? heldPhrase(tfType, tfHeld) + " -> " + heldPhrase(sfType, sfHeld)
                   : heldPhrase(sfType, sfHeld) + " -> " + heldPhrase(tfType, tfHeld)) +
                 into +
-                (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
+                (forwardFits
+                  ? ". Convert it with toOneWay(...) in a Telescope.mapperForward(...) mapper if only the forward" +
+                    " direction is wanted."
+                  : "")
             );
             return;
           }
@@ -1622,21 +1621,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (sourceFields.stream().noneMatch(f -> f.name().equals(v))) {
         error(
           source,
-          "@Bridge viaMappers field=\"" +
+          "a via row reads '" +
             v +
-            "\" is not a field of " +
+            "', which is not a property the bridge reads on " +
             source.getSimpleName() +
-            " — known fields: " +
+            "; its properties are " +
             sourceFields.stream().map(Field::name).collect(Collectors.toSet())
         );
-        return;
-      }
-      if (drops.contains(v)) {
-        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and drops — pick one.");
-        return;
-      }
-      if (transforms.containsKey(v)) {
-        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and transforms — pick one.");
         return;
       }
     }
@@ -1648,7 +1639,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!sourceNames.contains(d)) {
         error(
           source,
-          "@Bridge drops=\"" + d + "\" is not a field of " + source.getSimpleName() + " — known fields: " + sourceNames
+          "drop(...) of '" +
+            d +
+            "' names no property the bridge reads on " +
+            source.getSimpleName() +
+            "; its properties are " +
+            sourceNames
         );
         return;
       }
@@ -1661,11 +1657,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!sourceNames.contains(e.getKey())) {
         error(
           source,
-          "@Bridge renames source=\"" +
+          "a row reads '" +
             e.getKey() +
-            "\" is not a field of " +
+            "', which is not a property the bridge reads on " +
             source.getSimpleName() +
-            " — known fields: " +
+            "; its properties are " +
             sourceNames
         );
         return;
@@ -1673,27 +1669,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!targetNames.contains(e.getValue())) {
         error(
           source,
-          "@Bridge renames target=\"" +
+          "a row writes '" +
             e.getValue() +
-            "\" is not a field of " +
+            "', which is not a property the bridge writes on " +
             target.getSimpleName() +
-            " — known fields: " +
+            "; its properties are " +
             targetNames
         );
         return;
       }
-      if (drops.contains(e.getKey())) {
-        error(source, "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one.");
-        return;
-      }
     }
-    // Validate forward-only fan-out extras: every extra target must exist on the target side, each
-    // extra target's type must match the primary target's type (forward writes one source value
-    // into
-    // every target slot — they must be assignment-compatible), and the extra target can't double up
-    // with a constant/compute injection. seenTargets across the whole rename set is already
-    // enforced
-    // upstream in renamesFromMirror; this loop adds the source-side existence + type checks.
+    // Every further target a source property is written into must exist on the target side and
+    // share the first target's type: forward writes one source value into every one of them. A
+    // target written twice is refused by the rows' reader.
     for (final var fanout : renameFanouts.entrySet()) {
       final var srcName = fanout.getKey();
       final var primaryTgt = renames.get(srcName);
@@ -1702,13 +1690,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (!targetNames.contains(extraTgt)) {
           error(
             source,
-            "@Bridge renames target=\"" +
-              extraTgt +
-              "\" (forwardOnly fan-out from \"" +
+            "a row writes '" +
               srcName +
-              "\") is not a field of " +
+              "' into '" +
+              extraTgt +
+              "', which is not a property the bridge writes on " +
               target.getSimpleName() +
-              " — known fields: " +
+              "; its properties are " +
               targetNames
           );
           return;
@@ -1717,18 +1705,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (!isSameType(primaryType, extraType)) {
           error(
             source,
-            "@Bridge renames source=\"" +
+            "'" +
               srcName +
-              "\" fans out to targets with different types — \"" +
+              "' is written into targets of different types — '" +
               primaryTgt +
-              "\" is " +
+              "' is " +
               primaryType +
-              ", \"" +
+              ", '" +
               extraTgt +
-              "\" is " +
+              "' is " +
               extraType +
-              ". Forward-only fan-out writes the same source value into every target; all" +
-              " targets must share the same type."
+              ". Writing one source value into several targets writes the same value into each, so they" +
+              " must share one type."
           );
           return;
         }
@@ -1799,23 +1787,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (!targetFieldNames.contains(mappedTarget) || taken.contains(sf.name())) {
           // A conversion declared on a property the bridge leaves unread would never run.
           final var conversion = transforms.containsKey(sf.name())
-            ? "@Transform"
+            ? "converting row"
             : viaMappers.containsKey(sf.name())
-              ? "@ViaMapper"
+              ? "via row"
               : null;
           if (conversion != null) {
             error(
               source,
-              "@Bridge field \"" +
+              "'" +
                 sf.name() +
-                "\" has a " +
+                "' has a " +
                 conversion +
                 ", but " +
                 target.getSimpleName() +
-                " has no field it is written into, so the lenient bridge would leave it unread and" +
+                " has no property it is written into, so the lenient bridge would leave it unread and" +
                 " never run the conversion. Remove the " +
                 conversion +
-                ", or rename the field onto a field of " +
+                ", or write it into a property of " +
                 target.getSimpleName() +
                 "."
             );
@@ -3700,7 +3688,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               "\" needs a sub-bridge for " +
               abstractSub.getSimpleName() +
               ", which is abstract and has no constructor to rebuild through. Name a concrete" +
-              " type for that field, or give it an explicit @ViaMapper."
+              " type for that field, or convert it through a via(...) row."
           );
           return null;
         }
@@ -5543,7 +5531,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       "' cannot be named from " +
       packagePhrase(bridgePkg) +
       ", where the bridge is generated — the helper converting it writes that type. Make it and" +
-      " every class enclosing it public, or supply an explicit @ViaMapper for this field."
+      " every class enclosing it public, or convert this field through a via(...) row."
     );
   }
 
