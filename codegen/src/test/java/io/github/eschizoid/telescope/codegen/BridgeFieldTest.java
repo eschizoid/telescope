@@ -630,6 +630,14 @@ class BridgeFieldTest {
     "  public static int backward(final long l) { return (int) (l / 10); }\n" +
     "}\n";
 
+  private static final String INFERRED_MAP =
+    "package fb;\n" +
+    "public final class ItemMap {\n" +
+    "  @SuppressWarnings(\"unchecked\")\n" +
+    "  public static <D> D forward(final Item i) { return (D) new ItemDto(i.name() + \"?\"); }\n" +
+    "  public static Item backward(final ItemDto d) { return new Item(d.label().replace(\"?\", \"\")); }\n" +
+    "}\n";
+
   static List<String[]> viaShapes() {
     final var items = "java.util.Arrays.asList(new Item(\"a\"), null, new Item(\"b\"))";
     return List.of(
@@ -669,6 +677,13 @@ class BridgeFieldTest {
         "java.util.List<Item>",
         "java.util.List<ItemDto>",
         GENERIC_MAP,
+        items,
+      },
+      new String[] {
+        "a forward whose result its call infers, over a List",
+        "java.util.List<Item>",
+        "java.util.List<ItemDto>",
+        INFERRED_MAP,
         items,
       },
       new String[] {

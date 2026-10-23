@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -151,20 +152,43 @@ class ViaMethodsRowTest {
     assertTrue(refused.getMessage().contains("not a lambda"), refused::getMessage);
   }
 
-  /** A class a subclass implements, whose method an unbound reference names. */
+  /** A class two subclasses implement, whose default method an unbound reference names. */
   public interface Shape {
     String name();
 
     default ShapeDto toDto() {
-      return new ShapeDto(name());
+      return new ShapeDto(name(), getClass().getSimpleName());
     }
   }
 
   public record Circle(String name) implements Shape {}
 
-  public record ShapeDto(String name) {
+  public record Square(String name) implements Shape {}
+
+  public record ShapeDto(String name, String kind) {
+    public Shape toShape() {
+      return kind.equals("Circle") ? new Circle(name) : new Square(name);
+    }
+
     public Circle toCircle() {
       return new Circle(name);
+    }
+  }
+
+  public static final class Shapes2 {
+
+    private Shapes2() {}
+
+    public static ShapeDto forward(final Shape shape) {
+      return shape.toDto();
+    }
+
+    public static Shape backward(final ShapeDto dto) {
+      return dto.toShape();
+    }
+
+    public static Circle backwardToCircle(final ShapeDto dto) {
+      return dto.toCircle();
     }
   }
 
@@ -172,17 +196,46 @@ class ViaMethodsRowTest {
 
   public record ShapesDto(List<ShapeDto> shapes) {}
 
+  private static final Shapes MIXED = new Shapes(List.of(new Circle("a"), new Square("b")));
+
   @Test
-  @DisplayName("an unbound method takes any instance of the class declaring it, whatever backward returns")
-  void anUnboundMethodTakesItsDeclaringClass() {
-    final var mapper = Telescope.mapper(
+  @DisplayName(
+    "a list of two subclasses converts through a static method and a default one, backward returning the interface"
+  )
+  void aMixedListConverts() {
+    final var expected = new ShapesDto(List.of(new ShapeDto("a", "Circle"), new ShapeDto("b", "Square")));
+    final var byStatic = Telescope.mapper(
       Shapes.class,
       ShapesDto.class,
-      via(Shapes::shapes, ShapesDto::shapes, Shape::toDto, ShapeDto::toCircle)
+      via(Shapes::shapes, ShapesDto::shapes, Shapes2::forward, Shapes2::backward)
     );
-    final var dto = mapper.forward(new Shapes(List.of(new Circle("a"))));
-    assertEquals(new ShapesDto(List.of(new ShapeDto("a"))), dto);
-    assertEquals(new Shapes(List.of(new Circle("a"))), mapper.backward(dto));
+    assertEquals(expected, byStatic.forward(MIXED));
+    assertEquals(MIXED, byStatic.backward(expected));
+    final var byDefault = Telescope.mapper(
+      Shapes.class,
+      ShapesDto.class,
+      via(Shapes::shapes, ShapesDto::shapes, Shape::toDto, ShapeDto::toShape)
+    );
+    assertEquals(expected, byDefault.forward(MIXED));
+    assertEquals(MIXED, byDefault.backward(expected));
+  }
+
+  @Test
+  @DisplayName("a backward returning one subclass narrows forward to it, and the row is refused by name, never cast")
+  void aNarrowedForwardIsRefused() {
+    for (final var row : List.<Mapping<Shapes, ShapesDto>>of(
+      via(Shapes::shapes, ShapesDto::shapes, Shapes2::forward, Shapes2::backwardToCircle),
+      via(Shapes::shapes, ShapesDto::shapes, Shape::toDto, ShapeDto::toCircle)
+    )) {
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(Shapes.class, ShapesDto.class, row)
+      );
+      assertTrue(
+        refused.getMessage().contains("forward takes only Circle, narrower than the Shape"),
+        refused::getMessage
+      );
+      assertTrue(refused.getMessage().contains("Have backward return Shape"), refused::getMessage);
+    }
   }
 
   /** A generic supertype whose inherited method returns its type variable. */
@@ -253,6 +306,6 @@ class ViaMethodsRowTest {
     final var refused = assertThrows(IllegalArgumentException.class, () ->
       Telescope.mapper(Held.class, HeldDto.class, row)
     );
-    assertTrue(refused.getMessage().contains("returns, which a type variable names"), refused::getMessage);
+    assertTrue(refused.getMessage().contains("returns, which a type variable of its class names"), refused::getMessage);
   }
 }

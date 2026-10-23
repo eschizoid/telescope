@@ -494,11 +494,14 @@ public sealed interface Mapping<A, B>
    * value into a target value, and {@code backward} turns it back. As with {@link #via(Accessor,
    * Accessor, Mapper)}, the two may convert one element, and the row then converts a {@code List},
    * {@code Set}, {@code Optional} or the values of a {@code Map} element by element; they convert
-   * the whole property when {@code forward} takes the property's own type. Which one is read from
-   * the class {@code forward}'s method takes: a parameter typed by a type variable counts as its
-   * bound, and a primitive as its wrapper. A null value, or a null element, stays null and is not
-   * handed to either method. What {@code backward} returns must be a value {@code forward} takes,
-   * which is also what lets a generic {@code forward} be named without its type argument.
+   * the whole property when {@code forward} takes the property's own type. A null value, or a null
+   * element, stays null and is not handed to either method.
+   *
+   * <p>What {@code backward} returns must be a value {@code forward} takes, which is what lets a
+   * generic {@code forward} be named without its type argument, and the compiler then types {@code
+   * forward} as taking that class. Have {@code backward} return the class the property's elements
+   * are: one returning a subclass narrows {@code forward} to it, and a property holding another
+   * subclass is refused by name when the mapper is built.
    *
    * <pre>{@code
    * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line

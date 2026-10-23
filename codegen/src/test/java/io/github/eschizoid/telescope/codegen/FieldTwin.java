@@ -93,8 +93,9 @@ final class FieldTwin {
         () -> "the class form is refused and its field twin is not:\n" + original.errorMessages()
       );
       // The field form refuses with the class form's words, once a refusal made on a field's rows
-      // is read without its prefix. It refuses earlier where a field's rows cannot be written at
-      // all: a side nested in another class, or a row naming a property its side lacks.
+      // is read without its prefix. It refuses earlier in two cases: a side nested in another
+      // class, which a field's side may not be, and a conversion the class form refuses because
+      // the target has no property to write it into, which a field's row cannot name at all.
       final var refusal = original.errors().getFirst().getMessage(Locale.ROOT);
       final var twinRefusals = compiled
         .errors()
@@ -103,7 +104,11 @@ final class FieldTwin {
         .toList();
       final var earlier = twinRefusals
         .stream()
-        .anyMatch(m -> m.contains("must be a top-level type") || m.startsWith("invalid method reference"));
+        .anyMatch(
+          m ->
+            m.contains("must be a top-level type") ||
+            (m.startsWith("invalid method reference") && refusal.contains("has no field it is written into"))
+        );
       assertTrue(
         earlier || twinRefusals.contains(refusal),
         () -> "the field twin is refused otherwise than the class form:\n  " + refusal + "\nvs\n  " + twinRefusals

@@ -319,7 +319,17 @@ class LambdaIntrospectionTest {
     }
 
     private static Class<?>[] of(final Serializable reference) {
-      return LambdaIntrospection.conversionOf(reference);
+      final var conversion = LambdaIntrospection.conversionOf(reference);
+      return new Class<?>[] { conversion.from(), conversion.to() };
+    }
+
+    static Shape draw(final Shape shape) {
+      return shape;
+    }
+
+    @SuppressWarnings("unchecked")
+    static <D> D infer(final String s) {
+      return (D) s;
     }
 
     @Test
@@ -330,10 +340,10 @@ class LambdaIntrospectionTest {
     }
 
     @Test
-    @DisplayName("a parameter typed by a type variable takes its bound")
+    @DisplayName("a parameter typed by a type variable takes the class the instantiation gives it")
     void aGenericMethod() {
       final Fn<String, Integer> f = ConversionOf::generic;
-      assertEquals(List.of(CharSequence.class, Integer.class), List.of(of(f)));
+      assertEquals(List.of(String.class, Integer.class), List.of(of(f)));
     }
 
     @Test
@@ -412,10 +422,14 @@ class LambdaIntrospectionTest {
     }
 
     @Test
-    @DisplayName("an unbound method takes the class declaring it, not the receiver it was named on")
-    void anUnboundMethodTakesItsDeclaringClass() {
+    @DisplayName("a reference takes the class its instantiation casts the argument to, a narrowed one included")
+    void aReferenceTakesItsInstantiatedClass() {
       final Fn<Circle, String> f = Circle::label;
-      assertEquals(List.of(Shape.class, String.class), List.of(of(f)));
+      assertEquals(List.of(Circle.class, String.class), List.of(of(f)));
+      final Fn<Circle, Shape> narrowed = ConversionOf::draw;
+      assertEquals(List.of(Circle.class, Shape.class), List.of(of(narrowed)));
+      final Fn<Shape, Shape> wide = ConversionOf::draw;
+      assertEquals(List.of(Shape.class, Shape.class), List.of(of(wide)));
       assertTrue(LambdaIntrospection.takesReceiver(f));
       final Fn<CharSequence, Integer> s = ConversionOf::length;
       assertFalse(LambdaIntrospection.takesReceiver(s));
@@ -427,7 +441,21 @@ class LambdaIntrospectionTest {
     void aHiddenReturnIsRefused() {
       final Fn raw = (Fn<Holder, Object>) Holder::get;
       final var refused = assertThrows(IllegalArgumentException.class, () -> of(raw));
-      assertTrue(refused.getMessage().contains("returns, which a type variable names"), refused::getMessage);
+      assertTrue(
+        refused.getMessage().contains("returns, which a type variable of its class names"),
+        refused::getMessage
+      );
+    }
+
+    @Test
+    @DisplayName("a method returning its own type variable gives its bound, which the call site infers")
+    void anInferredResult() {
+      final Fn<String, Object> f = ConversionOf::infer;
+      final var conversion = LambdaIntrospection.conversionOf(f);
+      assertEquals(List.of(String.class, Object.class), List.of(conversion.from(), conversion.to()));
+      assertTrue(conversion.resultInferred());
+      final Fn<CharSequence, Integer> plain = ConversionOf::length;
+      assertFalse(LambdaIntrospection.conversionOf(plain).resultInferred());
     }
 
     @Test

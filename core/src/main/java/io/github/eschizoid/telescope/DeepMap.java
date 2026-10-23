@@ -2343,8 +2343,14 @@ public final class DeepMap {
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, false);
-      case ViaMethods<?, ?> r -> liftViaIfNeeded(r.resolved(), srcType, tgtType, sides, r.forwardTakesAnySubclass());
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, null);
+      case ViaMethods<?, ?> r -> liftViaIfNeeded(
+        r.resolved(),
+        srcType,
+        tgtType,
+        sides,
+        LambdaIntrospection.conversionOf(r.forward())
+      );
       // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
       // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
       // called. The cases exist only because the sealed switch must stay exhaustive — if a future
@@ -2381,7 +2387,7 @@ public final class DeepMap {
     final Type srcType,
     final Type tgtType,
     final RowSides sides,
-    final boolean anySubclass
+    final LambdaIntrospection.Conversion methods
   ) {
     // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
     // pull the source/target classes from the same Mapper. Reading the public components inline
@@ -2397,13 +2403,17 @@ public final class DeepMap {
     // finds the kinds equal, and reaches a lift no allocator answers for.
     final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
     final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
+    if (methods != null) refuseNarrowedInput(sides, srcShape, tgtShape, srcType, mapperSrc);
     if (
       srcShape != null &&
       tgtShape != null &&
       srcShape.kind() == tgtShape.kind() &&
-      (elementTypeMatches(srcShape.elementType(), mapperSrc) ||
-        (anySubclass && srcShape.elementType() instanceof Class<?> held && mapperSrc.isAssignableFrom(held))) &&
-      elementTypeMatches(tgtShape.elementType(), mapperTgt)
+      elementTypeMatches(srcShape.elementType(), mapperSrc) &&
+      (elementTypeMatches(tgtShape.elementType(), mapperTgt) ||
+        (methods != null &&
+          methods.resultInferred() &&
+          tgtShape.elementType() instanceof Class<?> written &&
+          mapperTgt.isAssignableFrom(written)))
     ) {
       if (srcShape.kind() == ContainerView.Kind.MAP_VALUES && !srcShape.keyType().equals(tgtShape.keyType())) {
         throw new IllegalStateException(
@@ -2430,6 +2440,47 @@ public final class DeepMap {
     refuseUnfit(sides, "source", sides.srcField(), srcType, mapperSrc);
     refuseUnfit(sides, "target", sides.tgtField(), tgtType, mapperTgt);
     return elementIso;
+  }
+
+  /**
+   * Refuses a via row of two methods whose {@code forward} takes only {@code takes}, a class
+   * narrower than the property's element, or than the property itself: the lambda javac builds for
+   * the reference casts each value to {@code takes}, so a value of another subclass would throw a
+   * {@code ClassCastException}. javac narrows it so when {@code backward} returns that class.
+   */
+  private static void refuseNarrowedInput(
+    final RowSides sides,
+    final ContainerView<Type> srcShape,
+    final ContainerView<Type> tgtShape,
+    final Type srcType,
+    final Class<?> takes
+  ) {
+    final Class<?> held =
+      srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()
+        ? srcShape.elementType() instanceof Class<?> element
+          ? element
+          : null
+        : heldClassOf(srcType);
+    if (held == null || boxed(held) == takes || !boxed(held).isAssignableFrom(takes)) return;
+    throw new IllegalArgumentException(
+      "Deep map " +
+        sides.source().getSimpleName() +
+        " → " +
+        sides.target().getSimpleName() +
+        ": the via row's forward takes only " +
+        takes.getSimpleName() +
+        ", narrower than the " +
+        held.getSimpleName() +
+        " the source's '" +
+        sides.srcField() +
+        "' holds, because backward returns " +
+        takes.getSimpleName() +
+        "; another " +
+        held.getSimpleName() +
+        " would not convert. Have backward return " +
+        held.getSimpleName() +
+        ", which forward takes."
+    );
   }
 
   /** The pair a row converts at and the two properties it reads and writes, named for a refusal. */

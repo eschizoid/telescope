@@ -41,15 +41,6 @@ public record ViaMethods<A, B>(
   }
 
   /**
-   * Whether {@code forward} is an instance method called on the value it converts, which applies to
-   * any instance of the class declaring it: a property holding a subclass of that class is
-   * converted element by element as one holding the class itself is.
-   */
-  public boolean forwardTakesAnySubclass() {
-    return LambdaIntrospection.takesReceiver(forward);
-  }
-
-  /**
    * The {@link Via} row the two methods make: a mapper between the classes {@code forward}'s method
    * converts between, which the runtime path converts the whole property or each element through.
    *
@@ -58,11 +49,17 @@ public record ViaMethods<A, B>(
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public Via<A, B> resolved() {
-    final var classes = LambdaIntrospection.conversionOf(forward);
+    final var conversion = LambdaIntrospection.conversionOf(forward);
     LambdaIntrospection.conversionOf(backward);
     final Function<Object, Object> there = (Function) forward;
     final Function<Object, Object> back = (Function) backward;
-    final var element = Mapper.create(there, back, (Class<Object>) classes[0], (Class<Object>) classes[1], Map.of());
+    final var element = Mapper.create(
+      there,
+      back,
+      (Class<Object>) conversion.from(),
+      (Class<Object>) conversion.to(),
+      Map.of()
+    );
     return new Via<>(src, tgt, element);
   }
 }
