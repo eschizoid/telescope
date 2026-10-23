@@ -1492,6 +1492,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       filled.addAll(renameFanouts.getOrDefault(rename.getKey(), List.of()));
       renamedTo.put(rename.getKey(), filled);
     }
+    // Every target property a source property is written into: each rename on it, the first
+    // declared first, or the property of its own name where it has none.
+    final Function<String, List<String>> targetsOf = name -> renamedTo.getOrDefault(name, List.of(name));
     final var unwalked = Unwalked.of(
       drops,
       transforms.keySet(),
@@ -2015,11 +2018,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         return;
       }
-      // GAP-5: when @Compute owns target.X and source.X exists with a source-side modifier
-      // (@Default / @Transform / @ViaMapper), the source-side annotation becomes dead code —
-      // the supplier short-circuits any source read for that slot. Reject loudly so the user
-      // either drops the source-side modifier or renames source.X to a different target slot.
-      if (sourceNames.contains(fieldName)) {
+      // When @Compute owns target.X and source.X would be written there, a source-side modifier on
+      // it (@Default / @Transform / @ViaMapper) is dead code: the supplier short-circuits any
+      // source read for that slot. A source.X renamed to another target property is written
+      // there instead, so its modifiers stay live.
+      if (sourceNames.contains(fieldName) && !renames.containsKey(fieldName)) {
         if (parsedDefaults.containsKey(fieldName)) {
           error(
             source,
@@ -2068,7 +2071,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       for (final var sf : sourceFields) {
         if (effectiveDrops.contains(sf.name())) continue;
         final var mappedTarget = renames.getOrDefault(sf.name(), sf.name());
-        if (!targetFieldNames.contains(mappedTarget)) {
+        // A property whose same-named target another property is renamed onto has no target of
+        // its own, as one with no same-named target has none.
+        if (!targetFieldNames.contains(mappedTarget) || writtenByARename(sf.name(), renames, renameTargetNames)) {
           effectiveDrops.add(sf.name());
         }
       }
@@ -2098,6 +2103,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !effectiveDrops.contains(f.name()))
           .toList();
+    // A source property left under its own name whose same-named target another property is
+    // renamed onto has no target to be written into, which the runtime mapper refuses by the
+    // property's name.
+    for (final var sf : nonDroppedSourceFields) {
+      if (!writtenByARename(sf.name(), renames, renameTargetNames)) continue;
+      error(
+        source,
+        PairingMessages.noSameNameTarget(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          slotWord(source),
+          slotWord(target),
+          sf.name()
+        )
+      );
+      return;
+    }
     if (
       !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
     ) return;
@@ -2256,7 +2278,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A transformed field's value is what its transform returns, which the transform check has
     // already held to the member it is written through; every other value has the field's own type.
     final var transformedTargets = new HashSet<String>();
-    for (final var t : transforms.keySet()) transformedTargets.add(renames.getOrDefault(t, t));
+    for (final var t : transforms.keySet()) transformedTargets.addAll(targetsOf.apply(t));
     final var transformedSources = new HashSet<>(transforms.keySet());
     transformedSources.removeAll(forwardOnlyTransforms);
     // What each transform hands the setter it writes through, by the field written: the target's
@@ -2272,7 +2294,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!entry.getValue().userSuppliedBridge()) continue;
       final var sourceName = entry.getKey();
       final var targetName = renames.getOrDefault(sourceName, sourceName);
-      if (!fieldByName(sourceFields, sourceName).type().getKind().isPrimitive()) referenceTargets.add(targetName);
+      if (!fieldByName(sourceFields, sourceName).type().getKind().isPrimitive()) {
+        referenceTargets.addAll(targetsOf.apply(sourceName));
+      }
       final var tf = targetFields
         .stream()
         .filter(f -> f.name().equals(targetName))
@@ -2300,7 +2324,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         !qualified,
         1
       );
-      if (forward != null) forwardGives.put(targetName, forward);
+      if (forward != null) for (final var each : targetsOf.apply(t)) forwardGives.put(each, forward);
       if (qualified || forwardOnlyTransforms.contains(t) || tf == null) continue;
       final var backward = transformGives(usingEl, "backward", heldAs(tf.type()), bridgePackage, true, 0);
       if (backward != null) backwardGives.put(t, backward);
@@ -2327,23 +2351,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           ? bound
           : inferringFn(mapper, "forward", handed, bridgePackage);
       if (forward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
-        final var result = viaResult(
-          v,
-          mapper,
-          "forward",
-          bound.member(),
-          handed,
-          target,
-          targetRebuild,
-          targetName,
-          bridgePackage
-        );
-        if (result.refusal() != null) {
-          error(source, result.refusal());
-          return;
+        for (final var written : targetsOf.apply(v)) {
+          final var result = viaResult(
+            v,
+            mapper,
+            "forward",
+            bound.member(),
+            handed,
+            target,
+            targetRebuild,
+            written,
+            bridgePackage
+          );
+          if (result.refusal() != null) {
+            error(source, result.refusal());
+            return;
+          }
+          forwardGives.put(written, result.gives());
+          transformedTargets.add(written);
         }
-        forwardGives.put(targetName, result.gives());
-        transformedTargets.add(targetName);
       }
       if (tf == null) continue;
       final var given = heldAs(tf.type());
@@ -8585,6 +8611,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         tn
     );
     return false;
+  }
+
+  /**
+   * Whether source property {@code name}, left under its own name, has its same-named target
+   * written by a rename of another property.
+   */
+  private static boolean writtenByARename(
+    final String name,
+    final Map<String, String> renames,
+    final Set<String> renameTargetNames
+  ) {
+    return !renames.containsKey(name) && renameTargetNames.contains(name);
+  }
+
+  /**
+   * What a property of {@code type} is called in a message: a record's field, a bean's property.
+   */
+  private static String slotWord(final TypeElement type) {
+    return type.getKind() == ElementKind.RECORD ? "field" : "property";
   }
 
   private static Field fieldByName(final List<Field> fields, final String name) {

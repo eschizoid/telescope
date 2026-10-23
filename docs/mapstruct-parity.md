@@ -104,7 +104,9 @@ On `@Bridge`, `@Rename(source = "email", target = "contactEmail")` names the pai
 `@ViaMapper` on the same source field converts the value on the way, so one field is renamed and converted the way the
 four-argument `to(...)` row and `via(...)` do it on the runtime path; the generated code is the same direct call it is
 for a field that is not renamed. A forward-only fan-out (several renames from one source) through a transform writes the
-converted value into every target, and reads the source back from the first rename declared.
+converted value into every target, and reads the source back from the first rename declared. A rename onto the target of
+another source field left under its own name is refused by that field's name on both paths, since the field would have
+nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
@@ -112,8 +114,9 @@ type); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, th
 — every field threads through correctly' (to(CompanyEntity::founded, CompanyDto::since) rename in 5-level nesting);
 core/src/main/java/io/github/eschizoid/telescope/Telescope.java, the javadoc on `map(Class, Class, MapStep...)` (a
 rename row applies wherever recursion lands on that type pair);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a property both renamed
-and converted by its own conversion converts the same way on both paths'</sub>
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a property both renamed
+and converted by its own conversion converts the same way on both paths' and 'a property left under its own name whose
+target a rename of another property fills is refused by name, the same way on both paths'</sub>
 
 ### Nested source path
 

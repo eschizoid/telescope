@@ -9695,6 +9695,25 @@ class CrossPathCorpusTest {
     "  public static %1$sIn backward(final %1$sOut o) { return new %1$sIn(o.v() + \"<\"); }\n}\n";
 
   /**
+   * {@code %1$sTgt}, a bean whose {@code x} and {@code y} are read as {@code CharSequence}, written
+   * through {@code setX(CharSequence)} and through {@code setY(String)}, which marks what it wrote.
+   */
+  private static final String FAN_OUT_BEAN =
+    "public class %1$sTgt {\n" +
+    "  private CharSequence x;\n" +
+    "  private CharSequence y;\n" +
+    "  public %1$sTgt() {}\n" +
+    "  public CharSequence getX() { return x; }\n" +
+    "  public void setX(final CharSequence v) { this.x = v; }\n" +
+    "  public CharSequence getY() { return y; }\n" +
+    "  public void setY(final String v) { this.y = \"S:\" + v; }\n}\n";
+
+  /** {@code %1$sMade}, a {@code Supplier<String>} giving {@code "made"}. */
+  private static final String MADE =
+    "public class %1$sMade implements java.util.function.Supplier<String> {\n" +
+    "  public String get() { return \"made\"; }\n}\n";
+
+  /**
    * A property converted by a transform or a {@code @ViaMapper} and renamed by a {@code @Rename} on
    * the same field, against the runtime rows that rename and convert it in one: the declarations,
    * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
@@ -9842,9 +9861,9 @@ class CrossPathCorpusTest {
           sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
         sampled("%1$sTgt", "String x, String y", "new %1$sTgt(\"#5\", \"#9\")"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
-        // The runtime reads a fanned-out source back from the row given last, and the
-        // bridge from
-        // the rename declared first, so the rows name the targets in the opposite order.
+        // The runtime reads a fanned-out source back from the row given last, the bridge
+        // from the
+        // rename declared first, so the rows name the targets in the opposite order.
         runtimeMapper(
           false,
           "    final var fn = new %1$sFn();\n",
@@ -9905,6 +9924,221 @@ class CrossPathCorpusTest {
       "#0(outs=[#1(v=\"p>\"), #2(v=\"r>\")])",
       "#0(ins=[#1(v=\"q<\")])",
       "#0(ins=[#1(v=\"q<\")])"
+    ),
+    new VariableTransform(
+      "a fan-out through a transform into a bean whose first target's setter takes the getter's type and the second's the result's",
+      true,
+      List.of(
+        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
+          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        FAN_OUT_BEAN,
+        transformFn("Integer", "String", "\"#\" + a", "0"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getY, fn::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getX, fn::forward)"
+        )
+      ),
+      "#0(x=\"#7\", y=\"S:#7\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "the same fan-out with its renames declared the other way round",
+      true,
+      List.of(
+        renamedConversion("transforms", transformOn("n", true), "n", "y", "x") +
+          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        FAN_OUT_BEAN,
+        transformFn("Integer", "String", "\"#\" + a", "0"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getX, fn::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getY, fn::forward)"
+        )
+      ),
+      "#0(x=\"#7\", y=\"S:#7\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a fan-out through a transform giving a wider type, into a record",
+      true,
+      List.of(
+        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
+          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sTgt", "String x, String y", "new %1$sTgt(\"#5\", \"#9\")"),
+        transformFn("Integer", "Object", "\"#\" + a", "0"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, Object>toOneWay(%1$sSrc::n, %1$sTgt::y, fn::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, Object>toOneWay(%1$sSrc::n, %1$sTgt::x, fn::forward)"
+        )
+      ),
+      "#0(x=\"#7\", y=\"#7\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a fan-out through a transform giving null, into primitive targets",
+      true,
+      List.of(
+        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
+          sampled("%1$sSrc", "Integer n", "new %1$sSrc(null)"),
+        sampled("%1$sTgt", "int x, int y", "new %1$sTgt(5, 9)"),
+        transformFn("Integer", "Integer", "a == null ? null : a + 1", "0"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, Integer>toOneWay(%1$sSrc::n, %1$sTgt::y, fn::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, Integer>toOneWay(%1$sSrc::n, %1$sTgt::x, fn::forward)"
+        )
+      ),
+      "#0(x=0, y=0)",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a fan-out through a @ViaMapper giving a wider type, into a record",
+      true,
+      List.of(
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        "public class %1$sVia {\n" +
+          "  public static Object forward(final %1$sIn i) { return new %1$sOut(i.v() + \">\"); }\n" +
+          "  public static %1$sIn backward(final %1$sOut o) { return new %1$sIn(o.v() + \"<\"); }\n}\n",
+        renamedConversion(
+            "viaMappers",
+            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
+            "a",
+            "x",
+            "y"
+          ) +
+          sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        sampled("%1$sTgt", "%1$sOut x, %1$sOut y", "new %1$sTgt(new %1$sOut(\"q\"), new %1$sOut(\"r\"))"),
+        // The runtime's mapper is typed by the classes it converts, so it narrows the
+        // result the
+        // bridge writes after a check of its class.
+        runtimeMapper(
+          true,
+          "    final io.github.eschizoid.telescope.conversion.Mapper via =" +
+            " io.github.eschizoid.telescope.conversion.Mapper.create(\n" +
+            "      (%1$sIn i) -> (%1$sOut) %1$sVia.forward(i), (%1$sOut o) -> %1$sVia.backward(o)," +
+            " %1$sIn.class, %1$sOut.class, java.util.Map.of());\n",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::y, via)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::x, via)"
+        )
+      ),
+      "#0(x=#1(v=\"p>\"), y=#2(v=\"p>\"))",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a fan-out of a null through a @ViaMapper returning a primitive, into a bean's primitive properties",
+      true,
+      List.of(
+        "public class %1$sVia {\n" +
+          "  public static int forward(final Integer i) { return i + 1; }\n" +
+          "  public static Integer backward(final int o) { return o - 1; }\n}\n",
+        renamedConversion(
+            "viaMappers",
+            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
+            "a",
+            "x",
+            "y"
+          ) +
+          sampled("%1$sSrc", "Integer a", "new %1$sSrc(null)"),
+        "public class %1$sTgt {\n" +
+          "  private int x;\n" +
+          "  private int y;\n" +
+          "  public %1$sTgt() {}\n" +
+          "  public int getX() { return x; }\n" +
+          "  public void setX(final int v) { this.x = v; }\n" +
+          "  public int getY() { return y; }\n" +
+          "  public void setY(final int v) { this.y = v; }\n}\n",
+        runtimeMapper(
+          true,
+          viaMapperOf("Integer", "Integer"),
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::getY, via)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::getX, via)"
+        )
+      ),
+      "#0(x=0, y=0)",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a renamed property through a transform beside a value computed into the property of its own name",
+      true,
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
+          transformOn("n", true) +
+          ", computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"n\", using = %1$sMade.class))\n" +
+          sampled("%1$sSrc", "String n", "new %1$sSrc(\"7\")"),
+        sampled("%1$sTgt", "String label, String n", "new %1$sTgt(\"#5\", \"q\")"),
+        transformFn("String", "String", "\"#\" + a", "b"),
+        MADE,
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, String, String>toOneWay(%1$sSrc::n, %1$sTgt::label, fn::forward)",
+          "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::n, new %1$sMade())"
+        )
+      ),
+      "#0(label=\"#7\", n=\"made\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a renamed property through a @ViaMapper beside a value computed into the property of its own name",
+      true,
+      List.of(
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        VIA_IN_OUT,
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"a\", target = \"b\"), viaMappers =" +
+          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)," +
+          " computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"a\", using = %1$sMade.class))\n" +
+          sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        sampled("%1$sTgt", "%1$sOut b, %1$sIn a", "new %1$sTgt(new %1$sOut(\"q\"), new %1$sIn(\"r\"))"),
+        "public class %1$sMade implements java.util.function.Supplier<%1$sIn> {\n" +
+          "  public %1$sIn get() { return new %1$sIn(\"made\"); }\n}\n",
+        runtimeMapper(
+          true,
+          viaMapperOf("%1$sIn", "%1$sOut"),
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, via)",
+          "<%1$sSrc, %1$sTgt, %1$sIn>compute(%1$sTgt::a, new %1$sMade())"
+        )
+      ),
+      "#0(b=#1(v=\"p>\"), a=#2(v=\"made\"))",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a lenient bridge renaming a property onto the target of a property left under its own name",
+      true,
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
+          transformOn("n", false) +
+          ")\n" +
+          sampled("%1$sSrc", "Integer n, String label", "new %1$sSrc(7, \"own\")"),
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"#5\")"),
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
+        runtimeMapper(
+          true,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, String>toOneWay(%1$sSrc::n, %1$sTgt::label, fn::forward)"
+        )
+      ),
+      "#0(label=\"#7\")",
+      null,
+      null
     ),
     new VariableTransform(
       "a nested pair whose own bridge renames and transforms a property, below a pair with no rows",
@@ -10032,6 +10266,120 @@ class CrossPathCorpusTest {
       ),
       processed::errorMessages
     );
+  }
+
+  /**
+   * A strict pair renaming one source property onto the target of another left under its own name,
+   * which then has nowhere to be written: the declarations, each with {@code %1$s} as the row's
+   * prefix and the last of them the runtime row, and the property both paths refuse by name.
+   */
+  private record KeptName(String name, String kept, List<String> declarations) {}
+
+  private static final List<KeptName> RENAMED_ONTO_A_KEPT_NAME = List.of(
+    new KeptName(
+      "a plain rename",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
+          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sTgt(String label) {}\n",
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)")
+      )
+    ),
+    new KeptName(
+      "a rename through a transform",
+      "label",
+      List.of(
+        renamedConversion("transforms", transformOn("n", false), "n", "label") +
+          "public record %1$sSrc(Integer n, String label) {}\n",
+        "public record %1$sTgt(String label) {}\n",
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
+        runtimeMapper(
+          false,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::label, fn::forward, fn::backward)"
+        )
+      )
+    ),
+    new KeptName(
+      "a rename through a @ViaMapper",
+      "b",
+      List.of(
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        VIA_IN_OUT,
+        renamedConversion(
+            "viaMappers",
+            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
+            "a",
+            "b"
+          ) +
+          "public record %1$sSrc(%1$sIn a, %1$sOut b) {}\n",
+        "public record %1$sTgt(%1$sOut b) {}\n",
+        runtimeMapper(false, viaMapperOf("%1$sIn", "%1$sOut"), "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, via)")
+      )
+    ),
+    new KeptName(
+      "a rename into a bean",
+      "value",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"value\"))\n" +
+          "public record %1$sSrc(String n, String value) {}\n",
+        valueBean("%1$sTgt", "String", "\"q\""),
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::getValue)")
+      )
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a property left under its own name whose target a rename of another property fills is refused by name, the same way on both paths"
+  )
+  void aKeptNameARenameFillsIsRefusedTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : RENAMED_ONTO_A_KEPT_NAME) {
+      final var prefix = "Rk" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var classes = plain.define(MethodHandles.lookup());
+      String runtime;
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        runtime = null;
+      } catch (final InvocationTargetException e) {
+        runtime = String.valueOf(e.getCause().getMessage());
+      }
+      if (runtime == null) {
+        failures.add(row.name() + ": the runtime built a mapper, where it owed a refusal");
+        continue;
+      }
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var generated = processed
+        .errors()
+        .stream()
+        .map(d -> d.getMessage(Locale.ROOT))
+        .toList();
+      if (processed.success() || !generated.contains(runtime)) {
+        failures.add(row.name() + ": the generated path owed the runtime's refusal, " + runtime + ", saw " + generated);
+      }
+      if (!runtime.contains("'" + row.kept() + "'")) {
+        failures.add(row.name() + ": the refusal should name the property left under its own name, saw " + runtime);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   @Test

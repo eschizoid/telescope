@@ -47,9 +47,10 @@ cannot do is refused by name at compile time.
    `@Bridge(lenient = true)`) for every source constant, and anything else is refused at compile time naming the
    constants that have none. A rename for individual constants is a later addition.
 3. **Conversion on a renamed field.** A `@Rename` and a `@Transform` or `@ViaMapper` on the same source field compose:
-   the rename names the target field and the conversion converts the value written there, so one field can be renamed
-   and converted without a new attribute. Built-in conversions for String and number, enum and String, and List and Set
-   follow, each decided in the shared spec so both paths convert the same pairs.
+   the rename names the target field and the conversion converts the value written there. Whether `@Transform` and
+   `@ViaMapper` also gain a target attribute, so that a fan-out can convert each target its own way, is decided
+   separately. Built-in conversions for String and number, enum and String, and List and Set follow, each decided in the
+   shared spec so both paths convert the same pairs.
 4. **Values computed from the source.** A `@Compute` form takes a function of the source, so a target field can be built
    from several source fields.
 5. **Nested source and target paths.** A rename source can name a nested field. Reading through a nested path
