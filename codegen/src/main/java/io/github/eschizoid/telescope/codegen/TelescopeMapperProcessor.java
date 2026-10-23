@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.util.Trees;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -19,6 +20,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
@@ -379,6 +381,11 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var bridges = elements.getTypeElement(BRIDGES);
     if (bridge != null && bridges != null) {
       for (final var carrier : round.getElementsAnnotatedWithAny(bridge, bridges)) {
+        if (carrier instanceof VariableElement field && carrier.getKind() == ElementKind.FIELD) {
+          final var declared = fieldBridgeFor(field, from, to);
+          if (declared != null) return declared;
+          continue;
+        }
         for (final var mirror : bridgeAnnotations(carrier)) {
           final var carriedSource = declaredType(mirror, "source");
           final var carriedTarget = declaredType(mirror, "target");
@@ -395,6 +402,36 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       if (hasForward(elements.getTypeElement(name), from, to)) return name;
     }
     return null;
+  }
+
+  /**
+   * The qualified name of the bridge {@code field}, a {@code @Bridge} mapper field, declares, when
+   * its mapper call names {@code from} and {@code to}; null otherwise, and on a compiler without
+   * the javac tree API, which cannot read the call.
+   */
+  private String fieldBridgeFor(final VariableElement field, final DeclaredType from, final DeclaredType to) {
+    final Trees trees;
+    try {
+      trees = Trees.instance(processingEnv);
+    } catch (final IllegalArgumentException e) {
+      return null;
+    }
+    final var rows = new FieldRows(processingEnv, trees);
+    final var call = rows.initializerCall(field);
+    final var path = trees.getPath(field);
+    if (call == null || path == null || call.getArguments().size() < 2) return null;
+    final var unit = path.getCompilationUnit();
+    final var source = rows.classLiteral(unit, call.getArguments().get(0));
+    final var target = rows.classLiteral(unit, call.getArguments().get(1));
+    if (source == null || target == null || !same(source.asType(), from)) return null;
+    if (!same(target.asType(), to)) return null;
+    final var pkg = processingEnv
+      .getElementUtils()
+      .getPackageOf(field.getEnclosingElement())
+      .getQualifiedName()
+      .toString();
+    final var name = FieldRows.bridgeSimpleName(field);
+    return pkg.isEmpty() ? name : pkg + "." + name;
   }
 
   private String sourceAnchoredName(final TypeElement source, final DeclaredType to, final boolean multiTarget) {

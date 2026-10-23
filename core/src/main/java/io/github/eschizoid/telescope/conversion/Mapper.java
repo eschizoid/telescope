@@ -99,6 +99,15 @@ public final class Mapper<A, B> {
   // don't alter the field mapping).
   private final List<OpticNode> explainTrail;
 
+  // Whether a value trace would show a field: a trail of only the node naming the generated bridge
+  // a mapper runs has none, so its forward skips the logger as a bridge called directly does.
+  private final boolean traced;
+
+  private static boolean traced(final List<OpticNode> trail) {
+    for (final var node : trail) if (!(node instanceof OpticNode.Declared)) return true;
+    return false;
+  }
+
   // Zero-dependency observability via java.base's System.Logger: the structure (explain) is logged
   // once at DEBUG on construction, and the per-conversion value trace at TRACE on each forward().
   // Both use lazy Supplier overloads, so nothing renders unless the level is enabled — a single
@@ -159,6 +168,7 @@ public final class Mapper<A, B> {
     this.preBackward = preBackward;
     this.postBackward = postBackward;
     this.explainTrail = List.copyOf(explainTrail);
+    this.traced = traced(this.explainTrail);
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
     // Structure once at DEBUG (skip the trail-less lifted shells, which would just log "(empty
     // optic)"). Guarded so the Supplier isn't built when DEBUG is off.
@@ -289,10 +299,26 @@ public final class Mapper<A, B> {
     final BiFunction<A, B, A> patcher,
     final List<String> intoNames
   ) {
+    return ofPatcher(iso, sourceClass, targetClass, patcher, intoNames, List.of());
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> As {@link #ofPatcher(Iso, Class, Class,
+   * BiFunction, List)}, with the trail {@link #explain()} reports. Fenced like {@link #ofIso}.
+   */
+  @SuppressWarnings("exports")
+  public static <A, B> Mapper<A, B> ofPatcher(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final BiFunction<A, B, A> patcher,
+    final List<String> intoNames,
+    final List<OpticNode> explainTrail
+  ) {
     final var table = new LinkedHashMap<String, PatchEntry>();
     // into reads only the keys; patch goes to the patcher whole and never reads an entry.
     for (final var name : intoNames) table.put(name, new PatchEntry(name, Function.identity()));
-    return new Mapper<>(iso, sourceClass, targetClass, table, null, null, null, null, List.of(), null, patcher);
+    return new Mapper<>(iso, sourceClass, targetClass, table, null, null, null, null, explainTrail, null, patcher);
   }
 
   /**
@@ -507,7 +533,7 @@ public final class Mapper<A, B> {
     // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
     // allocation-free
     // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
-    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+    if (traced && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
       MappingTraces.of(a, result, explainTrail).toString()
     );
     return result;

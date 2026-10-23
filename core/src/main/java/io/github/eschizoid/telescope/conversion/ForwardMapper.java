@@ -44,6 +44,15 @@ public final class ForwardMapper<A, B> {
   // then-composed forward mappers, whose A→C projection has no single flat field table.
   private final List<OpticNode> explainTrail;
 
+  // Whether a value trace would show a field: a trail of only the node naming the generated bridge
+  // a mapper runs has none, so its forward skips the logger as a bridge called directly does.
+  private final boolean traced;
+
+  private static boolean traced(final List<OpticNode> trail) {
+    for (final var node : trail) if (!(node instanceof OpticNode.Declared)) return true;
+    return false;
+  }
+
   // Zero-dependency observability via java.base's System.Logger — structure at DEBUG on
   // construction,
   // per-conversion value trace at TRACE on forward(). Lazy suppliers, free when the level is off.
@@ -68,6 +77,7 @@ public final class ForwardMapper<A, B> {
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
     this.explainTrail = List.copyOf(explainTrail);
+    this.traced = traced(this.explainTrail);
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
     // Structure once at DEBUG (skip trail-less shells). Guarded so the Supplier isn't built when
     // off.
@@ -144,7 +154,7 @@ public final class ForwardMapper<A, B> {
     // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
     // allocation-free
     // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
-    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+    if (traced && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
       MappingTraces.of(a, result, explainTrail).toString()
     );
     return result;

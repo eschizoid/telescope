@@ -421,6 +421,7 @@ class CrossPathCorpusTest {
     final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
     final var warnings = warningsInGenerated(processed);
     assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    FieldTwin.assertAgrees(processed, sources);
     return processed;
   }
 

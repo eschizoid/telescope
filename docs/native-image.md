@@ -33,6 +33,7 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Generated `@Focus` navigator      | `UserTelescope.of().address().city()` read and update, with the navigator in `serialization-config.json` |
 | Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
 | Row typed by a type argument      | `Mapping.to` rows typed by `Tagged<String>` and `Tagged<Badge>`, loading each class by name to check it  |
+| `@Bridge` mapper field            | `TicketMappers.TICKET` found by `StackWalker` and `ServiceLoader`, over records with no registration     |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -137,6 +138,20 @@ metadata the image raises a missing-registration error naming the class it was b
 through rather than converting it into its own refusal that the class has no constructor a rebuild can call. That
 refusal's advice — declare a constructor, or supply an explicit conversion row — is wrong here: the type is fine and the
 program works on the JVM. Only the image is missing something, and only the registration error says so.
+
+## A mapper a `@Bridge` field declares
+
+`Telescope.mapper(...)` and `mapperForward(...)` read their calling class once, with `StackWalker`, and look up the
+bridge a `@Bridge` field of that class declares for the pair through `ServiceLoader`. Both work in an image: the image
+builder registers the providers in `META-INF/services`, and the caller class needs no registration. The field's rows are
+built but never decoded, so the method references they name need no `serialization-config.json` entry, except a
+`constant` or `compute` row, which decodes its target accessor when it is built. The mapper then runs the generated
+bridge, which is typed method calls.
+
+A class compiled without the javac tree API, by Eclipse's compiler for one, has its rows read by no processor, and its
+mapper is built on the runtime path, which needs the registrations a runtime mapper needs. The processor marks such a
+class with a resource that `explain()` reads to say why; include `META-INF/telescope/**` in the image's resources to
+keep that reason.
 
 ## A nested pair's own bridge
 

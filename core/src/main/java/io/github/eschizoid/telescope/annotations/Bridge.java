@@ -61,11 +61,38 @@ import java.lang.annotation.Target;
  * UserDto dto = UserEntityBridge.BRIDGE.read(entity);
  * }</pre>
  *
+ * <h2>On a mapper field</h2>
+ *
+ * <p>On a {@code static final} field initialised in place by {@code Telescope.mapper(...)} or
+ * {@code Telescope.mapperForward(...)}, the annotation takes no attributes: the processor reads the
+ * rows of that call and generates the bridge from them, and the factory returns a mapper over that
+ * bridge whenever the processor ran. The field's class and the pair find it, once, when the mapper
+ * is built; when the processor did not run, the factory builds the runtime mapper from the same
+ * rows.
+ *
+ * <pre>{@code
+ * final class Mappers {
+ *   @Bridge
+ *   static final Mapper<User, UserDto> USER = Telescope.mapper(User.class, UserDto.class,
+ *       to(User::id, UserDto::userId),
+ *       to(User::email, UserDto::contact, Emails::normalise, Emails::normalise),
+ *       via(User::address, UserDto::address, AddressMappers.ADDRESS));
+ * }
+ * }</pre>
+ *
+ * <p>The rows compiled are {@code to}, with or without converters, {@code toOneWay}, {@code
+ * toOrElse}, {@code toOrElseGet}, {@code via} naming another {@code @Bridge} field, {@code drop},
+ * {@code constant} and {@code compute}. Accessors are method references; a converter or supplier is
+ * a reference to a static method, an unbound instance method, a constructor, or a method of a
+ * {@code static final} field; a constant or default is a literal or an enum constant. Any other row
+ * or argument is refused at compile time by name. A field's bridge is its pair's own bridge, so a
+ * pair is declared once, and the class that declares the field builds no other mapper of that pair.
+ *
  * @see io.github.eschizoid.telescope.Telescope#map(Class, Class,
  *     io.github.eschizoid.telescope.mapping.MapStep...)
  */
 @Retention(RetentionPolicy.SOURCE)
-@Target(ElementType.TYPE)
+@Target({ ElementType.TYPE, ElementType.FIELD })
 @Repeatable(Bridges.class)
 public @interface Bridge {
   /**

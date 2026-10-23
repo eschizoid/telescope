@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.Trace;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -80,6 +81,9 @@ public final class MappingTraces {
       }
       final var converted = d.path().isEmpty() ? output : readDotted(output, d.path());
       return new Row("✓", from, render(value), targetCase + " " + render(converted));
+    }
+    if (node instanceof OpticNode.Declared d) {
+      return new Row("•", "runs " + d.runs().name().toLowerCase(Locale.ROOT), "", d.why());
     }
     return new Row("•", String.valueOf(node), "", "");
   }

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -48,6 +49,8 @@ import org.openjdk.jmh.infra.Blackhole;
  *       through cached {@code LambdaMetafactory}-built {@code Function}/{@code BiConsumer}
  *       dispatchers. No codegen on the consumer's build.
  *   <li>{@code _codegen_*} — telescope's {@code @Bridge}-emitted {@code *Bridge.BRIDGE} constant.
+ *   <li>{@code _field_*} — the mapper a {@code @Bridge} field declares ({@link McFieldMappers}),
+ *       running the bridge generated from its rows, over twins of the {@code _codegen_*} shapes.
  *       Direct method-reference + canonical-constructor calls at every hop — the same dispatch
  *       shape MapStruct's generated impl uses, surfaced through the public {@link Telescope} value.
  * </ul>
@@ -72,12 +75,14 @@ public class MapStructComparisonBenchmark {
   private McFlatBean flatBean;
   private McFlatRec flatRec;
   private Mapper<McFlatBean, McFlatRec> flatRuntimeMapper;
+  private McFieldFlatBean fieldFlatBean;
 
   // ---------- Nested tier: outer + one nested record ----------
 
   private McNestedBean nestedBean;
   private McNestedRec nestedRec;
   private Mapper<McNestedBean, McNestedRec> nestedRuntimeMapper;
+  private McFieldNestedBean fieldNestedBean;
 
   // ---------- Deep tier: 3-level nesting + 2 list hops ----------
 
@@ -101,11 +106,24 @@ public class MapStructComparisonBenchmark {
     flatBean = new McFlatBean(42L, "alice@example.com", "Alice", 30, true);
     flatRec = new McFlatRec(42L, "alice@example.com", "Alice", 30, true);
     flatRuntimeMapper = Telescope.mapper(McFlatBean.class, McFlatRec.class);
+    fieldFlatBean = new McFieldFlatBean(42L, "alice@example.com", "Alice", 30, true);
 
     // Nested tier — outer + nested address.
     nestedBean = new McNestedBean(7L, "bob@example.com", new McAddressBean("123 Main St", "Brooklyn", "11201"));
     nestedRec = new McNestedRec(7L, "bob@example.com", new McAddressRec("123 Main St", "Brooklyn", "11201"));
     nestedRuntimeMapper = Telescope.mapper(McNestedBean.class, McNestedRec.class);
+    fieldNestedBean = new McFieldNestedBean(
+      7L,
+      "bob@example.com",
+      new McAddressBean("123 Main St", "Brooklyn", "11201")
+    );
+    // A _field_ row measures the generated bridge only while the field's mapper runs it; a mapper
+    // left on the runtime path would measure something else under the same name.
+    for (final var field : List.of(McFieldMappers.FLAT.explain(), McFieldMappers.NESTED.explain())) {
+      if (field.declared().map(OpticNode.Declared::runs).orElse(null) != OpticNode.Runs.GENERATED) {
+        throw new IllegalStateException("a @Bridge field's mapper runs on the runtime path: " + field);
+      }
+    }
 
     // Deep tier — 2 departments × 3 teams = 6 leaf records / beans.
     deepBean = buildCompanyBean();
@@ -164,6 +182,13 @@ public class MapStructComparisonBenchmark {
     bh.consume(McFlatBeanBridge.BRIDGE_FN.forward(flatBean));
   }
 
+  @Benchmark
+  public void flat_telescope_field_forward(final Blackhole bh) {
+    // The mapper a @Bridge field declares, on the same shapes: the generated forward reached
+    // through the mapper the field holds, the shape a call site has with the field form.
+    bh.consume(McFieldMappers.FLAT.forward(fieldFlatBean));
+  }
+
   // ---------- Flat — backward (record → bean) ----------
 
   @Benchmark
@@ -179,6 +204,16 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void flat_telescope_codegen_backward(final Blackhole bh) {
     bh.consume(McFlatBeanBridge.BRIDGE.set(flatBean, flatRec));
+  }
+
+  @Benchmark
+  public void flat_telescope_codegen_bridgefn_backward(final Blackhole bh) {
+    bh.consume(McFlatBeanBridge.BRIDGE_FN.backward(flatRec));
+  }
+
+  @Benchmark
+  public void flat_telescope_field_backward(final Blackhole bh) {
+    bh.consume(McFieldMappers.FLAT.backward(flatRec));
   }
 
   // ---------- Nested — forward ----------
@@ -210,6 +245,11 @@ public class MapStructComparisonBenchmark {
     bh.consume(McNestedBeanBridge.BRIDGE_FN.forward(nestedBean));
   }
 
+  @Benchmark
+  public void nested_telescope_field_forward(final Blackhole bh) {
+    bh.consume(McFieldMappers.NESTED.forward(fieldNestedBean));
+  }
+
   // ---------- Nested — backward ----------
 
   @Benchmark
@@ -225,6 +265,16 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void nested_telescope_codegen_backward(final Blackhole bh) {
     bh.consume(McNestedBeanBridge.BRIDGE.set(nestedBean, nestedRec));
+  }
+
+  @Benchmark
+  public void nested_telescope_codegen_bridgefn_backward(final Blackhole bh) {
+    bh.consume(McNestedBeanBridge.BRIDGE_FN.backward(nestedRec));
+  }
+
+  @Benchmark
+  public void nested_telescope_field_backward(final Blackhole bh) {
+    bh.consume(McFieldMappers.NESTED.backward(nestedRec));
   }
 
   // ---------- Deep — forward ----------

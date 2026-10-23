@@ -1,11 +1,13 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.VariableTree;
 import com.sun.source.util.JavacTask;
 import com.sun.source.util.TaskEvent;
 import com.sun.source.util.TaskListener;
@@ -151,6 +153,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   // The compilation units entered so far, by source file, each as last entered; every one is
   // entered before the first call site is scanned.
   private final Map<URI, CompilationUnitTree> units = new LinkedHashMap<>();
+
+  /** The {@code @Bridge} fields of the units entered, in the order entered. */
+  private final List<FieldBridge> fieldBridges = new ArrayList<>();
+
   // The binary names of the classes a @Bridge in those units is on or names, read once they are all
   // entered; null until then.
   private Set<String> bridgeNamed;
@@ -204,6 +210,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           public void finished(final TaskEvent event) {
             if (event.getKind() == TaskEvent.Kind.ENTER && event.getCompilationUnit() != null) {
               units.put(event.getCompilationUnit().getSourceFile().toUri(), event.getCompilationUnit());
+              recordFieldBridges(event.getCompilationUnit());
               bridgeNamed = null;
               bridgeSettings = null;
               return;
@@ -285,6 +292,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
       }
     }
+    collectFieldBridges(named);
     bridgeNamed = named;
     return named;
   }
@@ -419,6 +427,49 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
     for (final var member : type.getEnclosedElements()) {
       if (member instanceof TypeElement nested) collectBridges(nested, named);
+    }
+  }
+
+  /**
+   * The class-literal arguments of the mapper call each {@code @Bridge} field in {@code unit}
+   * initialises itself with, recorded as the unit is entered: the compiler drops a class's member
+   * trees once it has written the class, so they cannot be read when a later class is verified.
+   */
+  private void recordFieldBridges(final CompilationUnitTree unit) {
+    final var pkg = unit.getPackageName() == null ? "" : unit.getPackageName() + ".";
+    for (final var declaration : unit.getTypeDecls()) {
+      if (!(declaration instanceof ClassTree type)) continue;
+      for (final var member : type.getMembers()) {
+        if (!(member instanceof VariableTree field) || !(field.getInitializer() instanceof MethodInvocationTree call)) {
+          continue;
+        }
+        final var annotated = field
+          .getModifiers()
+          .getAnnotations()
+          .stream()
+          .map(annotation -> annotation.getAnnotationType().toString())
+          .anyMatch(name -> name.equals("Bridge") || name.equals(BRIDGE_FQN));
+        if (!annotated || call.getArguments().size() < 2) continue;
+        fieldBridges.add(
+          new FieldBridge(unit, pkg + type.getSimpleName(), List.copyOf(call.getArguments().subList(0, 2)))
+        );
+      }
+    }
+  }
+
+  /** A {@code @Bridge} field's class, by name, and the two class literals its mapper call names. */
+  private record FieldBridge(CompilationUnitTree unit, String owner, List<? extends ExpressionTree> sides) {}
+
+  /** The classes the pair of each recorded {@code @Bridge} field names, resolved by name. */
+  private void collectFieldBridges(final Set<String> named) {
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var bridge : fieldBridges) {
+      final var owner = elements.getTypeElement(bridge.owner());
+      if (owner == null) continue;
+      for (final var side : bridge.sides()) {
+        final var type = rows.classLiteralByName(bridge.unit(), side, owner);
+        if (type != null) named.add(binaryName(type));
+      }
     }
   }
 
@@ -1499,7 +1550,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var rowArgs = row.getArguments();
       switch (rowExec.getSimpleName().toString()) {
         case "to" -> {
-          if (rowArgs.size() == 4) return accessorRow(row, PairWalk.RowKind.CONVERTING);
+          if (rowArgs.size() == 4 || rowArgs.size() == 3) return accessorRow(row, PairWalk.RowKind.CONVERTING);
           if (rowArgs.size() != 2) return null;
           final var srcPath = isTelescopeParameter(rowExec, 0);
           final var tgtPath = isTelescopeParameter(rowExec, 1);

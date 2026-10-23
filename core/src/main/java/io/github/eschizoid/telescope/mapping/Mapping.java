@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.mapping;
 import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
+import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
@@ -117,6 +118,47 @@ public sealed interface Mapping<A, B>
     final Function<? super Y, ? extends X> backward
   ) {
     return new TypedTransformTo<>(src, tgt, forward, backward);
+  }
+
+  /**
+   * Typed-transform correspondence through one two-way conversion: {@code conversion}'s {@code
+   * forward} converts the source's leaf into the target's, and its {@code backward} converts back.
+   *
+   * <pre>{@code
+   * to(UserEntity::email, UserDto::contact, Emails.CONVERSION)
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the processor calls {@code conversion} from the generated
+   * bridge, so it must be a {@code static final} field the bridge can name.
+   */
+  static <A, B, X, Y> Mapping<A, B> to(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final BridgeFn<X, Y> conversion
+  ) {
+    Objects.requireNonNull(conversion, "Mapping.to: conversion is null");
+    return new TypedTransformTo<>(src, tgt, conversion::forward, conversion::backward);
+  }
+
+  /**
+   * As {@link #to(Accessor, Accessor, BridgeFn)}, naming the conversion's class, which is built
+   * through its no-argument constructor the first time the row converts a value.
+   *
+   * <pre>{@code
+   * to(UserEntity::email, UserDto::contact, EmailFn.class)
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the generated bridge builds the class once and converts through
+   * it, as it does for a class a {@code @Transform} names.
+   */
+  static <A, B, X, Y> Mapping<A, B> to(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Class<? extends BridgeFn<X, Y>> conversion
+  ) {
+    Objects.requireNonNull(conversion, "Mapping.to: conversion class is null");
+    final var fn = new ConversionClass<X, Y>(conversion);
+    return new TypedTransformTo<>(src, tgt, fn::forward, fn::backward);
   }
 
   /**

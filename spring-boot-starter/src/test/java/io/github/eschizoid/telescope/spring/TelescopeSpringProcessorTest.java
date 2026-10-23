@@ -783,6 +783,42 @@ class TelescopeSpringProcessorTest {
   }
 
   @Test
+  void mapperFindsTheBridgeAFieldDeclaresForItsPair() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.Account", "package demo; public record Account(String login) {}"),
+      source("demo.AccountDto", "package demo; public record AccountDto(String username) {}"),
+      source(
+        "demo.Mappers",
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        public final class Mappers {
+          @Bridge
+          public static final Mapper<Account, AccountDto> ACCOUNT =
+              Telescope.mapper(Account.class, AccountDto.class, to(Account::login, AccountDto::username));
+        }
+        """
+      ),
+      source(
+        "demo.AccountMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Account.class, to = AccountDto.class)
+        public interface AccountMapper { AccountDto map(Account source); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.AccountMapperImpl")).contains("MappersAccountBridge.forward(input)");
+  }
+
+  @Test
   void mapperAndProjectionFindACarrierBridge() {
     final var result = ProcessorHarness.compileFully(
       List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),

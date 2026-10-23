@@ -944,7 +944,11 @@ public sealed class Telescope<
    */
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
     rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
-    return DeepMap.resolveMapper(source, target, steps);
+    // A @Bridge field of the calling class declares this mapper when the processor generated a
+    // bridge from its rows; the caller is read here, in the factory the field's initializer calls.
+    final var declaration = DeepMap.declaration(CALLER.getCallerClass(), source, target, steps);
+    if (declaration.provider() != null) return DeepMap.declaredMapper(declaration, source, target);
+    return DeepMap.resolveMapper(source, target, steps, declaration.node());
   }
 
   /**
@@ -1067,7 +1071,9 @@ public sealed class Telescope<
     // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
-    if (steps.length == 0) {
+    final var declaration = DeepMap.declaration(CALLER.getCallerClass(), source, target, steps);
+    if (declaration.provider() != null) return DeepMap.declaredForwardMapper(declaration, source, target);
+    if (steps.length == 0 && declaration.node() == null) {
       // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
       // declares the pair: the holder beside the source, then a carrier registered by (source,
       // target), since a carrier lives in its own package.
@@ -1078,7 +1084,7 @@ public sealed class Telescope<
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
-    return DeepMap.resolveForwardMapper(source, target, steps);
+    return DeepMap.resolveForwardMapper(source, target, steps, declaration.node());
   }
 
   /**
@@ -3077,6 +3083,9 @@ public sealed class Telescope<
       );
     };
   }
+
+  /** Names the class that called a mapper factory, read once per mapper built. */
+  private static final StackWalker CALLER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
 
   /**
    * The {@link BridgeFn} behind {@code bridge}, a constant {@link #bridge(BridgeFn)} built, or

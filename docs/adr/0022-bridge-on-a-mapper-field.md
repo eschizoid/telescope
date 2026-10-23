@@ -63,8 +63,20 @@ the existing emitter without a second one.
    `@ViaMapper`, `@Constant`, `@Default` and `@Compute`, together with the `@Bridge` attributes that hold them and
    `drops`, with no deprecated aliases. The class form of `@Bridge` keeps `value`, `writeStrategy` and `lenient` for a
    pair declared with no rows.
-8. **Only javac reads the rows.** On a compiler without the tree API the processor prints one note and generates nothing
-   for the field, and the runtime mapper runs, which the cross-path corpus holds to the same result.
+8. **Only javac reads the rows.** On a compiler without the tree API the processor warns on each `@Bridge` field and
+   generates nothing for it, and the runtime mapper runs, which the cross-path corpus holds to the same result.
+9. **Which path runs is reported.** `explain()` and `trace()` on a mapper a field declares carry an `OpticNode.Declared`
+   naming the generated bridge, or saying why the runtime path runs: the class was compiled without the tree API, or the
+   bridge on the class path was generated from other rows. A class the processor never saw leaves no trace at run time,
+   since `@Bridge` is retained only in source, so its mapper carries no such node.
+
+> **Amendment (2026-10-23).** A provider whose recorded row kinds differ from the call's rows is passed over rather than
+> refused: the factory builds the runtime mapper from the rows it was given, logs a warning, and `explain()` says why.
+> The rows are what the author wrote, so they are the declaration to honour. The note on a compiler without the tree API
+> is a warning on each field, so it is seen where the field is. A named module that does not `provides` the generated
+> bridges gets a mandatory warning naming the line to add, since `ServiceLoader` ignores `META-INF/services` there. A
+> `to` row also takes one two-way conversion, a `BridgeFn` instance or its class, on both paths; this is a public
+> addition the feature's pull request puts to the user.
 
 ### Amendments to ADR-0018
 
@@ -88,8 +100,8 @@ the existing emitter without a second one.
   decoded, `ServiceLoader` providers are registered by the image builder, and `StackWalker` is supported there. The
   `NativeVerify` binary covers a field-declared mapper.
 - A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
-  generated from. The provider records the kinds of the rows it was generated from, and the runtime refuses a mismatch
-  by name rather than running a stale bridge.
+  generated from. The provider records the kinds of the rows it was generated from, and the runtime builds the mapper
+  from the call's rows when they differ, rather than running a stale bridge.
 
 ## Alternatives considered
 

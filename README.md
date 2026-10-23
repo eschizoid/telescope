@@ -81,10 +81,11 @@ Telescope.mapper(Cart.class, CartDto.class,
   to(Cart::customerName, CartDtoTelescope.of().shipping().recipient().fullName()));
 ```
 
-`@Bridge` is an annotation that has the `telescope-codegen` processor generate a mapper at compile time, and it does
-name fields with strings. Its entries, e.g. `@Rename` and `@Compute`, take field names as strings. The processor reports
-a name that isn't a field of the class as a compile error. `@FromMap(required = ...)` also takes strings, which name map
-keys.
+`@Bridge` has the `telescope-codegen` processor generate a mapper at compile time. Put on a mapper field, it names no
+field at all: the processor compiles the rows of the field's `Telescope.mapper(...)` call, so the generated mapper is
+checked by the same method references. The older per-field annotations on a class, such as `@Rename` and `@Compute`,
+still take field names as strings, which the processor checks against the class. `@FromMap(required = ...)` also takes
+strings, which name map keys.
 
 The [head-to-head module](examples/mapstruct-vs-telescope/) tests MapStruct's default-policy unmapped-target case. A
 rename failure can't be a passing test, because the rename has to be applied by hand to show it, so the module describes
@@ -93,28 +94,43 @@ the rename as a manual step.
 ## Runtime and generated mappers are tested to give the same result
 
 Telescope can run the same mapping in two ways. A runtime mapper, built by `Telescope.mapper(...)`, does the conversion
-while the program runs, with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes
-the `telescope-codegen` annotation processor generate the same conversion as plain Java, which is a generated mapper.
-You can start with a runtime mapper and move a mapping to `@Bridge` later, when that code needs the speed.
+while the program runs, with no annotations and no build step. Putting `@Bridge` on the field that holds the mapper
+makes the `telescope-codegen` annotation processor compile that call's rows into plain Java, which is a generated
+mapper. The field then runs the generated code, and the call site does not change. You can start with a runtime mapper
+and add `@Bridge` later, when that code needs the speed.
 
 ```java
-@Bridge(InvoiceDto.class)
-public record Invoice(Long id, String customer, long totalCents) {}
+public record Invoice(Long id, String customer, String currency, long totalCents) {}
 
-public record InvoiceDto(Long id, String customer, long totalCents) {}
+public record InvoiceDto(Long invoiceId, String customer, String currency, long totalCents) {}
 
-// at run time, with or without the annotation
-InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward(invoice);
+final class Mappers {
 
-// generated at compile time
-InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
+  @Bridge
+  static final Mapper<Invoice, InvoiceDto> INVOICE = Telescope.mapper(
+    Invoice.class,
+    InvoiceDto.class,
+    to(Invoice::id, InvoiceDto::invoiceId),
+    to(Invoice::currency, InvoiceDto::currency, Currencies.CODE) // a BridgeFn<String, String>
+  );
+}
+
+InvoiceDto dto = Mappers.INVOICE.forward(invoice); // the generated code when the processor ran
+Mappers.INVOICE.explain();                         // "Runs: generated — the bridge MappersInvoiceBridge, ..."
 ```
+
+The same field without the processor builds the runtime mapper from the same rows, so removing the processor changes
+speed and nothing else. A row the generated code cannot express is a compile error on that row, naming what to write
+instead: an inline lambda, for one, is refused in favour of a method reference such as `String::trim`. The processor
+reads the rows through the javac tree API. A compiler without it, such as Eclipse's, reports a warning on each `@Bridge`
+field and leaves the mapper on the runtime path, which `explain()` reports.
 
 Two tests run the same input through both kinds of mapper and fail when they disagree. `CrossPathCorpusTest` covers
 container shapes, how a target is constructed, same-typed container copies, object graphs that lead back to an object
-being converted, `patch`, and enum pairs. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run
-as part of `./gradlew check`, which is what CI runs. Renames, null strategies, and defaults aren't cross-checked by
-them.
+being converted, `patch`, and enum pairs. Every bridge it compiles from a `@Bridge` on a class that declares only
+renames and drops is compiled again from the same declaration written as a mapper field, and the two must generate the
+same code. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run as part of `./gradlew check`,
+which is what CI runs. Null strategies and defaults aren't cross-checked by them.
 
 The tests record each known difference between the two paths, and they fail when a recorded difference goes away, so the
 list stays accurate.
@@ -861,8 +877,10 @@ Runtime mappers and typed paths work inside a GraalVM native image, so `Telescop
 run there with no build step. You register your own types the way you would in any GraalVM application. A runtime
 mapper's types go in `reflect-config.json`, and a class that passes method references such as `User::name` goes in
 `serialization-config.json`, because telescope reads the field name from the method reference. Code generated by
-`@Bridge` and `@FromMap` needs no configuration. A navigator generated by `@Focus` or `@BeanFocus` builds its paths from
-method references, so the navigator class goes in `serialization-config.json` too.
+`@Bridge` and `@FromMap` needs no configuration. That includes a mapper a `@Bridge` field declares: its rows are built
+but never decoded, the factory finds the generated bridge through `ServiceLoader`, which the image builder registers,
+and the field's mapper runs that bridge. A navigator generated by `@Focus` or `@BeanFocus` builds its paths from method
+references, so the navigator class goes in `serialization-config.json` too.
 
 Inside an image, telescope swaps its `LambdaMetafactory` accessors for plain `MethodHandle` closures, because
 `LambdaMetafactory` defines classes at run time and native-image forbids that. One `static final boolean` picks the
@@ -870,9 +888,9 @@ branch. `telescope-core` carries its own native-image metadata.
 
 CI checks native-image support in two ways. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's
 whole suite with the `imagecode` property set. Every existing assertion then runs on the code an image uses, and both
-tasks are part of `check`. A verifier covering eleven capabilities also compiles and runs as a native binary. It runs on
-every push to `main` that changes `core`, `internal`, `codegen`, or the GraphQL example, and every week. Setup and
-limits are in [`docs/native-image.md`](docs/native-image.md).
+tasks are part of `check`. A verifier covering the runtime and generated capabilities also compiles and runs as a native
+binary. It runs on every push to `main` that changes `core`, `internal`, `codegen`, or the GraphQL example, and every
+week. Setup and limits are in [`docs/native-image.md`](docs/native-image.md).
 
 ---
 

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.introspection;
 
 import static java.util.stream.Collectors.joining;
 
+import io.github.eschizoid.telescope.introspection.OpticNode.Declared;
 import io.github.eschizoid.telescope.introspection.OpticNode.Dispatched;
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
 import io.github.eschizoid.telescope.introspection.OpticNode.Hop;
@@ -11,6 +12,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import io.github.eschizoid.telescope.introspection.OpticNode.UnusedSource;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -80,6 +82,14 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(Dispatched.class::isInstance).map(Dispatched.class::cast).toList();
   }
 
+  /**
+   * Which path runs a mapper a {@code @Bridge} field declares, when the mapper is one; empty for
+   * any other optic.
+   */
+  public Optional<Declared> declared() {
+    return nodes.stream().filter(Declared.class::isInstance).map(Declared.class::cast).findFirst();
+  }
+
   /** The navigation steps of a path, in trail order. */
   public List<Hop> hops() {
     return nodes.stream().filter(Hop.class::isInstance).map(Hop.class::cast).toList();
@@ -117,6 +127,7 @@ public record OpticReport(List<OpticNode> nodes) {
     // telescope
     // further navigated, e.g. map(A, B).field(B::x)), where hops follow the sections.
     final var blocks = new ArrayList<String>();
+    declared().ifPresent(d -> blocks.add("Runs: " + label(d.runs()) + " — " + d.why()));
     section(blocks, "Mapped", mapped, m -> row("✓", m.from(), leftWidth, "→ " + m.to()));
     section(blocks, "Skipped", skipped, s -> row("•", s.field(), leftWidth, "(" + label(s.reason()) + ")"));
     section(blocks, "Transformations", transformed, t ->
@@ -165,6 +176,13 @@ public record OpticReport(List<OpticNode> nodes) {
     return switch (reason) {
       case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
+    };
+  }
+
+  private static String label(final OpticNode.Runs runs) {
+    return switch (runs) {
+      case GENERATED -> "generated";
+      case RUNTIME -> "runtime";
     };
   }
 

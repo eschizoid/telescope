@@ -10,6 +10,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -721,6 +722,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * constant.
    */
   protected String bridgeTargetFqn(final TypeElement source) {
+    final var annotated = annotatedBridgeTargetFqn(source);
+    if (annotated != null) return annotated;
+    final var declared = fieldBridges.get(source.getQualifiedName().toString());
+    return declared == null || declared.isEmpty() ? null : declared.keySet().iterator().next();
+  }
+
+  /** The target a {@code @Bridge} on {@code source} itself names, or null. */
+  private String annotatedBridgeTargetFqn(final TypeElement source) {
     final var anno = processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.annotations.Bridge");
     if (anno == null) return null;
     for (final var am : source.getAnnotationMirrors()) {
@@ -735,6 +744,50 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
     }
     return null;
+  }
+
+  /**
+   * The bridges {@code @Bridge} fields declare, by the qualified name of their source, then of
+   * their target, to the qualified name of the bridge. A field's bridge is its pair's own bridge,
+   * so a navigator of the source hops through it as it hops through a bridge its own
+   * {@code @Bridge} declares. Accumulated across rounds, since a navigator may be written in a
+   * later round than the field is read.
+   */
+  private final Map<String, Map<String, String>> fieldBridges = new HashMap<>();
+
+  /**
+   * Records the pair of each {@code @Bridge} field of this round, read from the class literals its
+   * mapper call names. Without the javac tree API no field's call can be read, and nothing is
+   * recorded.
+   */
+  protected final void readFieldBridges(final RoundEnvironment roundEnv) {
+    final var anno = processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.annotations.Bridge");
+    if (anno == null) return;
+    final Trees trees;
+    try {
+      trees = Trees.instance(processingEnv);
+    } catch (final IllegalArgumentException e) {
+      return;
+    }
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
+      if (!(element instanceof VariableElement field) || element.getKind() != ElementKind.FIELD) continue;
+      final var call = rows.initializerCall(field);
+      final var path = trees.getPath(field);
+      if (call == null || path == null || call.getArguments().size() < 2) continue;
+      final var unit = path.getCompilationUnit();
+      final var source = rows.classLiteral(unit, call.getArguments().get(0));
+      final var target = rows.classLiteral(unit, call.getArguments().get(1));
+      if (source == null || target == null) continue;
+      final var owner = (TypeElement) field.getEnclosingElement();
+      final var pkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
+      fieldBridges
+        .computeIfAbsent(source.getQualifiedName().toString(), unused -> new LinkedHashMap<>())
+        .putIfAbsent(
+          target.getQualifiedName().toString(),
+          (pkg.isEmpty() ? "" : pkg + ".") + FieldRows.bridgeSimpleName(field)
+        );
+    }
   }
 
   /**
@@ -803,11 +856,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private MirrorProps mirrorProps;
 
   /**
-   * Records whether {@code roundEnv} is the final round. A processor that writes bean navigators
-   * calls this at the start of every round; one that does not is treated as never being in it.
+   * Records whether {@code roundEnv} is the final round, and the pairs its {@code @Bridge} fields
+   * declare. A processor that writes bean navigators calls this at the start of every round; one
+   * that does not is treated as never being in it.
    */
   protected final void enterRound(final RoundEnvironment roundEnv) {
     inFinalRound = roundEnv.processingOver();
+    readFieldBridges(roundEnv);
   }
 
   /**
@@ -1024,9 +1079,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * referenced by simple name because {@code @Bridge} always emits the bridge class in the source's
    * package — the same package as the navigator.
    */
-  protected void emitBridgeHop(final PrintWriter out, final String sourceSimpleName, final String targetFqn) {
+  protected void emitBridgeHop(
+    final PrintWriter out,
+    final TypeElement source,
+    final String sourceSimpleName,
+    final String targetFqn
+  ) {
     final var targetSimple = simpleNameOf(targetFqn);
-    final var bridgeName = sourceSimpleName + "Bridge";
+    final var declared = fieldBridges.getOrDefault(source.getQualifiedName().toString(), Map.of()).get(targetFqn);
+    // A bridge a field declares lives beside the field's class, so it is named in full.
+    final var bridgeName =
+      annotatedBridgeTargetFqn(source) == null && declared != null ? declared : sourceSimpleName + "Bridge";
     final var methodName = "as" + targetSimple;
     // Record the cross-paradigm conversion as a Bridge hop in the introspection trail.
     final var bridgeHop = ".hop(new OpticNode.Bridge(\"" + targetSimple + "\"))";
@@ -1512,7 +1575,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           emitBeanPropertyMethod(out, owner, props, rebuild, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
-        if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
+        if (bridgeTarget != null) emitBridgeHop(out, pojo, pojoName, bridgeTarget);
         emitTelescopeForwarders(out, pojoName, owner.suppression("  "));
       }
     );

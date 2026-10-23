@@ -123,6 +123,43 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 UserBeanTelescope.of().email().update(user, String::toLowerCase);   // direct getter + setter dispatch
 ```
 
+## A generated mapper declared on its field (`@Bridge`)
+
+`@Bridge` on a `static final` field initialised by `Telescope.mapper(...)` or `Telescope.mapperForward(...)` is the
+whole declaration of a generated mapper. The processor reads the rows of that call and compiles them into a bridge named
+after the class and the field (`MappersUserBridge` for `Mappers.USER`), and the factory returns a mapper over that
+bridge when the field is initialised. Nothing references the generated class.
+
+```java
+final class Mappers {
+
+  @Bridge
+  static final Mapper<User, UserDto> USER = Telescope.mapper(
+    User.class,
+    UserDto.class,
+    to(User::id, UserDto::userId), // a rename
+    to(User::email, UserDto::contact, EmailFn.class), // a rename converted by one BridgeFn
+    toOrElse(User::nickname, UserDto::nickname, "anonymous"),
+    via(User::address, UserDto::address, AddressMappers.ADDRESS),
+    drop(User::passwordHash)
+  );
+}
+```
+
+The rows the processor compiles are `to` (with no converter, with a forward and a backward method reference, or with one
+`BridgeFn` class or `static final` field), `toOneWay`, `toOrElse`, `toOrElseGet`, `via` naming another `@Bridge` field,
+`drop`, `constant` and `compute`. A converter or supplier is a reference to a static method, to an unbound instance
+method such as `String::trim`, or to a constructor; a constant or default is a literal or an enum constant. Any other
+row is a compile error on the row, naming what to write instead. `explain()` on the mapper says which path runs it and,
+when it is the runtime path although a field declares it, why.
+
+A field's bridge is its pair's own bridge, so a pair is declared once in a compilation, a navigator of the source hops
+through it, and a Spring `@TelescopeMapper` for the pair calls it. The class that declares the field builds no other
+mapper of the pair, since the factory finds the bridge by its calling class.
+
+The rows are read through the javac tree API. Under a compiler without it, Eclipse's for one, the processor warns on
+each `@Bridge` field and the mapper runs on the runtime path from the same rows.
+
 ## Installing the processor
 
 Add the processor only if you use the `@Focus` path. It's inert otherwise — the annotation is source-retention.

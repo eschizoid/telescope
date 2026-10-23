@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.ServiceLoader;
 
@@ -21,6 +23,40 @@ import java.util.ServiceLoader;
 public final class BridgeRegistry {
 
   private BridgeRegistry() {}
+
+  /**
+   * The providers registered for bridges that {@code @Bridge} fields of a class declare, by that
+   * class, read once per class: a class's mapper fields are initialised together, so its first
+   * factory call reads the registry for the rest.
+   */
+  private static final ClassValue<List<BridgeProvider>> DECLARED = new ClassValue<>() {
+    @Override
+    protected List<BridgeProvider> computeValue(final Class<?> declaring) {
+      final var loader =
+        declaring.getClassLoader() != null ? declaring.getClassLoader() : BridgeRegistry.class.getClassLoader();
+      final var found = new ArrayList<BridgeProvider>();
+      for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, loader)) {
+        if (provider.declaringType() == declaring) found.add(provider);
+      }
+      return List.copyOf(found);
+    }
+  };
+
+  /**
+   * The provider of the bridge a {@code @Bridge} field of {@code declaring} declares for {@code
+   * (source, target)}, or {@link Optional#empty()} when there is none, as when the processor did
+   * not run on that class.
+   */
+  public static Optional<BridgeProvider> declaredBy(
+    final Class<?> declaring,
+    final Class<?> source,
+    final Class<?> target
+  ) {
+    for (final var provider : DECLARED.get(declaring)) {
+      if (provider.sourceType() == source && provider.targetType() == target) return Optional.of(provider);
+    }
+    return Optional.empty();
+  }
 
   /**
    * The {@code bridge()} value of the unique {@link BridgeProvider} registered for {@code (source,

@@ -15,4 +15,9 @@ module io.github.eschizoid.telescope.benchmarks {
   requires jmh.core;
 
   exports io.github.eschizoid.telescope.benchmarks;
+
+  provides io.github.eschizoid.telescope.conversion.BridgeProvider
+    with
+      io.github.eschizoid.telescope.benchmarks.McFieldMappersFlatBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.McFieldMappersNestedBridgeProvider;
 }
