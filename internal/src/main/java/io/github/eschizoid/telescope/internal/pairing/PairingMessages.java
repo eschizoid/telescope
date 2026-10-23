@@ -212,7 +212,8 @@ public final class PairingMessages {
       "' holds " +
       held +
       ", which is not one; have backward return " +
-      held
+      held +
+      ", or name the class: via(src, tgt, Hw.class)"
     );
   }
 

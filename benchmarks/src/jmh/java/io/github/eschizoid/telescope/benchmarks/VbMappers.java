@@ -7,7 +7,8 @@ import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.conversion.Mapper;
 
 /**
- * The generated mapper {@link ViaRowBenchmark} declares on a field, with a via row of two methods.
+ * The generated mappers {@link ViaRowBenchmark} declares on fields: one with a via row of two
+ * methods, one with a via row naming their class.
  */
 public final class VbMappers {
 
@@ -18,5 +19,12 @@ public final class VbMappers {
     VbFieldSrc.class,
     VbTgt.class,
     via(VbFieldSrc::items, VbTgt::items, VbItemMap::forward, VbItemMap::backward)
+  );
+
+  @Bridge
+  public static final Mapper<VbClassSrc, VbTgt> NAMED = mapper(
+    VbClassSrc.class,
+    VbTgt.class,
+    via(VbClassSrc::items, VbTgt::items, VbItemMap.class)
   );
 }

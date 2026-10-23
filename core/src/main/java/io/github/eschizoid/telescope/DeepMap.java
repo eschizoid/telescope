@@ -43,6 +43,7 @@ import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
+import io.github.eschizoid.telescope.mapping.ViaClass;
 import io.github.eschizoid.telescope.mapping.ViaMethods;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.IOException;
@@ -118,7 +119,7 @@ public final class DeepMap {
    */
   private static final ReflectionProps PROPS = new ReflectionProps();
 
-  private static final PairingRules<Type> PAIRING = new PairingRules<>(PROPS);
+  static final PairingRules<Type> PAIRING = new PairingRules<>(PROPS);
 
   /** The shared walk of the pairs a mapper visits, which the compile-time verifier takes too. */
   private static final PairWalk<Type> PAIR_WALK = new PairWalk<>(new ReflectionProps());
@@ -719,6 +720,7 @@ public final class DeepMap {
       case TypedTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case Via<?, ?> __ -> PairWalk.RowKind.CONVERTING;
+      case ViaClass<?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case ViaMethods<?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case Drop<?, ?, ?> __ -> PairWalk.RowKind.DROP;
       case TelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
@@ -878,7 +880,7 @@ public final class DeepMap {
    * sealed type is an instance of one of its cases; or one is an interface and the other is a type
    * a subclass can still extend to implement it.
    */
-  private static boolean mayBeInstance(final Class<?> a, final Class<?> b) {
+  static boolean mayBeInstance(final Class<?> a, final Class<?> b) {
     if (a.isAssignableFrom(b) || b.isAssignableFrom(a)) return true;
     if (a.isSealed()) return Arrays.stream(a.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(c, b));
     if (b.isSealed()) return Arrays.stream(b.getPermittedSubclasses()).anyMatch(c -> mayBeInstance(a, c));
@@ -1382,6 +1384,7 @@ public final class DeepMap {
           case TypedTransformTo<?, ?, ?, ?> __ -> true;
           case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> true;
           case Via<?, ?> __ -> true;
+          case ViaClass<?, ?> __ -> true;
           case ViaMethods<?, ?> __ -> true;
         };
         if (!structural) continue;
@@ -1412,6 +1415,7 @@ public final class DeepMap {
         // least-upper-bound of the two accessors, so to(Integer-getter, String-getter) compiles and
         // would otherwise identity-pass an Integer into a String setter (ClassCastException at
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
+        final var resolved = resolvedRow(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
             ? checkedAgainstFixed(
@@ -1435,8 +1439,8 @@ public final class DeepMap {
                 forwardOnly
               )
             : resultChecked(
-                fieldIsoOf(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
-                row,
+                fieldIsoOf(resolved, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
+                resolved,
                 paired,
                 new RowSides(source, target, srcField, tgtField),
                 srcRefl,
@@ -2344,6 +2348,13 @@ public final class DeepMap {
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
       case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, null);
+      case ViaClass<?, ?> r -> liftViaIfNeeded(
+        (Via<?, ?>) resolvedRow(r, srcType, tgtType, sides),
+        srcType,
+        tgtType,
+        sides,
+        null
+      );
       case ViaMethods<?, ?> r -> liftViaIfNeeded(
         r.resolved(),
         srcType,
@@ -2481,6 +2492,37 @@ public final class DeepMap {
     );
   }
 
+  /**
+   * {@code row}, or, for a via row naming a class, the via row of the methods the class has for a
+   * property the source declares as {@code srcType} and the target as {@code tgtType}; see {@link
+   * ViaClasses}. The class's methods are read here, while the runtime path builds a mapper, and
+   * nowhere else.
+   */
+  private static Mapping<?, ?> resolvedRow(
+    final Mapping<?, ?> row,
+    final Type srcType,
+    final Type tgtType,
+    final RowSides sides
+  ) {
+    if (!(row instanceof ViaClass<?, ?> named)) return row;
+    final var srcView = PAIRING.containerViewOf(srcType);
+    final var tgtView = PAIRING.containerViewOf(tgtType);
+    final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
+    final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
+    final var lifts = srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind();
+    return ViaClasses.resolve(
+      named,
+      srcType,
+      tgtType,
+      lifts ? srcShape.elementType() : null,
+      lifts ? tgtShape.elementType() : null,
+      sides.source().getSimpleName(),
+      sides.target().getSimpleName(),
+      sides.srcField(),
+      sides.tgtField()
+    );
+  }
+
   /** The pair a row converts at and the two properties it reads and writes, named for a refusal. */
   private record RowSides(Class<?> source, Class<?> target, String srcField, String tgtField) {}
 
@@ -2519,7 +2561,7 @@ public final class DeepMap {
    * bound, followed through any variable that bound names, and an array of the class its component
    * is held as.
    */
-  private static Class<?> heldClassOf(final Type type) {
+  static Class<?> heldClassOf(final Type type) {
     if (type instanceof TypeVariable<?> variable) return boundOf(variable);
     if (type instanceof GenericArrayType array) return heldClassOf(array.getGenericComponentType()).arrayType();
     return rawClassOf(type);
@@ -2536,7 +2578,7 @@ public final class DeepMap {
   }
 
   /** The class a type variable's first bound erases to, following a bound that is a variable. */
-  private static Class<?> boundOf(final TypeVariable<?> variable) {
+  static Class<?> boundOf(final TypeVariable<?> variable) {
     final var bound = variable.getBounds()[0];
     return bound instanceof TypeVariable<?> next ? boundOf(next) : rawClassOf(bound);
   }

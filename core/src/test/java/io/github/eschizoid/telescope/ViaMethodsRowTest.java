@@ -262,7 +262,12 @@ class ViaMethodsRowTest {
         refused.getMessage().contains("taking only Circle, and the source's 'shapes' holds Shape"),
         refused::getMessage
       );
-      assertTrue(refused.getMessage().endsWith("which is not one; have backward return Shape"), refused::getMessage);
+      assertTrue(
+        refused
+          .getMessage()
+          .endsWith("which is not one; have backward return Shape, or name the class: via(src, tgt, Hw.class)"),
+        refused::getMessage
+      );
     }
   }
 

@@ -105,7 +105,7 @@ the existing emitter without a second one.
 > admits everything the property holds: each element of a `List`, `Set` or `Optional`, or each value of a `Map`, when
 > the row converts element by element, and the property itself when it converts the whole property. Otherwise both paths
 > refuse it in the same words, the generated path on the row at compile time and the runtime path when the mapper is
-> built: have `backward` return the wider class.
+> built: have `backward` return the wider class, or name the class with `via(src, tgt, Hw.class)`.
 >
 > A valid row converts on both paths alike. On the runtime path it reads its method references when the runtime path
 > builds a mapper from it and not before, so a mapper on the generated path, inside a native image included, never
@@ -118,13 +118,24 @@ the existing emitter without a second one.
 > path. A row naming a class the same compilation generates is read once that class exists. Other methods are refused by
 > name on the row.
 >
-> The class form `@ViaMapper(using = Hw.class)` keeps converting a class this rule refuses, through the bridge's cast,
-> until a row naming the class itself, which resolves its methods as `@ViaMapper` does, replaces it. That row is also
-> the replacement for the classes the method-reference row has no form for:
->
-> - a `backward` returning a class `forward` does not take;
-> - a generic `forward` returning its own type variable, paired with a generic `backward`;
-> - a class declaring both an element and a whole-container overload of `forward` or `backward`.
+> The class form `@ViaMapper(using = Hw.class)` keeps converting a class this rule refuses, through the bridge's cast;
+> the row naming the class, below, is its replacement on the field form.
+
+> **Amendment: a `via` row naming a class.** `via(src, tgt, Hw.class)` names the class itself, as
+> `@ViaMapper(using = Hw.class)` does, and leaves the choice of its methods to the property's types. In a `@Bridge`
+> mapper it compiles to the configuration the annotation names, so the generated bridge is the one the class form
+> writes. On the runtime path it holds the class alone until the runtime path builds a mapper, and then chooses the
+> methods as the processor does: where both sides are containers of one kind and the class has a `forward` taking the
+> source's element and a `backward` taking the target's, and not a pair of overloads converting the whole property both
+> ways, it converts element by element, an element's own class chosen before a class the element is one of, and two
+> methods a name has for an element refused by name; otherwise each direction calls the overload Java binds for the
+> property's value, then a generic one whose variable admits it, then the one method a value can be an instance of the
+> parameter of, which the call checks. It calls them through a function `LambdaMetafactory` spins on the JVM and a
+> method-handle closure inside a native image. So the classes the method-reference row has no form for convert on both
+> paths alike: a `backward` returning a class `forward` does not take, a generic `forward` returning its own type
+> variable with a generic `backward`, and a class with both element and whole-container overloads. The cross-path corpus
+> twins every `@ViaMapper` naming a hand-written class as this row, and runs each twin whose classes give a sample on
+> the runtime path against the class form's generated bridge.
 
 ### Amendments to ADR-0018
 

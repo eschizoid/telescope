@@ -24,5 +24,6 @@ module io.github.eschizoid.telescope.benchmarks {
       io.github.eschizoid.telescope.benchmarks.ShField2ToShDst2BridgeProvider,
       io.github.eschizoid.telescope.benchmarks.ShField3ToShDst3BridgeProvider,
       io.github.eschizoid.telescope.benchmarks.ShField4ToShDst4BridgeProvider,
-      io.github.eschizoid.telescope.benchmarks.VbFieldSrcToVbTgtBridgeProvider;
+      io.github.eschizoid.telescope.benchmarks.VbFieldSrcToVbTgtBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.VbClassSrcToVbTgtBridgeProvider;
 }

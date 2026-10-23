@@ -762,6 +762,8 @@ final class FieldRows {
       final var tgt = accessor(args.get(1), target);
       if (tgt instanceof Refused refused) return refused;
       if (args.size() == 4) return viaMethods(row, (Accessor) src, (Accessor) tgt);
+      final var named = classLiteral(unit, args.get(2));
+      if (named != null) return viaClass(row, (Accessor) src, (Accessor) tgt, named);
       final var mapper = elementAt(unit, args.get(2));
       if (
         !(args.get(2) instanceof IdentifierTree || args.get(2) instanceof MemberSelectTree) ||
@@ -772,8 +774,8 @@ final class FieldRows {
         return new Refused(
           args.get(2),
           "via(...) in a @Bridge mapper names another @Bridge mapper field, whose generated bridge the" +
-            " generated bridge calls, or a class's static forward and backward methods, as Hw::forward," +
-            " Hw::backward"
+            " generated bridge calls, a class's static forward and backward methods, as Hw::forward," +
+            " Hw::backward, or the class itself, as Hw.class"
         );
       }
       final var s = ((Accessor) src).property();
@@ -811,6 +813,25 @@ final class FieldRows {
       }
       rowKinds.add("Via");
       rowAccessors.add(((Accessor) src).method() + ">" + ((Accessor) tgt).method());
+      return null;
+    }
+
+    /**
+     * A {@code via} row naming a class written by hand, which compiles to what
+     * {@code @ViaMapper(using = ...)} names, so the bridge chooses the class's methods for the
+     * property's types as it does for the annotation.
+     */
+    private Refused viaClass(
+      final MethodInvocationTree row,
+      final Accessor src,
+      final Accessor tgt,
+      final TypeElement named
+    ) {
+      final var refusal = write(row, src.property(), tgt.property(), named);
+      if (refusal != null) return refusal;
+      if (!viaMappers.containsKey(src.property())) viaMappers.put(src.property(), named.getQualifiedName().toString());
+      rowKinds.add("ViaClass");
+      rowAccessors.add(src.method() + ">" + tgt.method());
       return null;
     }
 

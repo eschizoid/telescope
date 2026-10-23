@@ -4,8 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Array;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -47,11 +55,15 @@ final class FieldTwin {
   private static final Pattern QUOTED = Pattern.compile("\"(\\w+)\"");
   private static final Pattern PLACEHOLDER = Pattern.compile("%(\\w+)%:(\\w+)");
   private static final String CARRIER = "TwinCarrier";
+  private static final Pattern EXTENDS = Pattern.compile("\\bextends\\s+(\\w+)");
 
   /** How many compilations were held to a field twin, and how many had none. */
   static final AtomicInteger TWINNED = new AtomicInteger();
 
   static final AtomicInteger UNTWINNED = new AtomicInteger();
+
+  /** How many pairs naming a class were run on the runtime path against the class form's bridge. */
+  static final AtomicInteger RUN_BOTH_WAYS = new AtomicInteger();
 
   private static final Pattern FIELD_PREFIX = Pattern.compile("^In the rows of @Bridge field \\w+\\.\\w+: ");
 
@@ -63,7 +75,8 @@ final class FieldTwin {
    */
   static void assertAgrees(final ProcessorHarness.Compilation original, final JavaFileObject... sources) {
     final var names = new LinkedHashMap<String, String>();
-    final var twin = twinOf(names, sources);
+    final var namedClasses = new ArrayList<Pair>();
+    final var twin = twinOf(names, namedClasses, sources);
     if (twin.isEmpty()) {
       UNTWINNED.incrementAndGet();
       return;
@@ -144,6 +157,202 @@ final class FieldTwin {
         difference(expected, actual) +
         compiled.errorMessages()
     );
+    if (namedClasses.isEmpty()) return;
+    try {
+      runtimeAgrees(original, twin.get(), namedClasses);
+    } catch (final IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
+   * A pair whose twin names a class in a via row: its source and target, the carrier and field the
+   * twin declares it on, and whether it converts forward only.
+   */
+  private record Pair(String source, String target, String carrier, String field, boolean lenient) {}
+
+  /**
+   * Holds the runtime path of each pair in {@code pairs} to the class form's generated bridge: the
+   * twin compiled without the processor builds its field's mapper from the rows, and for a source
+   * and a target that each give a {@code sample()}, converts them as the bridge does, or fails as
+   * it does.
+   */
+  @SuppressWarnings("unchecked")
+  private static void runtimeAgrees(
+    final ProcessorHarness.Compilation original,
+    final JavaFileObject[] twin,
+    final List<Pair> pairs
+  ) throws IOException {
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), twin);
+    assertTrue(runtime.success(), runtime::errorMessages);
+    try (final var generated = loaderOf(original); final var built = loaderOf(runtime)) {
+      for (final var pair : pairs) {
+        final var sourceSample = sample(generated, pair.source());
+        final var bridge = bridgeOf(generated, pair);
+        if (sourceSample == null || bridge == null) continue;
+        final var mapper = outcomeOf(() -> built.loadClass(pair.carrier()).getField(pair.field()).get(null));
+        if (!(mapper.value() instanceof Mapper<?, ?>) && !(mapper.value() instanceof ForwardMapper<?, ?>)) {
+          throw new AssertionError("the runtime path does not build " + pair + ": " + mapper);
+        }
+        final var expected = outcomeOf(() ->
+          bridge.getMethod("forward", sourceSample.getClass()).invoke(null, sourceSample)
+        );
+        final var builtSample = sample(built, pair.source());
+        final var actual = outcomeOf(() ->
+          mapper.value() instanceof Mapper<?, ?> m
+            ? ((Mapper<Object, Object>) m).forward(builtSample)
+            : ((ForwardMapper<Object, Object>) mapper.value()).forward(builtSample)
+        );
+        assertEquals(expected.text(), actual.text(), () -> pair + " forward");
+        RUN_BOTH_WAYS.incrementAndGet();
+        final var targetSample = sample(generated, pair.target());
+        if (pair.lenient() || targetSample == null || !(mapper.value() instanceof Mapper<?, ?> two)) continue;
+        final var back = outcomeOf(() ->
+          bridge.getMethod("backward", targetSample.getClass()).invoke(null, targetSample)
+        );
+        final var builtTarget = sample(built, pair.target());
+        final var builtBack = outcomeOf(() -> ((Mapper<Object, Object>) two).backward(builtTarget));
+        assertEquals(back.text(), builtBack.text(), () -> pair + " backward");
+      }
+    }
+  }
+
+  /** What a conversion gave, or what it threw. */
+  private record Outcome(Object value, String text) {}
+
+  @FunctionalInterface
+  private interface Attempt {
+    Object get() throws Exception;
+  }
+
+  private static Outcome outcomeOf(final Attempt attempt) {
+    try {
+      final var value = attempt.get();
+      return new Outcome(value, describe(value, 0));
+    } catch (final Exception e) {
+      Throwable cause = e;
+      while (
+        (cause instanceof InvocationTargetException || cause instanceof ExceptionInInitializerError) &&
+        cause.getCause() != null
+      ) {
+        cause = cause.getCause();
+      }
+      return new Outcome(null, "threw " + cause.getClass().getSimpleName());
+    }
+  }
+
+  /**
+   * {@code value} by what it holds rather than by its identity: a record's components, a
+   * container's class and contents, a class's own {@code toString} where it declares one, and
+   * otherwise its class and fields, each described the same way.
+   */
+  private static String describe(final Object value, final int depth) {
+    if (value == null) return "null";
+    if (depth > 8) return "...";
+    final var type = value.getClass();
+    if (type.isRecord()) {
+      final var out = new StringBuilder(type.getSimpleName()).append('[');
+      for (final var component : type.getRecordComponents()) {
+        try {
+          component.getAccessor().setAccessible(true);
+          out
+            .append(component.getName())
+            .append('=')
+            .append(describe(component.getAccessor().invoke(value), depth + 1));
+        } catch (final ReflectiveOperationException e) {
+          out.append(component.getName()).append("=?");
+        }
+        out.append(';');
+      }
+      return out.append(']').toString();
+    }
+    if (value instanceof Optional<?> optional) {
+      return optional.map(o -> "Optional[" + describe(o, depth + 1) + "]").orElse("Optional.empty");
+    }
+    if (value instanceof Map<?, ?> map) {
+      final var out = new StringBuilder(type.getSimpleName()).append('{');
+      for (final var e : map.entrySet()) {
+        out.append(describe(e.getKey(), depth + 1)).append('=').append(describe(e.getValue(), depth + 1)).append(';');
+      }
+      return out.append('}').toString();
+    }
+    if (value instanceof Iterable<?> iterable) {
+      final var out = new StringBuilder(type.getSimpleName()).append('[');
+      for (final var element : iterable) out.append(describe(element, depth + 1)).append(';');
+      return out.append(']').toString();
+    }
+    if (type.isArray()) {
+      final var out = new StringBuilder(type.getComponentType().getSimpleName()).append("[](");
+      for (var i = 0; i < Array.getLength(value); i++) {
+        out.append(describe(Array.get(value, i), depth + 1)).append(';');
+      }
+      return out.append(')').toString();
+    }
+    if (ownsToString(type)) return type.getSimpleName() + ":" + value;
+    final var out = new StringBuilder(type.getSimpleName()).append('{');
+    for (Class<?> owner = type; owner != null && owner != Object.class; owner = owner.getSuperclass()) {
+      for (final var field : owner.getDeclaredFields()) {
+        if (Modifier.isStatic(field.getModifiers())) continue;
+        try {
+          field.setAccessible(true);
+          out.append(field.getName()).append('=').append(describe(field.get(value), depth + 1)).append(';');
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+          out.append(field.getName()).append("=?;");
+        }
+      }
+    }
+    return out.append('}').toString();
+  }
+
+  /** Whether {@code type}, or a class it extends other than {@code Object}, declares toString. */
+  private static boolean ownsToString(final Class<?> type) {
+    for (Class<?> owner = type; owner != null && owner != Object.class; owner = owner.getSuperclass()) {
+      try {
+        owner.getDeclaredMethod("toString");
+        return true;
+      } catch (final NoSuchMethodException e) {
+        // not this class
+      }
+    }
+    return false;
+  }
+
+  /** {@code name}'s {@code sample()} in {@code loader}, or null where it gives none. */
+  private static Object sample(final ClassLoader loader, final String name) {
+    try {
+      return loader.loadClass(name).getMethod("sample").invoke(null);
+    } catch (final ReflectiveOperationException e) {
+      return null;
+    }
+  }
+
+  /** The class-form bridge of {@code pair} in {@code loader}, by its short name or its long one. */
+  private static Class<?> bridgeOf(final ClassLoader loader, final Pair pair) {
+    final var target = pair.target().substring(pair.target().lastIndexOf('.') + 1);
+    for (final var name : List.of(pair.source() + "Bridge", pair.source() + "To" + target + "Bridge")) {
+      try {
+        return loader.loadClass(name);
+      } catch (final ClassNotFoundException e) {
+        // the other name
+      }
+    }
+    return null;
+  }
+
+  /** A loader over {@code compilation}'s classes and resources, as a class path holds them. */
+  private static URLClassLoader loaderOf(final ProcessorHarness.Compilation compilation) throws IOException {
+    final var dir = Files.createTempDirectory("field-twin");
+    for (final var e : compilation.classes().entrySet()) {
+      final var file = dir.resolve(e.getKey().replace('.', '/') + ".class");
+      Files.createDirectories(file.getParent());
+      Files.write(file, e.getValue());
+    }
+    for (final var e : compilation.resources().entrySet()) {
+      final var file = dir.resolve(e.getKey());
+      Files.createDirectories(file.getParent());
+      Files.writeString(file, e.getValue());
+    }
+    return new URLClassLoader(new URL[] { dir.toUri().toURL() }, FieldTwin.class.getClassLoader());
   }
 
   /** The first file the two compilations generate differently, and its first differing line. */
@@ -179,7 +388,11 @@ final class FieldTwin {
    * The field twin of {@code sources}, recording in {@code names} each field bridge's name against
    * the class form's name for its single-target source, or empty when there is none.
    */
-  private static Optional<JavaFileObject[]> twinOf(final Map<String, String> names, final JavaFileObject... sources) {
+  private static Optional<JavaFileObject[]> twinOf(
+    final Map<String, String> names,
+    final List<Pair> namedClasses,
+    final JavaFileObject... sources
+  ) {
     final var codes = new LinkedHashMap<JavaFileObject, String>();
     for (final var source : sources) codes.put(source, text(source));
     final var declared = new LinkedHashMap<String, Declared>();
@@ -212,7 +425,7 @@ final class FieldTwin {
     }
     final var fields = new LinkedHashMap<String, List<String>>();
     for (final var d : declared.values()) {
-      final var field = fieldOf(d, declared, codes, names);
+      final var field = fieldOf(d, declared, codes, names, namedClasses);
       if (field == null) return Optional.empty();
       fields.computeIfAbsent(d.pkg(), unused -> new ArrayList<>()).add(field);
     }
@@ -262,7 +475,8 @@ final class FieldTwin {
     final Declared d,
     final Map<String, Declared> declared,
     final Map<JavaFileObject, String> codes,
-    final Map<String, String> names
+    final Map<String, String> names,
+    final List<Pair> namedClasses
   ) {
     final var root = d.annotated();
     String target = null;
@@ -321,8 +535,8 @@ final class FieldTwin {
                       )
                     )
                   : null;
-                // A class no @Bridge of the compilation declares is written by hand, and its static
-                // forward and backward are the row's two methods.
+                // A class no @Bridge of the compilation declares is written by hand, and the row
+                // names it, as the annotation does.
                 final var written = using.substring(0, using.length() - ".class".length());
                 vias.put(
                   attributes.get("field"),
@@ -331,7 +545,7 @@ final class FieldTwin {
                       CARRIER +
                       "." +
                       fieldName(nested.annotated().name())
-                    : written + "::forward, " + written + "::backward"
+                    : written + ".class"
                 );
               }
             }
@@ -348,6 +562,23 @@ final class FieldTwin {
     if (!methods.isEmpty() && !lenient) return null;
     final var targetSimple = target.substring(target.lastIndexOf('.') + 1);
     names.put(root.name() + "To" + targetSimple + "Bridge", root.name() + "Bridge");
+    if (
+      vias
+        .values()
+        .stream()
+        .anyMatch(v -> v.endsWith(".class"))
+    ) {
+      final var prefix = d.pkg().isEmpty() ? "" : d.pkg() + ".";
+      namedClasses.add(
+        new Pair(
+          prefix + root.name(),
+          target.contains(".") ? target : prefix + target,
+          prefix + CARRIER,
+          fieldName(root.name()),
+          lenient
+        )
+      );
+    }
     final var rows = new ArrayList<String>();
     final var converted = new LinkedHashSet<String>();
     for (final var e : transforms.entrySet()) {
@@ -362,7 +593,19 @@ final class FieldTwin {
     }
     for (final var e : vias.entrySet()) {
       final var to = renames.getOrDefault(e.getKey(), e.getKey());
-      rows.add("via(%S%:" + e.getKey() + ", %T%:" + to + ", " + e.getValue() + ")");
+      rows.add(
+        "io.github.eschizoid.telescope.mapping.Mapping.<" +
+          root.name() +
+          ", " +
+          target +
+          ">via(%S%:" +
+          e.getKey() +
+          ", %T%:" +
+          to +
+          ", " +
+          e.getValue() +
+          ")"
+      );
       converted.add(e.getKey());
     }
     for (final var e : renames.entrySet()) {
@@ -468,11 +711,15 @@ final class FieldTwin {
     if (declaresRecord(codes, type)) return property;
     final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
     final var getter = Pattern.compile("\\b(get|is)" + cap + "\\s*\\(\\s*\\)");
-    final var declaration = Pattern.compile("\\bclass\\s+" + type + "\\b");
+    final var declaration = Pattern.compile("\\bclass\\s+" + type + "\\b([^{]*)\\{");
     for (final var code : codes.values()) {
-      if (!declaration.matcher(code).find()) continue;
+      final var declared = declaration.matcher(code);
+      if (!declared.find()) continue;
       final var found = getter.matcher(code);
-      return found.find() ? found.group(1) + cap : null;
+      if (found.find()) return found.group(1) + cap;
+      // A getter the class inherits is declared in the class it extends.
+      final var parent = EXTENDS.matcher(declared.group(1));
+      return parent.find() ? accessorOf(codes, parent.group(1), property) : null;
     }
     return null;
   }
