@@ -181,6 +181,11 @@ public class MapStructComparisonBenchmark {
     bh.consume(McFlatBeanBridge.BRIDGE.set(flatBean, flatRec));
   }
 
+  @Benchmark
+  public void flat_telescope_codegen_bridgefn_backward(final Blackhole bh) {
+    bh.consume(McFlatBeanBridge.BRIDGE_FN.backward(flatRec));
+  }
+
   // ---------- Nested — forward ----------
 
   @Benchmark
@@ -225,6 +230,11 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void nested_telescope_codegen_backward(final Blackhole bh) {
     bh.consume(McNestedBeanBridge.BRIDGE.set(nestedBean, nestedRec));
+  }
+
+  @Benchmark
+  public void nested_telescope_codegen_bridgefn_backward(final Blackhole bh) {
+    bh.consume(McNestedBeanBridge.BRIDGE_FN.backward(nestedRec));
   }
 
   // ---------- Deep — forward ----------
