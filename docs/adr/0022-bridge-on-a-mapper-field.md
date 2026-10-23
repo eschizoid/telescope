@@ -30,7 +30,8 @@ the existing emitter without a second one.
    bridge emitter already has:
    - `to` between two accessors, which renames when the names differ;
    - `to` with a forward and a backward converter, and `toOneWay` with a forward one, which convert and may also rename;
-   - `via` naming another `@Bridge` field, whose generated bridge converts the property;
+   - `via` naming another `@Bridge` field, whose generated bridge converts the property, or (amended below) the static
+     `forward` and `backward` of a class written by hand;
    - `drop` of a source property, `constant` of a literal, `toOrElse` with a literal default, and `compute` with a
      supplier.
 
@@ -96,6 +97,17 @@ the existing emitter without a second one.
 > ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its class,
 > on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge builds it
 > when the bridge is initialised.
+
+> **Amendment: a `via` row of two methods.** `via(src, tgt, Hw::forward, Hw::backward)` converts a property through two
+> methods written by hand, which is what `@ViaMapper(using = Hw.class)` names. On the runtime path the row reads the
+> classes it converts between from `forward`'s own method, so a parameter typed by a type variable is its bound and a
+> primitive its wrapper, and it converts each element of a `List`, `Set` or `Optional`, or each value of a `Map`, when
+> that class is the element's, and the whole property otherwise, as a `via` row with a mapper does. A null value or
+> element stays null and reaches neither method. In a `@Bridge` mapper the two must be the static `forward` and
+> `backward` of one class, and the row compiles to the configuration `@ViaMapper` names, so the generated bridge is the
+> same; other methods are refused by name on the row. The row types `backward`'s return as a value `forward` takes,
+> which is what lets javac infer a generic `forward`. A `@ViaMapper` class whose `backward` returns a class `forward`
+> does not take, relying on the bridge's cast, has no such row, and stays on the class form until it does.
 
 ### Amendments to ADR-0018
 

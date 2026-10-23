@@ -539,7 +539,11 @@ final class FieldRows {
         );
       }
       final var rowElement = elementAt(unit, row.getMethodSelect());
-      if (rowElement == null && ROW_FACTORIES.contains(selectedName(row))) return Refused.javacReports(row);
+      if (ROW_FACTORIES.contains(selectedName(row))) {
+        // A row javac cannot type, an argument it cannot infer included, is javac's own error.
+        final var typed = trees.getTypeMirror(TreePath.getPath(unit, row));
+        if (rowElement == null || typed == null || typed.getKind() == TypeKind.ERROR) return Refused.javacReports(row);
+      }
       if (
         !(rowElement instanceof ExecutableElement rowExec) ||
         !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
@@ -752,6 +756,7 @@ final class FieldRows {
       if (src instanceof Refused refused) return refused;
       final var tgt = accessor(args.get(1), target);
       if (tgt instanceof Refused refused) return refused;
+      if (args.size() == 4) return viaMethods(row, (Accessor) src, (Accessor) tgt);
       final var mapper = elementAt(unit, args.get(2));
       if (
         !(args.get(2) instanceof IdentifierTree || args.get(2) instanceof MemberSelectTree) ||
@@ -762,7 +767,8 @@ final class FieldRows {
         return new Refused(
           args.get(2),
           "via(...) in a @Bridge mapper names another @Bridge mapper field, whose generated bridge the" +
-            " generated bridge calls"
+            " generated bridge calls, or a class's static forward and backward methods, as Hw::forward," +
+            " Hw::backward"
         );
       }
       final var s = ((Accessor) src).property();
@@ -800,6 +806,43 @@ final class FieldRows {
       }
       rowKinds.add("Via");
       rowAccessors.add(((Accessor) src).method() + ">" + ((Accessor) tgt).method());
+      return null;
+    }
+
+    /**
+     * A {@code via} row converting through two methods: the static {@code forward} and {@code
+     * backward} of one class, which the bridge calls as it calls a {@code @ViaMapper} class, on the
+     * whole property or on each element of a container, as the class's methods take.
+     */
+    private Refused viaMethods(final MethodInvocationTree row, final Accessor src, final Accessor tgt) {
+      final var args = row.getArguments();
+      final var forward = call(args.get(2), "v", 1);
+      if (forward instanceof Refused refused) return refused;
+      final var backward = call(args.get(3), "v", 1);
+      if (backward instanceof Refused refused) return refused;
+      final var f = ((Call) forward).method();
+      final var b = ((Call) backward).method();
+      final var owner = (TypeElement) f.getEnclosingElement();
+      if (
+        !f.getModifiers().contains(Modifier.STATIC) ||
+        !b.getModifiers().contains(Modifier.STATIC) ||
+        !f.getSimpleName().contentEquals("forward") ||
+        !b.getSimpleName().contentEquals("backward") ||
+        !b.getEnclosingElement().equals(owner)
+      ) {
+        return new Refused(
+          f.getSimpleName().contentEquals("forward") && f.getModifiers().contains(Modifier.STATIC)
+            ? args.get(3)
+            : args.get(2),
+          "via(...) with two methods in a @Bridge mapper takes the static forward and backward methods of one" +
+            " class, as Hw::forward, Hw::backward, which the generated bridge calls on each value"
+        );
+      }
+      final var refusal = write(row, src.property(), tgt.property(), owner);
+      if (refusal != null) return refusal;
+      if (!viaMappers.containsKey(src.property())) viaMappers.put(src.property(), owner.getQualifiedName().toString());
+      rowKinds.add("Via");
+      rowAccessors.add(src.method() + ">" + tgt.method());
       return null;
     }
 

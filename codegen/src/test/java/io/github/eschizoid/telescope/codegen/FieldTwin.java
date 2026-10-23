@@ -287,16 +287,26 @@ final class FieldTwin {
               }
               default -> {
                 final var using = attributes.get("using");
-                if (using == null || !using.endsWith("Bridge.class")) return null;
-                final var simple = using.substring(
-                  using.lastIndexOf('.', using.length() - 7) + 1,
-                  using.length() - "Bridge.class".length()
-                );
-                final var nested = declared.get(simple);
-                if (nested == null) return null;
+                if (using == null || !using.endsWith(".class")) return null;
+                final var nested = using.endsWith("Bridge.class")
+                  ? declared.get(
+                      using.substring(
+                        using.lastIndexOf('.', using.length() - 7) + 1,
+                        using.length() - "Bridge.class".length()
+                      )
+                    )
+                  : null;
+                // A class no @Bridge of the compilation declares is written by hand, and its static
+                // forward and backward are the row's two methods.
+                final var written = using.substring(0, using.length() - ".class".length());
                 vias.put(
                   attributes.get("field"),
-                  (nested.pkg().isEmpty() ? "" : nested.pkg() + ".") + CARRIER + "." + fieldName(simple)
+                  nested != null
+                    ? (nested.pkg().isEmpty() ? "" : nested.pkg() + ".") +
+                      CARRIER +
+                      "." +
+                      fieldName(nested.annotated().name())
+                    : written + "::forward, " + written + "::backward"
                 );
               }
             }

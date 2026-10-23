@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -486,6 +487,43 @@ public sealed interface Mapping<A, B>
     final Mapper<?, ?> elementMapper
   ) {
     return new Via<>(src, tgt, elementMapper);
+  }
+
+  /**
+   * Nested correspondence converted by two methods written by hand: {@code forward} turns a source
+   * value into a target value, and {@code backward} turns it back. As with {@link #via(Accessor,
+   * Accessor, Mapper)}, the two may convert one element, and the row then converts a {@code List},
+   * {@code Set}, {@code Optional} or the values of a {@code Map} element by element; they convert
+   * the whole property when {@code forward} takes the property's own type. Which one is read from
+   * the class {@code forward}'s method takes: a parameter typed by a type variable counts as its
+   * bound, and a primitive as its wrapper. A null value, or a null element, stays null and is not
+   * handed to either method. What {@code backward} returns must be a value {@code forward} takes,
+   * which is also what lets a generic {@code forward} be named without its type argument.
+   *
+   * <pre>{@code
+   * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line
+   * via(Order::buyer, OrderDto::buyer, Buyers::toDto, Buyers::fromDto)             // the property
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the two are the static {@code forward} and {@code backward}
+   * methods of one class, which the generated bridge calls on the same values.
+   *
+   * @throws IllegalArgumentException if {@code forward} or {@code backward} is not a method
+   *     reference converting one value
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  static <A, B, X, Y, U, V extends X> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Accessor<X, Y> forward,
+    final Accessor<U, V> backward
+  ) {
+    final var classes = LambdaIntrospection.conversionOf(forward);
+    LambdaIntrospection.conversionOf(backward);
+    final Function<Object, Object> there = (Function) forward;
+    final Function<Object, Object> back = (Function) backward;
+    final var element = Mapper.create(there, back, (Class<Object>) classes[0], (Class<Object>) classes[1], Map.of());
+    return new Via<>(src, tgt, element);
   }
 
   /**

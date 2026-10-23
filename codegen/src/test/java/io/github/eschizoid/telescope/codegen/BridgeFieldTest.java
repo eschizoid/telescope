@@ -601,6 +601,194 @@ class BridgeFieldTest {
     }
   }
 
+  private static final String ITEM_MAP =
+    "package fb;\n" +
+    "public final class ItemMap {\n" +
+    "  public static ItemDto forward(final Item i) { return new ItemDto(i.name().toUpperCase()); }\n" +
+    "  public static Item backward(final ItemDto d) { return new Item(d.label().toLowerCase()); }\n" +
+    "}\n";
+
+  private static final String GENERIC_MAP =
+    "package fb;\n" +
+    "public final class ItemMap {\n" +
+    "  public static <T extends Item> ItemDto forward(final T i) { return new ItemDto(i.name() + \"!\"); }\n" +
+    "  public static Item backward(final ItemDto d) { return new Item(d.label().replace(\"!\", \"\")); }\n" +
+    "}\n";
+
+  private static final String WRAPPING_MAP =
+    "package fb;\n" +
+    "public final class ItemMap {\n" +
+    "  public static long forward(final Integer i) { return i * 10L; }\n" +
+    "  public static Integer backward(final Long l) { return (int) (l / 10); }\n" +
+    "}\n";
+
+  static List<String[]> viaShapes() {
+    final var items = "java.util.Arrays.asList(new Item(\"a\"), null, new Item(\"b\"))";
+    return List.of(
+      new String[] { "a scalar", "Item", "ItemDto", ITEM_MAP, "new Item(\"a\")" },
+      new String[] { "a null scalar", "Item", "ItemDto", ITEM_MAP, "null" },
+      new String[] { "a List", "java.util.List<Item>", "java.util.List<ItemDto>", ITEM_MAP, items },
+      new String[] {
+        "a Set",
+        "java.util.Set<Item>",
+        "java.util.Set<ItemDto>",
+        ITEM_MAP,
+        "new java.util.LinkedHashSet<>(" + items + ")",
+      },
+      new String[] {
+        "an Optional",
+        "java.util.Optional<Item>",
+        "java.util.Optional<ItemDto>",
+        ITEM_MAP,
+        "java.util.Optional.of(new Item(\"a\"))",
+      },
+      new String[] {
+        "an empty Optional",
+        "java.util.Optional<Item>",
+        "java.util.Optional<ItemDto>",
+        ITEM_MAP,
+        "java.util.Optional.empty()",
+      },
+      new String[] {
+        "a Map's values",
+        "java.util.Map<String, Item>",
+        "java.util.Map<String, ItemDto>",
+        ITEM_MAP,
+        "new java.util.TreeMap<>(java.util.Map.of(\"k\", new Item(\"a\"), \"m\", new Item(\"b\")))",
+      },
+      new String[] {
+        "a generic forward over a List",
+        "java.util.List<Item>",
+        "java.util.List<ItemDto>",
+        GENERIC_MAP,
+        items,
+      },
+      new String[] {
+        "a forward returning a primitive, over a List",
+        "java.util.List<Integer>",
+        "java.util.List<Long>",
+        WRAPPING_MAP,
+        "java.util.Arrays.asList(1, null, 3)",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("viaShapes")
+  @DisplayName("a via row of two methods converts the same on both paths, element by element in a container")
+  void aViaRowOfTwoMethodsAgreesOnBothPaths(
+    final String shape,
+    final String sourceType,
+    final String targetType,
+    final String itemMap,
+    final String sample
+  ) throws Exception {
+    final var rows = "via(Src::value, Dst::value, ItemMap::forward, ItemMap::backward)";
+    final var c = compile(
+      sources(
+        "fb.Item",
+        "package fb; public record Item(String name) {}",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.ItemMap",
+        itemMap,
+        "fb.Src",
+        "package fb; public record Src(" + sourceType + " value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(" + targetType + " value) {}",
+        "fb.Fields",
+        HEADER +
+          "public final class Fields {\n" +
+          "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class, " +
+          rows +
+          ");\n}\n",
+        "fb.Plain",
+        HEADER +
+          "public final class Plain {\n" +
+          "  public static final Mapper<Src, Dst> RUN = Telescope.mapper(Src.class, Dst.class, " +
+          rows +
+          ");\n}\n",
+        "fb.Probe",
+        "package fb;\n" +
+          "public final class Probe {\n" +
+          "  public static String run(final io.github.eschizoid.telescope.conversion.Mapper<Src, Dst> m) {\n" +
+          "    final var d = m.forward(new Src(" +
+          sample +
+          "));\n" +
+          "    return d + \" | \" + m.backward(d);\n" +
+          "  }\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().get("fb.SrcToDstBridge").contains("fb.ItemMap.forward("), shape);
+    try (final var loader = load(c)) {
+      final var run = loader.loadClass("fb.Probe").getMethod("run", Mapper.class);
+      final var generated = (Mapper<?, ?>) field(loader, "fb.Fields", "GEN");
+      final var runtime = (Mapper<?, ?>) field(loader, "fb.Plain", "RUN");
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs(), shape);
+      assertTrue(runtime.explain().declared().isEmpty(), shape);
+      assertEquals(run.invoke(null, runtime), run.invoke(null, generated), shape);
+    }
+  }
+
+  @Test
+  @DisplayName("a via row of two methods converts each element as the runtime path does, and refuses other methods")
+  void aViaRowOfTwoMethodsConvertsEachElement() throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Item",
+        "package fb; public record Item(String name) {}",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.ItemMap",
+        ITEM_MAP,
+        "fb.Src",
+        "package fb; public record Src(java.util.List<Item> value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(java.util.List<ItemDto> value) {}",
+        "fb.Fields",
+        HEADER +
+          "public final class Fields {\n" +
+          "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class," +
+          " via(Src::value, Dst::value, ItemMap::forward, ItemMap::backward));\n}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.Fields", "GEN");
+      final var item = loader.loadClass("fb.Item").getConstructors()[0];
+      final var src = loader
+        .loadClass("fb.Src")
+        .getConstructors()[0].newInstance(java.util.Arrays.asList(item.newInstance("a"), null));
+      assertEquals("Dst[value=[ItemDto[label=A], null]]", generated.forward(src).toString());
+    }
+    final var named = compile(
+      sources(
+        "fb.Item",
+        "package fb; public record Item(String name) {}",
+        "fb.ItemDto",
+        "package fb; public record ItemDto(String label) {}",
+        "fb.Conv2",
+        "package fb; public final class Conv2 {\n" +
+          "  public static ItemDto up(final Item i) { return new ItemDto(i.name()); }\n" +
+          "  public static Item down(final ItemDto d) { return new Item(d.label()); }\n}\n",
+        "fb.Src",
+        "package fb; public record Src(Item value) {}",
+        "fb.Dst",
+        "package fb; public record Dst(ItemDto value) {}",
+        "fb.Fields",
+        HEADER +
+          "public final class Fields {\n" +
+          "  @Bridge public static final Mapper<Src, Dst> GEN = Telescope.mapper(Src.class, Dst.class," +
+          " via(Src::value, Dst::value, Conv2::up, Conv2::down));\n}\n"
+      )
+    );
+    assertFalse(named.success());
+    assertTrue(named.hasError("takes the static forward and backward methods of one class"), named::errorMessages);
+  }
+
   @Test
   @DisplayName("a @Bridge field of an interface is static final without saying so, and runs its bridge")
   void anInterfaceFieldIsStaticFinal() throws Exception {

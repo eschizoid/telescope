@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import java.io.Serializable;
+import java.lang.invoke.MethodHandleInfo;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InaccessibleObjectException;
@@ -33,7 +34,15 @@ public final class LambdaIntrospection {
     }
   };
 
-  private record Metadata(String methodName, String implName, String receiverName, String returnName) {}
+  private record Metadata(
+    String methodName,
+    String implName,
+    String receiverName,
+    String returnName,
+    String implSignature,
+    int implKind,
+    int capturedArgs
+  ) {}
 
   private static final class MetadataSlot {
 
@@ -88,7 +97,10 @@ public final class LambdaIntrospection {
         name,
         serialized.getImplClass().replace('/', '.'),
         receiverNameOf(serialized.getInstantiatedMethodType()),
-        returnNameOf(serialized.getInstantiatedMethodType())
+        returnNameOf(serialized.getInstantiatedMethodType()),
+        serialized.getImplMethodSignature(),
+        serialized.getImplMethodKind(),
+        serialized.getCapturedArgCount()
       );
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException(
@@ -164,6 +176,58 @@ public final class LambdaIntrospection {
       if (namesSupertype(implemented, name)) return true;
     }
     return false;
+  }
+
+  /**
+   * The class a Serializable method reference converting one value takes, and the class it gives,
+   * read from the referenced method itself: a static method's or a constructor's one parameter, or
+   * the receiver of an unbound instance method, and the method's return, or the constructed class.
+   * A parameter or return typed by a type variable is its bound, and a primitive is its wrapper, so
+   * {@code static <T extends Line> long weigh(T line)} takes {@code Line} and gives {@code Long}.
+   * The classes are loaded by name through the lambda's class loader, as {@link #receiverClassOf}
+   * loads a receiver.
+   *
+   * @return the class taken, then the class given
+   * @throws IllegalArgumentException if the lambda is not a method reference, or the method does
+   *     not take exactly one value
+   * @throws IllegalStateException if a class cannot be loaded
+   */
+  public static Class<?>[] conversionOf(final Serializable lambda) {
+    final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+    final MethodType type;
+    try {
+      type = MethodType.fromMethodDescriptorString(metadata.implSignature(), lambda.getClass().getClassLoader());
+    } catch (final TypeNotPresentException e) {
+      throw new IllegalStateException(
+        "Cannot load a class the method reference " +
+          metadata.implName() +
+          "::" +
+          metadata.methodName() +
+          " names. Inside a native image, register it for reflection.",
+        e
+      );
+    }
+    final var kind = metadata.implKind();
+    final var unbound =
+      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
+      metadata.capturedArgs() == 0;
+    final Class<?> from;
+    if (unbound && type.parameterCount() == 0) from = receiverClassOf(lambda);
+    else if (!unbound && type.parameterCount() == 1) from = type.parameterType(0);
+    else throw new IllegalArgumentException(
+      "Expected a method reference converting one value, such as Hw::forward; " +
+        metadata.implName() +
+        "::" +
+        metadata.methodName() +
+        " takes " +
+        type.parameterCount() +
+        (unbound ? " besides its receiver" : "")
+    );
+    final Class<?> to = kind == MethodHandleInfo.REF_newInvokeSpecial ? implClassOf(lambda) : type.returnType();
+    return new Class<?>[] {
+      MethodType.methodType(from).wrap().returnType(),
+      MethodType.methodType(to).wrap().returnType(),
+    };
   }
 
   /**
