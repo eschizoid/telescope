@@ -15,6 +15,7 @@ import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
+import io.github.eschizoid.telescope.mapping.ViaMethods;
 import java.util.HashMap;
 import java.util.List;
 import java.util.function.Function;
@@ -193,6 +194,7 @@ final class TelescopeFixups {
         case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case Via<?, ?> __ -> throw structuralInFixups(__);
+        case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
       };
     }
@@ -249,6 +251,7 @@ final class TelescopeFixups {
         case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case Via<?, ?> __ -> throw structuralInFixups(__);
+        case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
       }
     }
@@ -291,6 +294,7 @@ final class TelescopeFixups {
         case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case Via<?, ?> __ -> throw structuralInFixups(__);
+        case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
       };
     }

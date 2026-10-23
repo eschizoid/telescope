@@ -48,6 +48,7 @@ public sealed interface Mapping<A, B>
     TypedTransformTo,
     ForwardOnlyTransformTo,
     Via,
+    ViaMethods,
     Drop,
     TelescopeTo,
     FromTelescopeTo,
@@ -486,6 +487,44 @@ public sealed interface Mapping<A, B>
     final Mapper<?, ?> elementMapper
   ) {
     return new Via<>(src, tgt, elementMapper);
+  }
+
+  /**
+   * Nested correspondence converted by two methods written by hand: {@code forward} turns a source
+   * value into a target value, and {@code backward} turns it back. As with {@link #via(Accessor,
+   * Accessor, Mapper)}, the two may convert one element, and the row then converts a {@code List},
+   * {@code Set}, {@code Optional} or the values of a {@code Map} element by element; they convert
+   * the whole property when {@code forward} takes the property's own type. A null value, or a null
+   * element, stays null and is not handed to either method.
+   *
+   * <p>What {@code backward} returns must be a value {@code forward} takes, which is what lets a
+   * generic {@code forward} be named without its type argument, and the compiler then types {@code
+   * forward} as taking exactly that class. The row is valid when that class admits everything the
+   * property holds, its elements when the row converts them one by one and the property itself
+   * otherwise; a {@code backward} returning a narrower class is refused by name, in a
+   * {@code @Bridge} mapper at compile time and otherwise when the mapper is built. Have {@code
+   * backward} return the wider class.
+   *
+   * <pre>{@code
+   * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line
+   * via(Order::buyer, OrderDto::buyer, Buyers::toDto, Buyers::fromDto)             // the property
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the two are the static {@code forward} and {@code backward}
+   * methods of one class, which the generated bridge calls on the same values.
+   *
+   * <p>The methods are read when the runtime path builds a mapper from the row; a mapper a
+   * {@code @Bridge} field declares, which runs its generated bridge, never reads them. Building
+   * that mapper throws {@link IllegalArgumentException} if either is not a method reference
+   * converting one value.
+   */
+  static <A, B, X, Y, U, V extends X> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Accessor<X, Y> forward,
+    final Accessor<U, V> backward
+  ) {
+    return new ViaMethods<>(src, tgt, forward, backward);
   }
 
   /**

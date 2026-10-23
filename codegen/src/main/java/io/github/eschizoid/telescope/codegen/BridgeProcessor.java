@@ -874,8 +874,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Refused refused) {
-      // A null message is a call javac cannot resolve, which javac reports on its own.
-      if (refused.message() == null) return;
+      // A null message is a row javac cannot type yet. Before the final round it may name a class a
+      // later round writes, such as another @Bridge's generated bridge, so the field is read again
+      // then; in the final round every such class exists, and javac reports the row on its own.
+      if (refused.message() == null) {
+        if (!roundEnv.processingOver()) fieldRetries.add(key);
+        return;
+      }
       if (refused.at() == null) error(field, refused.message());
       else errorAt(trees, field, refused.at(), refused.message());
       return;
@@ -5697,7 +5702,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return method.getReturnType().getKind() == TypeKind.TYPEVAR;
   }
 
-  /** The static methods of {@code mapper} named {@code name} that take one {@code element}. */
+  /**
+   * The static methods of {@code mapper} named {@code name} that take one {@code element}: those
+   * taking the element's own class where there are any, and otherwise those taking a class the
+   * element is one of. A primitive parameter takes its wrapper's elements, unboxed one at a time, a
+   * null left as it is.
+   */
   private List<ExecutableElement> elementMethods(
     final TypeElement mapper,
     final String name,
@@ -5706,9 +5716,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final PackageElement bridgePackage
   ) {
     final var types = processingEnv.getTypeUtils();
-    return viaCandidates(mapper, name, bridgePackage)
+    final var candidates = viaCandidates(mapper, name, bridgePackage);
+    final var exact = candidates
       .stream()
-      .filter(m -> elementTaken(element, types.erasure(m.getParameters().getFirst().asType()), container))
+      .filter(m -> elementTaken(element, boxedErasure(m.getParameters().getFirst().asType()), container))
+      .toList();
+    if (!exact.isEmpty() || element.getKind() == TypeKind.TYPEVAR) return exact;
+    final var erasedContainer = types.erasure(container);
+    return candidates
+      .stream()
+      .filter(m -> {
+        final var parameter = boxedErasure(m.getParameters().getFirst().asType());
+        return types.isAssignable(types.erasure(element), parameter) && !types.isSubtype(erasedContainer, parameter);
+      })
       .toList();
   }
 

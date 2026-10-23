@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -13,6 +14,7 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.DisplayName;
@@ -295,4 +297,172 @@ class LambdaIntrospectionTest {
   }
 
   static class SubBean extends SuperBean {}
+
+  /** The classes a method reference converting one value takes and gives. */
+  @Nested
+  class ConversionOf {
+
+    interface Fn<A, B> extends Function<A, B>, Serializable {}
+
+    interface Fn2<A, B, C> extends BiFunction<A, B, C>, Serializable {}
+
+    static Integer length(final CharSequence s) {
+      return s.length();
+    }
+
+    static <T extends CharSequence> Integer generic(final T s) {
+      return s.length();
+    }
+
+    static long twice(final int n) {
+      return n * 2L;
+    }
+
+    private static Class<?>[] of(final Serializable reference) {
+      final var conversion = LambdaIntrospection.conversionOf(reference);
+      return new Class<?>[] { conversion.from(), conversion.to() };
+    }
+
+    static Shape draw(final Shape shape) {
+      return shape;
+    }
+
+    @SuppressWarnings("unchecked")
+    static <D> D infer(final String s) {
+      return (D) s;
+    }
+
+    @Test
+    @DisplayName("a static method takes its parameter's class and gives its return's")
+    void aStaticMethod() {
+      final Fn<CharSequence, Integer> f = ConversionOf::length;
+      assertEquals(List.of(CharSequence.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a parameter typed by a type variable takes the class the instantiation gives it")
+    void aGenericMethod() {
+      final Fn<String, Integer> f = ConversionOf::generic;
+      assertEquals(List.of(String.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a primitive parameter and return are their wrappers")
+    void primitives() {
+      final Fn<Integer, Long> f = ConversionOf::twice;
+      assertEquals(List.of(Integer.class, Long.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("an unbound instance method takes its receiver")
+    void anUnboundMethod() {
+      final Fn<String, Integer> f = String::length;
+      assertEquals(List.of(String.class, Integer.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a constructor gives the class it constructs")
+    void aConstructor() {
+      final Fn<String, StringBuilder> f = StringBuilder::new;
+      assertEquals(List.of(String.class, StringBuilder.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a method bound to a receiver takes its one parameter")
+    void aBoundMethod() {
+      final Fn<String, String> f = "a"::concat;
+      assertEquals(List.of(String.class, String.class), List.of(of(f)));
+    }
+
+    @Test
+    @DisplayName("a method taking two values is refused by name, a receiver's included")
+    void twoValuesAreRefused() {
+      final Fn2<Integer, Integer, Integer> sum = Integer::sum;
+      final var refused = assertThrows(IllegalArgumentException.class, () -> of(sum));
+      assertTrue(refused.getMessage().contains("java.lang.Integer::sum takes 2"), refused::getMessage);
+      final Fn2<String, String, String> concat = String::concat;
+      final var unbound = assertThrows(IllegalArgumentException.class, () -> of(concat));
+      assertTrue(unbound.getMessage().contains("takes 1 besides its receiver"), unbound::getMessage);
+    }
+
+    interface Carries<D> {
+      D carried();
+
+      default D dto() {
+        return carried();
+      }
+    }
+
+    record Tagged(String name) implements Carries<String> {
+      @Override
+      public String carried() {
+        return name;
+      }
+    }
+
+    interface Shape {
+      default String label() {
+        return "shape";
+      }
+    }
+
+    record Circle(int r) implements Shape {}
+
+    record Holder<T>(T value) {
+      public T get() {
+        return value;
+      }
+    }
+
+    @Test
+    @DisplayName("an inherited method returning a supertype's variable gives the class the receiver binds it to")
+    void anInheritedGenericReturn() {
+      final Fn<Tagged, String> f = Tagged::dto;
+      assertEquals(String.class, of(f)[1]);
+    }
+
+    @Test
+    @DisplayName("a reference takes the class its instantiation casts the argument to, a narrowed one included")
+    void aReferenceTakesItsInstantiatedClass() {
+      final Fn<Circle, String> f = Circle::label;
+      assertEquals(List.of(Circle.class, String.class), List.of(of(f)));
+      final Fn<Circle, Shape> narrowed = ConversionOf::draw;
+      assertEquals(List.of(Circle.class, Shape.class), List.of(of(narrowed)));
+      final Fn<Shape, Shape> wide = ConversionOf::draw;
+      assertEquals(List.of(Shape.class, Shape.class), List.of(of(wide)));
+      assertTrue(LambdaIntrospection.takesReceiver(f));
+      final Fn<CharSequence, Integer> s = ConversionOf::length;
+      assertFalse(LambdaIntrospection.takesReceiver(s));
+    }
+
+    @Test
+    @DisplayName("a return a type variable hides is refused by name")
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    void aHiddenReturnIsRefused() {
+      final Fn raw = (Fn<Holder, Object>) Holder::get;
+      final var refused = assertThrows(IllegalArgumentException.class, () -> of(raw));
+      assertTrue(
+        refused.getMessage().contains("returns, which a type variable of its class names"),
+        refused::getMessage
+      );
+    }
+
+    @Test
+    @DisplayName("a method returning its own type variable gives its bound, which the call site infers")
+    void anInferredResult() {
+      final Fn<String, Object> f = ConversionOf::infer;
+      final var conversion = LambdaIntrospection.conversionOf(f);
+      assertEquals(List.of(String.class, Object.class), List.of(conversion.from(), conversion.to()));
+      assertTrue(conversion.resultInferred());
+      final Fn<CharSequence, Integer> plain = ConversionOf::length;
+      assertFalse(LambdaIntrospection.conversionOf(plain).resultInferred());
+    }
+
+    @Test
+    @DisplayName("a lambda is refused, since only a method reference names its classes")
+    void aLambdaIsRefused() {
+      final Fn<String, Integer> f = x -> x.length();
+      assertThrows(IllegalArgumentException.class, () -> of(f));
+    }
+  }
 }

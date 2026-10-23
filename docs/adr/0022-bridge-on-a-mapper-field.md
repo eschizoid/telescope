@@ -30,7 +30,8 @@ the existing emitter without a second one.
    bridge emitter already has:
    - `to` between two accessors, which renames when the names differ;
    - `to` with a forward and a backward converter, and `toOneWay` with a forward one, which convert and may also rename;
-   - `via` naming another `@Bridge` field, whose generated bridge converts the property;
+   - `via` naming another `@Bridge` field, whose generated bridge converts the property, or (amended below) the static
+     `forward` and `backward` of a class written by hand;
    - `drop` of a source property, `constant` of a literal, `toOrElse` with a literal default, and `compute` with a
      supplier.
 
@@ -96,6 +97,34 @@ the existing emitter without a second one.
 > ignores `META-INF/services` there. A `to` row also takes one two-way conversion, a `BridgeFn` instance or its class,
 > on both paths; a class is built through its no-argument constructor when the row is, as the generated bridge builds it
 > when the bridge is initialised.
+
+> **Amendment: a `via` row of two methods.** `via(src, tgt, Hw::forward, Hw::backward)` converts a property through two
+> methods written by hand. The row types `backward`'s return as a value `forward` takes, which is what lets javac infer
+> a generic `forward`, and javac then types `forward` as taking exactly what `backward` returns: the lambda it builds
+> for the reference casts each value to that class. So both paths hold the row to one rule. It is valid when that class
+> admits everything the property holds: each element of a `List`, `Set` or `Optional`, or each value of a `Map`, when
+> the row converts element by element, and the property itself when it converts the whole property. Otherwise both paths
+> refuse it in the same words, the generated path on the row at compile time and the runtime path when the mapper is
+> built: have `backward` return the wider class.
+>
+> A valid row converts on both paths alike. On the runtime path it reads its method references when the runtime path
+> builds a mapper from it and not before, so a mapper on the generated path, inside a native image included, never
+> decodes them. It gives the method's return: a return a generic supertype types is the class the receiver gives it, a
+> return that is the method's own type variable is the target's element, as the generated code infers it, and a return a
+> type variable of the method's class hides is refused by name. A null value or element stays null and reaches neither
+> method. In a `@Bridge` mapper the two must be the static `forward` and `backward` of one class, and the row compiles
+> to the configuration `@ViaMapper(using = Hw.class)` names, so a valid row's generated bridge is the one the class form
+> writes; a `forward` whose parameter is a supertype of the element lifts over the elements there as on the runtime
+> path. A row naming a class the same compilation generates is read once that class exists. Other methods are refused by
+> name on the row.
+>
+> The class form `@ViaMapper(using = Hw.class)` keeps converting a class this rule refuses, through the bridge's cast,
+> until a row naming the class itself, which resolves its methods as `@ViaMapper` does, replaces it. That row is also
+> the replacement for the classes the method-reference row has no form for:
+>
+> - a `backward` returning a class `forward` does not take;
+> - a generic `forward` returning its own type variable, paired with a generic `backward`;
+> - a class declaring both an element and a whole-container overload of `forward` or `backward`.
 
 ### Amendments to ADR-0018
 

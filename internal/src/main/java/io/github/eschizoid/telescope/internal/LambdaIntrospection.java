@@ -1,9 +1,13 @@
 package io.github.eschizoid.telescope.internal;
 
 import java.io.Serializable;
+import java.lang.invoke.MethodHandleInfo;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.InaccessibleObjectException;
+import java.lang.reflect.Method;
+import java.lang.reflect.TypeVariable;
+import java.util.Arrays;
 
 /**
  * Reflective extraction of method-reference metadata via {@link SerializedLambda}. The runtime
@@ -33,7 +37,15 @@ public final class LambdaIntrospection {
     }
   };
 
-  private record Metadata(String methodName, String implName, String receiverName, String returnName) {}
+  private record Metadata(
+    String methodName,
+    String implName,
+    String receiverName,
+    String returnName,
+    String implSignature,
+    int implKind,
+    int capturedArgs
+  ) {}
 
   private static final class MetadataSlot {
 
@@ -88,7 +100,10 @@ public final class LambdaIntrospection {
         name,
         serialized.getImplClass().replace('/', '.'),
         receiverNameOf(serialized.getInstantiatedMethodType()),
-        returnNameOf(serialized.getInstantiatedMethodType())
+        returnNameOf(serialized.getInstantiatedMethodType()),
+        serialized.getImplMethodSignature(),
+        serialized.getImplMethodKind(),
+        serialized.getCapturedArgCount()
       );
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException(
@@ -164,6 +179,156 @@ public final class LambdaIntrospection {
       if (namesSupertype(implemented, name)) return true;
     }
     return false;
+  }
+
+  /**
+   * What a Serializable method reference converting one value takes and gives, as {@link
+   * #conversionOf} reads it.
+   *
+   * @param from the class the reference accepts: what the lambda javac builds for it casts its
+   *     argument to, which is narrower than the method's parameter where the call site's inference
+   *     narrowed it
+   * @param to the class the method returns, or the bound of the type variable it returns
+   * @param resultInferred whether the method returns its own type variable, whose class the call
+   *     site infers from where the result goes
+   * @param declared the class the method itself takes, its parameter or declaring class, which
+   *     {@code from} narrows
+   */
+  public record Conversion(Class<?> from, Class<?> to, boolean resultInferred, Class<?> declared) {}
+
+  /**
+   * What a Serializable method reference converting one value takes and gives. It takes a static
+   * method's or a constructor's one parameter, or an unbound instance method's receiver, as the
+   * reference's instantiation types it, and gives the method's return, or the constructed class; a
+   * return a generic supertype types is the class the receiver gives it. A parameter or return
+   * typed by a type variable is its bound, and a primitive is its wrapper, so {@code static <T
+   * extends Line> long weigh(T line)} takes {@code Line} and gives {@code Long}. The classes are
+   * loaded by name through the lambda's class loader, as {@link #receiverClassOf} loads a receiver.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference, the method does not
+   *     take exactly one value, or it returns a type variable of a class that nothing narrows
+   * @throws IllegalStateException if a class cannot be loaded
+   */
+  public static Conversion conversionOf(final Serializable lambda) {
+    final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+    final MethodType type;
+    try {
+      type = MethodType.fromMethodDescriptorString(metadata.implSignature(), lambda.getClass().getClassLoader());
+    } catch (final TypeNotPresentException e) {
+      throw new IllegalStateException(
+        "Cannot load a class the method reference " +
+          metadata.implName() +
+          "::" +
+          metadata.methodName() +
+          " names. Inside a native image, register it for reflection.",
+        e
+      );
+    }
+    final var unbound = takesReceiver(lambda);
+    final Class<?> from;
+    final Class<?> declaredClass;
+    // The lambda javac builds for the reference casts its argument to the instantiation's
+    // parameter, or receiver, which the call site's inference may have narrowed below the method's.
+    if (unbound && type.parameterCount() == 0) {
+      from = receiverClassOf(lambda);
+      declaredClass = implClassOf(lambda);
+    } else if (!unbound && type.parameterCount() == 1) {
+      from = instantiatedParameterOf(lambda, type.parameterType(0));
+      declaredClass = type.parameterType(0);
+    } else throw new IllegalArgumentException(
+      "Expected a method reference converting one value, such as Hw::forward; " +
+        metadata.implName() +
+        "::" +
+        metadata.methodName() +
+        " takes " +
+        type.parameterCount() +
+        (unbound ? " besides its receiver" : "")
+    );
+    final var takes = MethodType.methodType(from).wrap().returnType();
+    final var declared = MethodType.methodType(declaredClass).wrap().returnType();
+    if (metadata.implKind() == MethodHandleInfo.REF_newInvokeSpecial) {
+      return new Conversion(takes, implClassOf(lambda), false, declared);
+    }
+    final var erased = type.returnType();
+    final var narrowed = narrowedReturnOf(lambda, erased);
+    if (narrowed != null) return new Conversion(takes, narrowed, false, declared);
+    final var gives = MethodType.methodType(erased).wrap().returnType();
+    final var variable = returnedVariable(implClassOf(lambda), metadata.methodName(), type);
+    if (variable != null && variable.getGenericDeclaration() instanceof Method) {
+      return new Conversion(takes, gives, true, declared);
+    }
+    if (variable != null && erased == Object.class) {
+      throw new IllegalArgumentException(
+        "Cannot read the class " +
+          metadata.implName() +
+          "::" +
+          metadata.methodName() +
+          " returns, which a type variable of its class names; reference a method whose return names" +
+          " the class, such as a static one"
+      );
+    }
+    return new Conversion(takes, gives, false, declared);
+  }
+
+  /**
+   * The class the instantiation of {@code lambda} types its one argument as, where that is narrower
+   * than {@code declared}, the method's parameter; {@code declared} otherwise.
+   */
+  private static Class<?> instantiatedParameterOf(final Serializable lambda, final Class<?> declared) {
+    final var name = CACHE.get(lambda.getClass()).get(lambda).receiverName();
+    if (declared.isPrimitive() || name == null || name.equals(declared.getName())) return declared;
+    try {
+      final var instantiated = Class.forName(name, false, lambda.getClass().getClassLoader());
+      return declared.isAssignableFrom(instantiated) ? instantiated : declared;
+    } catch (final ClassNotFoundException e) {
+      throw new IllegalStateException(
+        "Cannot load " +
+          name +
+          ", the class a method reference is typed to take. Inside a native image," +
+          " register it for reflection.",
+        e
+      );
+    }
+  }
+
+  /**
+   * Whether a Serializable method reference names an instance method it calls on the value it is
+   * handed, as {@code Shape::toDto} does, rather than a static method, a constructor, or a method
+   * of a receiver it holds.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   */
+  public static boolean takesReceiver(final Serializable lambda) {
+    final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+    final var kind = metadata.implKind();
+    return (
+      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
+      metadata.capturedArgs() == 0
+    );
+  }
+
+  /**
+   * The type variable the method {@code name} of {@code owner}, or of a class or interface it
+   * extends, declares its return as, or null when it returns no type variable.
+   */
+  private static TypeVariable<?> returnedVariable(final Class<?> owner, final String name, final MethodType type) {
+    if (owner == null) return null;
+    for (final var method : owner.getDeclaredMethods()) {
+      if (
+        method.getName().equals(name) &&
+        Arrays.equals(method.getParameterTypes(), type.parameterArray()) &&
+        method.getGenericReturnType() instanceof TypeVariable<?> variable
+      ) {
+        return variable;
+      }
+    }
+    final var inherited = returnedVariable(owner.getSuperclass(), name, type);
+    if (inherited != null) return inherited;
+    for (final var implemented : owner.getInterfaces()) {
+      final var found = returnedVariable(implemented, name, type);
+      if (found != null) return found;
+    }
+    return null;
   }
 
   /**

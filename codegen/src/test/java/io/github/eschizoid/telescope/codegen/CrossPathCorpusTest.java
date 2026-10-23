@@ -423,8 +423,8 @@ class CrossPathCorpusTest {
     final var twinned = FieldTwin.TWINNED.get();
     final var untwinned = FieldTwin.UNTWINNED.get();
     if (twinned + untwinned < FIELD_TWIN_CORPUS) return;
-    assertTrue(twinned >= 474, () -> "field twins fell to " + twinned + " of " + (twinned + untwinned));
-    assertTrue(untwinned <= 192, () -> "cells with no field twin rose to " + untwinned);
+    assertTrue(twinned >= 524, () -> "field twins fell to " + twinned + " of " + (twinned + untwinned));
+    assertTrue(untwinned <= 142, () -> "cells with no field twin rose to " + untwinned);
   }
 
   private static final int FIELD_TWIN_CORPUS = 600;

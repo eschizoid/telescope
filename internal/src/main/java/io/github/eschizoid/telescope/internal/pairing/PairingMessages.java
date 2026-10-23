@@ -186,6 +186,37 @@ public final class PairingMessages {
   }
 
   /**
+   * The refusal of a via row of two method references whose {@code backward} returns {@code takes},
+   * a class narrower than what the property holds: the lambda the compiler builds for {@code
+   * forward} casts each value to {@code takes}, so it cannot convert every value the property
+   * holds. Both paths refuse with these words.
+   */
+  public static String viaMethodsNarrowed(
+    final String source,
+    final String target,
+    final String property,
+    final String takes,
+    final String held
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the via row's backward returns " +
+      takes +
+      ", so the compiler types its forward as taking only " +
+      takes +
+      ", and the source's '" +
+      property +
+      "' holds " +
+      held +
+      ", which is not one; have backward return " +
+      held
+    );
+  }
+
+  /**
    * A {@code via} row, or a {@code @ViaMapper}, whose mapper is handed one side's property as it
    * is, though no value of that property can be an instance of the class the mapper converts on
    * that side: the property is not a List, Set, Optional or a map's values the mapper's elements
