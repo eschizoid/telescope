@@ -293,8 +293,10 @@ from "compile-checked" to "runtime-checked" is a regression.
   the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
   call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
   constructor. `BridgeRegistry.specialise` hands it, at dispatch, only to a provider `ServiceLoader` registered for the
-  field's class, and a constructor given any other value refuses it. Only a mapper a registered provider builds can
-  extend either class, so wrapping a field's mapper in a class of one's own fails at construction.
+  field's class, and a constructor given any other value refuses it. The grant stops accidental subclassing, such as
+  wrapping a field's mapper in a class of one's own, which fails at construction. It does not stop a deliberate one: a
+  hand-written provider registered in `META-INF/services` receives the grant at dispatch and can keep it, and on the
+  class path reflection can read `BridgeGrant.INSTANCE`.
 
 ### Zero runtime-check points: codegen path
 
@@ -342,7 +344,8 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 `UserEntityTelescope.of().asUserDto().email().update(entity, String::toLowerCase)`.
 `AbstractTelescopeProcessor#emitBridgeHop` writes the body. If the target is itself navigable, the hop returns
 `<Target>Telescope<R>`; otherwise a terminal `Telescope<R, Target>`. A pair a `@Bridge` field declares (ADR-0022) is the
-pair's own bridge, so the navigator of its source hops through `<Class><Field>Bridge.BRIDGE`, named in full.
+pair's own bridge, so the navigator of its source hops through `<Source>To<Target>Bridge.BRIDGE`, in the package of the
+class declaring the field, named in full.
 
 ### Files
 

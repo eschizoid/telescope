@@ -217,7 +217,8 @@ public class Mapper<A, B> {
    * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
    * and inlines; every other method is this class's own, and final. {@code grant} is the {@link
    * BridgeGrant} the field's provider is handed when the field's factory call is dispatched to it,
-   * which code outside a registered provider does not hold.
+   * which keeps a class written by hand from extending this one by accident; a registered provider
+   * of one's own, or reflection on the class path, can still obtain it.
    *
    * @throws IllegalArgumentException if {@code grant} is not the one core hands out, or {@code
    *     built} is not a mapper over a generated bridge with no hooks

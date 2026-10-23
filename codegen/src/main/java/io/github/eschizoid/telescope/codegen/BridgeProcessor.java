@@ -353,6 +353,41 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private final Set<String> reportedCalls = new HashSet<>();
 
+  /**
+   * The bridges, by qualified name, of the {@code @Bridge} fields still waiting for the bridges
+   * their {@code via} rows call to be written, and those bridges.
+   */
+  private final Map<String, List<String>> waitingOn = new HashMap<>();
+
+  /**
+   * The chain of bridges, by simple name, from {@code own} back to itself through the bridges
+   * waiting fields call, or null when there is none.
+   */
+  private List<String> cycleThrough(final String own) {
+    final var path = new ArrayList<String>();
+    path.add(own);
+    return cycleFrom(own, own, path, new HashSet<>())
+      ? path
+          .stream()
+          .map(n -> n.substring(n.lastIndexOf('.') + 1))
+          .toList()
+      : null;
+  }
+
+  private boolean cycleFrom(final String own, final String at, final List<String> path, final Set<String> visited) {
+    for (final var next : waitingOn.getOrDefault(at, List.of())) {
+      if (next.equals(own)) {
+        path.add(next);
+        return true;
+      }
+      if (!visited.add(next)) continue;
+      path.add(next);
+      if (cycleFrom(own, next, path, visited)) return true;
+      path.removeLast();
+    }
+    return false;
+  }
+
   /** The {@code @Bridge} fields, as {@code Carrier#FIELD}, whose sides were checked for Lombok. */
   private final Set<String> lombokWaited = new HashSet<>();
 
@@ -930,6 +965,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (processingEnv.getElementUtils().getTypeElement(awaited) == null) waits = true;
     }
     if (waits) {
+      final var carrierPkg = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
+      final var own =
+        (carrierPkg.isEmpty() ? "" : carrierPkg + ".") + FieldRows.bridgeSimpleName(parsed.source(), parsed.target());
+      waitingOn.put(own, List.copyOf(parsed.awaits()));
+      final var cycle = roundEnv.processingOver() ? cycleThrough(own) : null;
+      if (cycle != null) {
+        error(
+          field,
+          "@Bridge field " +
+            fieldName +
+            " converts through a bridge whose rows convert back through this field's own, " +
+            String.join(" -> ", cycle) +
+            ": each bridge is written only once the one it calls exists, so neither is; drop the via(...)" +
+            " from one of the fields, so that pair converts by its own rows"
+        );
+        return;
+      }
       if (roundEnv.processingOver()) {
         error(
           field,
@@ -7187,26 +7239,42 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var nameOwner = bridgeNameOwner.putIfAbsent(name.qualified(), thisPair);
     if (nameOwner == null) return true;
     if (nameOwner.equals(thisPair)) return false;
-    error(
-      source,
-      "@Bridge: the generated bridge name " +
-        name.qualified() +
-        " is claimed by two different type pairs — " +
-        nameOwner.sourceFq() +
-        " -> " +
-        nameOwner.targetFq() +
-        " and " +
-        thisPair.sourceFq() +
-        " -> " +
-        thisPair.targetFq() +
-        (fieldOrigin != null
-          ? ". A field's bridge is named after its pair's simple names, in its class's package; declare one" +
-            " of the two in a class of another package, or rename a type."
-          : ". Auto-derived names use the simple names, so types sharing a simple name across" +
-            " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
-            " type.")
-    );
+    // A clash a @Bridge field takes part in is reported on that field, this pair's first, whichever
+    // of the two claimed the name first.
+    final var thisField = fieldKeyOf(thisPair);
+    final var fieldKey = thisField != null ? thisField : fieldKeyOf(nameOwner);
+    final var previous = fieldOrigin;
+    fieldOrigin = fieldKey;
+    try {
+      error(
+        source,
+        "@Bridge: the generated bridge name " +
+          name.qualified() +
+          " is claimed by two different type pairs — " +
+          nameOwner.sourceFq() +
+          " -> " +
+          nameOwner.targetFq() +
+          " and " +
+          thisPair.sourceFq() +
+          " -> " +
+          thisPair.targetFq() +
+          (fieldKey != null
+            ? ". A field's bridge is named after its pair's simple names, in its class's package; declare one" +
+              " of the two in a class of another package, or rename a type."
+            : ". Auto-derived names use the simple names, so types sharing a simple name across" +
+              " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
+              " type.")
+      );
+    } finally {
+      fieldOrigin = previous;
+    }
     return false;
+  }
+
+  /** The {@code @Bridge} field declaring {@code pair}, as {@code Carrier#FIELD}, or null. */
+  private String fieldKeyOf(final TypePair pair) {
+    final var cfg = configOf(pair);
+    return cfg == null || cfg.declaringField() == null ? null : cfg.carrierFq() + "#" + cfg.declaringField();
   }
 
   /**

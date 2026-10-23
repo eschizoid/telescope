@@ -117,9 +117,9 @@ Invoice back   = Invoice.DTO.backward(dto);
 Invoice.DTO.explain();                         // "Runs: generated — the bridge InvoiceToInvoiceDtoBridge, ..."
 ```
 
-If you would rather write `invoice.toDto()`, add a one-line method to the record yourself. It costs nothing, since it
-calls the `static final` field, and the DTO can carry the reverse. Telescope can't generate these, because an annotation
-processor can't add methods to your record.
+If you would rather write `invoice.toDto()`, add a one-line method to the record yourself. It costs one extra method
+call over calling the `static final` field, and the DTO can carry the reverse. Telescope can't generate these, because
+an annotation processor can't add methods to your record.
 
 ```java
 public InvoiceDto toDto() {
@@ -149,9 +149,9 @@ interface Mappers {
 Java annotations only accept constants, so a mapper configured through annotations has to name its fields as strings.
 Telescope keeps the mapping out of the annotation. You write it as an ordinary Java expression of method references and
 assign it to a `static final` field, so the compiler checks every reference and an IDE rename carries through. Put
-`@Bridge` on that field, and a standard annotation processor reads the expression and generates a mapper with no
-reflection in it. Leave the processor out, and the same expression runs as a runtime mapper with the same result. Either
-way, the call site doesn't change.
+`@Bridge` on that field, and a standard annotation processor (javac only) reads the expression and generates a mapper
+with no reflection in it. Leave the processor out, and the same expression runs as a runtime mapper with the same
+result. Either way, the call site doesn't change.
 
 The same field without the processor builds the runtime mapper from the same rows, so removing the processor leaves the
 field's own results as they were. A mapper elsewhere that meets the pair nested then converts it by its own rules rather

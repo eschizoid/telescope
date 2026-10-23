@@ -697,6 +697,112 @@ class BridgeFieldTest {
     );
   }
 
+  /** The error {@code fragment} names, which must be reported in {@code file}. */
+  private static void assertErrorIn(final ProcessorHarness.Compilation c, final String fragment, final String file) {
+    final var error = c
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.ERROR && d.getMessage(null).contains(fragment))
+      .findFirst()
+      .orElseThrow(() -> new AssertionError(c.errorMessages()));
+    assertTrue(error.getSource().getName().endsWith("/" + file), () -> error.getSource().getName());
+  }
+
+  @Test
+  @DisplayName("a field's bridge name taken by a class's bridge for one of two targets is refused on the field")
+  void aNameTakenByAClassWithTwoTargetsIsRefusedOnTheField() {
+    final var c = compile(
+      sources(
+        "fb.X",
+        "package fb; public record X(Long ticketId) {}",
+        "fb.Y",
+        "package fb; public record Y(Long ticketId) {}",
+        "fb.Foo",
+        "package fb; @io.github.eschizoid.telescope.annotations.Bridge(X.class)" +
+          " @io.github.eschizoid.telescope.annotations.Bridge(Y.class) public record Foo(Long ticketId) {}",
+        "fb.other.Foo",
+        "package fb.other; public record Foo(Long ticketId) {}",
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge static final Mapper<fb.other.Foo, X> FOO = Telescope.mapper(fb.other.Foo.class, X.class);\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success());
+    assertErrorIn(c, "fb.FooToXBridge is claimed by two different type pairs", "Mappers.java");
+    assertTrue(c.hasError("In the rows of @Bridge field Mappers.FOO"), c::errorMessages);
+    assertTrue(c.hasError("declare one of the two in a class of another package"), c::errorMessages);
+    assertFalse(c.hasError("Declare an explicit @Bridge"), c::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a field's bridge name taken by a bridge derived for a nested pair is refused on the field")
+  void aNameTakenByANestedPairsBridgeIsRefusedOnTheField() {
+    final var c = compile(
+      sources(
+        "fb.Line",
+        "package fb; public record Line(Long n) {}",
+        "fb.LineDto",
+        "package fb; public record LineDto(Long n) {}",
+        "fb.Order",
+        "package fb; public record Order(Line line) {}",
+        "fb.OrderDto",
+        "package fb; public record OrderDto(LineDto line) {}",
+        "fb.other.Line",
+        "package fb.other; public record Line(Long n) {}",
+        "fb.Orders",
+        HEADER +
+          "public final class Orders {\n" +
+          "  @Bridge static final Mapper<Order, OrderDto> ORDER = Telescope.mapper(Order.class, OrderDto.class);\n" +
+          "}\n",
+        "fb.Lines",
+        HEADER +
+          "public final class Lines {\n" +
+          "  @Bridge static final Mapper<fb.other.Line, LineDto> LINE =" +
+          " Telescope.mapper(fb.other.Line.class, LineDto.class);\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success());
+    assertErrorIn(c, "fb.LineToLineDtoBridge is claimed by two different type pairs", "Lines.java");
+    assertTrue(c.hasError("In the rows of @Bridge field Lines.LINE"), c::errorMessages);
+    assertFalse(c.hasError("Declare an explicit @Bridge"), c::errorMessages);
+  }
+
+  @Test
+  @DisplayName("two fields whose rows convert through each other's bridge are refused, naming the cycle")
+  void fieldsThatConvertThroughEachOtherAreRefused() {
+    final var c = compile(
+      sources(
+        "fb.InvDto",
+        "package fb; public record InvDto(Long id, LineDto line) {}",
+        "fb.LineDto",
+        "package fb; public record LineDto(Long id, InvDto inv) {}",
+        "fb.Inv",
+        HEADER +
+          "public record Inv(Long id, Line line) {\n" +
+          "  @Bridge static final Mapper<Inv, InvDto> DTO =" +
+          " Telescope.mapper(Inv.class, InvDto.class, via(Inv::line, InvDto::line, Line.DTO));\n" +
+          "}\n",
+        "fb.Line",
+        HEADER +
+          "public record Line(Long id, Inv inv) {\n" +
+          "  @Bridge static final Mapper<Line, LineDto> DTO =" +
+          " Telescope.mapper(Line.class, LineDto.class, via(Line::inv, LineDto::inv, Inv.DTO));\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(c.hasError("whose rows convert back through this field's own"), c::errorMessages);
+    assertTrue(
+      c.hasError("InvToInvDtoBridge -> LineToLineDtoBridge -> InvToInvDtoBridge") ||
+        c.hasError("LineToLineDtoBridge -> InvToInvDtoBridge -> LineToLineDtoBridge"),
+      c::errorMessages
+    );
+    assertFalse(c.hasError("Lombok"), c::errorMessages);
+  }
+
   @Test
   @DisplayName("a field's mapper is the class generated for it, each direction one call into the bridge")
   void aFieldsMapperIsTheGeneratedClass() throws Exception {
