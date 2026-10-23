@@ -1266,9 +1266,11 @@ public final class DeepMap {
       final var srcNames = srcRefl.names(source);
       final var srcNameSet = new HashSet<>(List.of(srcNames));
       // A source field no row reads whose same-named target a row reading another source field
-      // writes has nowhere to go. The pair the user asked for refuses it whatever other rows it
-      // has; a forward-only mapper and a nested pair leave it unread, below.
-      if (!lenient && topStepsOut != null) {
+      // writes has nowhere to go. Only a pair with rows of its own can have such a target, and the
+      // user configured that pair, at whatever depth it is met, so a strict mapper refuses it
+      // whatever other rows the pair has. A forward-only mapper leaves it unread, below: `lenient`
+      // says so for its own pair, and `forwardOnly` for every pair below it.
+      if (!lenient && !forwardOnly) {
         final var kept = new ArrayList<String>();
         for (final var name : srcNames) {
           if (!claimedSrc.contains(name) && !telescopeReadsSrc.contains(name)) kept.add(name);

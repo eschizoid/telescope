@@ -45,7 +45,7 @@ class NeverVisitedRowAgreementTest {
     enum @@Shade { RED }
     record @@Part(String v) {}
     record @@PartDto(String v) {}
-    record @@Inner(String name, String label, @@Color color, @@Part part) {}
+    record @@Inner(String title, String label, @@Color color, @@Part part) {}
     class @@Base {
       private String name;
       public @@Base() {}
@@ -341,13 +341,13 @@ class NeverVisitedRowAgreementTest {
       import static io.github.eschizoid.telescope.mapping.Mapping.*;
       import io.github.eschizoid.telescope.Telescope;
       import java.util.*;
-      record @@Item(String name, String label) {}
+      record @@Item(String title, String label) {}
       record @@ItemDto(String name) {}
-      record @@Maybe(String name, String label) {}
+      record @@Maybe(String title, String label) {}
       record @@MaybeDto(String name) {}
-      record @@Value(String name, String label) {}
+      record @@Value(String title, String label) {}
       record @@ValueDto(String name) {}
-      record @@Present(String name, String label) {}
+      record @@Present(String title, String label) {}
       record @@PresentDto(String name) {}
       record @@Outer(List<@@Item> items, Optional<@@Maybe> maybe, Map<String, @@Value> byKey, Optional<@@Present> present) {}
       record @@OuterDto(List<@@ItemDto> items, @@MaybeDto maybe, Map<String, @@ValueDto> byKey, Optional<@@PresentDto> present) {}
@@ -408,7 +408,7 @@ class NeverVisitedRowAgreementTest {
             package io.github.eschizoid.telescope.codegen;
             import static io.github.eschizoid.telescope.mapping.Mapping.*;
             import io.github.eschizoid.telescope.Telescope;
-            record @@Inner(String name, String label) {}
+            record @@Inner(String title, String label) {}
             record @@InnerDto(String name) {}
             record @@Outer(@@Inner inner) {}
             class @@DtoBase {
@@ -433,7 +433,7 @@ class NeverVisitedRowAgreementTest {
             package io.github.eschizoid.telescope.codegen;
             import static io.github.eschizoid.telescope.mapping.Mapping.*;
             import io.github.eschizoid.telescope.Telescope;
-            record @@Inner(String name, String label) {}
+            record @@Inner(String title, String label) {}
             record @@InnerDto(String name) {}
             record @@Outer(@@Inner inner) {}
             record @@OuterDto(@@InnerDto renamed) {}
@@ -713,7 +713,7 @@ class NeverVisitedRowAgreementTest {
       import static io.github.eschizoid.telescope.mapping.Cases.cases;
       import static io.github.eschizoid.telescope.mapping.Mapping.*;
       import io.github.eschizoid.telescope.Telescope;
-      record @@Leaf(String name, String label) {}
+      record @@Leaf(String title, String label) {}
       record @@LeafDto(String name) {}
       record @@Other(String name) {}
       sealed interface @@Shape permits @@Circle, @@Square {}

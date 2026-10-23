@@ -10273,8 +10273,8 @@ class CrossPathCorpusTest {
    * A pair renaming one source property onto the target of another left under its own name, which
    * then has nowhere to be written: the declarations, each with {@code %1$s} as the row's prefix
    * and the last of them the runtime row, and the property both paths refuse by name. A strict pair
-   * refuses it whatever other rows it has; a kept property with a conversion of its own is a second
-   * write into the target, which a lenient pair refuses too.
+   * refuses it whatever other rows it has, at whatever depth it is met; a kept property with a
+   * conversion of its own is a second write into the target, which a lenient pair refuses too.
    */
   private record KeptName(String name, String kept, List<String> declarations) {}
 
@@ -10434,6 +10434,24 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, %1$sOut>to(%1$sSrc::a, %1$sTgt::b)",
           "<%1$sSrc, %1$sTgt>via(%1$sSrc::b, %1$sTgt::b, via)"
         )
+      )
+    ),
+    new KeptName(
+      "a rename on a nested pair, below a pair with no rows",
+      "label",
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\n" +
+          "public record %1$sSrc(String id, %1$sInner in) {}\n",
+        "public record %1$sTgt(String id, %1$sInnerDto in) {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, renames =" +
+          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
+          "public record %1$sInner(String n, String label) {}\n",
+        "public record %1$sInnerDto(String label) {}\n",
+        "public class %1$sRuntime {\n" +
+          "  public static Object mapper() {\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sInner, %1$sInnerDto, String>to(" +
+          "%1$sInner::n, %1$sInnerDto::label));\n  }\n}\n"
       )
     ),
     new KeptName(

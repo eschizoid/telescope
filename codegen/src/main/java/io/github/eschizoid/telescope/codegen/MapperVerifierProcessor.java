@@ -18,6 +18,7 @@ import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.KeptNames;
 import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
@@ -557,6 +558,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     // keyed to; a nested pair with no entry has no row keyed to it. Read through claimsAt, which
     // adds the rows keyed to two sealed interfaces a pair's classes implement.
     private Map<String, Set<String>> nestedClaims = Map.of();
+    // The source properties the rows of the call being verified read, by the nested pair they are
+    // keyed to. Read through sourceClaimsAt.
+    private Map<String, Set<String>> nestedSourceClaims = Map.of();
     // The rows of the call being verified, as the shared walk reads them.
     private List<PairWalk.KeyedRow<TypeMirror>> callRows = List.of();
 
@@ -617,6 +621,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var srcEl = props.elementOf(srcType);
       final var tgtEl = props.elementOf(tgtType);
       nestedClaims = Map.of();
+      nestedSourceClaims = Map.of();
       callRows = List.of();
       if (srcEl != null && tgtEl != null) nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       if (
@@ -713,6 +718,25 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           for (final var name : match.unmatchedSources()) {
             report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, name));
+          }
+        } else if (strict) {
+          // Beside a constant or compute row construction is lenient about unmatched properties,
+          // but still refuses a source property no row reads whose same-named target a row reading
+          // another property writes.
+          final var kept = new ArrayList<String>();
+          for (final var name : srcProps.keySet()) if (!claimedSrc.contains(name)) kept.add(name);
+          final var taken = KeptNames.taken(kept, claimedTgt);
+          if (!taken.isEmpty()) {
+            report(
+              node,
+              PairingMessages.noSameNameTarget(
+                srcSimple,
+                tgtSimple,
+                srcEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                tgtEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                taken.getFirst()
+              )
+            );
           }
         }
         final var seen = new HashSet<String>();
@@ -1008,6 +1032,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final boolean strict
     ) {
       final var claims = new HashMap<String, Set<String>>();
+      final var sourceClaims = new HashMap<String, Set<String>>();
+      nestedSourceClaims = sourceClaims;
       final var all = new ArrayList<PairWalk.KeyedRow<TypeMirror>>();
       callRows = all;
       for (var i = 2; i < args.size(); i++) {
@@ -1028,6 +1054,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         if (keyed.kind() == PairWalk.RowKind.PASS_THROUGH || keyed.kind() == PairWalk.RowKind.CONVERTING) {
           names.add(propertyName(keyed.targetMethod(), keyed.target()));
         }
+        final var read = readsAt(keyed.kind(), keyed.sourceMethod(), keyed.sourcePathStart(), keyed.source());
+        if (read != null) sourceClaims.computeIfAbsent(key, __ -> new HashSet<>()).add(read);
       }
       return claims;
     }
@@ -1049,6 +1077,35 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
       }
       return all;
+    }
+
+    /**
+     * The source properties the rows construction applies to the pair of {@code source} and {@code
+     * target} read: those keyed to the pair, and those keyed to two sealed interfaces its classes
+     * implement, whose source accessor or path names the property on {@code source}.
+     */
+    private Set<String> sourceClaimsAt(final TypeElement source, final TypeElement target) {
+      final var all = new HashSet<>(nestedSourceClaims.getOrDefault(pairKey(source, target), Set.of()));
+      for (final var row : inheritedAt(source, target)) {
+        final var read = readsAt(row.kind(), row.sourceAccessor(), row.sourcePathStart(), source);
+        if (read != null) all.add(read);
+      }
+      return all;
+    }
+
+    /**
+     * The source property a row of {@code kind} reads on {@code source}, through its accessor
+     * {@code method} or the first step {@code pathStart} of its path, or null when it reads none
+     * there.
+     */
+    private String readsAt(
+      final PairWalk.RowKind kind,
+      final String method,
+      final String pathStart,
+      final TypeElement source
+    ) {
+      if (kind == PairWalk.RowKind.PATH) return pathStart == null ? null : propertyName(pathStart, source);
+      return method == null ? null : propertyName(method, source);
     }
 
     /**
@@ -1846,6 +1903,27 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         if (claimed == null && bridgeVisible(srcEl, tgtEl)) return;
         if (!seen.add(key)) return;
         final var sides = classSides(srcEl, tgtEl);
+        // A strict mapper refuses, at any pair with rows of its own, a source property no row reads
+        // whose same-named target a row reading another property writes.
+        if (!forwardOnly && claimed != null) {
+          final var read = sourceClaimsAt(srcEl, tgtEl);
+          final var kept = new ArrayList<String>();
+          for (final var name : sides.source().keySet()) if (!read.contains(name)) kept.add(name);
+          final var taken = KeptNames.taken(kept, claimed);
+          if (!taken.isEmpty()) {
+            report(
+              at,
+              PairingMessages.noSameNameTarget(
+                srcEl.getSimpleName().toString(),
+                tgtEl.getSimpleName().toString(),
+                srcEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                tgtEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                taken.getFirst()
+              )
+            );
+            return;
+          }
+        }
         final var match = PairingRules.matchFields(
           List.copyOf(sides.source().keySet()),
           List.copyOf(sides.target().keySet()),
