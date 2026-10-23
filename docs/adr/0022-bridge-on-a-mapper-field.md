@@ -46,23 +46,30 @@ the existing emitter without a second one.
    (`when`, `zip`) each get a message naming what the processor needs instead. A refused row never falls back to the
    runtime path silently: the build fails, so the field never claims generated code it does not have.
 4. **Dispatch is by the calling class and the pair.** The bridge's generated `BridgeProvider` names the class that
-   declares the field. `Telescope.mapper` and `mapperForward` read their caller with `StackWalker` once, when the mapper
-   is built, and look the provider up by that class and the pair through `ServiceLoader`, when the call comes from the
-   class's static initialiser, which is what initialises a `@Bridge` field. When one is found the factory returns a
-   mapper over the generated bridge and builds nothing reflective; when none is found, because the processor did not
-   run, it builds the runtime mapper from the same rows. A call from a method or a lambda always builds the runtime
-   mapper. At compile time, a class that declares a `@Bridge` field builds no other mapper except as a static field
-   initialised in place, naming literal classes of a pair no `@Bridge` field of the class declares; every other
-   `Telescope.mapper` or `mapperForward` call in the class is refused by name. The two guards together keep the
-   generated bridge from a call with other rows: the runtime one stops a call outside the static initialiser, the
-   compile-time one a call inside it, a helper's included.
+   declares the field. `Telescope.mapper` and `mapperForward` read their caller once, when the mapper is built, with a
+   `StackWalker` that shows hidden frames, reflection's among them. Only when the frame directly below the factory is a
+   class's static initialiser, which is what initialises a `@Bridge` field, do they look a provider up by that class and
+   the pair through `ServiceLoader`. When one is found the factory returns the mapper generated for the field and builds
+   nothing reflective; when none is found, because the processor did not run, it builds the runtime mapper from the same
+   rows. A call from a method, a lambda, the hidden class behind a method reference or `Method.invoke` puts its own
+   frame below the factory and always builds the runtime mapper. At compile time, a class that declares a `@Bridge`
+   field builds every other mapper as a static field initialised in place by the factory, naming literal classes of a
+   pair no `@Bridge` field of the class declares. Every other call in the class is refused: by name during the round,
+   and again once javac has attributed the class, by the method each call or method reference resolves to, whatever its
+   receiver. The runtime guard holds every call whose frame below the factory is not a static initialiser; the
+   compile-time guard holds every call and reference written in the declaring class, a helper's included. A nested class
+   is a class of its own on both sides.
 5. **A field-declared bridge is its pair's own bridge,** as a `@Bridge` on a class is today: a mapper that reaches the
    pair as a nested field converts it through that bridge on both paths. One declaration per pair is allowed in a
    compilation, which is the rule carrier bridges already follow at run time. When the processor did not run, such a
    mapper converts the pair by its own rows instead, as with a `@Bridge` on a class; a `via` row naming the field holds
    the same in both cases.
-6. **The generated mapper costs what today's `@Bridge` costs per call.** The dispatched mapper holds the generated
-   `BridgeFn` and calls it directly; the lookup happens once, when the field is initialised.
+6. **The generated mapper costs what today's `@Bridge` costs per call.** The factory returns an instance of a class the
+   processor generates for the field, a subclass of `Mapper` or `ForwardMapper` whose `forward`, `backward` and `patch`
+   each make one call through the bridge's `BRIDGE_FN` constant. A call through the field's `static final` constant
+   resolves to the bridge as a call to `BRIDGE_FN` does, and the JIT inlines it. The lookup happens once, when the field
+   is initialised. Every other method, `explain()`, `trace()` and the hooks among them, is the base class's own, and a
+   hook returns a mapper of the base class around the same bridge.
 7. **The per-field annotations are retired** once the field form compiles what they express: `@Rename`, `@Transform`,
    `@ViaMapper`, `@Constant`, `@Default` and `@Compute`, together with the `@Bridge` attributes that hold them and
    `drops`, with no deprecated aliases. The class form of `@Bridge` keeps `value`, `writeStrategy` and `lenient` for a

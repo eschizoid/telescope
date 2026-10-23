@@ -28,7 +28,7 @@ import java.util.function.Function;
  * <p>For bidirectional conversions, use {@link Telescope#mapper(Class, Class,
  * io.github.eschizoid.telescope.mapping.MapStep...)} and the regular {@link Mapper}.
  */
-public final class ForwardMapper<A, B> {
+public class ForwardMapper<A, B> {
 
   // Lattice-routed: the read substrate is the internal `Getter<A, B>` (the lattice's read-only
   // optic primitive — the same shape Mapper's bidirectional `Iso<A, B>` weakens to). Stored as
@@ -47,6 +47,10 @@ public final class ForwardMapper<A, B> {
   // Whether a value trace would show a field: a trail of only the node naming the generated bridge
   // a mapper runs has none, so its forward skips the logger as a bridge called directly does.
   private final boolean traced;
+
+  // Whether this forward mapper converts through a generated bridge, which a generated class may
+  // then specialise.
+  private final boolean generated;
 
   private static boolean traced(final List<OpticNode> trail) {
     for (final var node : trail) if (!(node instanceof OpticNode.Declared)) return true;
@@ -73,6 +77,17 @@ public final class ForwardMapper<A, B> {
     final Class<B> targetClass,
     final List<OpticNode> explainTrail
   ) {
+    this(forward, sourceClass, targetClass, explainTrail, false);
+  }
+
+  private ForwardMapper(
+    final Getter<A, B> forward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail,
+    final boolean generated
+  ) {
+    this.generated = generated;
     this.forward = forward;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
@@ -85,6 +100,29 @@ public final class ForwardMapper<A, B> {
       Level.DEBUG,
       () -> "forward " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
     );
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> The state of {@code built}, a forward mapper
+   * {@link #ofGenerated} built over a generated bridge, for the class the {@code @Bridge} processor
+   * generates for a field: that class overrides {@link #forward} with one static call into the
+   * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
+   * and inlines. Every other method is this class's own.
+   *
+   * @throws IllegalArgumentException if {@code built} is not a forward mapper over a generated
+   *     bridge
+   */
+  protected ForwardMapper(final ForwardMapper<A, B> built) {
+    if (!built.generated) throw new IllegalArgumentException(
+      "Only a forward mapper over a generated bridge is specialised by a generated class"
+    );
+    this.forward = built.forward;
+    this.sourceClass = built.sourceClass;
+    this.targetClass = built.targetClass;
+    this.explainTrail = built.explainTrail;
+    this.traced = built.traced;
+    this.logger = built.logger;
+    this.generated = true;
   }
 
   /**
@@ -115,7 +153,7 @@ public final class ForwardMapper<A, B> {
     final List<OpticNode> explainTrail
   ) {
     final Getter<A, B> getter = bridge::forward;
-    return new ForwardMapper<>(getter, sourceClass, targetClass, explainTrail);
+    return new ForwardMapper<>(getter, sourceClass, targetClass, explainTrail, true);
   }
 
   /**
@@ -143,7 +181,7 @@ public final class ForwardMapper<A, B> {
    *
    * @return the structure of this mapper's conversion; never null
    */
-  public OpticReport explain() {
+  public final OpticReport explain() {
     return new OpticReport(explainTrail);
   }
 
@@ -155,7 +193,7 @@ public final class ForwardMapper<A, B> {
    * @param input the source value to convert and trace
    * @return the per-field value trace; never null
    */
-  public Trace trace(final A input) {
+  public final Trace trace(final A input) {
     return MappingTraces.of(input, forward(input), explainTrail);
   }
 
@@ -175,7 +213,7 @@ public final class ForwardMapper<A, B> {
   }
 
   /** Alias of {@link #forward(Object)}. */
-  public B read(final A a) {
+  public final B read(final A a) {
     return forward(a);
   }
 
@@ -190,7 +228,7 @@ public final class ForwardMapper<A, B> {
    * ForwardMapper<Entity, AuditEvent> pipeline = entityToDto.then(dtoToAudit);
    * }</pre>
    */
-  public <C> ForwardMapper<A, C> then(final ForwardMapper<B, C> next) {
+  public final <C> ForwardMapper<A, C> then(final ForwardMapper<B, C> next) {
     // Genuine lattice routing: Getter.then(Getter) composes two read-only optics into one. The
     // composition is one method call on the substrate, not an inline lambda closure.
     final Getter<A, C> composed = forward.then(next.forward);
@@ -208,7 +246,7 @@ public final class ForwardMapper<A, B> {
    * <p>Lattice-native: routes through {@code Getter.then(Getter)} by lifting {@code hook} as a
    * {@code Getter<A, A>} and composing it before the existing read. Chains compose left-to-right.
    */
-  public ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+  public final ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Getter<A, A> pre = hook::apply;
     // A pre-forward value hook doesn't change which field maps to which — keep the field trail so
     // explain() / trace() stay populated after composition.
@@ -222,7 +260,7 @@ public final class ForwardMapper<A, B> {
    *
    * <p>Lattice-native: routes through {@code Getter.then(Getter)}.
    */
-  public ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
+  public final ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
     final Getter<B, B> post = hook::apply;
     // A post-forward value hook doesn't change the field mapping — keep the field trail.
     return new ForwardMapper<>(forward.then(post), sourceClass, targetClass, explainTrail);
@@ -239,7 +277,7 @@ public final class ForwardMapper<A, B> {
    * prior read and the hook in one lambda. Still on-lattice: the substrate stays {@code Getter<A,
    * B>}, not a raw {@code Function}.
    */
-  public ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+  public final ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final Getter<A, B> prior = forward;
     final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
     // A source-aware post hook still doesn't change the field mapping — keep the field trail.
@@ -257,19 +295,19 @@ public final class ForwardMapper<A, B> {
    * }</pre>
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public ForwardMapper<List<A>, List<B>> liftList() {
+  public final ForwardMapper<List<A>, List<B>> liftList() {
     return new ForwardMapper<>(Getter.liftList(forward), (Class) List.class, (Class) List.class);
   }
 
   /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Set<A>, Set<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public ForwardMapper<Set<A>, Set<B>> liftSet() {
+  public final ForwardMapper<Set<A>, Set<B>> liftSet() {
     return new ForwardMapper<>(Getter.liftSet(forward), (Class) Set.class, (Class) Set.class);
   }
 
   /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Optional<A>, Optional<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public ForwardMapper<Optional<A>, Optional<B>> liftOptional() {
+  public final ForwardMapper<Optional<A>, Optional<B>> liftOptional() {
     return new ForwardMapper<>(Getter.liftOptional(forward), (Class) Optional.class, (Class) Optional.class);
   }
 
@@ -278,17 +316,17 @@ public final class ForwardMapper<A, B> {
    * are preserved; only the values flow through {@link #forward}.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public <K> ForwardMapper<Map<K, A>, Map<K, B>> liftMapValues() {
+  public final <K> ForwardMapper<Map<K, A>, Map<K, B>> liftMapValues() {
     return new ForwardMapper<>(Getter.liftMapValues(forward), (Class) Map.class, (Class) Map.class);
   }
 
   /** The mapper's source class. */
-  public Class<A> sourceClass() {
+  public final Class<A> sourceClass() {
     return sourceClass;
   }
 
   /** The mapper's target class. */
-  public Class<B> targetClass() {
+  public final Class<B> targetClass() {
     return targetClass;
   }
 }

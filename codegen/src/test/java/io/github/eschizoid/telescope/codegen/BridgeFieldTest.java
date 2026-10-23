@@ -412,6 +412,18 @@ class BridgeFieldTest {
         "a statically imported factory",
         "  static Object later() {" +
         " return io.github.eschizoid.telescope.Telescope.mapperForward(Address.class, AddressDto.class); }",
+      },
+      new String[] {
+        "a method reference to the factory, called from a static field",
+        "  interface Factory { ForwardMapper<User, UserDto> make(Class<User> s, Class<UserDto> t, MapStep... rows); }\n" +
+        "  static final Factory FACTORY = Telescope::mapperForward;\n" +
+        "  static final ForwardMapper<User, UserDto> SWAP = FACTORY.make(User.class, UserDto.class," +
+        " drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));",
+      },
+      new String[] {
+        "the factory reached through a receiver expression, for the same pair",
+        "  static final ForwardMapper<User, UserDto> SWAP = ((Telescope<?, ?>) null).mapperForward(User.class," +
+        " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));",
       }
     );
   }
@@ -471,6 +483,112 @@ class BridgeFieldTest {
       assertTrue(same.explain().declared().isEmpty(), "a nested class is its own caller");
       final var user = user(loader, "lovelace");
       assertNotEquals(field.forward(user), same.forward(user), "the nested class's rows run, not the field's bridge");
+    }
+  }
+
+  @Test
+  @DisplayName("a call the class's text names otherwise is refused where it is, once javac has resolved it")
+  void aResolvedCallIsRefusedWhereItIs() {
+    final var c = compile(
+      sources(
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge public static final ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
+          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          "  static final java.util.function.BiFunction<Class<Address>, Class<AddressDto>," +
+          " ForwardMapper<Address, AddressDto>> LATER =\n" +
+          "      Telescope::mapperForward;\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success());
+    final var refusal = c
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+      .filter(d -> d.getMessage(null).contains("so every mapper the class builds is a static field"))
+      .findFirst()
+      .orElseThrow(() -> new AssertionError(c.errorMessages()));
+    assertEquals(10, refusal.getLineNumber());
+    assertEquals(7, refusal.getColumnNumber());
+  }
+
+  @Test
+  @DisplayName("a @Bridge field of an interface is static final without saying so, and runs its bridge")
+  void anInterfaceFieldIsStaticFinal() throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Mappers",
+        HEADER +
+          "public interface Mappers {\n" +
+          "  @Bridge ForwardMapper<User, UserDto> USER = Telescope.mapperForward(User.class," +
+          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          "  ForwardMapper<Address, AddressDto> PLAIN = Telescope.mapperForward(Address.class, AddressDto.class);\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var field = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "USER");
+      assertEquals(OpticNode.Runs.GENERATED, field.explain().declared().orElseThrow().runs());
+      @SuppressWarnings("unchecked")
+      final var plain = (ForwardMapper<Object, Object>) field(loader, "fb.Mappers", "PLAIN");
+      assertTrue(plain.explain().declared().isEmpty());
+    }
+  }
+
+  @Test
+  @DisplayName("two fields whose bridges take one name are refused in the terms of a field")
+  void aBridgeNameTakenTwiceIsRefusedForTheField() {
+    final var c = compile(
+      sources(
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge static final ForwardMapper<User, UserDto> USER_VIEW = Telescope.mapperForward(User.class," +
+          " UserDto.class, drop(User::secret), toOneWay(User::handle, UserDto::handle, Handle::new));\n" +
+          "}\n",
+        "fb.MappersUser",
+        HEADER +
+          "public final class MappersUser {\n" +
+          "  @Bridge static final ForwardMapper<User, UserView> VIEW =" +
+          " Telescope.mapperForward(User.class, UserView.class, drop(User::name));\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(c.hasError("fb.MappersUserViewBridge is claimed by two different type pairs"), c::errorMessages);
+    assertTrue(c.hasError("rename the field or the type"), c::errorMessages);
+    assertFalse(c.hasError("Declare an explicit @Bridge"), c::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a field's mapper is the class generated for it, each direction one call into the bridge")
+  void aFieldsMapperIsTheGeneratedClass() throws Exception {
+    final var c = compile(sources());
+    assertTrue(c.success(), c::errorMessages);
+    final var provider = c.generated().get("fb.AddressMappersAddressBridgeProvider");
+    assertTrue(
+      provider.contains("static final class FieldMapper extends io.github.eschizoid.telescope.conversion.Mapper"),
+      provider
+    );
+    assertTrue(provider.contains("return AddressMappersAddressBridge.BRIDGE_FN.forward(source);"), provider);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var address = (Mapper<Object, Object>) field(loader, "fb.AddressMappers", "ADDRESS");
+      assertEquals("fb.AddressMappersAddressBridgeProvider$FieldMapper", address.getClass().getName());
+      final var a = loader.loadClass("fb.Address").getConstructors()[0].newInstance("Oslo", "0150");
+      final var dto = loader.loadClass("fb.AddressDto").getConstructors()[0].newInstance(null, "0151");
+      assertEquals(a, address.backward(address.forward(a)));
+      assertEquals("Address[city=Oslo, zip=0151]", address.patch(a, dto).toString());
+      assertEquals(null, address.patch(null, dto));
+      assertEquals(null, address.forward(null));
+      assertEquals(OpticNode.Runs.GENERATED, address.explain().declared().orElseThrow().runs());
+      assertTrue(address.trace(a).toString().contains("runs generated"), () -> address.trace(a).toString());
+      final var hooked = address.afterForward(d -> d);
+      assertEquals(address.forward(a), hooked.forward(a));
     }
   }
 

@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -124,6 +125,7 @@ public final class DeclaredFixtures {
 
     @Override
     public Point patch(final Point base, final PointDto partial) {
+      if (base == null) return null;
       GENERATED_CALLS.incrementAndGet();
       return new Point(
         partial.label() == null ? base.name() : partial.label(),
@@ -137,7 +139,9 @@ public final class DeclaredFixtures {
     }
   }
 
-  public static final Telescope<Point, PointDto> POINT_BRIDGE = Telescope.bridge(new PointFn());
+  public static final BridgeFn<Point, PointDto> POINT_FN = new PointFn();
+
+  public static final Telescope<Point, PointDto> POINT_BRIDGE = Telescope.bridge(POINT_FN);
 
   public static final Telescope<Stale, StaleDto> STALE_BRIDGE = Telescope.bridge(
     new BridgeFn<Stale, StaleDto>() {
@@ -154,20 +158,20 @@ public final class DeclaredFixtures {
     }
   );
 
-  public static final Telescope<Forward, ForwardDto> FORWARD_BRIDGE = Telescope.bridge(
-    new BridgeFn<Forward, ForwardDto>() {
-      @Override
-      public ForwardDto forward(final Forward s) {
-        GENERATED_CALLS.incrementAndGet();
-        return s == null ? null : new ForwardDto(s.name());
-      }
-
-      @Override
-      public Forward backward(final ForwardDto t) {
-        throw new UnsupportedOperationException();
-      }
+  public static final BridgeFn<Forward, ForwardDto> FORWARD_FN = new BridgeFn<>() {
+    @Override
+    public ForwardDto forward(final Forward s) {
+      GENERATED_CALLS.incrementAndGet();
+      return s == null ? null : new ForwardDto(s.name());
     }
-  );
+
+    @Override
+    public Forward backward(final ForwardDto t) {
+      throw new UnsupportedOperationException();
+    }
+  };
+
+  public static final Telescope<Forward, ForwardDto> FORWARD_BRIDGE = Telescope.bridge(FORWARD_FN);
 
   /** The class whose field the processor would have read. */
   public static final class PointMappers {
@@ -183,6 +187,77 @@ public final class DeclaredFixtures {
     /** The same mapper built by a method of the declaring class, which no field initialises. */
     public static Mapper<Point, PointDto> later() {
       return Telescope.mapper(Point.class, PointDto.class, to(Point::name, PointDto::label));
+    }
+
+    /** The factory's own shape, which a method reference to it takes. */
+    @FunctionalInterface
+    interface Factory {
+      Mapper<Point, PointDto> make(Class<Point> source, Class<PointDto> target, MapStep... rows);
+    }
+
+    private static final Factory FACTORY = Telescope::mapper;
+
+    /**
+     * The same rows, built from the static initialiser through a method reference to the factory.
+     */
+    public static final Mapper<Point, PointDto> THROUGH_REFERENCE = FACTORY.make(
+      Point.class,
+      PointDto.class,
+      to(Point::name, PointDto::label)
+    );
+
+    /** The same rows, built by reflection in the static initialiser itself. */
+    public static final Mapper<Point, PointDto> THROUGH_REFLECTION;
+
+    static {
+      try {
+        @SuppressWarnings("unchecked")
+        final var reflected = (Mapper<Point, PointDto>) Telescope.class.getMethod(
+          "mapper",
+          Class.class,
+          Class.class,
+          MapStep[].class
+        ).invoke(null, Point.class, PointDto.class, new MapStep[] { to(Point::name, PointDto::label) });
+        THROUGH_REFLECTION = reflected;
+      } catch (final ReflectiveOperationException e) {
+        throw new ExceptionInInitializerError(e);
+      }
+    }
+  }
+
+  /** What the processor writes for a field's mapper: each direction one call into the bridge. */
+  public static final class PointFieldMapper extends Mapper<Point, PointDto> {
+
+    public PointFieldMapper(final Mapper<Point, PointDto> built) {
+      super(built);
+    }
+
+    @Override
+    public PointDto forward(final Point source) {
+      return POINT_FN.forward(source);
+    }
+
+    @Override
+    public Point backward(final PointDto target) {
+      return POINT_FN.backward(target);
+    }
+
+    @Override
+    public Point patch(final Point base, final PointDto partial) {
+      return POINT_FN.patch(base, partial);
+    }
+  }
+
+  /** As {@link PointFieldMapper}, for a forward mapper. */
+  public static final class ForwardFieldMapper extends ForwardMapper<Forward, ForwardDto> {
+
+    public ForwardFieldMapper(final ForwardMapper<Forward, ForwardDto> built) {
+      super(built);
+    }
+
+    @Override
+    public ForwardDto forward(final Forward source) {
+      return FORWARD_FN.forward(source);
     }
   }
 
@@ -255,6 +330,12 @@ public final class DeclaredFixtures {
     public Object bridge() {
       return POINT_BRIDGE;
     }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public Mapper<?, ?> mapper(final Mapper<?, ?> built) {
+      return new PointFieldMapper((Mapper<Point, PointDto>) built);
+    }
   }
 
   public static final class StaleProvider implements BridgeProvider {
@@ -315,6 +396,12 @@ public final class DeclaredFixtures {
     @Override
     public Object bridge() {
       return FORWARD_BRIDGE;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built) {
+      return new ForwardFieldMapper((ForwardMapper<Forward, ForwardDto>) built);
     }
   }
 }

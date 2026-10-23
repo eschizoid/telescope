@@ -13,6 +13,7 @@ import com.sun.source.tree.Tree;
 import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
+import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -233,30 +234,7 @@ final class FieldRows {
     final var path = trees.getPath(type);
     if (path == null || !(path.getLeaf() instanceof ClassTree declaration)) return List.of();
     final var unit = path.getCompilationUnit();
-    final var declared = new LinkedHashSet<List<TypeElement>>();
-    for (final var member : declaration.getMembers()) {
-      if (
-        member instanceof VariableTree field &&
-        bridgeAnnotated(field) &&
-        field.getInitializer() instanceof MethodInvocationTree call
-      ) {
-        final var pair = literalPair(unit, call, type);
-        if (pair != null) declared.add(pair);
-      }
-    }
-    final var sanctioned = new HashSet<Tree>();
-    for (final var member : declaration.getMembers()) {
-      if (
-        !(member instanceof VariableTree field) ||
-        !field.getModifiers().getFlags().contains(Modifier.STATIC) ||
-        !(field.getInitializer() instanceof MethodInvocationTree call) ||
-        !namesFactory(unit, call)
-      ) {
-        continue;
-      }
-      final var pair = literalPair(unit, call, type);
-      if (pair != null && (bridgeAnnotated(field) || !declared.contains(pair))) sanctioned.add(call);
-    }
+    final var sanctioned = sanctionedCalls(type);
     final var found = new ArrayList<MethodInvocationTree>();
     final var scanner = new TreeScanner<Void, Void>() {
       @Override
@@ -274,6 +252,90 @@ final class FieldRows {
       if (!(member instanceof ClassTree)) scanner.scan(member, null);
     }
     return found;
+  }
+
+  /**
+   * The mapper-factory calls {@code type} may make: each one the whole initializer of a static
+   * field, naming its classes as literals, for the pair of a {@code @Bridge} field when it is that
+   * field, and for a pair no {@code @Bridge} field of the class declares otherwise. A field of an
+   * interface is static whether or not it says so.
+   */
+  Set<Tree> sanctionedCalls(final TypeElement type) {
+    final var path = trees.getPath(type);
+    if (path == null || !(path.getLeaf() instanceof ClassTree declaration)) return Set.of();
+    final var unit = path.getCompilationUnit();
+    final var implicitlyStatic = type.getKind().isInterface();
+    final var declared = new LinkedHashSet<List<TypeElement>>();
+    for (final var member : declaration.getMembers()) {
+      if (
+        member instanceof VariableTree field &&
+        bridgeAnnotated(field) &&
+        field.getInitializer() instanceof MethodInvocationTree call
+      ) {
+        final var pair = literalPair(unit, call, type);
+        if (pair != null) declared.add(pair);
+      }
+    }
+    final var sanctioned = new HashSet<Tree>();
+    for (final var member : declaration.getMembers()) {
+      if (
+        !(member instanceof VariableTree field) ||
+        !(implicitlyStatic || field.getModifiers().getFlags().contains(Modifier.STATIC)) ||
+        !(field.getInitializer() instanceof MethodInvocationTree call) ||
+        !namesFactory(unit, call)
+      ) {
+        continue;
+      }
+      final var pair = literalPair(unit, call, type);
+      if (pair != null && (bridgeAnnotated(field) || !declared.contains(pair))) sanctioned.add(call);
+    }
+    return sanctioned;
+  }
+
+  /**
+   * The calls to {@code Telescope.mapper} or {@code mapperForward}, and the method references to
+   * either, in {@code type} outside {@link #sanctionedCalls}, found by the method each resolves to.
+   * Read once javac has attributed {@code type}, so each tree already carries its symbol and
+   * nothing is attributed again; this finds what {@link #unsanctionedCalls} cannot see by name: a
+   * factory reached through any receiver expression, or a reference to it called later.
+   */
+  List<Tree> unsanctionedResolved(final TypeElement type) {
+    final var path = trees.getPath(type);
+    if (path == null || !(path.getLeaf() instanceof ClassTree declaration)) return List.of();
+    final var sanctioned = sanctionedCalls(type);
+    final var found = new ArrayList<Tree>();
+    final var scanner = new TreePathScanner<Void, Void>() {
+      @Override
+      public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
+        if (!sanctioned.contains(node) && dispatching(trees.getElement(getCurrentPath()))) found.add(node);
+        return super.visitMethodInvocation(node, unused);
+      }
+
+      @Override
+      public Void visitMemberReference(final MemberReferenceTree node, final Void unused) {
+        if (dispatching(trees.getElement(getCurrentPath()))) found.add(node);
+        return super.visitMemberReference(node, unused);
+      }
+
+      @Override
+      public Void visitClass(final ClassTree node, final Void unused) {
+        return null;
+      }
+    };
+    for (final var member : declaration.getMembers()) {
+      if (!(member instanceof ClassTree)) scanner.scan(new TreePath(path, member), null);
+    }
+    return found;
+  }
+
+  /** Whether {@code element} is {@code Telescope.mapper} or {@code Telescope.mapperForward}. */
+  private static boolean dispatching(final Element element) {
+    return (
+      element instanceof ExecutableElement method &&
+      DISPATCHING.contains(method.getSimpleName().toString()) &&
+      method.getEnclosingElement() instanceof TypeElement owner &&
+      owner.getQualifiedName().contentEquals(TELESCOPE_FQN)
+    );
   }
 
   /** The two classes {@code call} names as class literals, resolved by name, or null. */

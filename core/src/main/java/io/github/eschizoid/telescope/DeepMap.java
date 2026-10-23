@@ -266,7 +266,7 @@ public final class DeepMap {
   ) {
     final var bridge = declaration.provider().bridge();
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
-    return Mapper.ofGenerated(
+    final var built = Mapper.ofGenerated(
       fn,
       source,
       target,
@@ -274,6 +274,7 @@ public final class DeepMap {
       declaration.provider().targetProperties(),
       List.of(declaration.node())
     );
+    return (Mapper<A, B>) declaration.provider().mapper(built);
   }
 
   /** As {@link #declaredMapper}, for a mapper converting forward only. */
@@ -284,7 +285,8 @@ public final class DeepMap {
     final Class<B> target
   ) {
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(declaration.provider().bridge());
-    return ForwardMapper.ofGenerated(fn, source, target, List.of(declaration.node()));
+    final var built = ForwardMapper.ofGenerated(fn, source, target, List.of(declaration.node()));
+    return (ForwardMapper<A, B>) declaration.provider().forwardMapper(built);
   }
 
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {

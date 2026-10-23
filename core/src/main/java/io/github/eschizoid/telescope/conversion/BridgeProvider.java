@@ -71,4 +71,19 @@ public interface BridgeProvider {
   default List<String> targetProperties() {
     return List.of();
   }
+
+  /**
+   * The mapper a {@code Telescope.mapper} call for this bridge's pair returns, given {@code built},
+   * the mapper over this bridge. For a bridge a field declared, an instance of the class generated
+   * for the field, whose {@code forward}, {@code backward} and {@code patch} call the bridge
+   * directly; {@code built} itself otherwise.
+   */
+  default Mapper<?, ?> mapper(final Mapper<?, ?> built) {
+    return built;
+  }
+
+  /** As {@link #mapper}, for a {@code Telescope.mapperForward} call and its forward mapper. */
+  default ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built) {
+    return built;
+  }
 }

@@ -3084,13 +3084,18 @@ public sealed class Telescope<
     };
   }
 
-  private static final StackWalker CALLER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
+  // Hidden frames, reflection's among them, are shown, so a call through a method reference's
+  // hidden class or through Method.invoke has that frame as its caller rather than the static
+  // initialiser below it.
+  private static final StackWalker CALLER = StackWalker.getInstance(
+    Set.of(StackWalker.Option.RETAIN_CLASS_REFERENCE, StackWalker.Option.SHOW_HIDDEN_FRAMES)
+  );
 
   /**
-   * The class whose static initialiser called the mapper factory that calls this, or null when the
-   * call came from anywhere else. Only a static initialiser initialises a {@code @Bridge} field, so
-   * a mapper built in a method or a lambda is never handed a field's bridge. Read once per mapper
-   * built.
+   * The class whose static initialiser called the mapper factory that calls this, with no frame in
+   * between, or null when the call came from anywhere else. Only a static initialiser initialises a
+   * {@code @Bridge} field, so a mapper built in a method, a lambda, through a method reference or
+   * by reflection is never handed a field's bridge. Read once per mapper built.
    */
   private static Class<?> initialisingCaller() {
     return CALLER.walk(frames ->

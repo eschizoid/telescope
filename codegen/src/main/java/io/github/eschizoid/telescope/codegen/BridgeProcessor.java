@@ -1,6 +1,9 @@
 package io.github.eschizoid.telescope.codegen;
 
 import com.sun.source.tree.Tree;
+import com.sun.source.util.JavacTask;
+import com.sun.source.util.TaskEvent;
+import com.sun.source.util.TaskListener;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
@@ -106,6 +109,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var props = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
     rules = new PairingRules<>(props);
     allocation = new ContainerAllocation<>(props);
+    try {
+      final var trees = Trees.instance(processingEnv);
+      // A class's calls are resolved once javac has attributed it, when each tree carries the
+      // method it calls; resolving them during a round would attribute bodies javac attributes
+      // again later.
+      JavacTask.instance(processingEnv).addTaskListener(
+        new TaskListener() {
+          @Override
+          public void finished(final TaskEvent event) {
+            if (event.getKind() == TaskEvent.Kind.ANALYZE && event.getTypeElement() != null) {
+              refuseResolvedCalls(trees, event.getTypeElement());
+            }
+          }
+        }
+      );
+    } catch (final IllegalArgumentException e) {
+      // Only javac offers the tree API and its task events; the round's own reading stands alone.
+    }
+  }
+
+  /**
+   * The classes declaring a {@code @Bridge} field whose calls are still to be resolved once javac
+   * has attributed them, by qualified name.
+   */
+  private final Set<String> fieldCarriers = new HashSet<>();
+
+  /**
+   * Refuses, in each class declaring a {@code @Bridge} field within {@code analysed}, every call
+   * and method reference resolving to a mapper factory the class may not make, other than those the
+   * round already refused by name.
+   */
+  private void refuseResolvedCalls(final Trees trees, final TypeElement analysed) {
+    if (fieldCarriers.isEmpty()) return;
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var name : List.copyOf(fieldCarriers)) {
+      final var carrier = processingEnv.getElementUtils().getTypeElement(name);
+      if (carrier == null || !outermost(carrier).equals(outermost(analysed))) continue;
+      fieldCarriers.remove(name);
+      final var path = trees.getPath(carrier);
+      if (path == null) continue;
+      final var unit = path.getCompilationUnit();
+      for (final var other : rows.unsanctionedResolved(carrier)) {
+        final var at = trees.getSourcePositions().getStartPosition(unit, other);
+        if (!reportedCalls.add(carrier.getQualifiedName() + "@" + at)) continue;
+        trees.printMessage(Diagnostic.Kind.ERROR, unsanctioned(carrier), other, unit);
+      }
+    }
+  }
+
+  private static TypeElement outermost(final TypeElement type) {
+    var top = type;
+    while (top.getEnclosingElement() instanceof TypeElement enclosing) top = enclosing;
+    return top;
+  }
+
+  /** The refusal of a mapper {@code carrier}, a class declaring a {@code @Bridge} field, builds. */
+  private static String unsanctioned(final TypeElement carrier) {
+    return (
+      carrier.getSimpleName() +
+      " declares a @Bridge field, and the runtime hands a field's bridge to a mapper of its pair this" +
+      " class builds, so every mapper the class builds is a static field initialised by" +
+      " Telescope.mapper(...) or mapperForward(...) written in place, naming its classes as literals," +
+      " for a pair no @Bridge field of the class declares; build this one in another class"
+    );
   }
 
   /**
@@ -831,23 +898,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(field, declaredTwice(pair, held));
       return;
     }
-    var unsanctioned = false;
+    fieldCarriers.add(carrier.getQualifiedName().toString());
+    var refused = false;
     for (final var other : rows.unsanctionedCalls(carrier)) {
-      unsanctioned = true;
+      refused = true;
       final var at = trees.getSourcePositions().getStartPosition(trees.getPath(field).getCompilationUnit(), other);
       if (!reportedCalls.add(carrier.getQualifiedName() + "@" + at)) continue;
-      errorAt(
-        trees,
-        field,
-        other,
-        carrier.getSimpleName() +
-          " declares a @Bridge field, and the runtime hands a field's bridge to a mapper of its pair this" +
-          " class builds, so every mapper the class builds is a static field initialised by" +
-          " Telescope.mapper(...) or mapperForward(...) written in place, naming its classes as literals," +
-          " for a pair no @Bridge field of the class declares; build this one in another class"
-      );
+      errorAt(trees, field, other, unsanctioned(carrier));
     }
-    if (unsanctioned) return;
+    if (refused) return;
     // The pair is held under the field's name while its classes are written.
     configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrier, fieldName));
     seen.add(pair);
@@ -7139,9 +7198,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         thisPair.sourceFq() +
         " -> " +
         thisPair.targetFq() +
-        ". Auto-derived names use the simple names, so types sharing a simple name across" +
-        " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
-        " type."
+        (fieldOrigin != null
+          ? ". A field's bridge is named after its class and the field; rename the field or the type."
+          : ". Auto-derived names use the simple names, so types sharing a simple name across" +
+            " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
+            " type.")
     );
     return false;
   }
@@ -7232,6 +7293,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println("    return List.of(" + quotedList(fieldsOf(target).stream().map(Field::name).toList()) + ");");
           out.println("  }");
           out.println();
+          emitFieldMapper(out, source, target, bridgeName, cfg);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -7244,6 +7306,69 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     } catch (final IOException e) {
       error(source, "Failed to write " + qualifiedProvider + ": " + e.getMessage());
     }
+  }
+
+  /**
+   * Writes, into a field bridge's provider, the class the field's factory call returns and the
+   * provider method that builds it. The class takes the state of the mapper the runtime built over
+   * the bridge and overrides each direction with one call through the bridge's {@code BRIDGE_FN}
+   * constant, so a call through the field resolves to the bridge as a call to {@code BRIDGE_FN}
+   * does. Names are written in full, since the source or target may share a simple name with the
+   * telescope types.
+   */
+  private static void emitFieldMapper(
+    final PrintWriter out,
+    final TypeElement source,
+    final TypeElement target,
+    final String bridgeName,
+    final BridgeConfig cfg
+  ) {
+    final var s = source.getQualifiedName().toString();
+    final var t = target.getQualifiedName().toString();
+    final var fn = bridgeName + ".BRIDGE_FN";
+    final var base = cfg.lenient()
+      ? "io.github.eschizoid.telescope.conversion.ForwardMapper"
+      : "io.github.eschizoid.telescope.conversion.Mapper";
+    out.println("  @Override");
+    out.println("  @SuppressWarnings({ \"unchecked\", \"rawtypes\" })");
+    out.println(
+      "  public " +
+        base +
+        "<?, ?> " +
+        (cfg.lenient() ? "forwardMapper" : "mapper") +
+        "(final " +
+        base +
+        "<?, ?> built) {"
+    );
+    out.println("    return new FieldMapper((" + base + "<" + s + ", " + t + ">) built);");
+    out.println("  }");
+    out.println();
+    out.println("  /** The mapper the @Bridge field holds: each direction is one call into " + bridgeName + ". */");
+    out.println("  @SuppressWarnings(\"rawtypes\")");
+    out.println("  static final class FieldMapper extends " + base + "<" + s + ", " + t + "> {");
+    out.println();
+    out.println("    FieldMapper(final " + base + "<" + s + ", " + t + "> built) {");
+    out.println("      super(built);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public " + t + " forward(final " + s + " source) {");
+    out.println("      return " + fn + ".forward(source);");
+    out.println("    }");
+    if (!cfg.lenient()) {
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + s + " backward(final " + t + " target) {");
+      out.println("      return " + fn + ".backward(target);");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + s + " patch(final " + s + " base, final " + t + " partial) {");
+      out.println("      return " + fn + ".patch(base, partial);");
+      out.println("    }");
+    }
+    out.println("  }");
+    out.println();
   }
 
   /**

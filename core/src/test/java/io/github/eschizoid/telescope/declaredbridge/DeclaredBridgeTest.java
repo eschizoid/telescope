@@ -1,9 +1,14 @@
 package io.github.eschizoid.telescope.declaredbridge;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.Forward;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.ForwardDto;
 import io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures.ForwardMappers;
@@ -104,5 +109,44 @@ class DeclaredBridgeTest {
     final var before = DeclaredFixtures.GENERATED_CALLS.get();
     assertEquals(new ForwardDto("x"), ForwardMappers.FORWARD.forward(new Forward("x")));
     assertEquals(1, DeclaredFixtures.GENERATED_CALLS.get() - before);
+    assertEquals(null, ForwardMappers.FORWARD.forward(null));
+  }
+
+  @Test
+  @DisplayName("the declaring class's mapper is the class generated for the field, and keeps the mapper's state")
+  void theFieldsMapperIsTheGeneratedClass() {
+    final var mapper = assertInstanceOf(DeclaredFixtures.PointFieldMapper.class, PointMappers.POINT);
+    assertEquals(Point.class, mapper.sourceClass());
+    assertEquals(PointDto.class, mapper.targetClass());
+    assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+    assertEquals(null, mapper.patch(null, new PointDto("c", null)));
+    assertInstanceOf(DeclaredFixtures.ForwardFieldMapper.class, ForwardMappers.FORWARD);
+    assertEquals(OpticNode.Runs.GENERATED, ForwardMappers.FORWARD.explain().declared().orElseThrow().runs());
+  }
+
+  @Test
+  @DisplayName("only a mapper over a generated bridge with no hooks can be taken by a generated class")
+  void onlyAGeneratedMapperIsSpecialised() {
+    assertThrows(IllegalArgumentException.class, () -> new DeclaredFixtures.PointFieldMapper(OtherMappers.point()));
+    assertThrows(IllegalArgumentException.class, () ->
+      new DeclaredFixtures.PointFieldMapper(PointMappers.POINT.beforeForward(p -> p))
+    );
+    assertThrows(IllegalArgumentException.class, () ->
+      new DeclaredFixtures.ForwardFieldMapper(Telescope.mapperForward(Forward.class, ForwardDto.class))
+    );
+  }
+
+  @Test
+  @DisplayName("a call through a method reference or by reflection from the static initialiser gets the runtime mapper")
+  void aCallWithAFrameBetweenGetsTheRuntimeMapper() {
+    assertAll(
+      () -> assertTrue(PointMappers.THROUGH_REFERENCE.explain().declared().isEmpty(), "through a method reference"),
+      () -> assertTrue(PointMappers.THROUGH_REFLECTION.explain().declared().isEmpty(), "by reflection"),
+      () -> assertFalse(PointMappers.THROUGH_REFERENCE instanceof DeclaredFixtures.PointFieldMapper),
+      () -> assertFalse(PointMappers.THROUGH_REFLECTION instanceof DeclaredFixtures.PointFieldMapper)
+    );
+    final var before = DeclaredFixtures.GENERATED_CALLS.get();
+    assertEquals(new PointDto("a", "n"), PointMappers.THROUGH_REFERENCE.forward(new Point("a", "n")));
+    assertEquals(0, DeclaredFixtures.GENERATED_CALLS.get() - before);
   }
 }

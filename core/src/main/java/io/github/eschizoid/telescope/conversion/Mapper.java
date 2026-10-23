@@ -33,7 +33,7 @@ import java.util.function.Function;
  * value through the right reflective and rebuilds the source through its writer (canonical
  * constructor for records, auto-detected write strategy for beans).
  */
-public final class Mapper<A, B> {
+public class Mapper<A, B> {
 
   /**
    * <b>Module-internal seam — NOT public API.</b> One entry of the patch table — when overlaying a
@@ -103,9 +103,8 @@ public final class Mapper<A, B> {
   // a mapper runs has none, so its forward skips the logger as a bridge called directly does.
   private final boolean traced;
 
-  // The generated bridge this mapper converts through, when it is one with no hooks: forward and
-  // backward call it directly, as a bridge called on its own is, null included, since a generated
-  // bridge returns null for null. Null for every other mapper.
+  // The generated bridge this mapper converts through, when it is one with no hooks, which the
+  // class generated for a @Bridge field may then specialise. Null for every other mapper.
   private final BridgeFn<A, B> generated;
 
   /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
@@ -209,6 +208,38 @@ public final class Mapper<A, B> {
       Level.DEBUG,
       () -> "map " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
     );
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> The state of {@code built}, a mapper over a
+   * generated bridge with no hooks, for the class the {@code @Bridge} processor generates for a
+   * field: that class overrides {@link #forward}, {@link #backward} and {@link #patch} with one
+   * static call each into the field's bridge, so a call through the field's constant is a call the
+   * JIT resolves to the bridge and inlines. Every other method is this class's own.
+   *
+   * @throws IllegalArgumentException if {@code built} is not a mapper over a generated bridge with
+   *     no hooks
+   */
+  protected Mapper(final Mapper<A, B> built) {
+    if (built.generated == null) throw new IllegalArgumentException(
+      "Only a mapper over a generated bridge with no hooks is specialised by a generated class"
+    );
+    this.iso = built.iso;
+    this.sourceClass = built.sourceClass;
+    this.targetClass = built.targetClass;
+    this.sourceRefl = built.sourceRefl;
+    this.targetRefl = built.targetRefl;
+    this.patchByTargetField = built.patchByTargetField;
+    this.cases = built.cases;
+    this.patcher = built.patcher;
+    this.preForward = null;
+    this.postForward = null;
+    this.preBackward = null;
+    this.postBackward = null;
+    this.explainTrail = built.explainTrail;
+    this.traced = built.traced;
+    this.generated = built.generated;
+    this.logger = built.logger;
   }
 
   /**
@@ -383,7 +414,7 @@ public final class Mapper<A, B> {
    *
    * @return the structure of this mapper's forward conversion; never null
    */
-  public OpticReport explain() {
+  public final OpticReport explain() {
     return new OpticReport(explainTrail);
   }
 
@@ -396,7 +427,7 @@ public final class Mapper<A, B> {
    * @param input the source value to convert and trace
    * @return the per-field value trace; never null
    */
-  public Trace trace(final A input) {
+  public final Trace trace(final A input) {
     return MappingTraces.of(input, forward(input), explainTrail);
   }
 
@@ -412,7 +443,7 @@ public final class Mapper<A, B> {
    * #asTelescope()} (which exposes {@code set}/{@code update}/{@code then}); for a sparse overlay,
    * use {@link #patch}.
    */
-  public B read(final A a) {
+  public final B read(final A a) {
     return forward(a);
   }
 
@@ -428,7 +459,7 @@ public final class Mapper<A, B> {
    *     .update(page, String::toLowerCase);
    * }</pre>
    */
-  public Telescope<A, B> asTelescope() {
+  public final Telescope<A, B> asTelescope() {
     // Route through this::forward / this::backward (NOT iso::to / iso::from) so the four hook
     // fields (beforeForward / afterForward / beforeBackward / afterBackward) compose into the
     // returned Telescope. Calling iso::to directly bypasses the hook chain — a configured mapper
@@ -441,12 +472,12 @@ public final class Mapper<A, B> {
    * mapper through a container shape ({@code List} / {@code Set} / {@code Optional} / {@code Map})
    * when the user passed it as the {@code via(...)} element mapper.
    */
-  public Class<A> sourceClass() {
+  public final Class<A> sourceClass() {
     return sourceClass;
   }
 
   /** The mapper's target class. See {@link #sourceClass()}. */
-  public Class<B> targetClass() {
+  public final Class<B> targetClass() {
     return targetClass;
   }
 
@@ -468,7 +499,7 @@ public final class Mapper<A, B> {
    * // projector.forward(entity) runs the afterForward stamp, same as bidi.forward(entity).
    * }</pre>
    */
-  public ForwardMapper<A, B> toForwardMapper() {
+  public final ForwardMapper<A, B> toForwardMapper() {
     return ForwardMapper.create(this::forward, sourceClass, targetClass);
   }
 
@@ -569,8 +600,6 @@ public final class Mapper<A, B> {
     // Null in, null out — matches MapStruct's generated `if (source == null) return null;` and the
     // JPA "no row" idiom adopters rely on. The hook chain is skipped on null since neither
     // pre/postForward has a sensible meaning when no value flowed through.
-    final var direct = generated;
-    if (direct != null) return direct.forward(a);
     if (a == null) return null;
     final A a1 = preForward == null ? a : preForward.apply(a);
     // Post-hook null guard: a preForward that returns null (e.g. a normalisation hook that maps
@@ -632,7 +661,7 @@ public final class Mapper<A, B> {
    * @throws IllegalArgumentException between two sealed interfaces, if {@code source} converts to a
    *     case other than {@code target}'s
    */
-  public B into(final B target, final A source) {
+  public final B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
     if (cases == null) refuseRecordTarget(targetClass);
@@ -759,8 +788,6 @@ public final class Mapper<A, B> {
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
     // Null in, null out — symmetric with forward(). See the rationale on forward(Object) above.
-    final var direct = generated;
-    if (direct != null) return direct.backward(b);
     if (b == null) return null;
     final B b1 = preBackward == null ? b : preBackward.apply(b);
     if (b1 == null) return null;
@@ -788,7 +815,7 @@ public final class Mapper<A, B> {
    * @see io.github.eschizoid.telescope.Telescope#before(Function) for the path-level (single-
    *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
    */
-  public Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+  public final Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Function<A, A> prev = this.preForward;
     final Function<A, A> next = prev == null ? hook::apply : a -> hook.apply(prev.apply(a));
     return new Mapper<>(
@@ -828,7 +855,7 @@ public final class Mapper<A, B> {
    * @see io.github.eschizoid.telescope.Telescope#after(Function) for the path-level (single-
    *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
    */
-  public Mapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
+  public final Mapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
     return afterForward((a, b) -> hook.apply(b));
   }
 
@@ -844,7 +871,7 @@ public final class Mapper<A, B> {
    *     .afterForward((src, dto) -> dto.withDisplayName(src.firstName() + " " + src.lastName()));
    * }</pre>
    */
-  public Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+  public final Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final BiFunction<A, B, B> prev = this.postForward;
     final BiFunction<A, B, B> next = prev == null ? hook::apply : (a, b) -> hook.apply(a, prev.apply(a, b));
     return new Mapper<>(
@@ -876,7 +903,7 @@ public final class Mapper<A, B> {
    *     .beforeBackward(dto -> dto.normalised());
    * }</pre>
    */
-  public Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
+  public final Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
     final Function<B, B> prev = this.preBackward;
     final Function<B, B> next = prev == null ? hook::apply : b -> hook.apply(prev.apply(b));
     return new Mapper<>(
@@ -907,7 +934,7 @@ public final class Mapper<A, B> {
    *     .afterBackward(e -> e.withLastModifiedAt(Instant.now()));
    * }</pre>
    */
-  public Mapper<A, B> afterBackward(final Function<? super A, ? extends A> hook) {
+  public final Mapper<A, B> afterBackward(final Function<? super A, ? extends A> hook) {
     return afterBackward((b, a) -> hook.apply(a));
   }
 
@@ -922,7 +949,7 @@ public final class Mapper<A, B> {
    *     .afterBackward((dto, entity) -> entity.withAuditTrail(dto.actor() + "@" + Instant.now()));
    * }</pre>
    */
-  public Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
+  public final Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
     final BiFunction<B, A, A> prev = this.postBackward;
     final BiFunction<B, A, A> next = prev == null ? hook::apply : (b, a) -> hook.apply(b, prev.apply(b, a));
     return new Mapper<>(
@@ -954,21 +981,21 @@ public final class Mapper<A, B> {
    * forward/backward calls at a {@code List} call site.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public Mapper<List<A>, List<B>> liftList() {
+  public final Mapper<List<A>, List<B>> liftList() {
     final var lifted = Iso.liftList(iso);
     return new Mapper<>(lifted, (Class) List.class, (Class) List.class, null);
   }
 
   /** Same as {@link #liftList()} but produces a {@code Mapper<Set<A>, Set<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public Mapper<Set<A>, Set<B>> liftSet() {
+  public final Mapper<Set<A>, Set<B>> liftSet() {
     final var lifted = Iso.liftSet(iso);
     return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, null);
   }
 
   /** Same as {@link #liftList()} but produces a {@code Mapper<Optional<A>, Optional<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public Mapper<Optional<A>, Optional<B>> liftOptional() {
+  public final Mapper<Optional<A>, Optional<B>> liftOptional() {
     final var lifted = Iso.liftOptional(iso);
     return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, null);
   }
@@ -978,7 +1005,7 @@ public final class Mapper<A, B> {
    * preserved; only the values flow through {@link #forward}/{@link #backward}.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  public <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
+  public final <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
     final var lifted = Iso.<K, A, B>liftMapValues(iso);
     return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, null);
   }
