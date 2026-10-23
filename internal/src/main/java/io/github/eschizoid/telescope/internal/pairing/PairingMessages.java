@@ -39,6 +39,11 @@ public final class PairingMessages {
     );
   }
 
+  /** Two {@code writeBeans} defaults in one mapper. */
+  public static String duplicateWriteBeansDefault() {
+    return "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call.";
+  }
+
   /** Two {@code writeBean} hints for the same target class. */
   public static String duplicateWriteBeanHint(final String binaryName) {
     return (

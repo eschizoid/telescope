@@ -63,6 +63,8 @@ final class FieldRows {
 
   static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
+  private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
+  private static final String WRITE_STRATEGY_FQN = WRITE_HINT_FQN + ".WriteStrategy";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
   private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
@@ -77,7 +79,9 @@ final class FieldRows {
     "constant",
     "compute",
     "zip",
-    "when"
+    "when",
+    "writeBean",
+    "writeBeans"
   );
 
   /** What the reader found for a field. */
@@ -88,7 +92,9 @@ final class FieldRows {
    * classes the rows need written; {@code awaits} the classes, written by this compilation, that
    * must exist before the bridge is planned. {@code rowKinds} are the classes of the rows the
    * runtime builds from the same call, in order, and {@code rowAccessors} the accessor methods each
-   * names, as {@code source>target}; the generated provider records both.
+   * names, as {@code source>target}; the generated provider records both. {@code beanStrategies}
+   * are the write strategies {@code writeBean} rows name, by the qualified name of the class each
+   * is keyed to, and {@code defaultStrategy} the one a {@code writeBeans} row names, or null.
    */
   record Parsed(
     TypeElement source,
@@ -105,8 +111,20 @@ final class FieldRows {
     List<String> rowKinds,
     List<String> rowAccessors,
     List<GeneratedClass> classes,
-    Set<String> awaits
-  ) implements Result {}
+    Set<String> awaits,
+    Map<String, String> beanStrategies,
+    String defaultStrategy
+  ) implements Result {
+    /**
+     * How {@code side} is rebuilt: the strategy a {@code writeBean} row keyed to it names, else the
+     * {@code writeBeans} default, else {@code AUTO}.
+     */
+    String writeStrategyOf(final TypeElement side) {
+      final var keyed = beanStrategies.get(side.getQualifiedName().toString());
+      if (keyed != null) return keyed;
+      return defaultStrategy != null ? defaultStrategy : "AUTO";
+    }
+  }
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
   record GeneratedClass(String qualifiedName, String source) {}
@@ -492,6 +510,8 @@ final class FieldRows {
     private final List<String> rowAccessors = new ArrayList<>();
     private final List<GeneratedClass> classes = new ArrayList<>();
     private final Set<String> awaits = new LinkedHashSet<>();
+    private final Map<String, String> beanStrategies = new LinkedHashMap<>();
+    private String defaultStrategy;
 
     /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
     private final String fieldName;
@@ -530,7 +550,9 @@ final class FieldRows {
         rowKinds,
         rowAccessors,
         classes,
-        awaits
+        awaits,
+        beanStrategies,
+        defaultStrategy
       );
     }
 
@@ -550,6 +572,13 @@ final class FieldRows {
         if (rowElement == null || typed == null || typed.getKind() == TypeKind.ERROR) return Refused.javacReports(row);
       }
       if (
+        rowElement instanceof ExecutableElement hintExec &&
+        hintExec.getEnclosingElement() instanceof TypeElement hintOwner &&
+        hintOwner.getQualifiedName().contentEquals(WRITE_HINT_FQN)
+      ) {
+        return hint(row, hintExec.getSimpleName().toString());
+      }
+      if (
         !(rowElement instanceof ExecutableElement rowExec) ||
         !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
         !rowOwner.getQualifiedName().contentEquals(MAPPING_FQN)
@@ -558,7 +587,8 @@ final class FieldRows {
           row,
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
-            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute"
+            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute, and the hints writeBean and" +
+            " writeBeans"
         );
       }
       final var rowArgs = row.getArguments();
@@ -1034,6 +1064,70 @@ final class FieldRows {
         );
       }
       return owner.getQualifiedName() + "." + held.getSimpleName() + ".get()";
+    }
+
+    /**
+     * A {@code writeBean} or {@code writeBeans} hint, which decides how the bridge rebuilds a side of
+     * its pair, as {@code @Bridge(writeStrategy = ...)} does for both: {@code writeBean} keyed to the
+     * source or the target decides that side, and {@code writeBeans} every side no {@code writeBean}
+     * names. A {@code writeBean} keyed to any other class, and a {@code writeBeans} default on a
+     * pair whose bridge builds a nested bean pair, would reach a pair the bridge does not rebuild
+     * itself, which the generated bridge has no form for; the first is refused here, and the second
+     * when the nested pair is planned.
+     */
+    private Refused hint(final MethodInvocationTree row, final String kind) {
+      final var args = row.getArguments();
+      final var strategy = strategyOf(args.get(args.size() - 1));
+      if (strategy == null) {
+        return new Refused(
+          args.get(args.size() - 1),
+          "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place," +
+            " such as SETTERS or WriteStrategy.BUILDER"
+        );
+      }
+      if (kind.equals("writeBeans")) {
+        if (defaultStrategy != null) return new Refused(row, PairingMessages.duplicateWriteBeansDefault());
+        defaultStrategy = strategy;
+        rowKinds.add("DefaultWriteHint");
+        return null;
+      }
+      final var keyed = classLiteral(unit, args.get(0));
+      if (keyed == null) {
+        return new Refused(args.get(0), "a @Bridge mapper compiles a writeBean hint keyed to a class literal");
+      }
+      final var binary = env.getElementUtils().getBinaryName(keyed).toString();
+      if (keyed.getKind() == ElementKind.RECORD) {
+        return new Refused(row, PairingMessages.writeBeanTargetsRecord(binary));
+      }
+      if (!keyed.equals(source) && !keyed.equals(target)) {
+        return new Refused(
+          row,
+          "writeBean(" +
+            keyed.getSimpleName() +
+            ".class, ...) is keyed to a class other than " +
+            simple(source) +
+            " and " +
+            simple(target) +
+            ", a nested pair the generated bridge has no hint for yet; give that pair its own @Bridge field" +
+            " with its own writeBean row"
+        );
+      }
+      if (beanStrategies.put(keyed.getQualifiedName().toString(), strategy) != null) {
+        return new Refused(row, PairingMessages.duplicateWriteBeanHint(binary));
+      }
+      rowKinds.add("BeanWriteHint");
+      return null;
+    }
+
+    /** The name of the {@code WriteStrategy} constant {@code arg} names, or null. */
+    private String strategyOf(final ExpressionTree arg) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (!(elementAt(unit, arg) instanceof VariableElement constant)) return null;
+      if (constant.getKind() != ElementKind.ENUM_CONSTANT) return null;
+      if (!((TypeElement) constant.getEnclosingElement()).getQualifiedName().contentEquals(WRITE_STRATEGY_FQN)) {
+        return null;
+      }
+      return constant.getSimpleName().toString();
     }
 
     /**

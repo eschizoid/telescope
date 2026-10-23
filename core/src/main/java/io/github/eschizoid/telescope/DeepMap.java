@@ -225,7 +225,8 @@ public final class DeepMap {
     if (NativeImage.IN_IMAGE) return null;
     final var accessors = new ArrayList<String>(steps.length);
     for (final var step : steps) {
-      if (!(step instanceof Mapping<?, ?> row)) return null;
+      // A write hint names a class rather than accessors; its kind is compared above.
+      if (!(step instanceof Mapping<?, ?> row)) continue;
       accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
     }
     if (accessors.equals(provider.rowAccessors())) return null;
@@ -557,9 +558,7 @@ public final class DeepMap {
     WriteHint.WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
       if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteHint.WriteStrategy strat))) continue;
-      if (defaultStrategy != null) throw new IllegalArgumentException(
-        "Duplicate writeBeans(...) default — at most one default write strategy per" + " Telescope.map(...) call."
-      );
+      if (defaultStrategy != null) throw new IllegalArgumentException(PairingMessages.duplicateWriteBeansDefault());
       defaultStrategy = strat;
     }
     return defaultStrategy;

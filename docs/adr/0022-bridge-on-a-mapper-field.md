@@ -41,9 +41,8 @@ the existing emitter without a second one.
    through a `@Transform` class today, so every type check the emitter makes applies unchanged.
 
    Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
-   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the mapper-wide hints
-   `writeBean`, `writeBeans` and `nullSourceValues`. Each one that ADR-0018 brings to the generated path is added to
-   this list then.
+   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the mapper-wide hint
+   `nullSourceValues`. Each one that ADR-0018 brings to the generated path is added to this list then.
 
 3. **Everything else is refused by name at compile time, on the row.** An inline lambda, a row built by a helper method,
    a loop or a variable, a row keyed to a nested pair, a non-literal constant, an initializer that is not the factory
@@ -137,6 +136,16 @@ the existing emitter without a second one.
 > class with both element and whole-container overloads. The cross-path corpus twins every `@ViaMapper` naming a
 > hand-written class as this row, and runs each twin whose classes give a sample on the runtime path against the class
 > form's generated bridge.
+
+> **Amendment: write hints.** A field's rows may include `writeBean(Class, strategy)` and `writeBeans(strategy)`, which
+> decide how the bridge rebuilds each side of its pair, as `@Bridge(writeStrategy = …)` does for both: the target on
+> forward, and the source on backward and in patch. A `writeBean` keyed to the source or the target decides that side,
+> and a `writeBeans` default every side no `writeBean` names. A `writeBean` keyed to another class is refused by name on
+> the row, since it reaches a nested pair the bridge does not rebuild itself, and so is a `writeBeans` default on a pair
+> whose bridge builds a nested bean pair, which the runtime mapper builds with the default and the bridge hands to a
+> bridge of its own. A hint the runtime path refuses, keyed to a record or given twice, is refused on the row in the
+> same words. The generated provider records each hint's kind with the rows', so a call with other hints runs the
+> runtime mapper.
 
 ### Amendments to ADR-0018
 

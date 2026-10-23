@@ -202,6 +202,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> multiTargetSources = new HashSet<>();
 
   /**
+   * The refusal of a nested pair {@code sub} that a pair declared with a {@code writeBeans} default
+   * rebuilds through a bean: the runtime mapper builds that bean with the default, and the bridge
+   * would hand it to a bridge of its own. Null where the parent has no default or the nested pair
+   * rebuilds only records, or the cases of a sealed interface, which are refused one by one.
+   */
+  private String writeDefaultReaches(
+    final TypeElement parentSource,
+    final TypeElement parentTarget,
+    final TypeElement subSource,
+    final TypeElement subTarget
+  ) {
+    final var strategy = writeDefaults.get(
+      new TypePair(parentSource.getQualifiedName().toString(), parentTarget.getQualifiedName().toString())
+    );
+    if (strategy == null) return null;
+    final var bean = subSource.getKind() == ElementKind.CLASS || subTarget.getKind() == ElementKind.CLASS;
+    if (!bean) return null;
+    return (
+      "writeBeans(" +
+      strategy +
+      ") builds every bean the mapper reaches, and the generated bridge builds the nested pair " +
+      subSource.getSimpleName() +
+      " -> " +
+      subTarget.getSimpleName() +
+      " through its own bridge, which the hint does not reach; key the hint to this pair's source or target" +
+      " with writeBean(Class, strategy), and give the nested pair its own @Bridge field with its own hint"
+    );
+  }
+
+  /**
    * Single per-pair configuration record holding every modifier parsed from the {@code @Bridge}
    * annotation. Consolidating ten separate {@code Map<TypePair, ?>} fields into one {@code
    * Map<TypePair, BridgeConfig>} eliminates the {@code clear()} maintenance hazard — adding a new
@@ -220,7 +250,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     Set<String> forwardOnlyTransforms,
     Map<String, String> defaults,
     Map<String, String> viaMappers,
+    // How the target is rebuilt on forward, and the source on backward and in patch: AUTO, or a
+    // strategy a class-form writeStrategy or a field's writeBean / writeBeans hint names.
     String writeStrategy,
+    String sourceWriteStrategy,
     Map<String, String> constants,
     Map<String, String> computes,
     // Per-source-field qualifier method name. Set when @Transform supplies a non-empty `method`
@@ -257,6 +290,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       Map.of(),
       "AUTO",
+      "AUTO",
       Map.of(),
       Map.of(),
       Map.of(),
@@ -285,6 +319,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Set.of(),
         Map.of(),
         Map.of(),
+        "AUTO",
         "AUTO",
         Map.of(),
         Map.of(),
@@ -328,6 +363,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // this set is refused where an enum pair below it converts forward only
   // (refuseStrictReferencesToLenientPairs).
   private final Set<TypePair> lenientPairs = new HashSet<>();
+
+  /**
+   * The {@code writeBeans} default of each pair a {@code @Bridge} field declares with one. The
+   * default reaches every bean the runtime mapper builds, so a nested pair rebuilt through a bean,
+   * which the bridge hands to a bridge of its own, is refused rather than built another way.
+   */
+  private final Map<TypePair, String> writeDefaults = new HashMap<>();
 
   /**
    * The {@code @Bridge} fields read again next round, as {@code Carrier#FIELD}: their rows name a
@@ -677,6 +719,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           Map.of(),
           Map.of(),
           writeStrategy,
+          writeStrategy,
           Map.of(),
           Map.of(),
           Map.of(),
@@ -746,6 +789,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       multiTargetSources.clear();
       configsByPair.clear();
       lenientPairs.clear();
+      writeDefaults.clear();
       bridgeProviders.clear();
       bridgeNameOwner.clear();
       reachable.clear();
@@ -954,6 +998,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       fieldRetries.add(carrier.getQualifiedName() + "#" + fieldName);
       return;
     }
+    if (parsed.defaultStrategy() != null) writeDefaults.put(pair, parsed.defaultStrategy());
     final var config = new BridgeConfig(
       parsed.drops(),
       parsed.renames(),
@@ -962,7 +1007,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       parsed.forwardOnly(),
       Map.of(),
       parsed.viaMappers(),
-      "AUTO",
+      parsed.writeStrategyOf(parsed.target()),
+      parsed.writeStrategyOf(parsed.source()),
       Map.of(),
       parsed.computes(),
       parsed.transformMethods(),
@@ -1505,6 +1551,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var rawDefaults = cfg.defaults();
     final var viaMappers = cfg.viaMappers();
     final var writeStrategy = cfg.writeStrategy();
+    final var sourceWriteStrategy = cfg.sourceWriteStrategy();
     // The package the bridge is emitted into: beside the carrier for a carrier-form pair, beside
     // the source otherwise. A member the bridge calls, a constructor included, has to be reachable
     // from there.
@@ -1512,7 +1559,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The rung each side's rebuild will stop at, decided once and consulted by both the check
     // below and the emission further down, so the two cannot answer differently.
     final var targetRebuild = rebuildFor(target, targetFields, writeStrategy, bridgePackage);
-    final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy, bridgePackage);
+    final var sourceRebuild = rebuildFor(source, sourceFields, sourceWriteStrategy, bridgePackage);
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
     // The properties the bridge converts by a conversion of its own, drops, or fills without
@@ -2496,7 +2543,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       readBackward,
       sourceFields,
-      writeStrategy,
+      sourceWriteStrategy,
       source,
       sourceRebuild,
       pkg,
@@ -2605,7 +2652,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       readPatch,
       sourceFields,
-      writeStrategy,
+      sourceWriteStrategy,
       source,
       sourceRebuild,
       null,
@@ -2930,6 +2977,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Defensively enqueue the per-case pair too — if the user @Bridge'd it (required), it's
       // already in the queue; this is idempotent via `seen`. Route Lombok-touching sub-pairs to
       // deferredPairs so they wait for processingOver() like the top-level deferred pairs.
+      final var writeDefault = writeDefaultReaches(source, target, sourceCaseEl, targetCaseEl);
+      if (writeDefault != null) {
+        error(reportOn, writeDefault);
+        return;
+      }
       final var casePair = new TypePair(sourceCaseEl.getQualifiedName().toString(), targetCaseFq);
       if (seen.add(casePair)) {
         if (shouldDeferSubPair(sourceCaseEl, targetCaseEl)) deferredPairs.add(casePair);
@@ -4030,6 +4082,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
           return null;
         }
+        final var writeDefault = writeDefaultReaches(source, target, subSourceEl, subTargetEl);
+        if (writeDefault != null) {
+          error(source, writeDefault);
+          return null;
+        }
         if (!lenient) recordStrictReference(subPair, source, target, sf.type(), tf.type(), sf.name());
         // Sub-pairs whose source or target carries a Lombok-synthesizing annotation must wait for
         // processingOver() — same rationale as the top-level deferral. shouldDeferSubPair returns
@@ -4185,6 +4242,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         subTargetEl.getQualifiedName().toString()
       );
       if (dispatchesCases(sd, td, fieldName)) sealedSubPairParents.putIfAbsent(subPair, parentSource);
+      final var writeDefault = writeDefaultReaches(parentSource, parentTarget, subSourceEl, subTargetEl);
+      if (writeDefault != null) {
+        error(parentSource, writeDefault);
+        return null;
+      }
       if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
