@@ -118,7 +118,7 @@ tasks.withType<Javadoc>().configureEach {
     }
 }
 
-val quarkusVersion = "3.40.1"
+val quarkusVersion = "3.40.1.1"
 
 dependencies {
     api(project(":core"))
