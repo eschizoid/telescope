@@ -50,6 +50,14 @@ class ReadSourceFieldPairingTest {
 
   record Wrap(Inner n) {}
 
+  record Spare(String n) {}
+
+  record SpareDto(String label, String n, String x) {}
+
+  record SrcOuter(String id, Src in) {}
+
+  record TgtOuter(String id, Tgt in) {}
+
   record WrapDto(String label, Inner n) {}
 
   private static String show(final Integer n) {
@@ -158,6 +166,37 @@ class ReadSourceFieldPairingTest {
       to(Telescope.of(Src.class).field(Src::n), Tgt::label)
     );
     assertEquals(new Tgt("v", null), mapper.forward(new Src("v")));
+  }
+
+  @Test
+  @DisplayName("a strict mapper refuses the target field a rename leaves beside a constant on another field")
+  void aConstantOnAnotherFieldDoesNotWriteTheNamesake() {
+    final var refused = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(Spare.class, SpareDto.class, to(Spare::n, SpareDto::label), constant(SpareDto::x, "k"))
+    );
+    assertEquals(PairingMessages.sameNameSourceRead("Spare", "SpareDto", "field", "field", "n"), refused.getMessage());
+  }
+
+  @Test
+  @DisplayName("a strict mapper refuses the target field a path one field hop long leaves")
+  void aStrictMapperRefusesTheNamesakeAOneHopPathLeaves() {
+    final var refused = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(Src.class, Tgt.class, to(Telescope.of(Src.class).field(Src::n), Tgt::label))
+    );
+    assertEquals(PairingMessages.sameNameSourceRead("Src", "Tgt", "field", "field", "n"), refused.getMessage());
+  }
+
+  @Test
+  @DisplayName("a constant on a path from the pair above writes the target field a nested rename leaves")
+  void anOuterPathConstantWritesTheNestedNamesake() {
+    final var mapper = Telescope.mapper(
+      SrcOuter.class,
+      TgtOuter.class,
+      constant(Telescope.of(TgtOuter.class).field(TgtOuter::in).field(Tgt::n), "k"),
+      to(Src::n, Tgt::label)
+    );
+    assertEquals(new TgtOuter("i", new Tgt("v", "k")), mapper.forward(new SrcOuter("i", new Src("v"))));
+    assertEquals(new SrcOuter("j", new Src("lbl")), mapper.backward(new TgtOuter("j", new Tgt("lbl", "w"))));
   }
 
   @Test

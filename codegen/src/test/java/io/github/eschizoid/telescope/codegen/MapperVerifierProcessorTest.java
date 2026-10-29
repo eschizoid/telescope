@@ -934,6 +934,85 @@ class MapperVerifierProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "a target field whose same-name source a rename reads, beside a constant on another field, is a compile error"
+    )
+    void aTargetARenameLeavesBesideAnUnrelatedConstantErrors() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        record Src(String n) {}
+        record Tgt(String label, String n, String x) {}
+        class Holder {
+          static final Mapper<Src, Tgt> M =
+            Telescope.mapper(Src.class, Tgt.class, to(Src::n, Tgt::label), constant(Tgt::x, "k"));
+        }
+        """
+      );
+      assertFalse(compilation.success(), () -> compilation.errorMessages());
+      assertTrue(
+        compilation.hasError(PairingMessages.sameNameSourceRead("Src", "Tgt", "field", "field", "n")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "a target field a nested rename leaves is a compile error beside a constant on the mapper's own target"
+    )
+    void aNestedRenameBesideAnOwnTargetConstantErrors() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        record Src(String n) {}
+        record Tgt(String label, String n) {}
+        record Out(String id, String k, Src in) {}
+        record OutD(String id, String k, Tgt in) {}
+        class Holder {
+          static final Mapper<Out, OutD> M =
+            Telescope.mapper(Out.class, OutD.class, constant(OutD::k, "c"), to(Src::n, Tgt::label));
+        }
+        """
+      );
+      assertFalse(compilation.success(), () -> compilation.errorMessages());
+      assertTrue(
+        compilation.hasError(PairingMessages.sameNameSourceRead("Src", "Tgt", "field", "field", "n")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a constant on a path writing the target field a nested rename leaves compiles clean")
+    void anOuterPathConstantWritingTheNestedNamesakeCompiles() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        record Src(String n) {}
+        record Tgt(String label, String n) {}
+        record Out(String id, Src in) {}
+        record OutD(String id, Tgt in) {}
+        class Holder {
+          static final Mapper<Out, OutD> M = Telescope.mapper(Out.class, OutD.class,
+            constant(Telescope.of(OutD.class).field(OutD::in).field(Tgt::n), "k"), to(Src::n, Tgt::label));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
     @DisplayName("a complete same-name mapper compiles clean")
     void cleanMapperPasses() {
       final var compilation = verify(

@@ -620,6 +620,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     // Whether every row of the call being verified was read into callRows, other than a cases row
     // or a hint, which apply to no property.
     private boolean callRowsComplete = true;
+    // Whether every row of the call being verified with a side given as a path, a constant or a
+    // compute is a constant or compute writing one property of the call's own target.
+    private boolean callPathRowsWriteOwnTarget = true;
 
     @Override
     public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
@@ -682,6 +685,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       nestedConsumed = Map.of();
       callRows = List.of();
       callRowsComplete = true;
+      callPathRowsWriteOwnTarget = true;
       if (srcEl != null && tgtEl != null) nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       if (
         srcEl != null &&
@@ -801,6 +805,24 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
                 taken.getFirst()
               )
             );
+          }
+          // It refuses as well a target property no row writes whose same-named source a row
+          // reads, when no constant or compute row writes it either.
+          final var written = fixupTargets(args, tgtEl);
+          if (written != null) {
+            for (final var name : match.unmatchedTargets()) {
+              if (!srcProps.containsKey(name) || written.contains(name)) continue;
+              report(
+                node,
+                PairingMessages.sameNameSourceRead(
+                  srcSimple,
+                  tgtSimple,
+                  tgtEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                  srcEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                  name
+                )
+              );
+            }
           }
         }
         final var seen = new HashSet<String>();
@@ -1128,6 +1150,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         final var key = pairKey(keyed.source(), keyed.target());
         all.add(shared(keyed));
+        if (keyed.kind() == PairWalk.RowKind.PATH && !writesOneTargetProperty(row, tgtEl)) {
+          callPathRowsWriteOwnTarget = false;
+        }
         if (key.equals(pairKey(srcEl, tgtEl))) continue;
         final var names = claims.computeIfAbsent(key, __ -> new HashSet<>());
         if (keyed.kind() == PairWalk.RowKind.PASS_THROUGH || keyed.kind() == PairWalk.RowKind.CONVERTING) {
@@ -1192,15 +1217,76 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
-     * Whether every row of the call was read and none has a side given as a path, a constant or a
-     * compute. Construction leaves a target property no row pairs with unwritten at a pair such a
-     * row applies to, since the row may write it, and which pair a path row applies to is not read
-     * here.
+     * Whether every row of the call was read and each row with a side given as a path, a constant
+     * or a compute writes one property of the call's own target and nothing below it. Such a row
+     * writes no property of a nested pair, and which nested property any other path row writes is
+     * not read here.
      */
-    private boolean callRowsAllAccessors() {
-      if (!callRowsComplete) return false;
-      for (final var row : callRows) if (row.kind() == PairWalk.RowKind.PATH) return false;
-      return true;
+    private boolean nestedWritesKnown() {
+      return callRowsComplete && callPathRowsWriteOwnTarget;
+    }
+
+    /**
+     * Whether {@code row}, or the row a {@code when} wraps, is a {@code constant} or {@code compute}
+     * whose target is an accessor of {@code target} or a class it extends, or a path one {@code
+     * field} hop long.
+     */
+    private boolean writesOneTargetProperty(final MethodInvocationTree row, final TypeElement target) {
+      var call = row;
+      if (
+        elementAt(call.getMethodSelect()) instanceof ExecutableElement outer &&
+        outer.getSimpleName().contentEquals("when") &&
+        call.getArguments().size() == 2 &&
+        call.getArguments().get(1) instanceof MethodInvocationTree inner
+      ) {
+        call = inner;
+      }
+      if (!(elementAt(call.getMethodSelect()) instanceof ExecutableElement)) return false;
+      final var name = factoryName(call);
+      if ((!"constant".equals(name) && !"compute".equals(name)) || call.getArguments().isEmpty()) return false;
+      final var arg = call.getArguments().getFirst();
+      final var accessor = accessorProp(arg);
+      if (accessor != null) {
+        return types.isSubtype(types.erasure(target.asType()), types.erasure(accessor.owner().asType()));
+      }
+      final var calls = telescopeCalls(arg);
+      if (calls == null || calls.size() != 2) return false;
+      final var root = factoryName(calls.getFirst());
+      return (
+        ("of".equals(root) || "ofBean".equals(root)) &&
+        ((MemberSelectTree) calls.get(1).getMethodSelect()).getIdentifier().contentEquals("field") &&
+        calls.get(1).getArguments().size() == 1
+      );
+    }
+
+    /**
+     * The properties of {@code target} the call's {@code constant} and {@code compute} rows write,
+     * each named by its accessor or its path's first hop, or null when one of them names its target
+     * in a way this does not read.
+     */
+    private Set<String> fixupTargets(final List<? extends ExpressionTree> args, final TypeElement target) {
+      final var written = new HashSet<String>();
+      for (var i = 2; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        var call = row;
+        if (
+          elementAt(call.getMethodSelect()) instanceof ExecutableElement outer &&
+        outer.getSimpleName().contentEquals("when") &&
+          call.getArguments().size() == 2 &&
+          call.getArguments().get(1) instanceof MethodInvocationTree inner
+        ) {
+          call = inner;
+        }
+        if (!(elementAt(call.getMethodSelect()) instanceof ExecutableElement)) continue;
+        final var name = factoryName(call);
+        if (!"constant".equals(name) && !"compute".equals(name)) continue;
+        final var arg = call.getArguments().isEmpty() ? null : call.getArguments().getFirst();
+        final var accessor = accessorProp(arg);
+        final var start = accessor != null ? accessor.method() : pathStart(arg);
+        if (start == null) return null;
+        written.add(propertyName(start, target));
+      }
+      return written;
     }
 
     /**
@@ -2042,8 +2128,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         );
         // A strict mapper refuses, at any pair with rows of its own, a target property no row
         // writes whose same-named source a row reads. A call with a row this does not read, or a
-        // path row, is left to construction.
-        if (!forwardOnly && claimed != null && callRowsAllAccessors()) {
+        // path row that may write below the call's own target, is left to construction.
+        if (!forwardOnly && claimed != null && nestedWritesKnown()) {
           for (final var name : match.unmatchedTargets()) {
             if (!sides.source().containsKey(name)) continue;
             report(
