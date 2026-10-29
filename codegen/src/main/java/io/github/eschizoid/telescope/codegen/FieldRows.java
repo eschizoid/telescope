@@ -684,10 +684,12 @@ final class FieldRows {
       if (!transforms.containsKey(s.property())) {
         final var unnamed = unnameable(s, t);
         if (unnamed != null) return unnamed;
+        final var gives = converted(args.get(2), forwardMethod, t);
+        if (gives instanceof Refused refused) return refused;
         final var name = bridgeName + camel(s.property()) + "Fn";
         transforms.put(s.property(), qualified(name));
         if (!twoWay) forwardOnly.add(s.property());
-        classes.add(bridgeFn(name, s.type(), converted(args.get(2), t.type()), ((Call) forward).expression(), backward));
+        classes.add(bridgeFn(name, s.type(), (TypeMirror) gives, ((Call) forward).expression(), backward));
       }
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
@@ -695,21 +697,45 @@ final class FieldRows {
     }
 
     /**
-     * The class a converting row's {@code forward} reference gives its values as, which Java infers
-     * for the row from both the reference and the target's accessor: {@code into} itself, or a class
-     * wider than it when the reference returns one. A result of a wider class is written into the
-     * property after a check of its class, as the runtime writes it. {@code into} where the inferred
-     * class names a type variable, which the class the processor writes cannot name.
+     * What the class the processor writes for a converting row gives its values as: the property
+     * {@code into}'s own class, or a wider class that {@code forward}'s method returns, whose result
+     * is written into the property after a check of its class, as the runtime writes it. The
+     * refusal where the method returns a class no value of the property can be. Where the return
+     * names a type variable, the class Java infers for the row is read in its place, and where
+     * neither has a name the written class can use, the property's own.
      */
-    private TypeMirror converted(final ExpressionTree forward, final TypeMirror into) {
-      if (!(trees.getTypeMirror(TreePath.getPath(unit, forward)) instanceof DeclaredType function)) return into;
-      final var arguments = function.getTypeArguments();
-      if (arguments.size() != 2) return into;
-      var gives = arguments.get(1);
-      if (gives instanceof WildcardType wildcard) gives = wildcard.getExtendsBound();
-      if (gives == null || !nameable(gives)) return into;
+    private Object converted(final ExpressionTree forward, final ExecutableElement method, final Accessor into) {
       final var types = env.getTypeUtils();
-      return types.isAssignable(gives, into) ? into : gives;
+      var gives = declaredResult(method);
+      if (gives == null) gives = inferredResult(forward);
+      if (gives == null || !nameable(gives) || types.isAssignable(gives, into.type())) return into.type();
+      if (types.isSubtype(types.erasure(into.type()), types.erasure(gives))) return gives;
+      return new Refused(
+        forward,
+        forward + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+      );
+    }
+
+    /**
+     * What {@code method} returns, boxed, or the class a constructor builds; null where it names a
+     * type variable.
+     */
+    private TypeMirror declaredResult(final ExecutableElement method) {
+      final var types = env.getTypeUtils();
+      final var result =
+        method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
+      if (result.getKind().isPrimitive()) return types.boxedClass((PrimitiveType) result).asType();
+      if (result.getKind() == TypeKind.TYPEVAR || !nameable(result)) return null;
+      return result;
+    }
+
+    /** The result type Java infers for a reference converting one value, or null. */
+    private TypeMirror inferredResult(final ExpressionTree forward) {
+      if (!(trees.getTypeMirror(TreePath.getPath(unit, forward)) instanceof DeclaredType function)) return null;
+      final var arguments = function.getTypeArguments();
+      if (arguments.size() != 2) return null;
+      final var gives = arguments.get(1);
+      return gives instanceof WildcardType wildcard ? wildcard.getExtendsBound() : gives;
     }
 
     /**
@@ -746,6 +772,8 @@ final class FieldRows {
         if (!reachable(held, heldOwner)) return new Refused(conversion, unreachable(heldOwner, held.getSimpleName()));
         final var unnamed = unnameable(s, t);
         if (unnamed != null) return unnamed;
+        final var raw = rawMisfit(held, s, t);
+        if (raw != null) return new Refused(conversion, raw);
         final var reference = heldOwner.getQualifiedName() + "." + held.getSimpleName();
         final var name = bridgeName + camel(s.property()) + "Fn";
         using = qualified(name);
@@ -765,6 +793,56 @@ final class FieldRows {
       }
       rowKinds.add("TypedTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
+      return null;
+    }
+
+    /**
+     * Why a {@code BridgeFn} that {@code held} declares raw cannot convert {@code src} into {@code
+     * tgt}, or null when it can: a raw class's {@code forward} and {@code backward} take and give
+     * what its type variables erase to, and the class the processor writes calls them with the
+     * property's values and returns what they give.
+     */
+    private String rawMisfit(final VariableElement held, final Accessor src, final Accessor tgt) {
+      if (!(held.asType() instanceof DeclaredType type) || !type.getTypeArguments().isEmpty()) return null;
+      if (((TypeElement) type.asElement()).getTypeParameters().isEmpty()) return null;
+      final var types = env.getTypeUtils();
+      final var members = ElementFilter.methodsIn(env.getElementUtils().getAllMembers((TypeElement) type.asElement()));
+      for (final var direction : List.of("forward", "backward")) {
+        final var takes = direction.equals("forward") ? src.type() : tgt.type();
+        final var gives = direction.equals("forward") ? tgt.type() : src.type();
+        ExecutableType misfit = null;
+        var fits = false;
+        for (final var method : members) {
+          if (!method.getSimpleName().contentEquals(direction) || method.getParameters().size() != 1) continue;
+          if (method.getModifiers().contains(Modifier.STATIC)) continue;
+          final var erased = (ExecutableType) types.asMemberOf(type, method);
+          if (
+            types.isAssignable(takes, erased.getParameterTypes().getFirst()) &&
+            types.isAssignable(erased.getReturnType(), gives)
+          ) {
+            fits = true;
+          } else if (misfit == null) {
+            misfit = erased;
+          }
+        }
+        if (fits || misfit == null) continue;
+        return (
+          held.getSimpleName() +
+          " holds a raw " +
+          type.asElement().getSimpleName() +
+          ", whose " +
+          direction +
+          " is (" +
+          misfit.getParameterTypes().getFirst() +
+          ") -> " +
+          misfit.getReturnType() +
+          ", which does not carry " +
+          takes +
+          " -> " +
+          gives +
+          "; declare the field with its type arguments"
+        );
+      }
       return null;
     }
 
@@ -1037,14 +1115,44 @@ final class FieldRows {
       if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
-      final var unnamed = unnameable(t);
-      if (unnamed != null) return unnamed;
+      final var filledAs = nameable(t.type()) ? t.type() : suppliedType(args.get(1), constant);
+      if (filledAs == null || !nameable(filledAs)) return unnameable(t);
       final var name = bridgeName + camel(t.property()) + (constant ? "Constant" : "Compute");
       computes.put(t.property(), qualified(name));
-      classes.add(supplier(name, t.type(), value));
+      classes.add(supplier(name, filledAs, value));
       rowKinds.add(constant ? "Constant" : "Compute");
       rowAccessors.add(">");
       return null;
+    }
+
+    /**
+     * The class a constant or compute row's value is, which the class the processor writes for the
+     * row supplies where the property's own type has no name it can use, as a type variable: the
+     * value's own type for a constant, and what the supplier gives for a compute row; null where
+     * neither is known.
+     */
+    private TypeMirror suppliedType(final ExpressionTree arg, final boolean constant) {
+      final var types = env.getTypeUtils();
+      final TypeMirror given;
+      if (constant) {
+        given = trees.getTypeMirror(TreePath.getPath(unit, arg));
+      } else if (elementAt(unit, arg) instanceof VariableElement held && held.getKind() == ElementKind.FIELD) {
+        final var get = env
+          .getElementUtils()
+          .getTypeElement("java.util.function.Supplier")
+          .getEnclosedElements()
+          .stream()
+          .filter(e -> e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals("get"))
+          .findFirst()
+          .orElseThrow();
+        given = ((ExecutableType) types.asMemberOf((DeclaredType) held.asType(), get)).getReturnType();
+      } else if (elementAt(unit, arg) instanceof ExecutableElement method) {
+        given = method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
+      } else {
+        given = null;
+      }
+      if (given == null || given.getKind() == TypeKind.NULL) return null;
+      return given.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) given).asType() : given;
     }
 
     /**

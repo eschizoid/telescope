@@ -403,7 +403,7 @@ class SetterTypeCrossPathTest {
   }
 
   @Test
-  @DisplayName("a transform producing the setter's type writes through a setter the getter's type cannot reach")
+  @DisplayName("a forward-only row producing the setter's type writes through a setter the getter's type cannot reach")
   void aTransformIntoTheSettersTypeKeepsTheBridge() throws ReflectiveOperationException {
     final var c = CASES.getFirst();
     final var prefix = "Stt";
@@ -419,21 +419,28 @@ class SetterTypeCrossPathTest {
           prefix +
           "Conv {\n  public static String text(final int i) { return Integer.toString(i); }\n}\n"
       ),
-      source(
-        prefix + "Src",
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = " +
-          prefix +
-          "Bean.class, transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
-          prefix +
-          "Conv.class, method = \"text\"))",
-        c
+      source(prefix + "Src", "", c),
+      // The field sits on a class of its own, so building a source never initialises it.
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Carrier",
+        (
+          "package " +
+          PACKAGE +
+          ";\npublic final class %1$sCarrier {\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.ForwardMapper<%1$sSrc, %1$sBean> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.mapperForward(%1$sSrc.class, %1$sBean.class," +
+          " io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sBean, Integer, Object>toOneWay(" +
+          "%1$sSrc::count, %1$sBean::getCount, %1$sConv::text));\n" +
+          "}\n"
+        ).formatted(prefix)
       )
     );
     assertEquals(true, compilation.success(), compilation::errorMessages);
     final var classes = compilation.define(MethodHandles.lookup());
     final var bean = classes.get(PACKAGE + "." + prefix + "Bean");
     final var src = classes.get(PACKAGE + "." + prefix + "Src");
-    final var forward = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src);
+    final var forward = classes.get(PACKAGE + "." + prefix + "SrcTo" + prefix + "BeanBridge").getMethod("forward", src);
     assertEquals("Ada/5", describe(bean, forward.invoke(null, src.getConstructors()[0].newInstance(5, "Ada"))));
   }
 
@@ -557,11 +564,11 @@ class SetterTypeCrossPathTest {
   /** How a bridge cell's record value becomes the bean's: as it is, or through user code. */
   private enum Conversion {
     NONE,
-    /** A {@code @Transform} naming a static method. */
+    /** A forward-only row through a static method. */
     TRANSFORM_METHOD,
-    /** A {@code @Transform} through a {@code BridgeFn}. */
+    /** A converting row through a {@code BridgeFn} class. */
     TRANSFORM_FN,
-    /** A {@code @ViaMapper}, whose read is gated on a null source. */
+    /** A via row naming a class, whose read is gated on a null source. */
     VIA_MAPPER,
   }
 
@@ -616,7 +623,7 @@ class SetterTypeCrossPathTest {
       "Ada/0"
     ),
     new BridgeCell(
-      "a @ViaMapper Integer into an int getter with int and Integer setters",
+      "a via row's Integer into an int getter with int and Integer setters",
       "int",
       "public void setCount(final int c) { this.count = c; }\n" +
         "  public void setCount(final Integer c) { this.count = -1; }",
@@ -626,7 +633,7 @@ class SetterTypeCrossPathTest {
       "Ada/0"
     ),
     new BridgeCell(
-      "a @ViaMapper Integer into an int getter with long and Integer setters",
+      "a via row's Integer into an int getter with long and Integer setters",
       "int",
       "public void setCount(final long c) { this.count = (int) c; }\n" +
         "  public void setCount(final Integer c) { this.count = -1; }",
@@ -636,7 +643,7 @@ class SetterTypeCrossPathTest {
       "Ada/0"
     ),
     new BridgeCell(
-      "a @ViaMapper Integer into an Integer getter with one int varargs setter",
+      "a via row's Integer into an Integer getter with one int varargs setter",
       "Integer",
       "public void setCount(final int... c) { this.count = c.length == 1 ? c[0] : -4; }",
       "String",
@@ -682,22 +689,28 @@ class SetterTypeCrossPathTest {
     for (final var b : BRIDGE_CELLS) {
       final var prefix = "Stx" + index++;
       final var c = new Case(b.name(), b.type(), b.setters(), Writes.BOTH);
-      final var head = "@io.github.eschizoid.telescope.annotations.Bridge(value = " + prefix + "Bean.class";
-      final var annotation = switch (b.conversion()) {
-        case NONE -> head + ")";
-        case TRANSFORM_METHOD -> head +
-        ", transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
-        prefix +
-        "Conv.class, method = \"parse\"))";
-        case TRANSFORM_FN -> head +
-        ", transforms = @io.github.eschizoid.telescope.annotations.Transform(field = \"count\", using = " +
-        prefix +
-        "Fn.class))";
-        case VIA_MAPPER -> head +
-        ", viaMappers = @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"count\", using = " +
-        prefix +
-        "Via.class))";
+      final var row = switch (b.conversion()) {
+        case NONE -> null;
+        case TRANSFORM_METHOD -> "toOneWay(%1$sSrc::count, %1$sBean::getCount, %1$sConv::parse)";
+        case TRANSFORM_FN -> "to(%1$sSrc::count, %1$sBean::getCount, %1$sFn.class)";
+        case VIA_MAPPER -> "via(%1$sSrc::count, %1$sBean::getCount, %1$sVia.class)";
       };
+      final var forwardOnly = b.conversion() == Conversion.TRANSFORM_METHOD;
+      final var annotation = row == null ? "@io.github.eschizoid.telescope.annotations.Bridge(%1$sBean.class)" : "";
+      // The field sits on a class of its own, so building a source never initialises it.
+      final var carrier = row == null
+        ? "package " + PACKAGE + ";\nfinal class %1$sCarrier {}\n"
+        : "package " +
+          PACKAGE +
+          ";\nfinal class %1$sCarrier {\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion." +
+          (forwardOnly ? "ForwardMapper" : "Mapper") +
+          "<%1$sSrc, %1$sBean> MAPPER = io.github.eschizoid.telescope.Telescope." +
+          (forwardOnly ? "mapperForward" : "mapper") +
+          "(%1$sSrc.class, %1$sBean.class, io.github.eschizoid.telescope.mapping.Mapping." +
+          row +
+          ");\n}\n";
       final var compilation = ProcessorHarness.compileFully(
         List.of(new BridgeProcessor()),
         List.of(),
@@ -732,16 +745,17 @@ class SetterTypeCrossPathTest {
         ),
         ProcessorHarness.source(
           PACKAGE + "." + prefix + "Src",
-          "package " +
+          (
+            "package " +
             PACKAGE +
             ";\n" +
             annotation +
-            "\npublic record " +
-            prefix +
-            "Src(" +
+            "\npublic record %1$sSrc(" +
             b.sourceType() +
             " count, String name) {}\n"
-        )
+          ).formatted(prefix)
+        ),
+        ProcessorHarness.source(PACKAGE + "." + prefix + "Carrier", carrier.formatted(prefix))
       );
       if (!compilation.success()) {
         failures.add(b.name() + ": the bridge does not compile: " + compilation.errorMessages().strip());
@@ -750,7 +764,8 @@ class SetterTypeCrossPathTest {
       final var classes = compilation.define(MethodHandles.lookup());
       final var bean = classes.get(PACKAGE + "." + prefix + "Bean");
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
-      final var forward = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src);
+      final var bridgeName = row == null ? prefix + "SrcBridge" : prefix + "SrcTo" + prefix + "BeanBridge";
+      final var forward = classes.get(PACKAGE + "." + bridgeName).getMethod("forward", src);
       final Object five = b.converted() ? "5" : (Object) 5;
       final var written = outcome(() ->
         describe(bean, forward.invoke(null, src.getConstructors()[0].newInstance(five, "Ada")))

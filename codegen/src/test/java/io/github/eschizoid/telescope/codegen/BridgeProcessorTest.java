@@ -2574,9 +2574,18 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(value = demo.OrderEntity.class, drops = {"payment"})
-          public record Order(String id, String customer, String payment) {}
+          public record Order(String id, String customer, String payment) {
+            @Bridge
+            public static final Mapper<Order, OrderEntity> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderEntity.class,
+              drop(Order::payment)
+            );
+          }
           """
         ),
         source(
@@ -2589,7 +2598,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderEntityBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // Forward: build OrderEntity from non-dropped source fields only (read once into locals) —
@@ -2610,9 +2619,19 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(value = demo.B.class, drops = {"age", "active"})
-          public record A(String id, int age, boolean active) {}
+          public record A(String id, int age, boolean active) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              drop(A::age),
+              drop(A::active)
+            );
+          }
           """
         ),
         source(
@@ -2625,7 +2644,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.ABridge");
+      final var bridge = compilation.generated().get("demo.AToBBridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
       // age (int) → 0, active (boolean) → false in the backward rebuild; the kept field is read
       // once into a final local.
@@ -2634,16 +2653,25 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("misspelled drop name is a compile error pointing at the source")
+    @DisplayName("a drop row naming no accessor of the source is a compile error naming the reference")
     void misspelledDropIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(value = demo.B.class, drops = {"payement"})
-          public record A(String id, String payment) {}
+          public record A(String id, String payment) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              drop(A::payement)
+            );
+          }
           """
         ),
         source(
@@ -2657,7 +2685,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "misspelled drop name should fail");
       assertTrue(
-        compilation.hasError("not a field of A"),
+        compilation.hasError("invalid method reference") && compilation.hasError("payement"),
         () -> "expected misspelled-drop diagnostic; saw " + compilation.errorMessages()
       );
     }
@@ -2687,9 +2715,18 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
-          @io.github.eschizoid.telescope.annotations.Bridge(value = demo.B.class,
-            transforms = @io.github.eschizoid.telescope.annotations.Transform(field = "n", using = demo.TagFn.class))
-          public record A(String id, Integer n) {}
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.conversion.*;
+          public record A(String id, Integer n) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::n, B::n, TagFn.class)
+            );
+          }
           """
         ),
         source("demo.B", "package demo; public record B(String id, String n) {}")
@@ -2700,18 +2737,26 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
-          @io.github.eschizoid.telescope.annotations.Bridge(value = demo.B.class,
-            renames = @io.github.eschizoid.telescope.annotations.Rename(source = "n", target = "label"),
-            transforms = @io.github.eschizoid.telescope.annotations.Transform(field = "n", using = demo.TagFn.class))
-          public record A(String id, Integer n) {}
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.conversion.*;
+          public record A(String id, Integer n) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::n, B::label, TagFn.class)
+            );
+          }
           """
         ),
         source("demo.B", "package demo; public record B(String id, String label) {}")
       );
       assertTrue(sameNamed.success(), sameNamed::errorMessages);
       assertTrue(renamed.success(), renamed::errorMessages);
-      final var expected = sameNamed.generated().get("demo.ABridge");
-      final var actual = renamed.generated().get("demo.ABridge");
+      final var expected = sameNamed.generated().get("demo.AToBBridge");
+      final var actual = renamed.generated().get("demo.AToBBridge");
       // The bodies end where the BridgeFn wrapper begins; the wrapper names the unwalked target
       // properties, which differ by the rename alone.
       final var end = "  /** One concrete BridgeFn type per @Bridge";
@@ -2723,19 +2768,25 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Rename matches source.orderNumber to target.referenceCode in both directions")
+    @DisplayName("a renaming row matches source.orderNumber to target.referenceCode in both directions")
     void renameMapsBothDirections() {
       final var compilation = compile(
         source(
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.OrderEntity.class, renames = {
-            @Rename(source = "orderNumber", target = "referenceCode")
-          })
-          public record Order(Long id, String orderNumber) {}
+          public record Order(Long id, String orderNumber) {
+            @Bridge
+            public static final Mapper<Order, OrderEntity> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderEntity.class,
+              to(Order::orderNumber, OrderEntity::referenceCode)
+            );
+          }
           """
         ),
         source(
@@ -2748,7 +2799,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderEntityBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // Forward: source.orderNumber() is read once into a local that fills the referenceCode slot.
@@ -2760,17 +2811,25 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("misspelled rename source is a compile error pointing at the source")
+    @DisplayName("a renaming row naming no accessor of the source is a compile error naming the reference")
     void misspelledRenameSourceIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {@Rename(source = "ordreNumber", target = "referenceCode")})
-          public record A(Long id, String orderNumber) {}
+          public record A(Long id, String orderNumber) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::ordreNumber, B::referenceCode)
+            );
+          }
           """
         ),
         source(
@@ -2784,23 +2843,31 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "misspelled rename source should fail");
       assertTrue(
-        compilation.hasError("source=\"ordreNumber\" is not a field of A"),
+        compilation.hasError("invalid method reference") && compilation.hasError("ordreNumber"),
         () -> "expected misspelled-source diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("misspelled rename target is a compile error pointing at the source")
+    @DisplayName("a renaming row naming no accessor of the target is a compile error naming the reference")
     void misspelledRenameTargetIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {@Rename(source = "orderNumber", target = "refrenceCode")})
-          public record A(Long id, String orderNumber) {}
+          public record A(Long id, String orderNumber) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::orderNumber, B::refrenceCode)
+            );
+          }
           """
         ),
         source(
@@ -2814,27 +2881,32 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "misspelled rename target should fail");
       assertTrue(
-        compilation.hasError("target=\"refrenceCode\" is not a field of B"),
+        compilation.hasError("invalid method reference") && compilation.hasError("refrenceCode"),
         () -> "expected misspelled-target diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("a field listed in BOTH renames and drops is a compile error")
+    @DisplayName("a property both dropped and renamed by rows is a compile error")
     void renameAndDropOnSameFieldIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(
-            value = demo.B.class,
-            drops = {"orderNumber"},
-            renames = {@Rename(source = "orderNumber", target = "referenceCode")}
-          )
-          public record A(Long id, String orderNumber) {}
+          public record A(Long id, String orderNumber) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              drop(A::orderNumber),
+              to(A::orderNumber, B::referenceCode)
+            );
+          }
           """
         ),
         source(
@@ -2848,13 +2920,13 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "rename + drop on the same field should fail");
       assertTrue(
-        compilation.hasError("appears in both renames and drops"),
+        compilation.hasError("orderNumber"),
         () -> "expected dual-membership diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Transform whose using class is not a BridgeFn at all is rejected with a targeted message")
+    @DisplayName("a converting row naming a class that is not a BridgeFn does not compile, and writes no bridge")
     void transformWithNonBridgeFnClassRejected() {
       final var compilation = compile(
         source("demo.NotAnFn", "package demo; public final class NotAnFn { public NotAnFn() {} }"),
@@ -2862,10 +2934,18 @@ class BridgeProcessorTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.NotAnFn.class) })
-          public record Src(String id, String label) {}
+          public record Src(String id, String label) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(
+              Src.class,
+              Tgt.class,
+              to(Src::label, Tgt::label, NotAnFn.class)
+            );
+          }
           """
         ),
         source("demo.Tgt", "package demo; public record Tgt(String id, String label) {}")
@@ -2873,17 +2953,19 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a non-BridgeFn using class must not compile");
       assertTrue(
-        compilation.hasError("does not implement BridgeFn"),
-        () -> "expected a targeted non-BridgeFn diagnostic; saw " + compilation.errorMessages()
+        compilation.hasError("NotAnFn"),
+        () -> "expected a diagnostic naming the class; saw " + compilation.errorMessages()
       );
+      assertNull(compilation.generated().get("demo.SrcToTgtBridge"), "no bridge is written for the pair");
     }
 
     @Test
-    @DisplayName("@Transform accepts a type-variable BridgeFn whose erased bound fits the field pair")
+    @DisplayName("a converting row accepts a type-variable BridgeFn whose erased bound fits the property pair")
     void transformAcceptsTypeVariableBridgeFnThatFits() {
-      // The emitter instantiates the fn raw, so a type-variable argument erases to its bound and
-      // the call accepts anything assignable to that. Both shapes below compile, and the fit test
-      // must not reject them for having a variable where a concrete type could stand.
+      // A generic BridgeFn is named by a static final field holding an instance of it, raw or with
+      // type arguments; a field held raw has its methods erase to the variable's bound, and the
+      // call accepts anything assignable to that. Both shapes below compile, and the fit test must
+      // not reject them for having a variable where a concrete type could stand.
       final var compilation = compileAttributed(
         source(
           "demo.RenderFn",
@@ -2903,6 +2985,8 @@ class BridgeProcessorTest {
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           public final class IdFn2<T> implements BridgeFn<T, T> {
+            @SuppressWarnings("rawtypes") public static final IdFn2 RAW = new IdFn2();
+            public static final RenderFn<Object> RENDER = new RenderFn<>();
             public IdFn2() {}
             @Override public T forward(T t) { return t; }
             @Override public T backward(T t) { return t; }
@@ -2913,13 +2997,19 @@ class BridgeProcessorTest {
           "demo.SrcG",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.TgtG.class, transforms = {
-            @Transform(field = "payload", using = demo.RenderFn.class, forwardOnly = true),
-            @Transform(field = "label", using = demo.IdFn2.class)
-          })
-          public record SrcG(Object payload, Object label) {}
+          public record SrcG(Object payload, Object label) {
+            @Bridge
+            public static final ForwardMapper<SrcG, TgtG> MAPPER = Telescope.mapperForward(
+              SrcG.class,
+              TgtG.class,
+              toOneWay(SrcG::payload, TgtG::payload, IdFn2.RENDER::forward),
+              to(SrcG::label, TgtG::label, IdFn2.RAW)
+            );
+          }
           """
         ),
         source("demo.TgtG", "package demo; public record TgtG(String payload, Object label) {}")
@@ -2929,17 +3019,16 @@ class BridgeProcessorTest {
         compilation.success(),
         () -> "a type-variable BridgeFn whose bound fits must be accepted: " + compilation.errorMessages()
       );
-      assertNotNull(compilation.generated().get("demo.SrcGBridge"));
+      assertNotNull(compilation.generated().get("demo.SrcGToTgtGBridge"));
     }
 
     @Test
-    @DisplayName("@Transform on a raw generic BridgeFn is rejected by name instead of inside the generated" + " file")
+    @DisplayName("a converting row through a raw generic BridgeFn is rejected by name instead of inside a generated" + " file")
     void transformWithRawGenericBridgeFnRejectedByName() {
-      // An annotation carries only a raw class literal, so the emitter instantiates the fn raw and
-      // its methods erase to the type variable's bound, Number here. A String is not a Number, so
-      // this pair is named at the declaration; the sibling test covers the pairs it does fit.
-      // Attributed compilation, so the generated-file error this replaces would be observable if
-      // it were still what the user saw.
+      // A field holding the fn raw has its methods erase to the type variable's bound, Number
+      // here. A String is not a Number, so this pair is named on the row; the sibling test covers
+      // the pairs it does fit. Attributed compilation, so the generated-file error this replaces
+      // would be observable if it were still what the user saw.
       final var compilation = compileAttributed(
         source(
           "demo.IdFn",
@@ -2947,6 +3036,7 @@ class BridgeProcessorTest {
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           public final class IdFn<T extends Number> implements BridgeFn<T, T> {
+            @SuppressWarnings("rawtypes") public static final IdFn RAW = new IdFn();
             public IdFn() {}
             @Override public T forward(T t) { return t; }
             @Override public T backward(T t) { return t; }
@@ -2957,10 +3047,18 @@ class BridgeProcessorTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.IdFn.class) })
-          public record Src(String label) {}
+          public record Src(String label) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(
+              Src.class,
+              Tgt.class,
+              to(Src::label, Tgt::label, IdFn.RAW)
+            );
+          }
           """
         ),
         source("demo.Tgt", "package demo; public record Tgt(String label) {}")
@@ -2968,7 +3066,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a raw generic BridgeFn must not compile");
       assertTrue(
-        compilation.hasError("does not fit") && compilation.hasError("forward resolves to (java.lang.Number)"),
+        compilation.errorMessages().contains("RAW holds a raw IdFn, whose forward is (java.lang.Number) -> java.lang.Number"),
         () ->
           "expected the diagnostic to name the signature the call site binds to, which for a" +
           " raw instantiation is the erased one; saw " +
@@ -2981,7 +3079,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform accepts a BridgeFn reached through an intermediate abstract class")
+    @DisplayName("a converting row accepts a BridgeFn reached through an intermediate abstract class")
     void transformAcceptsBridgeFnThroughIntermediateSupertype() {
       // The validator walks the supertype closure rather than the direct interfaces, so an
       // implementor several levels up still resolves its BridgeFn arguments. Attributed, because
@@ -3011,22 +3109,30 @@ class BridgeProcessorTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.LenFn.class) })
-          public record Src(String id, String label) {}
+          public record Src(String id, String label) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(
+              Src.class,
+              Tgt.class,
+              to(Src::label, Tgt::label, LenFn.class)
+            );
+          }
           """
         ),
         source("demo.Tgt", "package demo; public record Tgt(String id, Integer label) {}")
       );
 
       assertTrue(compilation.success(), () -> "inherited BridgeFn must be accepted: " + compilation.errorMessages());
-      assertNotNull(compilation.generated().get("demo.SrcBridge"));
+      assertNotNull(compilation.generated().get("demo.SrcToTgtBridge"));
     }
 
     @Test
     @DisplayName(
-      "@Transform accepts the conversions the emitted call relies on — widening, boxing, and" +
+      "converting rows accept the conversions the emitted call relies on — widening, boxing, and" +
         " unboxing-plus-widening"
     )
     void transformAcceptsWideningAndBoxedPairs() {
@@ -3034,9 +3140,11 @@ class BridgeProcessorTest {
       // target write needs, so the declared field types are what to compare — boxing either side
       // first would discard the second. The two asymmetric rows are forward-only: widening and
       // unboxing-plus-widening run one way, so the emitted backward would not compile, and the
-      // check must accept the direction that exists rather than the pair as a whole. The boxed
-      // int row is bidirectional because int boxes to Integer and Integer unboxes to int on both
-      // sides of the row, so both directions perform the same pair of conversions.
+      // check must accept the direction that exists rather than the pair as a whole; the
+      // unboxing-plus-widening one is a static method the bridge calls by name, its int result
+      // widening into the long slot. The boxed int row is bidirectional because int boxes to
+      // Integer and Integer unboxes to int on both sides of the row, so both directions perform the
+      // same pair of conversions.
       final var compilation = compileAttributed(
         source(
           "demo.WideFn",
@@ -3044,6 +3152,7 @@ class BridgeProcessorTest {
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           public final class WideFn implements BridgeFn<CharSequence, String> {
+            public static final WideFn INSTANCE = new WideFn();
             public WideFn() {}
             @Override public String forward(CharSequence c) { return c.toString(); }
             @Override public CharSequence backward(String s) { return s; }
@@ -3071,6 +3180,7 @@ class BridgeProcessorTest {
             public SizeFn() {}
             @Override public Integer forward(String s) { return s.length(); }
             @Override public String backward(Integer n) { return "x".repeat(n); }
+            public static int length(String s) { return s.length(); }
           }
           """
         ),
@@ -3078,14 +3188,20 @@ class BridgeProcessorTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "label", using = demo.WideFn.class, forwardOnly = true),
-            @Transform(field = "count", using = demo.BoxFn.class),
-            @Transform(field = "size", using = demo.SizeFn.class, forwardOnly = true)
-          })
-          public record Src(String label, int count, String size) {}
+          public record Src(String label, int count, String size) {
+            @Bridge
+            public static final ForwardMapper<Src, Tgt> MAPPER = Telescope.mapperForward(
+              Src.class,
+              Tgt.class,
+              toOneWay(Src::label, Tgt::label, WideFn.INSTANCE::forward),
+              to(Src::count, Tgt::count, BoxFn.class),
+              toOneWay(Src::size, Tgt::size, SizeFn::length)
+            );
+          }
           """
         ),
         source("demo.Tgt", "package demo; public record Tgt(String label, int count, long size) {}")
@@ -3095,16 +3211,14 @@ class BridgeProcessorTest {
         compilation.success(),
         () -> "widening and boxed BridgeFn pairs must be accepted: " + compilation.errorMessages()
       );
-      assertNotNull(compilation.generated().get("demo.SrcBridge"));
+      assertNotNull(compilation.generated().get("demo.SrcToTgtBridge"));
     }
 
     @Test
-    @DisplayName("@Transform with a BridgeFn whose type arguments do not fit the field pair is rejected at" + " build")
+    @DisplayName("a converting row through a BridgeFn whose type arguments do not fit the property pair does not" + " compile")
     void transformWithMisfittingBridgeFnRejected() {
-      // Without the check, the bridge is emitted anyway and the mismatch surfaces as raw
-      // incompatible-types errors inside the generated file — code the user never wrote. The
-      // diagnostic must land on the @Bridge declaration and name the field pair and the
-      // BridgeFn's actual arguments.
+      // The row types the class it names by the two accessors, so javac refuses the row itself, on
+      // the line the user wrote, and no bridge is written whose code would fail instead.
       final var compilation = compile(
         source(
           "demo.BadFn",
@@ -3122,10 +3236,18 @@ class BridgeProcessorTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.BadFn.class) })
-          public record Src(String id, String label) {}
+          public record Src(String id, String label) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(
+              Src.class,
+              Tgt.class,
+              to(Src::label, Tgt::label, BadFn.class)
+            );
+          }
           """
         ),
         source("demo.Tgt", "package demo; public record Tgt(String id, String label) {}")
@@ -3133,14 +3255,14 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a misfitting BridgeFn must not compile");
       assertTrue(
-        compilation.hasError("does not fit") &&
-          compilation.hasError("forward resolves to (java.lang.Integer) -> java.lang.Long"),
-        () -> "expected a diagnostic naming the field pair and the bound signature; saw " + compilation.errorMessages()
+        compilation.errors().stream().allMatch(d -> d.getSource() != null && d.getSource().getName().endsWith("/demo/Src.java")),
+        () -> "expected the refusal on the row's own file; saw " + compilation.errorMessages()
       );
+      assertNull(compilation.generated().get("demo.SrcToTgtBridge"), "no bridge is written for the pair");
     }
 
     @Test
-    @DisplayName("@Transform per-field conversion routes through the BridgeFn class in both directions")
+    @DisplayName("a converting row naming a BridgeFn class routes through it in both directions")
     void transformRoutesThroughBridgeFn() {
       final var compilation = compile(
         source(
@@ -3160,13 +3282,19 @@ class BridgeProcessorTest {
           "demo.LineItem",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
           import java.math.BigDecimal;
-          @Bridge(value = demo.LineItemEntity.class, transforms = {
-            @Transform(field = "unitPrice", using = demo.CentsConverter.class)
-          })
-          public record LineItem(String id, BigDecimal unitPrice) {}
+          public record LineItem(String id, BigDecimal unitPrice) {
+            @Bridge
+            public static final Mapper<LineItem, LineItemEntity> MAPPER = Telescope.mapper(
+              LineItem.class,
+              LineItemEntity.class,
+              to(LineItem::unitPrice, LineItemEntity::unitPrice, CentsConverter.class)
+            );
+          }
           """
         ),
         source(
@@ -3179,7 +3307,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.LineItemBridge");
+      final var bridge = compilation.generated().get("demo.LineItemToLineItemEntityBridge");
       assertNotNull(bridge, () -> "LineItemBridge missing; saw " + compilation.generated().keySet());
 
       // Static instance of the user's BridgeFn.
@@ -3198,7 +3326,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform(forwardOnly=true) — backward zero-fills the slot, BridgeFn.backward is never" + " invoked")
+    @DisplayName("a forward-only row through a BridgeFn — backward zero-fills the slot, backward is never" + " invoked")
     void transformForwardOnlyEmitsZeroFill() {
       final var compilation = compile(
         source(
@@ -3208,9 +3336,10 @@ class BridgeProcessorTest {
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           import java.time.Instant;
           public final class AuditTimestampFn implements BridgeFn<Instant, String> {
+            public static final AuditTimestampFn INSTANCE = new AuditTimestampFn();
             public AuditTimestampFn() {}
             @Override public String forward(Instant x) { return x.toString(); }
-            // Backward stubbed — never invoked when forwardOnly=true. The generated bridge
+            // Backward stubbed — never invoked for a forward-only row. The generated bridge
             // emits a zero-fill instead of calling this method.
             @Override public Instant backward(String s) { throw new UnsupportedOperationException(); }
           }
@@ -3220,13 +3349,19 @@ class BridgeProcessorTest {
           "demo.Audit",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
           import java.time.Instant;
-          @Bridge(value = demo.AuditEntity.class, transforms = {
-            @Transform(field = "createdAt", using = demo.AuditTimestampFn.class, forwardOnly = true)
-          })
-          public record Audit(String id, Instant createdAt) {}
+          public record Audit(String id, Instant createdAt) {
+            @Bridge
+            public static final ForwardMapper<Audit, AuditEntity> MAPPER = Telescope.mapperForward(
+              Audit.class,
+              AuditEntity.class,
+              toOneWay(Audit::createdAt, AuditEntity::createdAt, AuditTimestampFn.INSTANCE::forward)
+            );
+          }
           """
         ),
         source(
@@ -3239,7 +3374,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.AuditBridge");
+      final var bridge = compilation.generated().get("demo.AuditToAuditEntityBridge");
       assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
 
       // Forward routes the hoisted single-read local through the BridgeFn.
@@ -3250,17 +3385,17 @@ class BridgeProcessorTest {
       // read or convert t.createdAt() at all.
       assertTrue(
         bridge.contains("new demo.Audit(__bt_id, null)"),
-        () -> "expected backward zero-fill for forwardOnly transform slot, saw: " + bridge
+        () -> "expected backward zero-fill for the forward-only slot, saw: " + bridge
       );
       assertFalse(
         bridge.contains("__tx_createdAt.backward"),
-        () -> "backward must NOT invoke BridgeFn.backward for forwardOnly transform, saw: " + bridge
+        () -> "backward must NOT invoke backward for a forward-only row, saw: " + bridge
       );
     }
 
     @Test
     @DisplayName(
-      "@Transform(method = \"...\") — qualifier dispatch emits direct static-method call, no" + " BridgeFn instance"
+      "a forward-only row through a static method emits a direct call to it, no" + " BridgeFn instance"
     )
     void transformQualifierDispatchEmitsDirectStaticCall() {
       final var compilation = compile(
@@ -3282,14 +3417,20 @@ class BridgeProcessorTest {
           "demo.UserEntity",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
           import java.time.Instant;
-          @Bridge(value = demo.UserDto.class, transforms = {
-            @Transform(field = "expiresAt", using = demo.DateHelpers.class, method = "expiry"),
-            @Transform(field = "registeredAt", using = demo.DateHelpers.class, method = "createdAt")
-          })
-          public record UserEntity(String id, Instant expiresAt, Instant registeredAt) {}
+          public record UserEntity(String id, Instant expiresAt, Instant registeredAt) {
+            @Bridge
+            public static final ForwardMapper<UserEntity, UserDto> MAPPER = Telescope.mapperForward(
+              UserEntity.class,
+              UserDto.class,
+              toOneWay(UserEntity::expiresAt, UserDto::expiresAt, DateHelpers::expiry),
+              toOneWay(UserEntity::registeredAt, UserDto::registeredAt, DateHelpers::createdAt)
+            );
+          }
           """
         ),
         source(
@@ -3302,7 +3443,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.UserEntityBridge");
+      final var bridge = compilation.generated().get("demo.UserEntityToUserDtoBridge");
       assertNotNull(bridge, () -> "UserEntityBridge missing; saw " + compilation.generated().keySet());
 
       // NO __tx_ singleton — qualifier dispatch calls the static method directly.
@@ -3328,7 +3469,7 @@ class BridgeProcessorTest {
         () -> "expected demo.DateHelpers.createdAt(...) call over the read local; saw: " + bridge
       );
 
-      // Qualifier dispatch is implicitly forward-only — backward zero-fills.
+      // A static method converts forward only — backward zero-fills.
       assertTrue(
         bridge.contains("new demo.UserEntity(__bt_id, null, null)"),
         () -> "expected backward zero-fill on qualifier-dispatch slots; saw: " + bridge
@@ -3336,7 +3477,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform(using=BridgeFn) and @Transform(method=...) coexist on the same bridge")
+    @DisplayName("a row through a BridgeFn class and one through a static method coexist on the same bridge")
     void transformBridgeFnAndQualifierCoexist() {
       final var compilation = compile(
         source(
@@ -3367,15 +3508,21 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
           import java.math.BigDecimal;
           import java.time.Instant;
-          @Bridge(value = demo.OrderEntity.class, transforms = {
-            @Transform(field = "price", using = demo.CentsConverter.class),
-            @Transform(field = "createdAt", using = demo.Helpers.class, method = "asIso")
-          })
-          public record Order(String id, BigDecimal price, Instant createdAt) {}
+          public record Order(String id, BigDecimal price, Instant createdAt) {
+            @Bridge
+            public static final ForwardMapper<Order, OrderEntity> MAPPER = Telescope.mapperForward(
+              Order.class,
+              OrderEntity.class,
+              to(Order::price, OrderEntity::price, CentsConverter.class),
+              toOneWay(Order::createdAt, OrderEntity::createdAt, Helpers::asIso)
+            );
+          }
           """
         ),
         source(
@@ -3388,7 +3535,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderEntityBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // BridgeFn-shape: __tx_price singleton + .forward/.backward calls
@@ -3418,46 +3565,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform(method = \"  \") — whitespace method name rejected at processor time")
-    void transformBlankMethodRejected() {
-      final var compilation = compile(
-        source(
-          "demo.Helpers",
-          """
-          package demo;
-          public final class Helpers {
-            public static String identity(String s) { return s; }
-          }
-          """
-        ),
-        source(
-          "demo.A",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.B.class, transforms = {
-            @Transform(field = "name", using = demo.Helpers.class, method = "  ")
-          })
-          public record A(String name) {}
-          """
-        ),
-        source(
-          "demo.B",
-          """
-          package demo;
-          public record B(String name) {}
-          """
-        )
-      );
-      assertTrue(
-        !compilation.success() && compilation.hasError("must not be blank"),
-        () -> "expected 'must not be blank' diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("@Transform(method = \"missing\") — non-existent method rejected at processor time")
+    @DisplayName("a row naming a method its class lacks is a compile error naming the reference")
     void transformMissingMethodRejected() {
       final var compilation = compile(
         source(
@@ -3473,12 +3581,18 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.B.class, transforms = {
-            @Transform(field = "name", using = demo.Helpers.class, method = "nonexistent")
-          })
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final ForwardMapper<A, B> MAPPER = Telescope.mapperForward(
+              A.class,
+              B.class,
+              toOneWay(A::name, B::name, Helpers::nonexistent)
+            );
+          }
           """
         ),
         source(
@@ -3490,13 +3604,13 @@ class BridgeProcessorTest {
         )
       );
       assertTrue(
-        !compilation.success() && compilation.hasError("method` not found"),
+        !compilation.success() && compilation.hasError("invalid method reference") && compilation.hasError("nonexistent"),
         () -> "expected 'method not found' diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Transform(method = \"instanceMethod\") — non-static method rejected at processor time")
+    @DisplayName("a row naming an instance method of another class as a converter is a compile error")
     void transformNonStaticMethodRejected() {
       final var compilation = compile(
         source(
@@ -3505,7 +3619,7 @@ class BridgeProcessorTest {
           package demo;
           public final class Helpers {
             public Helpers() {}
-            // instance method — qualifier dispatch needs static
+            // instance method of Helpers, which a converter of a String cannot be unbound to
             public String mutate(String s) { return s; }
           }
           """
@@ -3514,12 +3628,18 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.B.class, transforms = {
-            @Transform(field = "name", using = demo.Helpers.class, method = "mutate")
-          })
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final ForwardMapper<A, B> MAPPER = Telescope.mapperForward(
+              A.class,
+              B.class,
+              toOneWay(A::name, B::name, Helpers::mutate)
+            );
+          }
           """
         ),
         source(
@@ -3531,13 +3651,13 @@ class BridgeProcessorTest {
         )
       );
       assertTrue(
-        !compilation.success() && compilation.hasError("is not static"),
+        !compilation.success() && compilation.hasError("invalid method reference") && compilation.hasError("mutate"),
         () -> "expected 'is not static' diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("misspelled transform field is a compile error pointing at the source")
+    @DisplayName("a converting row naming no accessor of the source is a compile error naming the reference")
     void misspelledTransformFieldIsRejected() {
       final var compilation = compile(
         source(
@@ -3556,12 +3676,18 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.B.class, transforms = {
-            @Transform(field = "nmae", using = demo.Conv.class)
-          })
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::nmae, B::name, Conv.class)
+            );
+          }
           """
         ),
         source(
@@ -3575,25 +3701,31 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "misspelled transform field should fail");
       assertTrue(
-        compilation.hasError("transforms field=\"nmae\" is not a field of A"),
+        compilation.hasError("invalid method reference") && compilation.hasError("nmae"),
         () -> "expected misspelled-transform diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Constant injects a String literal at a target-only field on forward")
+    @DisplayName("a constant row fills a target-only property with a String literal on forward")
     void constantStringInjectsForwardOnly() {
       final var compilation = compile(
         source(
           "demo.LineItem",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Constant;
-          @Bridge(value = demo.LineItemEntity.class, constants = {
-            @Constant(field = "source", value = "API")
-          })
-          public record LineItem(String id) {}
+          public record LineItem(String id) {
+            @Bridge
+            public static final Mapper<LineItem, LineItemEntity> MAPPER = Telescope.mapper(
+              LineItem.class,
+              LineItemEntity.class,
+              constant(LineItemEntity::source, "API")
+            );
+          }
           """
         ),
         source(
@@ -3606,29 +3738,42 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.LineItemBridge");
+      final var bridge = compilation.generated().get("demo.LineItemToLineItemEntityBridge");
       assertNotNull(bridge, () -> "LineItemBridge missing; saw " + compilation.generated().keySet());
+      final var filled = compilation.generated().get("demo.LineItemToLineItemEntityBridgeSourceConstant");
+      assertNotNull(filled, () -> "the class filling the constant is missing; saw " + compilation.generated().keySet());
 
-      // Forward fills the target's `source` slot with the literal; the id read is hoisted.
+      // Forward fills the target's `source` slot with the literal the generated class returns; the
+      // id read is hoisted.
+      assertTrue(filled.contains("return \"API\";"), filled);
       assertTrue(bridge.contains("final java.lang.String __fs_id = s.id();"), bridge);
-      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, \"API\")"), bridge);
+      assertTrue(bridge.contains("__cv_source = __cp_source.get();"), bridge);
+      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, __cv_source)"), bridge);
       // Backward rebuilds LineItem from t.id() only — source is target-only, dropped on backward.
       assertTrue(bridge.contains("final java.lang.String __bt_id = t.id();"), bridge);
       assertTrue(bridge.contains("new demo.LineItem(__bt_id)"), bridge);
     }
 
     @Test
-    @DisplayName("@Constant supports primitive types — int parses and emits as a literal")
+    @DisplayName("a constant row fills a primitive property — an int is written as its literal")
     void constantIntPrimitiveEmitsAsLiteral() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Constant;
-          @Bridge(value = demo.B.class, constants = {@Constant(field = "version", value = "1")})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              constant(B::version, 1)
+            );
+          }
           """
         ),
         source(
@@ -3641,22 +3786,32 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.ABridge");
-      assertTrue(bridge.contains("new demo.B(__fs_id, 1)"), bridge);
+      final var bridge = compilation.generated().get("demo.AToBBridge");
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cv_version)"), bridge);
+      final var filled = compilation.generated().get("demo.AToBBridgeVersionConstant");
+      assertTrue(filled.contains("java.util.function.Supplier<java.lang.Integer>") && filled.contains("return 1;"), filled);
     }
 
     @Test
-    @DisplayName("@Constant value=\"null\" is accepted for reference-typed target fields")
+    @DisplayName("a null constant is accepted for a reference-typed target property")
     void constantNullForReferenceType() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Constant;
-          @Bridge(value = demo.B.class, constants = {@Constant(field = "note", value = "null")})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              constant(B::note, null)
+            );
+          }
           """
         ),
         source(
@@ -3669,22 +3824,31 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.ABridge");
-      assertTrue(bridge.contains("new demo.B(__fs_id, null)"), bridge);
+      final var bridge = compilation.generated().get("demo.AToBBridge");
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cv_note)"), bridge);
+      assertTrue(compilation.generated().get("demo.AToBBridgeNoteConstant").contains("return null;"));
     }
 
     @Test
-    @DisplayName("@Constant value that does not parse against the target type is a compile error")
+    @DisplayName("a constant row whose value the target property does not hold is a compile error")
     void constantValueMismatchIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Constant;
-          @Bridge(value = demo.B.class, constants = {@Constant(field = "version", value = "v2")})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              constant(B::version, "v2")
+            );
+          }
           """
         ),
         source(
@@ -3698,23 +3862,31 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "non-parseable constant value should fail");
       assertTrue(
-        compilation.hasError("is not a valid int literal"),
+        compilation.hasError("the value \"v2\" is java.lang.String, which the java.lang.Integer property 'version' does not hold"),
         () -> "expected parse-fail diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Constant for a non-existent target field is a compile error")
+    @DisplayName("a constant row naming no accessor of the target is a compile error naming the reference")
     void constantWithMissingTargetFieldIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Constant;
-          @Bridge(value = demo.B.class, constants = {@Constant(field = "ghost", value = "x")})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              constant(B::ghost, "x")
+            );
+          }
           """
         ),
         source(
@@ -3728,13 +3900,13 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "constant against a missing target field should fail");
       assertTrue(
-        compilation.hasError("constants field=\"ghost\" is not a field of B"),
+        compilation.hasError("invalid method reference") && compilation.hasError("ghost"),
         () -> "expected missing-field diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Compute calls Supplier.get() at the forward target slot")
+    @DisplayName("a compute row calls its supplier's get() at the forward target slot")
     void computeCallsSupplierGet() {
       final var compilation = compile(
         source(
@@ -3743,6 +3915,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class NowSupplier implements Supplier<String> {
+            public static final NowSupplier INSTANCE = new NowSupplier();
             public NowSupplier() {}
             @Override public String get() { return "now"; }
           }
@@ -3752,10 +3925,18 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          @Bridge(value = demo.B.class, computes = {@Compute(field = "createdAt", using = demo.NowSupplier.class)})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              compute(B::createdAt, NowSupplier.INSTANCE)
+            );
+          }
           """
         ),
         source(
@@ -3768,12 +3949,17 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.ABridge");
+      final var bridge = compilation.generated().get("demo.AToBBridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
 
       assertTrue(
-        bridge.contains("private static final demo.NowSupplier __cp_createdAt = new demo.NowSupplier();"),
+        bridge.contains(
+          "private static final demo.AToBBridgeCreatedAtCompute __cp_createdAt = new demo.AToBBridgeCreatedAtCompute();"
+        ),
         bridge
+      );
+      assertTrue(
+        compilation.generated().get("demo.AToBBridgeCreatedAtCompute").contains("return demo.NowSupplier.INSTANCE.get();")
       );
       assertTrue(bridge.contains("__cv_createdAt = __cp_createdAt.get();"), bridge);
       assertTrue(bridge.contains("new demo.B(__fs_id, __cv_createdAt)"), bridge);
@@ -3792,6 +3978,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class NowSupplier implements Supplier<String> {
+            public static final NowSupplier INSTANCE = new NowSupplier();
             public NowSupplier() {}
             @Override public String get() { return "now"; }
           }
@@ -3801,10 +3988,22 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          @Bridge(value = demo.B.class, computes = {@Compute(field = "createdAt", using = demo.NowSupplier.class)})
-          public record A(String id) {}
+          public record A(String id) {
+            @Bridge
+            @SuppressWarnings({ "rawtypes", "unchecked" })
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              io.github.eschizoid.telescope.mapping.Mapping.<A, B<String>, String>compute(
+                B<String>::createdAt,
+                NowSupplier.INSTANCE
+              )
+            );
+          }
           """
         ),
         source(
@@ -3817,27 +4016,33 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.ABridge");
+      final var bridge = compilation.generated().get("demo.AToBBridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
       assertTrue(bridge.contains("final java.lang.Object __cv_createdAt = __cp_createdAt.get();"), bridge);
       assertTrue(bridge.contains("new demo.B(__fs_id, __cv_createdAt)"), bridge);
     }
 
     @Test
-    @DisplayName("two renames cannot share the same source or the same target")
+    @DisplayName("a two-way mapper cannot write one source property into two targets")
     void duplicateRenameSourceIsRejected() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {
-            @Rename(source = "name", target = "a"),
-            @Rename(source = "name", target = "b")
-          })
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::name, B::a),
+              to(A::name, B::b)
+            );
+          }
           """
         ),
         source(
@@ -3851,14 +4056,14 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "duplicate rename source should fail");
       assertTrue(
-        compilation.hasError("source \"name\" appears twice"),
+        compilation.hasError("property 'name' can be written into only one target"),
         () -> "expected duplicate-source diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
     @DisplayName(
-      "@Rename(forwardOnly=true) fan-out: one source feeds multiple targets; backward reads" + " primary only"
+      "a forward-only fan-out: one source feeds multiple targets; backward reads" + " the first only"
     )
     void forwardOnlyFanoutEmitsMultiTargetWrite() {
       final var compilation = compile(
@@ -3866,13 +4071,19 @@ class BridgeProcessorTest {
           "demo.Audit",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.AuditEntity.class, renames = {
-            @Rename(source = "businessUnit", target = "cretnUserId",  forwardOnly = true),
-            @Rename(source = "businessUnit", target = "lastUpdtdUserId", forwardOnly = true)
-          })
-          public record Audit(String businessUnit) {}
+          public record Audit(String businessUnit) {
+            @Bridge
+            public static final ForwardMapper<Audit, AuditEntity> MAPPER = Telescope.mapperForward(
+              Audit.class,
+              AuditEntity.class,
+              to(Audit::businessUnit, AuditEntity::cretnUserId),
+              to(Audit::businessUnit, AuditEntity::lastUpdtdUserId)
+            );
+          }
           """
         ),
         source(
@@ -3885,7 +4096,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.AuditBridge");
+      final var bridge = compilation.generated().get("demo.AuditToAuditEntityBridge");
       assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
 
       // Forward: one read of source.businessUnit() into a final local fans into BOTH target
@@ -3911,53 +4122,26 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Rename source-collision is still rejected if any conflicting entry omits forwardOnly")
-    void forwardOnlyMustBeSetOnEveryConflictingRename() {
-      final var compilation = compile(
-        source(
-          "demo.A",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {
-            @Rename(source = "name", target = "a",  forwardOnly = true),
-            @Rename(source = "name", target = "b") // forwardOnly defaults to false — opt-in required
-          })
-          public record A(String name) {}
-          """
-        ),
-        source(
-          "demo.B",
-          """
-          package demo;
-          public record B(String a, String b) {}
-          """
-        )
-      );
-
-      assertFalse(compilation.success(), "partial forwardOnly opt-in should fail");
-      assertTrue(
-        compilation.hasError("set forwardOnly = true on every conflicting"),
-        () -> "expected partial-opt-in diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("@Rename forwardOnly fan-out rejects targets with mismatched types")
+    @DisplayName("a forward-only fan-out rejects targets with mismatched types")
     void forwardOnlyFanoutRejectsTypeMismatch() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {
-            @Rename(source = "value", target = "asString", forwardOnly = true),
-            @Rename(source = "value", target = "asInt",    forwardOnly = true)
-          })
-          public record A(String value) {}
+          public record A(String value) {
+            @Bridge
+            public static final ForwardMapper<A, B> MAPPER = Telescope.mapperForward(
+              A.class,
+              B.class,
+              to(A::value, B::asString),
+              to(A::value, B::asInt)
+            );
+          }
           """
         ),
         source(
@@ -3971,26 +4155,32 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "type-mismatched fan-out should fail");
       assertTrue(
-        compilation.hasError("fans out to targets with different types"),
+        compilation.hasError("'value' is written into targets of different types"),
         () -> "expected type-mismatch diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Rename forwardOnly fan-out rejects an extra target that doesn't exist on the target side")
+    @DisplayName("a forward-only fan-out naming no accessor of the target is a compile error naming the reference")
     void forwardOnlyFanoutRejectsMissingExtraTarget() {
       final var compilation = compile(
         source(
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.B.class, renames = {
-            @Rename(source = "name", target = "a",        forwardOnly = true),
-            @Rename(source = "name", target = "missingX", forwardOnly = true)
-          })
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final ForwardMapper<A, B> MAPPER = Telescope.mapperForward(
+              A.class,
+              B.class,
+              to(A::name, B::a),
+              to(A::name, B::missingX)
+            );
+          }
           """
         ),
         source(
@@ -4004,25 +4194,31 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "missing extra target should fail");
       assertTrue(
-        compilation.hasError("target=\"missingX\""),
+        compilation.hasError("invalid method reference") && compilation.hasError("missingX"),
         () -> "expected missing-extra-target diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@Default(field, value) — forward null-coalesces, backward is identity")
+    @DisplayName("toOrElse with a literal — forward null-coalesces, backward is identity")
     void defaultsNullCoalescing() {
       final var compilation = compile(
         source(
           "demo.User",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          @Bridge(value = demo.UserEntity.class, defaults = {
-            @Default(field = "region", value = "EMEA")
-          })
-          public record User(String id, String region) {}
+          public record User(String id, String region) {
+            @Bridge
+            public static final Mapper<User, UserEntity> MAPPER = Telescope.mapper(
+              User.class,
+              UserEntity.class,
+              toOrElse(User::region, UserEntity::region, "EMEA")
+            );
+          }
           """
         ),
         source(
@@ -4035,76 +4231,79 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.UserBridge");
+      final var bridge = compilation.generated().get("demo.UserToUserEntityBridge");
       assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
+      final var coalesce = compilation.generated().get("demo.UserToUserEntityBridgeRegionFn");
+      assertNotNull(coalesce, () -> "the class coalescing region is missing; saw " + compilation.generated().keySet());
 
-      // Forward null-coalesces over the hoisted single-read local: `region` null → "EMEA";
-      // otherwise pass-through. The coalesce names its operand twice, but only as the local.
+      // Forward hands the hoisted single-read local to the generated class, which null-coalesces
+      // it: `region` null → "EMEA"; otherwise pass-through.
       assertTrue(bridge.contains("final java.lang.String __fs_region = s.region();"), bridge);
+      assertTrue(bridge.contains("__tx_region.forward(__fs_region)"), bridge);
       assertTrue(
-        bridge.contains("(__fs_region == null ? \"EMEA\" : __fs_region)"),
-        () -> "expected null-coalesce over the region local on forward, saw: " + bridge
+        coalesce.contains("return v == null ? \"EMEA\" : v;"),
+        () -> "expected the null-coalesce in the generated class, saw: " + coalesce
       );
       // One read per source field: the accessor appears exactly once even though the coalesce
       // consumes the value twice.
       assertTrue(occurrences(bridge, "s.region()") == 1, bridge);
-      // Backward is identity — the default doesn't appear in backward expression.
+      // Backward is identity — the generated class hands the value back as it is.
       assertTrue(bridge.contains("final java.lang.String __bt_region = t.region();"), bridge);
-      assertTrue(bridge.contains("new demo.User(__bt_id, __bt_region)"), bridge);
+      assertTrue(bridge.contains("__tx_region.backward(__bt_region)"), bridge);
     }
 
     @Test
     @DisplayName(
-      "GAP-1: @Default + @Rename on the same source field compose — null-coalesce feeds the" + " renamed target slot"
+      "toOrElse into a property of another name — the null-coalesce feeds the" + " renamed target slot"
     )
     void defaultAndRenameOnSameFieldCompose() {
-      // The two modifiers operate on different axes: @Default null-coalesces the SOURCE read,
-      // @Rename relocates the TARGET slot. They are not mutually exclusive (unlike @Default +
-      // @Drop or @Default + @Transform), so the processor accepts the combination and the
-      // generated forward expression is the source-side null-coalesce written into the renamed
-      // target slot. This test pins that contract — if a future change starts rejecting the
-      // composition, the failure here surfaces the regression immediately.
+      // One row null-coalesces the source read and names the target slot it is written into, so
+      // the coalesced value lands in the renamed slot and backward reads that slot back.
       final var compilation = compile(
         source(
           "demo.User",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(
-            value = demo.UserDto.class,
-            renames = { @Rename(source = "region", target = "area") },
-            defaults = { @Default(field = "region", value = "EMEA") }
-          )
-          public record User(String id, String region) {}
+          public record User(String id, String region) {
+            @Bridge
+            public static final Mapper<User, UserDto> MAPPER = Telescope.mapper(
+              User.class,
+              UserDto.class,
+              toOrElse(User::region, UserDto::area, "EMEA")
+            );
+          }
           """
         ),
         source("demo.UserDto", "package demo; public record UserDto(String id, String area) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.UserBridge");
+      final var bridge = compilation.generated().get("demo.UserToUserDtoBridge");
       assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
 
       // Forward: source.region is read once into a local; the null-coalesce to "EMEA" operates on
       // the local and feeds the renamed target.area slot.
       assertTrue(bridge.contains("final java.lang.String __fs_region = s.region();"), bridge);
       assertTrue(
-        bridge.contains("new demo.UserDto(__fs_id, (__fs_region == null ? \"EMEA\" : __fs_region))"),
-        () -> "expected null-coalesce over the region local feeding renamed `area` slot, saw: " + bridge
+        bridge.contains("__cv_area = __tx_region.forward(__fs_region);") &&
+          bridge.contains("new demo.UserDto(__fs_id, __cv_area)"),
+        () -> "expected the coalesced region local feeding renamed `area` slot, saw: " + bridge
       );
       assertTrue(occurrences(bridge, "s.region()") == 1, bridge);
       // Backward: target.area reads back into source.region (no default on backward).
       assertTrue(bridge.contains("final java.lang.String __bt_region = t.area();"), bridge);
       assertTrue(
-        bridge.contains("new demo.User(__bt_id, __bt_region)"),
+        bridge.contains("__tx_region.backward(__bt_region)"),
         () -> "expected backward writes target.area into source.region, saw: " + bridge
       );
     }
 
     @Test
-    @DisplayName("@ViaMapper(field, using) — codegen delegates the field to the named bridge class")
+    @DisplayName("a via row naming a class — codegen delegates the property to the named class")
     void viaMapperRoutesToNamedBridge() {
       final var compilation = compile(
         source(
@@ -4139,12 +4338,18 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.AddressBridge.class)
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, AddressBridge.class)
+            );
+          }
           """
         ),
         source(
@@ -4157,7 +4362,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // Forward routes the hoisted single-read local through the user-named bridge, null-gated:
@@ -4181,16 +4386,20 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@ViaMapper naming a bridge this compilation generates resolves it once it is written")
+    @DisplayName("a via row naming a @Bridge field whose bridge this compilation generates resolves it once it is written")
     void viaMapperNamingABridgeGeneratedInTheSameCompilationResolvesIt() {
       final var compilation = compileAttributed(
         source(
           "demo.Address",
           """
           package demo;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(demo.AddressDto.class)
-          public record Address(String line) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public record Address(String line) {
+            @Bridge
+            public static final Mapper<Address, AddressDto> MAPPER = Telescope.mapper(Address.class, AddressDto.class);
+          }
           """
         ),
         source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
@@ -4198,23 +4407,29 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.AddressBridge.class)
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, Address.MAPPER)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
       assertTrue(
-        bridge.contains("demo.AddressBridge.forward(__fs_address)"),
-        () -> "expected forward via the generated AddressBridge, saw: " + bridge
+        bridge.contains("demo.AddressToAddressDtoBridge.forward(__fs_address)"),
+        () -> "expected forward via the generated AddressToAddressDtoBridge, saw: " + bridge
       );
     }
 
@@ -4226,9 +4441,13 @@ class BridgeProcessorTest {
           "demo.Address",
           """
           package demo;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(demo.AddressDto.class)
-          public record Address(String line) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public record Address(String line) {
+            @Bridge
+            public static final Mapper<Address, AddressDto> MAPPER = Telescope.mapper(Address.class, AddressDto.class);
+          }
           """
         ),
         source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
@@ -4238,12 +4457,18 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.AddressBridge.class)
-          })
-          public record Order(String id, demo.Address address, demo.Address billing, demo.Item item) {}
+          public record Order(String id, demo.Address address, demo.Address billing, demo.Item item) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, Address.MAPPER)
+            );
+          }
           """
         ),
         source(
@@ -4266,23 +4491,23 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var shop = compilation.generated().get("demo.ShopBridge");
       assertNotNull(shop, () -> "ShopBridge missing; saw " + compilation.generated().keySet());
-      // The shop reaches Order -> OrderDto before that pair is written, and names it by the short
-      // name its own @Bridge gives it, under which the later round writes it with its @ViaMapper.
-      assertTrue(shop.contains("OrderBridge.forward("), () -> "expected ShopBridge to call OrderBridge, saw: " + shop);
-      assertNull(
-        compilation.generated().get("demo.OrderToOrderDtoBridge"),
-        "Order -> OrderDto should be written once, under its declared name"
+      // The shop reaches Order -> OrderDto before that pair is written, and names it by the name
+      // its @Bridge field gives it, under which the later round writes it with its via row.
+      assertTrue(
+        shop.contains("OrderToOrderDtoBridge.forward("),
+        () -> "expected ShopBridge to call OrderToOrderDtoBridge, saw: " + shop
       );
-      final var order = compilation.generated().get("demo.OrderBridge");
+      assertNull(compilation.generated().get("demo.OrderBridge"), "Order -> OrderDto should be written once, under its declared name");
+      final var order = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(order, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
-      assertTrue(order.contains("demo.AddressBridge.forward(__fs_address)"), order);
+      assertTrue(order.contains("demo.AddressToAddressDtoBridge.forward(__fs_address)"), order);
       // Address -> AddressDto, declared and written a round earlier, is named as it was written.
-      assertTrue(order.contains(" AddressBridge.forward(__fs_billing)"), order);
+      assertTrue(order.contains(" AddressToAddressDtoBridge.forward(__fs_billing)"), order);
       assertTrue(order.contains("ItemToItemDtoBridge.forward("), order);
     }
 
     @Test
-    @DisplayName("@ViaMapper naming a class nothing provides is refused by name on the annotation")
+    @DisplayName("a via row naming a class nothing provides is refused by javac on the row, and writes no bridge")
     void viaMapperNamingAClassNothingProvidesIsRefusedByName() {
       final var compilation = compileAttributed(
         source("demo.Address", "package demo; public record Address(String line) {}"),
@@ -4291,40 +4516,40 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.MissingBridge.class)
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, MissingBridge.class)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
-      assertFalse(compilation.success(), "a @ViaMapper naming no class should fail the build");
-      assertTrue(
-        compilation
-          .errorMessages()
-          .contains("@ViaMapper(field = \"address\") names a `using` class that does not exist:"),
-        () -> "expected the processor's named refusal, saw: " + compilation.errorMessages()
-      );
-      // The refusal sits on the @ViaMapper line, which is where javac's own unresolved-symbol
-      // error names the class.
+      assertFalse(compilation.success(), "a via row naming no class should fail the build");
+      // The refusal sits on the via row's line, where javac's unresolved-symbol error names the
+      // class.
       final var refusal = compilation
         .diagnostics()
         .stream()
         .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
-        .filter(d -> d.getMessage(null).startsWith("@ViaMapper(field = \"address\")"))
+        .filter(d -> d.getMessage(null).contains("MissingBridge"))
         .findFirst()
-        .orElseThrow();
-      assertEquals(5L, refusal.getLineNumber(), "the refusal should point at the @ViaMapper line");
-      assertNull(compilation.generated().get("demo.OrderBridge"), "no bridge should be written for the pair");
+        .orElseThrow(() -> new AssertionError(compilation.errorMessages()));
+      assertEquals(11L, refusal.getLineNumber(), "the refusal should point at the via row's line");
+      assertNull(compilation.generated().get("demo.OrderToOrderDtoBridge"), "no bridge should be written for the pair");
     }
 
     @Test
     @DisplayName(
-      "a carrier @Bridge waiting on its @ViaMapper is named by its carrier from a parent that reaches it first"
+      "a @Bridge field on a third class waiting on its via row is the bridge a parent that reaches it first calls"
     )
     void aWaitingCarrierBridgeIsNamedByItsCarrier() {
       final var compilation = compileAttributed(
@@ -4332,9 +4557,13 @@ class BridgeProcessorTest {
           "demo.Leaf",
           """
           package demo;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(demo.LeafDto.class)
-          public record Leaf(String line) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public record Leaf(String line) {
+            @Bridge
+            public static final Mapper<Leaf, LeafDto> MAPPER = Telescope.mapper(Leaf.class, LeafDto.class);
+          }
           """
         ),
         source("demo.LeafDto", "package demo; public record LeafDto(String line) {}"),
@@ -4344,12 +4573,18 @@ class BridgeProcessorTest {
           "demo.CaMapping",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(source = demo.CaChild.class, target = demo.CaChildDto.class, viaMappers = {
-            @ViaMapper(field = "leaf", using = demo.LeafBridge.class)
-          })
-          public final class CaMapping {}
+          public final class CaMapping {
+            @Bridge
+            public static final Mapper<CaChild, CaChildDto> MAPPER = Telescope.mapper(
+              CaChild.class,
+              CaChildDto.class,
+              via(CaChild::leaf, CaChildDto::leaf, Leaf.MAPPER)
+            );
+          }
           """
         ),
         source(
@@ -4367,14 +4602,18 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var parent = compilation.generated().get("demo.CaParentBridge");
       assertNotNull(parent, () -> "CaParentBridge missing; saw " + compilation.generated().keySet());
-      assertTrue(parent.contains("CaMappingBridge.forward("), () -> "expected the carrier's bridge, saw: " + parent);
-      final var carrier = compilation.generated().get("demo.CaMappingBridge");
-      assertNotNull(carrier, () -> "CaMappingBridge missing; saw " + compilation.generated().keySet());
-      assertTrue(carrier.contains("demo.LeafBridge.forward(__fs_leaf)"), carrier);
+      assertTrue(
+        parent.contains("CaChildToCaChildDtoBridge.forward("),
+        () -> "expected the field's bridge, saw: " + parent
+      );
+      final var carrier = compilation.generated().get("demo.CaChildToCaChildDtoBridge");
+      assertNotNull(carrier, () -> "CaChildToCaChildDtoBridge missing; saw " + compilation.generated().keySet());
+      // The pair's one bridge is the field's, converting the leaf through the bridge its row names.
+      assertTrue(carrier.contains("demo.LeafToLeafDtoBridge.forward(__fs_leaf)"), carrier);
     }
 
     @Test
-    @DisplayName("a @Transform method on a bridge this compilation generates resolves it once it is written")
+    @DisplayName("a row's method on a bridge this compilation generates resolves it once it is written")
     void aTransformMethodOnABridgeGeneratedInTheSameCompilationResolvesIt() {
       final var compilation = compileAttributed(
         source(
@@ -4391,50 +4630,56 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.OrderDto.class, transforms = {
-            @Transform(field = "address", using = demo.AddressBridge.class, method = "forward")
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final ForwardMapper<Order, OrderDto> MAPPER = Telescope.mapperForward(
+              Order.class,
+              OrderDto.class,
+              toOneWay(Order::address, OrderDto::address, AddressBridge::forward)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
       assertTrue(bridge.contains("demo.AddressBridge.forward("), () -> "expected the qualifier call, saw: " + bridge);
     }
 
     @Test
-    @DisplayName("@Transform and @Compute naming a class nothing provides are refused by name")
+    @DisplayName("a converting row and a compute row naming a class nothing provides are refused on the row")
     void transformAndComputeNamingAClassNothingProvidesAreRefusedByName() {
       for (final var row : List.of(
-        "transforms = { @io.github.eschizoid.telescope.annotations.Transform(field = \"id\", using = demo.NoSuchFn.class) }",
-        "computes = { @io.github.eschizoid.telescope.annotations.Compute(field = \"id\", using = demo.NoSuchSupplier.class) }"
+        "io.github.eschizoid.telescope.mapping.Mapping.to(Order::id, OrderDto::id, demo.NoSuchFn.class)",
+        "io.github.eschizoid.telescope.mapping.Mapping.compute(OrderDto::id, demo.NoSuchSupplier.INSTANCE)"
       )) {
         final var compilation = compileAttributed(
           source(
             "demo.Order",
-            "package demo;\n@io.github.eschizoid.telescope.annotations.Bridge(value = demo.OrderDto.class, " +
+            "package demo;\npublic record Order(String id) {\n  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+              "  public static final io.github.eschizoid.telescope.conversion.Mapper<Order, OrderDto> MAPPER =" +
+              " io.github.eschizoid.telescope.Telescope.mapper(Order.class, OrderDto.class, " +
               row +
-              ")\npublic record Order(String id) {}\n"
+              ");\n}\n"
           ),
           source("demo.OrderDto", "package demo; public record OrderDto(String id) {}")
         );
-        final var annotation = row.startsWith("transforms") ? "@Transform" : "@Compute";
-        assertFalse(compilation.success(), () -> annotation + " naming no class should fail the build");
-        assertTrue(
-          compilation.hasError(annotation + "(field = \"id\") names a `using` class that does not exist:"),
-          () -> "expected the processor's named refusal, saw: " + compilation.errorMessages()
-        );
+        final var missing = row.contains("NoSuchFn") ? "NoSuchFn" : "NoSuchSupplier";
+        assertFalse(compilation.success(), () -> missing + " naming no class should fail the build");
+        assertTrue(compilation.hasError(missing), () -> "expected a refusal naming the class, saw: " + compilation.errorMessages());
+        assertNull(compilation.generated().get("demo.OrderToOrderDtoBridge"), "no bridge should be written for the pair");
       }
     }
 
     @Test
-    @DisplayName("@ViaMapper naming a bridge only the final round writes is refused with that reason")
+    @DisplayName("a via row naming a bridge only the final round writes is refused with that reason")
     void viaMapperNamingAFinalRoundBridgeIsRefusedWithThatReason() {
       final var compilation = compileAttributed(
         source(
@@ -4454,10 +4699,14 @@ class BridgeProcessorTest {
           "demo.Address",
           """
           package demo;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.conversion.Mapper;
           @lombok.Data
-          @Bridge(demo.AddressDto.class)
-          public record Address(String line) {}
+          public record Address(String line) {
+            @Bridge
+            public static final Mapper<Address, AddressDto> MAPPER = Telescope.mapper(Address.class, AddressDto.class);
+          }
           """
         ),
         source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
@@ -4465,12 +4714,18 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.AddressBridge.class)
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, Address.MAPPER)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
@@ -4479,15 +4734,15 @@ class BridgeProcessorTest {
       assertFalse(compilation.success(), "a bridge only the final round writes cannot be named here");
       assertTrue(
         compilation.hasError(
-          "@ViaMapper(field = \"address\") names a `using` class that does not exist when this @Bridge is" +
-            " read. If it is demo.AddressBridge, that bridge is written only in the final round"
+          "converts through demo.AddressToAddressDtoBridge, a bridge written only in the final round because a side" +
+            " of its pair carries a Lombok annotation"
         ),
         () -> "expected the final-round reason, saw: " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("@ViaMapper patch() writes the slot whole through the user bridge's backward")
+    @DisplayName("a via row's patch() writes the slot whole through the named class's backward")
     void viaMapperPatchWritesWholeThroughUserBridgeBackward() {
       final var compilation = compile(
         source(
@@ -4510,24 +4765,30 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(value = demo.OrderDto.class, viaMappers = {
-            @ViaMapper(field = "address", using = demo.AddressBridge.class)
-          })
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              via(Order::address, OrderDto::address, AddressBridge.class)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // A non-null partial slot is written WHOLE: Mapper#patch documents whole-value writes
       // for nested components, and the runtime patch table applies every non-null partial
-      // value through the row's backward, @ViaMapper rows included. Delegating to the user
+      // value through the row's backward, via rows included. Delegating to the user
       // bridge's patch would deep-merge, and its base == null guard would silently drop the
       // partial's value whenever the base slot is null. The user bridge's own patch method
       // (present in the fixture) stays compilable; the parent simply never routes through it.
@@ -4537,12 +4798,12 @@ class BridgeProcessorTest {
       );
       assertFalse(
         bridge.contains("demo.AddressBridge.patch(base.address()"),
-        () -> "patch must not sub-patch @ViaMapper fields; saw: " + bridge
+        () -> "patch must not sub-patch via-row properties; saw: " + bridge
       );
     }
 
     @Test
-    @DisplayName("VM2: @ViaMapper + @Default on the same field rejected at build")
+    @DisplayName("a via row and a toOrElse row on the same property are rejected at build")
     void viaMapperAndDefaultsOnSameFieldRejected() {
       final var compilation = compile(
         source(
@@ -4561,15 +4822,19 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(
-            value = demo.OrderDto.class,
-            defaults = { @Default(field = "address", value = "null") },
-            viaMappers = { @ViaMapper(field = "address", using = demo.AddressBridge.class) }
-          )
-          public record Order(String id, demo.Address address) {}
+          public record Order(String id, demo.Address address) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              toOrElse(Order::address, OrderDto::address, null),
+              via(Order::address, OrderDto::address, AddressBridge.class)
+            );
+          }
           """
         ),
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
@@ -4577,7 +4842,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "viaMappers + defaults overlap should fail");
       assertTrue(
-        compilation.hasError("appears in both viaMappers and defaults"),
+        compilation.hasError("duplicate override row for target field 'address'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
@@ -4791,71 +5056,28 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Default + @ViaMapper on one field is rejected, so no combined patch shape exists")
-    void defaultPlusViaMapperOnOneFieldIsRejected() {
-      final var compilation = compile(
-        source(
-          "demo.AddressBridge",
-          """
-          package demo;
-          public final class AddressBridge {
-            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
-            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
-            public static demo.Address patch(demo.Address base, demo.AddressDto partial) { return base; }
-          }
-          """
-        ),
-        source("demo.Address", "package demo; public record Address(String line) {}"),
-        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
-        source(
-          "demo.Order",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(
-            value = demo.OrderDto.class,
-            defaults   = { @Default(field    = "address", value = "null") },
-            viaMappers = { @ViaMapper(field  = "address", using = demo.AddressBridge.class) }
-          )
-          public record Order(String id, demo.Address address) {}
-          """
-        ),
-        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
-      );
-
-      // @Default and @ViaMapper on one field have no defined composition — the default is a
-      // null-coalesce on the raw value, the via bridge owns the whole conversion — so the pair
-      // is rejected at build rather than given an arbitrary ordering.
-      assertFalse(compilation.success(), "@Default + @ViaMapper should be rejected (VM2)");
-      assertTrue(
-        compilation.hasError("appears in both viaMappers and defaults"),
-        () -> "expected VM2 rejection blocks the @Default + RECURSE patch scenario; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("@Default on a container source field emits no coalesce in patch")
+    @DisplayName("toOrElse on a container source property emits no coalesce in patch")
     void patchAppliesNoDefaultCoalesceOnContainerFields() {
-      // @Default is a forward-direction null-coalesce; patch never applies it, so a container
+      // toOrElse is a forward-direction null-coalesce; patch never applies it, so a container
       // slot null in both partial and base stays null rather than resurrecting the default.
-      // The container arm matters because applyBackward for an identity-element LIST returns
-      // the defensive-copy expression — the conditional must stay type-compatible without any
-      // coalesce wrapper around it.
       final var compilation = compile(
         source(
           "demo.Cart",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
           import java.util.List;
-          @Bridge(
-            value = demo.CartDto.class,
-            defaults = { @Default(field = "items", value = "null") }
-          )
-          public record Cart(String id, List<String> items) {}
+          public record Cart(String id, List<String> items) {
+            @Bridge
+            public static final Mapper<Cart, CartDto> MAPPER = Telescope.mapper(
+              Cart.class,
+              CartDto.class,
+              toOrElse(Cart::items, CartDto::items, null)
+            );
+          }
           """
         ),
         source(
@@ -4869,7 +5091,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.CartBridge");
+      final var bridge = compilation.generated().get("demo.CartToCartDtoBridge");
       assertNotNull(bridge, () -> "CartBridge missing; saw " + compilation.generated().keySet());
 
       // __pp_items must be typed to the target field's container type.
@@ -4882,11 +5104,11 @@ class BridgeProcessorTest {
         bridge.contains("(__pp_items != null") && bridge.contains(": base.items())"),
         () -> "expected the plain __pp_items null-gate falling back to base.items(), saw: " + bridge
       );
-      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit a @Default coalesce local, saw: " + bridge);
+      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit a coalesce local, saw: " + bridge);
     }
 
     @Test
-    @DisplayName("P5-T3a: forward-only @Transform field reads from base in patch (no backward call)")
+    @DisplayName("a forward-only converting row's property reads from base in patch (no backward call)")
     void patchForwardOnlyTransformReadsBase() {
       final var compilation = compile(
         source(
@@ -4896,6 +5118,7 @@ class BridgeProcessorTest {
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           import java.time.Instant;
           public final class TimestampFn implements BridgeFn<Instant, String> {
+            public static final TimestampFn INSTANCE = new TimestampFn();
             public TimestampFn() {}
             @Override public String forward(Instant x) { return x.toString(); }
             @Override public Instant backward(String s) { throw new UnsupportedOperationException(); }
@@ -4906,20 +5129,26 @@ class BridgeProcessorTest {
           "demo.Audit",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
           import java.time.Instant;
-          @Bridge(value = demo.AuditEntity.class, transforms = {
-            @Transform(field = "createdAt", using = demo.TimestampFn.class, forwardOnly = true)
-          })
-          public record Audit(String id, Instant createdAt) {}
+          public record Audit(String id, Instant createdAt) {
+            @Bridge
+            public static final ForwardMapper<Audit, AuditEntity> MAPPER = Telescope.mapperForward(
+              Audit.class,
+              AuditEntity.class,
+              toOneWay(Audit::createdAt, AuditEntity::createdAt, TimestampFn.INSTANCE::forward)
+            );
+          }
           """
         ),
         source("demo.AuditEntity", "package demo; public record AuditEntity(String id, String createdAt) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.AuditBridge");
+      final var bridge = compilation.generated().get("demo.AuditToAuditEntityBridge");
       assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
       // Patch for createdAt must read from base.createdAt() — partial has no meaningful inverse.
       assertTrue(
@@ -4929,28 +5158,37 @@ class BridgeProcessorTest {
       // Must NOT invoke __tx_createdAt.backward(...) anywhere in patch body.
       assertFalse(
         bridge.contains("__tx_createdAt.backward"),
-        () -> "patch must NOT call BridgeFn.backward for forward-only transform, saw: " + bridge
+        () -> "patch must NOT call backward for a forward-only row, saw: " + bridge
       );
     }
 
     @Test
-    @DisplayName("P5-T3b: dropped source field reads from base in patch")
+    @DisplayName("a dropped source property reads from base in patch")
     void patchDroppedFieldReadsBase() {
       final var compilation = compile(
         source(
           "demo.User",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(value = demo.UserDto.class, drops = { "secret" })
-          public record User(String id, String secret) {}
+          public record User(String id, String secret) {
+            @Bridge
+            public static final Mapper<User, UserDto> MAPPER = Telescope.mapper(
+              User.class,
+              UserDto.class,
+              drop(User::secret)
+            );
+          }
           """
         ),
         source("demo.UserDto", "package demo; public record UserDto(String id) {}")
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.UserBridge");
+      final var bridge = compilation.generated().get("demo.UserToUserDtoBridge");
       assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
       // Patch for secret (dropped from target) must read from base.secret() — the partial doesn't
       // carry the dropped slot, so there's no value to overlay.
@@ -5232,39 +5470,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Default on a primitive-typed source field is a compile error")
-    void defaultsOnPrimitiveRejected() {
-      final var compilation = compile(
-        source(
-          "demo.A",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          @Bridge(value = demo.B.class, defaults = {
-            @Default(field = "count", value = "0")
-          })
-          public record A(String name, int count) {}
-          """
-        ),
-        source(
-          "demo.B",
-          """
-          package demo;
-          public record B(String name, int count) {}
-          """
-        )
-      );
-
-      assertFalse(compilation.success(), "@Default on primitive should fail");
-      assertTrue(
-        compilation.hasError("primitives cannot be null"),
-        () -> "expected primitive-rejection diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("FD-1: @Default + @Transform on the same field rejected at build")
+    @DisplayName("a converting row and a toOrElse row on the same property are rejected at build")
     void defaultsAndTransformsOnSameFieldRejected() {
       final var compilation = compile(
         source(
@@ -5283,15 +5489,19 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Default;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(
-            value = demo.B.class,
-            transforms = { @Transform(field = "name", using = demo.NoopFn.class) },
-            defaults   = { @Default(field   = "name", value = "anonymous") }
-          )
-          public record A(String name) {}
+          public record A(String name) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              to(A::name, B::name, NoopFn.class),
+              toOrElse(A::name, B::name, "anonymous")
+            );
+          }
           """
         ),
         source(
@@ -5305,21 +5515,18 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "defaults + transforms overlap should fail");
       assertTrue(
-        compilation.hasError("appears in both defaults and transforms"),
+        compilation.hasError("duplicate override row for target field 'name'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
     @DisplayName(
-      "KITCHEN: drops + @Rename + @Default + @Transform + @ViaMapper + @Compute compose" + " end-to-end with patch"
+      "drop, renaming, toOrElse, converting, via and compute rows compose" + " end-to-end with patch"
     )
     void kitchenSinkAllModifiersCompose() {
-      // Exercises every modifier on a single @Bridge declaration. The goal isn't coverage of
-      // any one mechanism — each is pinned by its own dedicated test elsewhere — but rather to
-      // catch silent interaction bugs that only show up when multiple modifiers are stacked on
-      // the same generation pass. If any pair regresses in a way the unit tests miss, this is
-      // the test that shouts.
+      // Every row kind on a single @Bridge field. Each is pinned by a test of its own elsewhere;
+      // this one holds their interaction when they are stacked on one generation pass.
       final var compilation = compile(
         source(
           "demo.QtyFn",
@@ -5339,6 +5546,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class EnvSupplier implements Supplier<String> {
+            public static final EnvSupplier INSTANCE = new EnvSupplier();
             public EnvSupplier() {}
             @Override public String get() { return "prod"; }
           }
@@ -5364,22 +5572,23 @@ class BridgeProcessorTest {
           "demo.Order",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          import io.github.eschizoid.telescope.annotations.Default;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(
-            value      = demo.OrderDto.class,
-            drops      = { "id" },
-            renames    = { @Rename(source    = "name", target = "renamed") },
-            defaults   = { @Default(field    = "tag",  value  = "X") },
-            transforms = { @Transform(field  = "qty",  using  = demo.QtyFn.class) },
-            viaMappers = { @ViaMapper(field  = "addr", using  = demo.AddressBridge.class) },
-            computes   = { @Compute(field    = "env",  using  = demo.EnvSupplier.class) }
-          )
-          public record Order(String id, String name, String tag, String qty, demo.Address addr) {}
+          public record Order(String id, String name, String tag, String qty, demo.Address addr) {
+            @Bridge
+            public static final Mapper<Order, OrderDto> MAPPER = Telescope.mapper(
+              Order.class,
+              OrderDto.class,
+              drop(Order::id),
+              to(Order::name, OrderDto::renamed),
+              toOrElse(Order::tag, OrderDto::tag, "X"),
+              to(Order::qty, OrderDto::qty, QtyFn.class),
+              via(Order::addr, OrderDto::addr, AddressBridge.class),
+              compute(OrderDto::env, EnvSupplier.INSTANCE)
+            );
+          }
           """
         ),
         source(
@@ -5392,20 +5601,19 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.OrderBridge");
+      final var bridge = compilation.generated().get("demo.OrderToOrderDtoBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
       // FORWARD ────────────────────────────────────────────────────────────────────────────
-      // drops: source.id never read; @Rename: source.name → target.renamed; @Default:
-      // null-coalesce on source.tag; @Transform: source.qty through __tx_qty.forward;
-      // @ViaMapper: source.addr through AddressBridge.forward; @Compute: target.env from
+      // drop: source.id never read; renaming: source.name → target.renamed; toOrElse: source.tag
+      // through the generated class that null-coalesces it; converting: source.qty through
+      // __tx_qty.forward; via: source.addr through AddressBridge.forward; compute: target.env from
       // EnvSupplier with no source involvement.
-      // Every kept source field is read exactly once into a __fs_ local; each modifier consumes
-      // its local, so duplication (the @Default coalesce) happens only over locals.
+      // Every kept source field is read exactly once into a __fs_ local, which each row consumes.
       assertTrue(
         bridge.contains("final java.lang.String __fs_name = s.name();") &&
           bridge.contains("final java.lang.String __fs_tag = s.tag();") &&
-          bridge.contains("(__fs_tag == null ? \"X\" : __fs_tag)") &&
+          bridge.contains("__tx_tag.forward(__fs_tag)") &&
           bridge.contains("__tx_qty.forward(__fs_qty)") &&
           bridge.contains("(__fs_addr == null ? null : demo.AddressBridge.forward(__fs_addr))") &&
           bridge.contains("__cp_env.get()"),
@@ -5415,21 +5623,21 @@ class BridgeProcessorTest {
       assertFalse(bridge.contains("s.id()"), () -> "dropped source.id must not appear in forward; saw: " + bridge);
 
       // BACKWARD ───────────────────────────────────────────────────────────────────────────
-      // drops fill source.id with null; @Rename reads target.renamed into source.name;
-      // @Transform routes target.qty through __tx_qty.backward; @ViaMapper routes
-      // target.addr through AddressBridge.backward; @Default does NOT apply on backward.
+      // drop fills source.id with null; renaming reads target.renamed into source.name;
+      // converting routes target.qty through __tx_qty.backward; via routes target.addr through
+      // AddressBridge.backward; toOrElse hands target.tag back as it is.
       assertTrue(
         bridge.contains("final java.lang.String __bt_name = t.renamed();") &&
           bridge.contains("__cv_qty = __tx_qty.backward(__bt_qty);") &&
           bridge.contains("__cv_addr = (__bt_addr == null ? null : demo.AddressBridge.backward(__bt_addr));") &&
-          bridge.contains("new demo.Order(null, __bt_name, __bt_tag, __cv_qty, __cv_addr)"),
+          bridge.contains("new demo.Order(null, __bt_name, __cv_tag, __cv_qty, __cv_addr)"),
         () -> "backward composition off; saw: " + bridge
       );
 
       // PATCH ──────────────────────────────────────────────────────────────────────────────
       // Dropped + computed slots read from base; renamed source uses __pp_name from
-      // partial.renamed(); @Transform threads through __tx_qty.backward(__pp_qty); @ViaMapper
-      // writes whole via AddressBridge.backward(__pp_addr); @Default never fires in patch.
+      // partial.renamed(); converting threads through __tx_qty.backward(__pp_qty); via writes
+      // whole via AddressBridge.backward(__pp_addr); the null-coalesce never fires in patch.
       assertTrue(
         bridge.contains("__pp_name = partial == null ? null : partial.renamed()"),
         () -> "expected __pp_name from partial.renamed(); saw: " + bridge
@@ -5447,10 +5655,10 @@ class BridgeProcessorTest {
         () -> "expected __pp_tag local; saw: " + bridge
       );
       assertTrue(
-        bridge.contains("(__pp_tag != null ? __pp_tag : base.tag())"),
-        () -> "expected the plain null-gate on tag with no default coalesce; saw: " + bridge
+        bridge.contains("(__pp_tag != null ? __tx_tag.backward(__pp_tag) : base.tag())"),
+        () -> "expected the null-gate on tag handing it back as it is; saw: " + bridge
       );
-      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit @Default coalesce locals; saw: " + bridge);
+      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit coalesce locals; saw: " + bridge);
       assertTrue(
         bridge.contains("(__pp_addr != null ? demo.AddressBridge.backward(__pp_addr) : base.addr())"),
         () -> "expected null-gated whole-value write via AddressBridge.backward; saw: " + bridge
@@ -5464,7 +5672,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("GAP-5a: @Compute + @Default on the same field rejected at build")
+    @DisplayName("a compute row and a toOrElse row writing one property are rejected at build")
     void computeAndDefaultOnSameFieldRejected() {
       final var compilation = compile(
         source(
@@ -5473,6 +5681,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class NowSupplier implements Supplier<String> {
+            public static final NowSupplier INSTANCE = new NowSupplier();
             public NowSupplier() {}
             @Override public String get() { return "now"; }
           }
@@ -5482,15 +5691,19 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          import io.github.eschizoid.telescope.annotations.Default;
-          @Bridge(
-            value = demo.B.class,
-            computes = { @Compute(field = "ts", using = demo.NowSupplier.class) },
-            defaults = { @Default(field = "ts", value = "fallback") }
-          )
-          public record A(String id, String ts) {}
+          public record A(String id, String ts) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              compute(B::ts, NowSupplier.INSTANCE),
+              toOrElse(A::ts, B::ts, "fallback")
+            );
+          }
           """
         ),
         source("demo.B", "package demo; public record B(String id, String ts) {}")
@@ -5498,13 +5711,13 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "computes + defaults overlap should fail");
       assertTrue(
-        compilation.hasError("appears in both computes (target slot) and defaults"),
+        compilation.hasError("duplicate override row for target field 'ts'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("GAP-5b: @Compute + @Transform on the same field rejected at build")
+    @DisplayName("a compute row and a converting row writing one property are rejected at build")
     void computeAndTransformOnSameFieldRejected() {
       final var compilation = compile(
         source(
@@ -5513,6 +5726,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class NowSupplier implements Supplier<String> {
+            public static final NowSupplier INSTANCE = new NowSupplier();
             public NowSupplier() {}
             @Override public String get() { return "now"; }
           }
@@ -5534,15 +5748,19 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(
-            value = demo.B.class,
-            computes   = { @Compute(field   = "ts", using = demo.NowSupplier.class) },
-            transforms = { @Transform(field = "ts", using = demo.NoopFn.class) }
-          )
-          public record A(String id, String ts) {}
+          public record A(String id, String ts) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              compute(B::ts, NowSupplier.INSTANCE),
+              to(A::ts, B::ts, NoopFn.class)
+            );
+          }
           """
         ),
         source("demo.B", "package demo; public record B(String id, String ts) {}")
@@ -5550,13 +5768,13 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "computes + transforms overlap should fail");
       assertTrue(
-        compilation.hasError("appears in both computes (target slot) and transforms"),
+        compilation.hasError("duplicate override row for target field 'ts'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
 
     @Test
-    @DisplayName("GAP-5c: @Compute + @ViaMapper on the same field rejected at build")
+    @DisplayName("a compute row and a via row writing one property are rejected at build")
     void computeAndViaMapperOnSameFieldRejected() {
       final var compilation = compile(
         source(
@@ -5565,6 +5783,7 @@ class BridgeProcessorTest {
           package demo;
           import java.util.function.Supplier;
           public final class NowSupplier implements Supplier<demo.Inner> {
+            public static final NowSupplier INSTANCE = new NowSupplier();
             public NowSupplier() {}
             @Override public demo.Inner get() { return new demo.Inner("computed"); }
           }
@@ -5586,15 +5805,19 @@ class BridgeProcessorTest {
           "demo.A",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Compute;
-          import io.github.eschizoid.telescope.annotations.ViaMapper;
-          @Bridge(
-            value = demo.B.class,
-            computes   = { @Compute(field   = "inner", using = demo.NowSupplier.class) },
-            viaMappers = { @ViaMapper(field = "inner", using = demo.InnerBridge.class) }
-          )
-          public record A(String id, demo.Inner inner) {}
+          public record A(String id, demo.Inner inner) {
+            @Bridge
+            public static final Mapper<A, B> MAPPER = Telescope.mapper(
+              A.class,
+              B.class,
+              compute(B::inner, NowSupplier.INSTANCE),
+              via(A::inner, B::inner, InnerBridge.class)
+            );
+          }
           """
         ),
         source("demo.B", "package demo; public record B(String id, demo.Inner inner) {}")
@@ -5602,7 +5825,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "computes + viaMappers overlap should fail");
       assertTrue(
-        compilation.hasError("appears in both computes (target slot) and viaMappers"),
+        compilation.hasError("duplicate override row for target field 'inner'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }
@@ -5665,7 +5888,7 @@ class BridgeProcessorTest {
     void largeSrcSmallTarget() {
       // Mirror image of the above: Source has fields with no Target counterpart. Without lenient,
       // bijection check fails. With lenient, the extras are auto-dropped (silently ignored on
-      // forward, JLS-defaulted on backward — same as an explicit @Bridge(drops = {...})).
+      // forward, JLS-defaulted on backward — as a drop row of each would).
       final var compilation = compile(
         source(
           "demo.LargeDto",
@@ -5726,7 +5949,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("lenient + renames: renamed pair is honoured; remaining unmatched fields auto-filled")
+    @DisplayName("a lenient field with a renaming row: renamed pair is honoured; remaining unmatched fields auto-filled")
     void lenientPlusRenames() {
       // Hybrid case: user declares one rename to bridge a deliberate name difference, but other
       // unmatched fields take the lenient auto-fill path. The rename + auto-fill must not
@@ -5736,11 +5959,18 @@ class BridgeProcessorTest {
           "demo.SrcWithRename",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(value = demo.DstWithRename.class, lenient = true,
-            renames = { @Rename(source = "orderNumber", target = "referenceCode") })
-          public record SrcWithRename(String orderNumber, String memo) {}
+          public record SrcWithRename(String orderNumber, String memo) {
+            @Bridge
+            public static final ForwardMapper<SrcWithRename, DstWithRename> MAPPER = Telescope.mapperForward(
+              SrcWithRename.class,
+              DstWithRename.class,
+              to(SrcWithRename::orderNumber, DstWithRename::referenceCode)
+            );
+          }
           """
         ),
         source(
@@ -5753,7 +5983,7 @@ class BridgeProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "lenient + rename should compile; saw " + compilation.errorMessages());
-      final var bridge = compilation.generated().get("demo.SrcWithRenameBridge");
+      final var bridge = compilation.generated().get("demo.SrcWithRenameToDstWithRenameBridge");
       assertNotNull(bridge);
       assertTrue(
         bridge.contains("s.orderNumber()") && bridge.contains("s.memo()"),
@@ -5943,14 +6173,13 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "adopter shape: carrier + lenient + sibling @Rename + a raw collection-subtype field, all" + " together"
+      "adopter shape: a lenient field on a third class + a renaming row + a raw collection-subtype field, all" + " together"
     )
     void carrierLenientRenameWithRawCollectionField() {
-      // Faithful reproduction of the reported scenario: a carrier @Bridge with lenient = true and a
-      // @Rename on a scalar sibling, where the bean target also nests a custom collection wrapper
-      // (`class Wrap extends ArrayList<Elem>`). All four dimensions must coexist: the raw container
-      // field element-bridges, the rename applies, and leniency lets the extra target field
-      // default.
+      // A lenient @Bridge field on a third class with a renaming row on a scalar sibling, where the
+      // bean target also nests a custom collection wrapper (`class Wrap extends ArrayList<Elem>`).
+      // All four dimensions coexist: the raw container field element-bridges, the rename applies,
+      // and leniency lets the extra target field default.
       final var compilation = compile(
         source(
           "modela.DocDbDetails",
@@ -5997,14 +6226,18 @@ class BridgeProcessorTest {
           "carrier.IdentificationBridgeDef",
           """
           package carrier;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(
-            source = modela.DocDbDetails.class,
-            target = modelb.DocBoDetails.class,
-            lenient = true,
-            renames = { @Rename(source = "icVerificationExt", target = "vendorExtendedResult") })
-          public class IdentificationBridgeDef {}
+          public class IdentificationBridgeDef {
+            @Bridge
+            public static final ForwardMapper<modela.DocDbDetails, modelb.DocBoDetails> MAPPER = Telescope.mapperForward(
+              modela.DocDbDetails.class,
+              modelb.DocBoDetails.class,
+              to(modela.DocDbDetails::getIcVerificationExt, modelb.DocBoDetails::getVendorExtendedResult)
+            );
+          }
           """
         )
       );
@@ -6013,7 +6246,7 @@ class BridgeProcessorTest {
         compilation.success(),
         () -> "the adopter's full shape should compile; saw " + compilation.errorMessages()
       );
-      final var bridge = compilation.generated().get("carrier.IdentificationBridgeDefBridge");
+      final var bridge = compilation.generated().get("carrier.DocDbDetailsToDocBoDetailsBridge");
       assertNotNull(bridge);
       // The raw collection field element-bridges through a generated element sub-bridge...
       assertNotNull(compilation.generated().get("modela.SrcUrlToDstUrlBridge"));
@@ -6105,11 +6338,10 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("carrier form: renames / drops apply identically to the model-anchored form")
+    @DisplayName("a field on a third class: renaming and drop rows apply as on the source's own field")
     void carrierRespectsRenamesAndDrops() {
-      // Every modifier (@Rename, drops, constants, transforms) must behave the same on the carrier
-      // form as on the model-anchored form. Pin one non-trivial combo so a future refactor that
-      // special-cased the carrier path can't silently lose modifier semantics.
+      // Rows declared on a field of a third class behave as on a field of the source. One
+      // non-trivial combination pins it.
       final var compilation = compile(
         source("a.SrcRD", "package a; public record SrcRD(String oldName, String stripMe, int value) {}"),
         source("b.DstRD", "package b; public record DstRD(String newName, int value) {}"),
@@ -6117,12 +6349,19 @@ class BridgeProcessorTest {
           "c.CarrierRD",
           """
           package c;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Rename;
-          @Bridge(source = a.SrcRD.class, target = b.DstRD.class,
-            drops = { "stripMe" },
-            renames = { @Rename(source = "oldName", target = "newName") })
-          public class CarrierRD {}
+          public class CarrierRD {
+            @Bridge
+            public static final Mapper<a.SrcRD, b.DstRD> MAPPER = Telescope.mapper(
+              a.SrcRD.class,
+              b.DstRD.class,
+              drop(a.SrcRD::stripMe),
+              to(a.SrcRD::oldName, b.DstRD::newName)
+            );
+          }
           """
         )
       );
@@ -6131,7 +6370,7 @@ class BridgeProcessorTest {
         compilation.success(),
         () -> "carrier + renames + drops should compile; saw " + compilation.errorMessages()
       );
-      final var bridge = compilation.generated().get("c.CarrierRDBridge");
+      final var bridge = compilation.generated().get("c.SrcRDToDstRDBridge");
       assertNotNull(bridge);
       assertTrue(
         bridge.contains("s.oldName()") && bridge.contains("s.value()"),

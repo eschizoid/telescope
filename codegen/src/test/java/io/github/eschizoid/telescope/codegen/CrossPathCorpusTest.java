@@ -413,23 +413,29 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * The bridges the whole corpus compiles that are held to a field twin, at least, and those with
-   * no row of the same meaning, at most. A run of a few cells compiles too few to say, so the bound
-   * holds once the corpus compiles at least {@link #FIELD_TWIN_CORPUS} bridges. A change that stops
-   * a cell being twinned fails here, and a change that twins more raises the floor.
+   * The compilations of the whole corpus held to a field twin of their class-form declarations, at
+   * least, and those with a class-form declaration no field says the same as, at most; and the
+   * fields naming a class in a via row whose runtime path is run against the generated bridge, at
+   * least. A run of a few cells compiles too few to say, so the bounds hold once the corpus makes
+   * at least {@link #FIELD_TWIN_CORPUS} compilations. A change that stops a cell being held fails
+   * here, and a change that holds more raises the floor.
    */
   @AfterAll
-  static void everyCellWithRowsIsTwinned() {
+  static void everyCellIsHeldTwice() {
+    if (FieldTwin.COMPILED.get() < FIELD_TWIN_CORPUS) return;
     final var twinned = FieldTwin.TWINNED.get();
     final var untwinned = FieldTwin.UNTWINNED.get();
-    if (twinned + untwinned < FIELD_TWIN_CORPUS) return;
-    assertTrue(twinned >= 562, () -> "field twins fell to " + twinned + " of " + (twinned + untwinned));
-    assertTrue(untwinned <= 104, () -> "cells with no field twin rose to " + untwinned);
+    assertTrue(twinned >= TWINNED_FLOOR, () -> "field twins fell to " + twinned + " of " + (twinned + untwinned));
+    assertTrue(untwinned <= UNTWINNED_CEILING, () -> "cells with no field twin rose to " + untwinned);
     final var run = FieldTwin.RUN_BOTH_WAYS.get();
-    assertTrue(run >= 49, () -> "field twins naming a class run on the runtime path fell to " + run);
+    assertTrue(run >= RUN_BOTH_WAYS_FLOOR, () -> "fields naming a class run on the runtime path fell to " + run);
     final var unsampled = FieldTwin.UNSAMPLED.get();
-    assertTrue(unsampled <= 0, () -> "field twins naming a class not run, for want of a sample, rose to " + unsampled);
+    assertTrue(unsampled <= 0, () -> "fields naming a class not run, for want of a sample, rose to " + unsampled);
   }
+
+  private static final int TWINNED_FLOOR = 0;
+  private static final int UNTWINNED_CEILING = 0;
+  private static final int RUN_BOTH_WAYS_FLOOR = 0;
 
   private static final int FIELD_TWIN_CORPUS = 600;
 
@@ -6223,7 +6229,7 @@ class CrossPathCorpusTest {
   };
 
   /**
-   * The declarations of a forward-only {@code @ViaMapper} row on {@code child}, whose mapper's
+   * The declarations of a forward-only {@code via} row on {@code child}, whose mapper's
    * {@code forward} returns {@code result} as {@code forward}, into a target bean whose {@code
    * child} is a {@code List<String>}, with the runtime {@code via} row over the same functions.
    */
@@ -6254,7 +6260,7 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * The declarations of a forward-only {@code @ViaMapper} row on {@code child}, a {@code
+   * The declarations of a forward-only {@code via} row on {@code child}, a {@code
    * sourceType} the source samples as {@code sample}, whose mapper declares {@code methods} and a
    * {@code backward} returning {@code backward} from the target's {@code property}, into a target
    * bean whose {@code child} is a {@code property}, with the runtime {@code via} row handing the
@@ -6335,7 +6341,7 @@ class CrossPathCorpusTest {
     "}\n";
 
   /**
-   * The declarations of a forward-only {@code @ViaMapper} row on {@code child}, whose mapper's
+   * The declarations of a forward-only {@code via} row on {@code child}, whose mapper's
    * {@code forward} returns {@code Object} holding {@code forward}, into a target whose setters
    * take the child's class and {@code Object}, with the runtime {@code via} row over the same
    * functions.
@@ -6564,7 +6570,7 @@ class CrossPathCorpusTest {
       "#0(value=[\"x\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward infers a list of a variable bounded by CharSequence, into a List<String> property",
+      "a via row whose forward infers a list of a variable bounded by CharSequence, into a List<String> property",
       viaListRow(
         "<T extends CharSequence> java.util.List<T>",
         "(java.util.List<T>) (java.util.List<?>) java.util.List.of(c.name())"
@@ -6600,7 +6606,7 @@ class CrossPathCorpusTest {
       "#0(value=\"Object:x\")"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward infers a list of a variable bounded by an interface, into a List<String> property",
+      "a via row whose forward infers a list of a variable bounded by an interface, into a List<String> property",
       viaListRow(
         "<T extends Comparable<T>> java.util.List<T>",
         "(java.util.List<T>) (java.util.List<?>) java.util.List.of(c.name())"
@@ -6615,7 +6621,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns its own variable, handed an ArrayList<String>, into a List<String> property",
+      "a via row whose forward returns its own variable, handed an ArrayList<String>, into a List<String> property",
       viaOwnRow(
         "java.util.ArrayList<String>",
         "new java.util.ArrayList<>(java.util.List.of(\"a\"))",
@@ -6626,7 +6632,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a list of its own variable, handed a String, into a List<String> property",
+      "a via row whose forward returns a list of its own variable, handed a String, into a List<String> property",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6637,7 +6643,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a list of its own variable, handed a String, into a List<CharSequence>",
+      "a via row whose forward returns a list of its own variable, handed a String, into a List<CharSequence>",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6648,7 +6654,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a variable bounded by the final class String, into a String property",
+      "a via row whose forward returns a variable bounded by the final class String, into a String property",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6660,7 +6666,7 @@ class CrossPathCorpusTest {
       "#0(child=\"<a>\")"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into a List<CharSequence>",
+      "a via row whose forward returns a variable bounded by a list of the argument's, into a List<CharSequence>",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6673,7 +6679,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into a Collection<CharSequence>",
+      "a via row whose forward returns a variable bounded by a list of the argument's, into a Collection<CharSequence>",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6686,7 +6692,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a variable bounded by a list of the argument's, into an ArrayList<String>",
+      "a via row whose forward returns a variable bounded by a list of the argument's, into an ArrayList<String>",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6699,7 +6705,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns a variable bounded by a list of a wildcard, into a List<String> property",
+      "a via row whose forward returns a variable bounded by a list of a wildcard, into a List<String> property",
       viaListRow("<T, U extends java.util.List<? extends T>> U", "(U) (java.util.List<?>) java.util.List.of(c.name())")
         .stream()
         .map(declaration ->
@@ -6711,7 +6717,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns its own variable and whose backward a variable bounded by CharSequence",
+      "a via row whose forward returns its own variable and whose backward a variable bounded by CharSequence",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6731,7 +6737,7 @@ class CrossPathCorpusTest {
       "#0(child=\"a\")"
     ),
     new ResultRow(
-      "a @ViaMapper with two forwards inferring from the argument, the one with the narrower bound into a List<String>",
+      "a via row with two forwards inferring from the argument, the one with the narrower bound into a List<String>",
       viaOwnRow(
         "String",
         "\"a\"",
@@ -6743,7 +6749,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose overloaded forward infers a list of a variable bounded by CharSequence, into a List<String>",
+      "a via row whose overloaded forward infers a list of a variable bounded by CharSequence, into a List<String>",
       viaListRow(
         "<T extends CharSequence> java.util.List<T>",
         "(java.util.List<T>) (java.util.List<?>) java.util.List.of(c.name())"
@@ -6763,7 +6769,7 @@ class CrossPathCorpusTest {
       "#0(child=[\"a\"])"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns ArrayList<String>, into a List<String> property",
+      "a via row whose forward returns ArrayList<String>, into a List<String> property",
       viaListRow("java.util.ArrayList<String>", "new java.util.ArrayList<>(java.util.List.of(c.name()))"),
       "#0(child=[\"a\"])"
     ),
@@ -6783,12 +6789,12 @@ class CrossPathCorpusTest {
       resultRefusal("java.lang.Double", "java.lang.Integer")
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns Object holding the child's class, into setters for it and for Object",
+      "a via row whose forward returns Object holding the child's class, into setters for it and for Object",
       viaResultRow("new %1$sChDto(c.name())"),
       "#0(child=#1(name=\"Dto:a\"))"
     ),
     new ResultRow(
-      "a @ViaMapper whose forward returns Object holding a String, into setters for the child and for Object",
+      "a via row whose forward returns Object holding a String, into setters for the child and for Object",
       viaResultRow("c.name()"),
       resultRefusal("child", "java.lang.String", "%3$sChDto")
     )
@@ -6875,9 +6881,9 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a @ViaMapper result whose type arguments do not fit those its property fixes is refused by name, not by javac"
+    "a via row's result whose type arguments do not fit those its property fixes is refused by name, not by javac"
   )
-  void aViaMapperResultWhoseArgumentsDoNotFitIsRefusedByName() {
+  void aViaRowResultWhoseArgumentsDoNotFitIsRefusedByName() {
     // Each row: the prefix, the mapper's forward as it is declared, what it returns, the fragment
     // the refusal names, and the target's property type where it is not List<String>. The second
     // and third infer their result: from the value handed to a parameter of the method's own
@@ -7691,6 +7697,34 @@ class CrossPathCorpusTest {
     );
   }
 
+  /**
+   * As {@link #sealedCases}, with the bank's bridge into its case of the target declared as a
+   * {@code @Bridge} field of the bank holding {@code row}, after {@code classForm}, the class-form
+   * {@code @Bridge} annotations the bank also carries, if any.
+   */
+  private static List<String> sealedCasesWithRow(
+    final String root,
+    final String classForm,
+    final String bankDto,
+    final String row
+  ) {
+    return List.of(
+      SEALED_HEAD + "%1$sCardDto.class)\npublic record %1$sCard(String pan) implements " + root + " {}\n",
+      classForm +
+        "public record %1$sBank(String iban, int rank) implements " +
+        root +
+        " {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  public static final io.github.eschizoid.telescope.conversion.Mapper<%1$sBank, %1$sBankDto> MAPPER =\n" +
+        "    io.github.eschizoid.telescope.Telescope.mapper(%1$sBank.class, %1$sBankDto.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping." +
+        row +
+        ");\n}\n",
+      "public record %1$sCardDto(String pan) implements " + root + "Dto {}\n",
+      "public record %1$sBankDto(" + bankDto + ", int rank) implements " + root + "Dto {}\n"
+    );
+  }
+
   /** A sealed source root and target root over {@link #sealedCases}, under the given names. */
   private static List<String> sealedRoots(final String source, final String target, final String extra) {
     return List.of(
@@ -7755,12 +7789,7 @@ class CrossPathCorpusTest {
             "  static %1$sTgt sample() { return new %1$sBankDto(\"NL01\", 1); }\n" +
             "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n"
         ),
-        sealedCases(
-          "%1$sSrc",
-          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
-            "source = \"iban\", target = \"account\")",
-          "String account"
-        )
+        sealedCasesWithRow("%1$sSrc", "", "String account", "to(%1$sBank::iban, %1$sBankDto::account)")
           .stream()
           .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
           .toList()
@@ -7781,13 +7810,11 @@ class CrossPathCorpusTest {
             "  static %1$sTgt partial() { return new %1$sBankDto(\"NL02\", 7); }\n}\n",
           "public record %1$sBankView(String iban, int rank) {}\n"
         ),
-        sealedCases(
+        sealedCasesWithRow(
           "%1$sSrc",
-          "value = %1$sBankDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(" +
-            "source = \"iban\", target = \"account\"))\n" +
-            SEALED_HEAD +
-            "%1$sBankView.class",
-          "String account"
+          SEALED_HEAD + "%1$sBankView.class)\n",
+          "String account",
+          "to(%1$sBank::iban, %1$sBankDto::account)"
         )
           .stream()
           .map(d -> d.replace("%1$sSrcDto", "%1$sTgt"))
@@ -7873,7 +7900,7 @@ class CrossPathCorpusTest {
         "@io.github.eschizoid.telescope.annotations.Bridge(%1$sDotDto.class)\npublic record %1$sDot(int x) implements %1$sShape {}\n",
         "public final class %1$sBackDto implements %1$sShapeDto {\n  private %1$sTgt top;\n  public %1$sTgt getTop() { return top; }\n  public void setTop(final %1$sTgt top) { this.top = top; }\n}\n",
         "public record %1$sDotDto(int x) implements %1$sShapeDto {}\n",
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sXDto.class, renames = @io.github.eschizoid.telescope.annotations.Rename(source = \"s\", target = \"shape\"))\npublic class %1$sX {\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n}\n",
+        "public class %1$sX {\n  @io.github.eschizoid.telescope.annotations.Bridge\n  public static final io.github.eschizoid.telescope.conversion.Mapper<%1$sX, %1$sXDto> MAPPER =\n    io.github.eschizoid.telescope.Telescope.mapper(%1$sX.class, %1$sXDto.class,\n      io.github.eschizoid.telescope.mapping.Mapping.to(%1$sX::getS, %1$sXDto::getShape));\n  private %1$sShape s;\n  public %1$sShape getS() { return s; }\n  public void setS(final %1$sShape s) { this.s = s; }\n}\n",
         "public class %1$sXDto {\n  private %1$sShapeDto shape;\n  public %1$sShapeDto getShape() { return shape; }\n  public void setShape(final %1$sShapeDto shape) { this.shape = shape; }\n}\n",
         "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\npublic class %1$sSrc {\n  private %1$sX x;\n  public %1$sX getX() { return x; }\n  public void setX(final %1$sX x) { this.x = x; }\n  public static %1$sSrc sample() {\n    final var top = new %1$sSrc();\n    final var x = new %1$sX();\n    final var back = new %1$sBack();\n    back.setTop(top);\n    x.setS(back);\n    top.setX(x);\n    return top;\n  }\n}\n",
         "public class %1$sTgt {\n  private %1$sXDto x;\n  public %1$sXDto getX() { return x; }\n  public void setX(final %1$sXDto x) { this.x = x; }\n  public static %1$sTgt sample() {\n    final var top = new %1$sTgt();\n    final var x = new %1$sXDto();\n    final var back = new %1$sBackDto();\n    back.setTop(top);\n    x.setShape(back);\n    top.setX(x);\n    return top;\n  }\n  public static %1$sTgt partial() { return new %1$sTgt(); }\n}\n"
@@ -8988,9 +9015,8 @@ class CrossPathCorpusTest {
           "%1$sInnerDto inner, java.util.List<%1$sInnerDto> items",
           "new %1$sTgt(new %1$sInnerDto(%1$sEb.C), java.util.List.of(new %1$sInnerDto(%1$sEb.C)))"
         ),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
-          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInner(%1$sEa status) {}\n",
+        fieldBridge("%1$sInner", "%1$sInnerDto", "to(%1$sInner::status, %1$sInnerDto::status, %1$sFn.class)"),
         "public record %1$sInnerDto(%1$sEb status) {}\n",
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
           "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
@@ -9032,9 +9058,8 @@ class CrossPathCorpusTest {
         "public record %1$sOtherDto(%1$sMidDto x) {}\n",
         "public record %1$sMid(%1$sInner i) {}\n",
         "public record %1$sMidDto(%1$sInnerDto i) {}\n",
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
-          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInner(%1$sEa status) {}\n",
+        fieldBridge("%1$sInner", "%1$sInnerDto", "to(%1$sInner::status, %1$sInnerDto::status, %1$sFn.class)"),
         "public record %1$sInnerDto(%1$sEb status) {}\n",
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
           "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
@@ -9055,10 +9080,9 @@ class CrossPathCorpusTest {
       List.of(
         BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sInner i", "new %1$sSrc(new %1$sInner(%1$sEa.A))"),
         sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(%1$sEb.C))"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
-          "@io.github.eschizoid.telescope.annotations.Bridge(%1$sOtherDto.class)\n" +
+        "@io.github.eschizoid.telescope.annotations.Bridge(%1$sOtherDto.class)\n" +
           "public record %1$sInner(%1$sEa status) {}\n",
+        fieldBridge("%1$sInner", "%1$sInnerDto", "to(%1$sInner::status, %1$sInnerDto::status, %1$sFn.class)"),
         "public record %1$sInnerDto(%1$sEb status) {}\n",
         "public record %1$sOtherDto(%1$sEa status) {}\n",
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
@@ -9080,9 +9104,8 @@ class CrossPathCorpusTest {
       List.of(
         BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sMid m", "new %1$sSrc(new %1$sMid(%1$sEa.A, java.util.List.of()))"),
         sampled("%1$sTgt", "%1$sMidDto m", "new %1$sTgt(new %1$sMidDto(%1$sEb.C, java.util.List.of()))"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
-          "public record %1$sMid(%1$sEa status, java.util.List<%1$sSrc> back) {}\n",
+        "public record %1$sMid(%1$sEa status, java.util.List<%1$sSrc> back) {}\n",
+        fieldBridge("%1$sMid", "%1$sMidDto", "to(%1$sMid::status, %1$sMidDto::status, %1$sFn.class)"),
         "public record %1$sMidDto(%1$sEb status, java.util.List<%1$sTgt> back) {}\n",
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
           "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
@@ -9348,7 +9371,7 @@ class CrossPathCorpusTest {
 
   /**
    * {@code %1$sRuntime}, whose {@code mapper()} builds the runtime mapper for the pair with the
-   * typed-transform row that agrees with the {@code @Transform}, reading {@code value} through
+   * typed-transform row that agrees with the field's row, reading {@code value} through
    * {@code accessor} on both sides. A method reference to a member of a generic class names it raw,
    * so the row is typed by what the raw members return, {@code srcType} and {@code tgtType}.
    */
@@ -9484,7 +9507,7 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A {@code @Transform} on a property typed by its class's own type variable: the declarations,
+   * A converting row on a property typed by its class's own type variable: the declarations,
    * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
    * paths owe for {@code Src.sample()} forward and {@code Tgt.sample()} backward and laid over
    * {@code Src.sample()}. A forward-only row owes no backward or patch.
@@ -9700,48 +9723,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * {@code @Bridge} to {@code %1$sTgt} renaming {@code from} to each of {@code to}, forward-only
-   * fan-out when there are several, and converting {@code from} by {@code conversion}, an
-   * annotation the {@code transforms} or {@code viaMappers} attribute takes.
+   * {@code %1$sCarrier}, whose {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} holds
+   * {@code rows}, each a {@code Mapping} factory call with its type arguments: a {@code
+   * Telescope.mapperForward} field for one converting {@code forwardOnly}, and a {@code
+   * Telescope.mapper} field otherwise.
    */
-  private static String renamedConversion(
-    final String attribute,
-    final String conversion,
-    final String from,
-    final String... to
-  ) {
-    final var renames = new ArrayList<String>();
-    for (final var target : to) {
-      renames.add(
-        "@io.github.eschizoid.telescope.annotations.Rename(source = \"" +
-          from +
-          "\", target = \"" +
-          target +
-          "\"" +
-          (to.length > 1 ? ", forwardOnly = true" : "") +
-          ")"
-      );
-    }
-    return (
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames = {" +
-      String.join(", ", renames) +
-      "}, " +
-      attribute +
-      " = " +
-      conversion +
-      ")\n"
-    );
-  }
-
-  /** A {@code @Transform} on {@code field} through {@code %1$sFn}. */
-  private static String transformOn(final String field, final boolean forwardOnly) {
-    return (
-      "@io.github.eschizoid.telescope.annotations.Transform(field = \"" +
-      field +
-      "\", using = %1$sFn.class" +
-      (forwardOnly ? ", forwardOnly = true" : "") +
-      ")"
-    );
+  private static String typedField(final boolean forwardOnly, final String... rows) {
+    final var typed = new ArrayList<String>();
+    for (final var row : rows) typed.add("io.github.eschizoid.telescope.mapping.Mapping." + row);
+    return forwardOnly
+      ? forwardFieldBridge("%1$sSrc", "%1$sTgt", typed.toArray(String[]::new))
+      : fieldBridge("%1$sSrc", "%1$sTgt", typed.toArray(String[]::new));
   }
 
   /**
@@ -9810,22 +9802,23 @@ class CrossPathCorpusTest {
   /** {@code %1$sMade}, a {@code Supplier<String>} giving {@code "made"}. */
   private static final String MADE =
     "public class %1$sMade implements java.util.function.Supplier<String> {\n" +
+    "  public static final %1$sMade INSTANCE = new %1$sMade();\n" +
     "  public String get() { return \"made\"; }\n}\n";
 
   /**
-   * A property converted by a transform or a {@code @ViaMapper} and renamed by a {@code @Rename} on
-   * the same field, against the runtime rows that rename and convert it in one: the declarations,
-   * each with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both
-   * paths owe for {@code Src.sample()} forward and {@code Tgt.sample()} backward and laid over
-   * {@code Src.sample()}. A forward-only row owes no backward or patch.
+   * A property both renamed and converted by one row of a {@code @Bridge} field, against the
+   * runtime rows that rename and convert it in one: the declarations, each with {@code %1$s} as the
+   * row's prefix and the last of them the runtime row, and what both paths owe for {@code
+   * Src.sample()} forward and {@code Tgt.sample()} backward and laid over {@code Src.sample()}. A
+   * forward-only row owes no backward or patch.
    */
   private static final List<VariableTransform> RENAMED_CONVERSIONS = List.of(
     new VariableTransform(
       "a renamed record property through a transform, both ways",
       false,
       List.of(
-        renamedConversion("transforms", transformOn("n", false), "n", "label") +
-          sampled("%1$sSrc", "String id, Integer n", "new %1$sSrc(\"i\", 7)"),
+        sampled("%1$sSrc", "String id, Integer n", "new %1$sSrc(\"i\", 7)"),
+        typedField(false, "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::label, %1$sFn.class)"),
         sampled("%1$sTgt", "String id, String label", "new %1$sTgt(\"j\", \"#5\")"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         runtimeMapper(
@@ -9842,8 +9835,11 @@ class CrossPathCorpusTest {
       "a renamed record property through a forward-only transform",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "label") +
-          sampled("%1$sSrc", "String id, Integer n", "new %1$sSrc(\"i\", 7)"),
+        sampled("%1$sSrc", "String id, Integer n", "new %1$sSrc(\"i\", 7)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, String>toOneWay(%1$sSrc::n, %1$sTgt::label, %1$sFn.INSTANCE::forward)"
+        ),
         sampled("%1$sTgt", "String id, String label", "new %1$sTgt(\"j\", \"#5\")"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         runtimeMapper(
@@ -9860,8 +9856,8 @@ class CrossPathCorpusTest {
       "a renamed property through a transform, into a bean written by setters",
       false,
       List.of(
-        renamedConversion("transforms", transformOn("n", false), "n", "label") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(false, "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::getLabel, %1$sFn.class)"),
         valueBean("%1$sTgt", "String", "\"#5\"").replace("Value", "Label").replace("value", "label"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         runtimeMapper(
@@ -9878,8 +9874,11 @@ class CrossPathCorpusTest {
       "a renamed property through a transform giving a wider type, into a bean whose setters are overloaded",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "value") +
-          sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String, Object>toOneWay(%1$sSrc::n, %1$sTgt::getValue, %1$sFn.INSTANCE::forward)"
+        ),
         overloadedValueBean("Tgt", "q"),
         transformFn("String", "Object", "a", "String.valueOf(b)"),
         runtimeMapper(
@@ -9896,8 +9895,11 @@ class CrossPathCorpusTest {
       "a renamed property through a transform giving a wider type, into a bean whose one setter takes the property's type",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "value") +
-          sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String, Object>toOneWay(%1$sSrc::n, %1$sTgt::getValue, %1$sFn.INSTANCE::forward)"
+        ),
         valueBean("%1$sTgt", "String", "\"q\""),
         transformFn("String", "Object", "a", "String.valueOf(b)"),
         runtimeMapper(
@@ -9914,8 +9916,11 @@ class CrossPathCorpusTest {
       "a renamed property through a transform, into a bean whose setter is wider than its getter",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "value") +
-          sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getValue, %1$sFn.INSTANCE::forward)"
+        ),
         "public class %1$sTgt {\n" +
           "  private String value;\n" +
           "  public %1$sTgt() {}\n" +
@@ -9937,13 +9942,8 @@ class CrossPathCorpusTest {
       "a renamed property through a transform's named method",
       true,
       List.of(
-        renamedConversion(
-            "transforms",
-            "@io.github.eschizoid.telescope.annotations.Transform(field = \"n\", using = %1$sFn.class, method = \"tag\")",
-            "n",
-            "label"
-          ) +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(true, "<%1$sSrc, %1$sTgt, Integer, String>toOneWay(%1$sSrc::n, %1$sTgt::label, %1$sFn::tag)"),
         sampled("%1$sTgt", "String label", "new %1$sTgt(\"#5\")"),
         "public class %1$sFn {\n  public static String tag(final Integer a) { return \"t\" + a; }\n}\n",
         runtimeMapper(true, "", "<%1$sSrc, %1$sTgt, Integer, String>toOneWay(%1$sSrc::n, %1$sTgt::label, %1$sFn::tag)")
@@ -9954,40 +9954,36 @@ class CrossPathCorpusTest {
     ),
     new VariableTransform(
       "a renamed property fanned out to two targets through a transform",
-      false,
+      true,
       List.of(
-        renamedConversion("transforms", transformOn("n", false), "n", "x", "y") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, %1$sFn.class)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::y, %1$sFn.class)"
+        ),
         sampled("%1$sTgt", "String x, String y", "new %1$sTgt(\"#5\", \"#9\")"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
-        // The runtime reads a fanned-out source back from the row given last, the bridge
-        // from the
-        // rename declared first, so the rows name the targets in the opposite order.
         runtimeMapper(
-          false,
+          true,
           "    final var fn = new %1$sFn();\n",
-          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::y, fn::forward, fn::backward)",
-          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, fn::forward, fn::backward)"
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, fn::forward, fn::backward)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::y, fn::forward, fn::backward)"
         )
       ),
       "#0(x=\"#7\", y=\"#7\")",
-      "#0(n=5)",
-      "#0(n=5)"
+      null,
+      null
     ),
     new VariableTransform(
-      "a renamed record property through a @ViaMapper, both ways",
+      "a renamed record property through a via row, both ways",
       false,
       List.of(
         "public record %1$sIn(String v) {}\n",
         "public record %1$sOut(String v) {}\n",
         VIA_IN_OUT,
-        renamedConversion(
-            "viaMappers",
-            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
-            "a",
-            "b"
-          ) +
-          sampled("%1$sSrc", "String id, %1$sIn a", "new %1$sSrc(\"i\", new %1$sIn(\"p\"))"),
+        sampled("%1$sSrc", "String id, %1$sIn a", "new %1$sSrc(\"i\", new %1$sIn(\"p\"))"),
+        typedField(false, "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, %1$sVia.class)"),
         sampled("%1$sTgt", "String id, %1$sOut b", "new %1$sTgt(\"j\", new %1$sOut(\"q\"))"),
         runtimeMapper(false, viaMapperOf("%1$sIn", "%1$sOut"), "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, via)")
       ),
@@ -9996,23 +9992,18 @@ class CrossPathCorpusTest {
       "#0(id=\"j\", a=#1(v=\"q<\"))"
     ),
     new VariableTransform(
-      "a renamed list through a @ViaMapper converting each element, both ways",
+      "a renamed list through a via row converting each element, both ways",
       false,
       List.of(
         "public record %1$sIn(String v) {}\n",
         "public record %1$sOut(String v) {}\n",
         VIA_IN_OUT,
-        renamedConversion(
-            "viaMappers",
-            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"ins\", using = %1$sVia.class)",
-            "ins",
-            "outs"
-          ) +
-          sampled(
-            "%1$sSrc",
-            "java.util.List<%1$sIn> ins",
-            "new %1$sSrc(java.util.List.of(new %1$sIn(\"p\"), new %1$sIn(\"r\")))"
-          ),
+        sampled(
+          "%1$sSrc",
+          "java.util.List<%1$sIn> ins",
+          "new %1$sSrc(java.util.List.of(new %1$sIn(\"p\"), new %1$sIn(\"r\")))"
+        ),
+        typedField(false, "<%1$sSrc, %1$sTgt>via(%1$sSrc::ins, %1$sTgt::outs, %1$sVia.class)"),
         sampled("%1$sTgt", "java.util.List<%1$sOut> outs", "new %1$sTgt(java.util.List.of(new %1$sOut(\"q\")))"),
         runtimeMapper(
           false,
@@ -10028,8 +10019,12 @@ class CrossPathCorpusTest {
       "a fan-out through a transform into a bean whose first target's setter takes the getter's type and the second's the result's",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getX, %1$sFn.INSTANCE::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getY, %1$sFn.INSTANCE::forward)"
+        ),
         FAN_OUT_BEAN,
         transformFn("Integer", "String", "\"#\" + a", "0"),
         runtimeMapper(
@@ -10044,11 +10039,15 @@ class CrossPathCorpusTest {
       null
     ),
     new VariableTransform(
-      "the same fan-out with its renames declared the other way round",
+      "the same fan-out with its rows given the other way round",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "y", "x") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getY, %1$sFn.INSTANCE::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, CharSequence>toOneWay(%1$sSrc::n, %1$sTgt::getX, %1$sFn.INSTANCE::forward)"
+        ),
         FAN_OUT_BEAN,
         transformFn("Integer", "String", "\"#\" + a", "0"),
         runtimeMapper(
@@ -10066,8 +10065,12 @@ class CrossPathCorpusTest {
       "a fan-out through a transform giving a wider type, into a record",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, Object>toOneWay(%1$sSrc::n, %1$sTgt::x, %1$sFn.INSTANCE::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, Object>toOneWay(%1$sSrc::n, %1$sTgt::y, %1$sFn.INSTANCE::forward)"
+        ),
         sampled("%1$sTgt", "String x, String y", "new %1$sTgt(\"#5\", \"#9\")"),
         transformFn("Integer", "Object", "\"#\" + a", "0"),
         runtimeMapper(
@@ -10085,8 +10088,12 @@ class CrossPathCorpusTest {
       "a fan-out through a transform giving null, into primitive targets",
       true,
       List.of(
-        renamedConversion("transforms", transformOn("n", true), "n", "x", "y") +
-          sampled("%1$sSrc", "Integer n", "new %1$sSrc(null)"),
+        sampled("%1$sSrc", "Integer n", "new %1$sSrc(null)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, Integer, Integer>toOneWay(%1$sSrc::n, %1$sTgt::x, %1$sFn.INSTANCE::forward)",
+          "<%1$sSrc, %1$sTgt, Integer, Integer>toOneWay(%1$sSrc::n, %1$sTgt::y, %1$sFn.INSTANCE::forward)"
+        ),
         sampled("%1$sTgt", "int x, int y", "new %1$sTgt(5, 9)"),
         transformFn("Integer", "Integer", "a == null ? null : a + 1", "0"),
         runtimeMapper(
@@ -10101,7 +10108,7 @@ class CrossPathCorpusTest {
       null
     ),
     new VariableTransform(
-      "a fan-out through a @ViaMapper giving a wider type, into a record",
+      "a fan-out through a via row giving a wider type, into a record",
       true,
       List.of(
         "public record %1$sIn(String v) {}\n",
@@ -10109,14 +10116,12 @@ class CrossPathCorpusTest {
         "public class %1$sVia {\n" +
           "  public static Object forward(final %1$sIn i) { return new %1$sOut(i.v() + \">\"); }\n" +
           "  public static %1$sIn backward(final %1$sOut o) { return new %1$sIn(o.v() + \"<\"); }\n}\n",
-        renamedConversion(
-            "viaMappers",
-            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
-            "a",
-            "x",
-            "y"
-          ) +
-          sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::x, %1$sVia.class)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::y, %1$sVia.class)"
+        ),
         sampled("%1$sTgt", "%1$sOut x, %1$sOut y", "new %1$sTgt(new %1$sOut(\"q\"), new %1$sOut(\"r\"))"),
         // The runtime's mapper is typed by the classes it converts, so it narrows the
         // result the
@@ -10136,20 +10141,18 @@ class CrossPathCorpusTest {
       null
     ),
     new VariableTransform(
-      "a fan-out of a null through a @ViaMapper returning a primitive, into a bean's primitive properties",
+      "a fan-out of a null through a via row returning a primitive, into a bean's primitive properties",
       true,
       List.of(
         "public class %1$sVia {\n" +
           "  public static int forward(final Integer i) { return i + 1; }\n" +
           "  public static Integer backward(final int o) { return o - 1; }\n}\n",
-        renamedConversion(
-            "viaMappers",
-            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
-            "a",
-            "x",
-            "y"
-          ) +
-          sampled("%1$sSrc", "Integer a", "new %1$sSrc(null)"),
+        sampled("%1$sSrc", "Integer a", "new %1$sSrc(null)"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::getX, %1$sVia.class)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::getY, %1$sVia.class)"
+        ),
         "public class %1$sTgt {\n" +
           "  private int x;\n" +
           "  private int y;\n" +
@@ -10173,11 +10176,12 @@ class CrossPathCorpusTest {
       "a renamed property through a transform beside a value computed into the property of its own name",
       true,
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("n", true) +
-          ", computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"n\", using = %1$sMade.class))\n" +
-          sampled("%1$sSrc", "String n", "new %1$sSrc(\"7\")"),
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"7\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String, String>toOneWay(%1$sSrc::n, %1$sTgt::label, %1$sFn.INSTANCE::forward)",
+          "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::n, %1$sMade.INSTANCE)"
+        ),
         sampled("%1$sTgt", "String label, String n", "new %1$sTgt(\"#5\", \"q\")"),
         transformFn("String", "String", "\"#\" + a", "b"),
         MADE,
@@ -10193,19 +10197,21 @@ class CrossPathCorpusTest {
       null
     ),
     new VariableTransform(
-      "a renamed property through a @ViaMapper beside a value computed into the property of its own name",
+      "a renamed property through a via row beside a value computed into the property of its own name",
       true,
       List.of(
         "public record %1$sIn(String v) {}\n",
         "public record %1$sOut(String v) {}\n",
         VIA_IN_OUT,
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"a\", target = \"b\"), viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)," +
-          " computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"a\", using = %1$sMade.class))\n" +
-          sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        sampled("%1$sSrc", "%1$sIn a", "new %1$sSrc(new %1$sIn(\"p\"))"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, %1$sVia.class)",
+          "<%1$sSrc, %1$sTgt, %1$sIn>compute(%1$sTgt::a, %1$sMade.INSTANCE)"
+        ),
         sampled("%1$sTgt", "%1$sOut b, %1$sIn a", "new %1$sTgt(new %1$sOut(\"q\"), new %1$sIn(\"r\"))"),
         "public class %1$sMade implements java.util.function.Supplier<%1$sIn> {\n" +
+          "  public static final %1$sMade INSTANCE = new %1$sMade();\n" +
           "  public %1$sIn get() { return new %1$sIn(\"made\"); }\n}\n",
         runtimeMapper(
           true,
@@ -10222,11 +10228,8 @@ class CrossPathCorpusTest {
       "a lenient bridge renaming a property onto the target of a property left under its own name",
       true,
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("n", false) +
-          ")\n" +
-          sampled("%1$sSrc", "Integer n, String label", "new %1$sSrc(7, \"own\")"),
+        sampled("%1$sSrc", "Integer n, String label", "new %1$sSrc(7, \"own\")"),
+        typedField(true, "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::label, %1$sFn.class)"),
         sampled("%1$sTgt", "String label", "new %1$sTgt(\"#5\")"),
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         runtimeMapper(
@@ -10246,10 +10249,8 @@ class CrossPathCorpusTest {
         "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\n" +
           sampled("%1$sSrc", "%1$sIn in", "new %1$sSrc(new %1$sIn(7))"),
         sampled("%1$sTgt", "%1$sOut in", "new %1$sTgt(new %1$sOut(\"#5\"))"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sOut.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("n", false) +
-          ")\npublic record %1$sIn(Integer n) {}\n",
+        "public record %1$sIn(Integer n) {}\n",
+        fieldBridge("%1$sIn", "%1$sOut", "to(%1$sIn::n, %1$sOut::label, %1$sFn.class)"),
         "public record %1$sOut(String label) {}\n",
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         "public class %1$sRuntime {\n" +
@@ -10341,12 +10342,12 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a renamed property's transform is checked against the property the rename names, and refused by name")
+  @DisplayName("a converting row's result is checked against the property the row names, and refused by name")
   void aRenamedTransformIsCheckedAgainstTheRenamedProperty() {
     final var head = "package " + PACKAGE + ";\n";
     final var all = List.of(
-      renamedConversion("transforms", transformOn("n", false), "n", "label") +
-        sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+      sampled("%1$sSrc", "Integer n", "new %1$sSrc(7)"),
+      forwardFieldBridge("%1$sSrc", "%1$sTgt", "toOneWay(%1$sSrc::n, %1$sTgt::label, %1$sFn.INSTANCE::forward)"),
       sampled("%1$sTgt", "String label", "new %1$sTgt(\"#5\")"),
       transformFn("Integer", "Long", "Long.valueOf(a)", "b.intValue()")
     )
@@ -10355,13 +10356,10 @@ class CrossPathCorpusTest {
       .map(code -> source(declaredName(code), head + code))
       .toArray(JavaFileObject[]::new);
     final var processed = bridged(all);
-    assertFalse(processed.success(), "a transform giving Long into a String property compiled");
+    assertFalse(processed.success(), "a conversion giving Long into a String property compiled");
     assertTrue(
       processed.hasError(
-        "@Transform field=\"n\" does not fit forward: " +
-          PACKAGE +
-          ".Rr0Fn's forward resolves to (java.lang.Integer) -> java.lang.Long, which does not carry" +
-          " java.lang.Integer -> java.lang.String"
+        "Rr0Fn.INSTANCE::forward gives java.lang.Long, which the java.lang.String property 'label' does not hold"
       ),
       processed::errorMessages
     );
@@ -10381,9 +10379,8 @@ class CrossPathCorpusTest {
       "a plain rename",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
-          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sSrc(String n, String label) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::label)"),
         "public record %1$sTgt(String label) {}\n",
         runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)")
       )
@@ -10392,8 +10389,8 @@ class CrossPathCorpusTest {
       "a rename through a transform",
       "label",
       List.of(
-        renamedConversion("transforms", transformOn("n", false), "n", "label") +
-          "public record %1$sSrc(Integer n, String label) {}\n",
+        "public record %1$sSrc(Integer n, String label) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::label, %1$sFn.class)"),
         "public record %1$sTgt(String label) {}\n",
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
         runtimeMapper(
@@ -10404,19 +10401,14 @@ class CrossPathCorpusTest {
       )
     ),
     new KeptName(
-      "a rename through a @ViaMapper",
+      "a rename through a via row",
       "b",
       List.of(
         "public record %1$sIn(String v) {}\n",
         "public record %1$sOut(String v) {}\n",
         VIA_IN_OUT,
-        renamedConversion(
-            "viaMappers",
-            "@io.github.eschizoid.telescope.annotations.ViaMapper(field = \"a\", using = %1$sVia.class)",
-            "a",
-            "b"
-          ) +
-          "public record %1$sSrc(%1$sIn a, %1$sOut b) {}\n",
+        "public record %1$sSrc(%1$sIn a, %1$sOut b) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::a, %1$sTgt::b, %1$sVia.class)"),
         "public record %1$sTgt(%1$sOut b) {}\n",
         runtimeMapper(false, viaMapperOf("%1$sIn", "%1$sOut"), "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::b, via)")
       )
@@ -10425,10 +10417,8 @@ class CrossPathCorpusTest {
       "a plain rename beside a value computed into another property",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\")," +
-          " computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"z\", using = %1$sMade.class))\n" +
-          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sSrc(String n, String label) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::label)", "compute(%1$sTgt::z, %1$sMade.INSTANCE)"),
         "public record %1$sTgt(String label, String z) {}\n",
         MADE,
         runtimeMapper(
@@ -10443,10 +10433,8 @@ class CrossPathCorpusTest {
       "a plain rename beside a constant on another property",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\")," +
-          " constants = @io.github.eschizoid.telescope.annotations.Constant(field = \"z\", value = \"k\"))\n" +
-          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sSrc(String n, String label) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::label)", "constant(%1$sTgt::z, \"k\")"),
         "public record %1$sTgt(String label, String z) {}\n",
         runtimeMapper(
           false,
@@ -10460,11 +10448,13 @@ class CrossPathCorpusTest {
       "a rename through a transform beside a value computed into another property",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("n", false) +
-          ", computes = @io.github.eschizoid.telescope.annotations.Compute(field = \"z\", using = %1$sMade.class))\n" +
-          "public record %1$sSrc(Integer n, String label) {}\n",
+        "public record %1$sSrc(Integer n, String label) {}\n",
+        fieldBridge(
+          "%1$sSrc",
+          "%1$sTgt",
+          "to(%1$sSrc::n, %1$sTgt::label, %1$sFn.class)",
+          "compute(%1$sTgt::z, %1$sMade.INSTANCE)"
+        ),
         "public record %1$sTgt(String label, String z) {}\n",
         MADE,
         transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
@@ -10480,11 +10470,13 @@ class CrossPathCorpusTest {
       "a kept property with a transform of its own",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("label", false) +
-          ")\n" +
-          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sSrc(String n, String label) {}\n",
+        fieldBridge(
+          "%1$sSrc",
+          "%1$sTgt",
+          "to(%1$sSrc::n, %1$sTgt::label)",
+          "to(%1$sSrc::label, %1$sTgt::label, %1$sFn.class)"
+        ),
         "public record %1$sTgt(String label) {}\n",
         transformFn("String", "String", "\"#\" + a", "b.substring(1)"),
         runtimeMapper(
@@ -10499,11 +10491,13 @@ class CrossPathCorpusTest {
       "a lenient pair's kept property with a transform of its own",
       "label",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"), transforms = " +
-          transformOn("label", false) +
-          ")\n" +
-          "public record %1$sSrc(String n, String label) {}\n",
+        "public record %1$sSrc(String n, String label) {}\n",
+        forwardFieldBridge(
+          "%1$sSrc",
+          "%1$sTgt",
+          "to(%1$sSrc::n, %1$sTgt::label)",
+          "to(%1$sSrc::label, %1$sTgt::label, %1$sFn.class)"
+        ),
         "public record %1$sTgt(String label) {}\n",
         transformFn("String", "String", "\"#\" + a", "b.substring(1)"),
         runtimeMapper(
@@ -10515,16 +10509,19 @@ class CrossPathCorpusTest {
       )
     ),
     new KeptName(
-      "a lenient pair's kept property with a @ViaMapper of its own",
+      "a lenient pair's kept property with a via row of its own",
       "b",
       List.of(
         "public record %1$sIn(String v) {}\n",
         "public record %1$sOut(String v) {}\n",
         VIA_IN_OUT,
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"a\", target = \"b\"), viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"b\", using = %1$sVia.class))\n" +
-          "public record %1$sSrc(%1$sOut a, %1$sIn b) {}\n",
+        "public record %1$sSrc(%1$sOut a, %1$sIn b) {}\n",
+        forwardFieldBridge(
+          "%1$sSrc",
+          "%1$sTgt",
+          "to(%1$sSrc::a, %1$sTgt::b)",
+          "via(%1$sSrc::b, %1$sTgt::b, %1$sVia.class)"
+        ),
         "public record %1$sTgt(%1$sOut b) {}\n",
         runtimeMapper(
           true,
@@ -10541,9 +10538,8 @@ class CrossPathCorpusTest {
         "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\n" +
           "public record %1$sSrc(String id, %1$sInner in) {}\n",
         "public record %1$sTgt(String id, %1$sInnerDto in) {}\n",
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
-          "public record %1$sInner(String n, String label) {}\n",
+        "public record %1$sInner(String n, String label) {}\n",
+        fieldBridge("%1$sInner", "%1$sInnerDto", "to(%1$sInner::n, %1$sInnerDto::label)"),
         "public record %1$sInnerDto(String label) {}\n",
         "public class %1$sRuntime {\n" +
           "  public static Object mapper() {\n" +
@@ -10556,9 +10552,8 @@ class CrossPathCorpusTest {
       "a rename into a bean",
       "value",
       List.of(
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"value\"))\n" +
-          "public record %1$sSrc(String n, String value) {}\n",
+        "public record %1$sSrc(String n, String value) {}\n",
+        fieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::getValue)"),
         valueBean("%1$sTgt", "String", "\"q\""),
         runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::getValue)")
       )
@@ -10570,9 +10565,8 @@ class CrossPathCorpusTest {
   void aLenientBridgeLeavesAKeptFieldARenameTakesUnread() throws ReflectiveOperationException {
     final var head = "package " + PACKAGE + ";\n";
     final var sources = List.of(
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, renames =" +
-        " @io.github.eschizoid.telescope.annotations.Rename(source = \"n\", target = \"label\"))\n" +
-        "public record %1$sSrc(String n, String label) {}\n",
+      "public record %1$sSrc(String n, String label) {}\n",
+      forwardFieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::n, %1$sTgt::label)"),
       "public record %1$sTgt(String label) {}\n"
     )
       .stream()
@@ -10584,7 +10578,7 @@ class CrossPathCorpusTest {
     final var classes = compilation.define(MethodHandles.lookup());
     final var src = classes.get(PACKAGE + ".Rl0Src");
     final var tgt = classes.get(PACKAGE + ".Rl0Tgt");
-    final var bridge = classes.get(PACKAGE + ".Rl0SrcBridge");
+    final var bridge = classes.get(PACKAGE + ".Rl0SrcToRl0TgtBridge");
     final Attempt forward = () ->
       bridge
         .getMethod("forward", src)
@@ -10593,58 +10587,6 @@ class CrossPathCorpusTest {
       bridge.getMethod("backward", tgt).invoke(null, tgt.getConstructor(String.class).newInstance("q"));
     assertEquals("#0(label=\"7\")", shapeOf(forward));
     assertEquals("#0(n=\"q\", label=null)", shapeOf(backward));
-  }
-
-  @Test
-  @DisplayName("a lenient bridge refuses a conversion on a field it leaves unread, by the field's name")
-  void aLenientBridgeRefusesAConversionOnAFieldItLeavesUnread() {
-    final var rows = List.of(
-      List.of(
-        "@Transform",
-        "n",
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, transforms = " +
-          transformOn("n", false) +
-          ")\npublic record %1$sSrc(String id, Integer n) {}\n",
-        "public record %1$sTgt(String id) {}\n",
-        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))")
-      ),
-      List.of(
-        "@ViaMapper",
-        "b",
-        "public record %1$sIn(String v) {}\n",
-        "public record %1$sOut(String v) {}\n",
-        VIA_IN_OUT,
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"b\", using = %1$sVia.class))\n" +
-          "public record %1$sSrc(String id, %1$sIn b) {}\n",
-        "public record %1$sTgt(String id) {}\n"
-      )
-    );
-    final var failures = new ArrayList<String>();
-    var index = 0;
-    for (final var row : rows) {
-      final var prefix = "Ru" + index++;
-      final var head = "package " + PACKAGE + ";\n";
-      final var sources = row
-        .subList(2, row.size())
-        .stream()
-        .map(declaration -> declaration.formatted(prefix))
-        .map(code -> source(declaredName(code), head + code))
-        .toArray(JavaFileObject[]::new);
-      final var processed = bridged(sources);
-      final var owed =
-        "@Bridge field \"" +
-        row.get(1) +
-        "\" has a " +
-        row.get(0) +
-        ", but " +
-        prefix +
-        "Tgt has no field it is written into";
-      if (processed.success() || !processed.hasError(owed)) {
-        failures.add(row.get(0) + ": owed a refusal naming " + owed + ", saw " + describe(processed));
-      }
-    }
-    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   @Test
@@ -10698,53 +10640,67 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a transform taking a class no value of a type-variable property can be is refused by name, and by javac on a row typed as the raw members"
+    "a conversion taking a class no value of a type-variable property can be is refused by javac on its row, on both paths"
   )
   void aTransformNoValueOfATypeVariablePropertyFitsIsRefusedByName() {
-    // Each row: the prefix, the pair and its transform, the runtime row typed by what the raw
-    // members return, and two fragments the processor's refusal has to contain.
-    final var rows = List.of(
-      List.of(
-        "Vr0",
-        sampledGeneric("%1$sSrc<X extends Number>", "X value", "new %1$sSrc<>(7)"),
-        transformedField(false, "value", "%1$sSrc, %1$sTgt, Number, String"),
-        sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
-        transformFn("String", "String", "a", "b"),
-        runtimeRow(false, "value", "Number", "String"),
-        "@Transform field=\"value\" does not fit forward",
-        "X (held as its erasure java.lang.Number) -> java.lang.String"
-      )
+    // The pair and its field, the conversion, and the runtime row, each typed by what the raw
+    // members return: no value of a variable bounded by Number is a String, so javac refuses the
+    // field's row and the runtime row alike, and the processor writes nothing to refuse inside.
+    final var prefix = "Vr0";
+    final var head = "package " + PACKAGE + ";\n";
+    final var all = List.of(
+      sampledGeneric("%1$sSrc<X extends Number>", "X value", "new %1$sSrc<>(7)"),
+      transformedField(false, "value", "%1$sSrc, %1$sTgt, Number, String"),
+      sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
+      transformFn("String", "String", "a", "b"),
+      runtimeRow(false, "value", "Number", "String")
+    )
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toList();
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      all.subList(0, 4).toArray(JavaFileObject[]::new)
     );
-    final var failures = new ArrayList<String>();
-    for (final var row : rows) {
-      final var prefix = row.get(0);
-      final var head = "package " + PACKAGE + ";\n";
-      final var all = row
-        .subList(1, 5)
-        .stream()
-        .map(declaration -> declaration.formatted(prefix))
-        .map(code -> source(declaredName(code), head + code))
-        .toList();
-      final var processed = bridged(all.subList(0, 3).toArray(JavaFileObject[]::new));
-      if (processed.success() || !processed.hasError(row.get(5)) || !processed.hasError(row.get(6))) {
-        failures.add(prefix + ": the processor owed a refusal naming the property, saw " + describe(processed));
-      }
-      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
-      final var rowRefused = plain
+    assertFalse(processed.success(), "the field's row compiled");
+    assertTrue(
+      processed
         .errors()
         .stream()
-        .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "Runtime.java"));
-      if (plain.success() || !rowRefused) {
-        failures.add(prefix + ": javac owed a refusal of the runtime row alone, saw " + describe(plain));
-      }
-    }
-    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+        .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
+      () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
+    );
+    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+    assertFalse(plain.success(), "the runtime row compiled");
+    assertTrue(
+      plain
+        .errors()
+        .stream()
+        .allMatch(
+          e ->
+            e.getSource() != null &&
+            (e.getSource().getName().endsWith(prefix + "Runtime.java") ||
+              e.getSource().getName().endsWith(prefix + "SrcCarrier.java"))
+        ),
+      () -> "javac owed a refusal of the rows alone, saw " + describe(plain)
+    );
   }
 
-  /** {@code @Bridge} to {@code %1$sTgt} converting {@code child} through {@code %1$sChMap}. */
-  private static final String VIA_CHILD =
-    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
-    " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = %1$sChMap.class))\n";
+  /**
+   * {@code %1$sCarrier}, whose {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} converts
+   * {@code child}, read through {@code accessor} on both sides, through the class {@code
+   * %1$sChMap}.
+   */
+  private static String viaChild(final String accessor) {
+    return fieldBridge(
+      "%1$sSrc",
+      "%1$sTgt",
+      "via(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", %1$sChMap.class)"
+    );
+  }
 
   /**
    * The child pair, {@code %1$sCh} and {@code %1$sChDto}, and {@code %1$sChMap}, whose static
@@ -10862,7 +10818,7 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A transform or a {@code @ViaMapper} on {@code property} whose result a runtime row can be typed
+   * A converting row or a {@code via} row on {@code property} whose result a runtime row can be typed
    * to return: the declarations, each with {@code %1$s} as the row's prefix and the last of them
    * the runtime row. A row both paths convert, or refuse by the same name, is held to agree; one
    * the processor still refuses while the runtime row runs is a registered divergence.
@@ -10999,7 +10955,7 @@ class CrossPathCorpusTest {
       )
     ),
     new UncheckedConversion(
-      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      "a via row whose forward has an overload for Object besides the child, on a property both sides pass through",
       "child",
       List.of(
         "public record %1$sCh(String name) {}\n",
@@ -11009,7 +10965,8 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -11022,7 +10979,7 @@ class CrossPathCorpusTest {
       )
     ),
     new UncheckedConversion(
-      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      "a via row whose forward has an overload for String besides the child, on a property both sides pass through",
       "child",
       List.of(
         "public record %1$sCh(String name) {}\n",
@@ -11032,7 +10989,8 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -11096,20 +11054,20 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * The direction a transform on {@code value} was refused in, and the member type the refusal
-   * names where it names one; the call and the reason a {@code @ViaMapper} on {@code child} was
+   * The direction a converting row on {@code value} was refused in, and the member type the refusal
+   * names where it names one; the call and the reason a {@code via} row on {@code child} was
    * refused for; or the compilation, where nothing refused the row.
    */
   private static String refusalOfConversion(final ProcessorHarness.Compilation processed) {
     for (final var direction : List.of("forward", "backward")) {
       for (final var reason : List.of("takes no value", "returns", "has several overloads")) {
-        if (processed.hasError("@ViaMapper field=\"child\"") && processed.hasError("'s " + direction + " " + reason)) {
-          return REFUSED + "@ViaMapper " + direction + " " + reason;
+        if (processed.hasError("via(...) of 'child': ") && processed.hasError("'s " + direction + " " + reason)) {
+          return REFUSED + "via row " + direction + " " + reason;
         }
       }
     }
     for (final var direction : List.of("forward", "backward")) {
-      if (!processed.hasError("@Transform field=\"value\" does not fit " + direction)) continue;
+      if (!processed.hasError("a converting row of 'value' does not fit " + direction)) continue;
       final var member = Pattern.compile("the member it is written through takes (\\S+)").matcher(
         processed.errorMessages()
       );
@@ -11157,17 +11115,17 @@ class CrossPathCorpusTest {
     // and no generated source can make that static choice. Dispatching on the value's class
     // would pick by a different rule. The processor refuses by name.
     Map.entry(
-      "a @ViaMapper whose forward has an overload for Object besides the child, on a property both sides pass through",
+      "a via row whose forward has an overload for Object besides the child, on a property both sides pass through",
       List.of(
-        REFUSED + "@ViaMapper forward has several overloads",
+        REFUSED + "via row forward has several overloads",
         "child=ChDto[name=f:a], a ChDto",
         "child=Ch[name=q], a Ch"
       )
     ),
     Map.entry(
-      "a @ViaMapper whose forward has an overload for String besides the child, on a property both sides pass through",
+      "a via row whose forward has an overload for String besides the child, on a property both sides pass through",
       List.of(
-        REFUSED + "@ViaMapper forward has several overloads",
+        REFUSED + "via row forward has several overloads",
         "child=ChDto[name=f:a], a ChDto",
         "child=Ch[name=q], a Ch"
       )
@@ -11253,7 +11211,7 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A {@code @ViaMapper} on a property typed by a type variable: the declarations other than the
+   * A {@code via} row naming a class on a property typed by a type variable: the declarations other than the
    * child pair, each with {@code %1$s} as the row's prefix and the last of them the runtime row,
    * and what both paths owe for {@code Src.sample()} forward, {@code Tgt.sample()} backward, and
    * {@code Tgt.sample()} laid over {@code Src.sample()}.
@@ -11264,7 +11222,8 @@ class CrossPathCorpusTest {
     new ViaVariable(
       "a source record typed by its own variable bounded by the child",
       List.of(
-        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        viaChild("child"),
         sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
         viaRow("child")
       ),
@@ -11275,7 +11234,8 @@ class CrossPathCorpusTest {
     new ViaVariable(
       "a target record typed by its own variable",
       List.of(
-        VIA_CHILD + sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        viaChild("child"),
         sampledGeneric("%1$sTgt<Y>", "Y child", "new %1$sTgt<>(new %1$sChDto(\"Q\"))"),
         viaRow("child")
       ),
@@ -11287,7 +11247,8 @@ class CrossPathCorpusTest {
       "a property both sides pass through to a generic superclass",
       List.of(
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
         viaRow("getChild")
       ),
@@ -11302,7 +11263,8 @@ class CrossPathCorpusTest {
       "a property both sides pass through, holding a value that is not the child",
       List.of(
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<Object>", "\"a\""),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<Object>", "\"a\""),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<Object>", "\"Q\""),
         viaRow("getChild")
       ),
@@ -11314,7 +11276,8 @@ class CrossPathCorpusTest {
       "a property the source passes through and the target fixes to the child's counterpart",
       List.of(
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"Q\")"),
         viaRow("getChild")
       ),
@@ -11326,7 +11289,8 @@ class CrossPathCorpusTest {
       "a property the source fixes to the child and the target passes through",
       List.of(
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
         viaRow("getChild")
       ),
@@ -11337,7 +11301,8 @@ class CrossPathCorpusTest {
     new ViaVariable(
       "a property read and written through generic methods",
       List.of(
-        genericAccessorBean(VIA_CHILD, "%1$sSrc", "child", "new %1$sCh(\"a\")"),
+        genericAccessorBean("", "%1$sSrc", "child", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         "public class %1$sTgt {\n" +
           "  private %1$sChDto child;\n" +
           "  public %1$sChDto getChild() { return child; }\n" +
@@ -11358,7 +11323,8 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
           "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
-        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        viaChild("child"),
         sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
         viaRow("child")
       ),
@@ -11373,7 +11339,8 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
           "  public static %1$sChDto forward(final String o) { return new %1$sChDto(\"s:\" + o); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
-        VIA_CHILD + sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        sampledGeneric("%1$sSrc<X extends %1$sCh>", "X child", "new %1$sSrc<>(new %1$sCh(\"a\"))"),
+        viaChild("child"),
         sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"Q\"))"),
         viaRow("child")
       ),
@@ -11388,12 +11355,12 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
           "  public static %1$sChDto forward(final Object o) { return new %1$sChDto(\"o:\" + o); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
-        VIA_CHILD +
-          "public class %1$sSrc {\n" +
-          "  private %1$sCh child;\n" +
-          "  @SuppressWarnings(\"unchecked\") public <T extends %1$sCh> T getChild() { return (T) child; }\n" +
-          "  public <T extends %1$sCh> void setChild(final T child) { this.child = child; }\n" +
-          "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.setChild(new %1$sCh(\"a\")); return s; }\n}\n",
+        "public class %1$sSrc {\n" +
+        "  private %1$sCh child;\n" +
+        "  @SuppressWarnings(\"unchecked\") public <T extends %1$sCh> T getChild() { return (T) child; }\n" +
+        "  public <T extends %1$sCh> void setChild(final T child) { this.child = child; }\n" +
+        "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.setChild(new %1$sCh(\"a\")); return s; }\n}\n",
+        viaChild("getChild"),
         "public class %1$sTgt {\n" +
           "  private %1$sChDto child;\n" +
           "  public %1$sChDto getChild() { return child; }\n" +
@@ -11415,7 +11382,8 @@ class CrossPathCorpusTest {
           " return new %1$sChDto(((%1$sCh) c).name().toUpperCase()); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")"),
         viaRow("getChild")
       ),
@@ -11426,7 +11394,7 @@ class CrossPathCorpusTest {
   );
 
   /**
-   * A {@code @ViaMapper} whose mapper method takes a class narrower than the property's own type,
+   * A {@code via} row naming a class whose method takes a class narrower than the property's own type,
    * which no type variable names: a value of the property may still be an instance of it, so the
    * bridge casts the value to the method's parameter, and a value that is not one fails at the call
    * on both paths. The declarations other than the child pair, the last of them the runtime row,
@@ -11477,7 +11445,8 @@ class CrossPathCorpusTest {
         "public class %1$sChMap {\n" +
           "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(\"f:\" + c.name()); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
-        VIA_CHILD + sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+        viaChild("child"),
         sampled("%1$sTgt", "Object child", "new %1$sTgt(new %1$sChDto(\"q\"))"),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -11539,7 +11508,8 @@ class CrossPathCorpusTest {
         back +
         "; }\n}\n"
     );
-    rows.add(VIA_CHILD + sampled("%1$sSrc", held + " child", "new %1$sSrc(" + sample + ")"));
+    rows.add(sampled("%1$sSrc", held + " child", "new %1$sSrc(" + sample + ")"));
+    rows.add(viaChild("child"));
     rows.add(sampled("%1$sTgt", "%1$sChDto child", "new %1$sTgt(new %1$sChDto(\"q\"))"));
     rows.add(
       "public class %1$sRuntime {\n" +
@@ -11562,16 +11532,16 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a @ViaMapper whose method takes a class narrower than the property casts to it, as the runtime row converts"
+    "a via row whose method takes a class narrower than the property casts to it, as the runtime row converts"
   )
-  void aViaMapperOnAPropertyWiderThanItsParameterConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+  void aViaRowOnAPropertyWiderThanItsParameterConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
     final var failures = viaConversionFailures(VIA_CASTS, "Vk");
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   @Test
-  @DisplayName("a @ViaMapper on a property typed by a type variable converts the same way on both paths")
-  void aViaMapperOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+  @DisplayName("a via row naming a class on a property typed by a type variable converts the same way on both paths")
+  void aViaRowOnATypeVariablePropertyConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
     final var failures = viaConversionFailures(VIA_VARIABLES, "Vm");
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
@@ -11687,13 +11657,8 @@ class CrossPathCorpusTest {
     }
   }
 
-  /** {@code @Bridge} to {@code %1$sTgt} converting {@code children} through {@code %1$sChMap}. */
-  private static final String VIA_CHILDREN =
-    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
-    " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = %1$sChMap.class))\n";
-
   /**
-   * A {@code @ViaMapper} on a container property: the mapper class, null for the child pair's own,
+   * A {@code via} row naming a class on a container property: the mapper class, null for the child pair's own,
    * the source and target declarations, each with {@code %1$s} as the row's prefix, and what each
    * path owes for {@code Src.sample()} forward, and for {@code Tgt.sample()} backward and laid over
    * {@code Src.sample()}: the runtime first, then the generated bridge.
@@ -11762,9 +11727,8 @@ class CrossPathCorpusTest {
   /** A container row's source, generic over its element or not, holding {@code sample}. */
   private static String containerSource(final boolean generic, final String declared, final String sample) {
     return generic
-      ? VIA_CHILDREN +
-        sampledGeneric("%1$sSrc<X>", declared.replace("%1$sCh", "X") + " children", "new %1$sSrc<>(" + sample + ")")
-      : VIA_CHILDREN + sampled("%1$sSrc", declared + " children", "new %1$sSrc(" + sample + ")");
+      ? sampledGeneric("%1$sSrc<X>", declared.replace("%1$sCh", "X") + " children", "new %1$sSrc<>(" + sample + ")")
+      : sampled("%1$sSrc", declared + " children", "new %1$sSrc(" + sample + ")");
   }
 
   private static List<ViaContainer> viaContainers() {
@@ -11931,15 +11895,15 @@ class CrossPathCorpusTest {
   }
 
   @Test
-  @DisplayName("a @ViaMapper on a List, Set, Optional or Map property converts each element the same way on both paths")
-  void aViaMapperOnAContainerPropertyConvertsEachElementTheSameWayOnBothPaths() throws ReflectiveOperationException {
+  @DisplayName("a via row naming a class on a List, Set, Optional or Map property converts each element the same way on both paths")
+  void aViaRowOnAContainerPropertyConvertsEachElementTheSameWayOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : viaContainers()) {
       final var prefix = "Vc" + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var pair = row.mapper() == null ? CHILD_PAIR : List.of(CHILD_PAIR.get(0), CHILD_PAIR.get(1), row.mapper());
-      final var all = concat(pair, row.source(), row.target(), viaRow("children"))
+      final var all = concat(pair, row.source(), viaChild("children"), row.target(), viaRow("children"))
         .stream()
         .map(declaration -> declaration.formatted(prefix))
         .map(code -> source(declaredName(code), head + code))
@@ -12036,7 +12000,7 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A {@code @ViaMapper} and the runtime {@code via} row over the same pair, whose mapper is handed
+   * A {@code via} row of a {@code @Bridge} field and the runtime {@code via} row over the same pair, whose mapper is handed
    * a property no value of which it can take, or returns a class no value of which the property it
    * writes takes: the declarations other than the child pair, each with {@code %1$s} as the row's
    * prefix and the last of them the runtime row, and the refusal both paths owe when the bridge and
@@ -12054,7 +12018,8 @@ class CrossPathCorpusTest {
       "a List of a variable bounded by a class the mapper does not take",
       List.of(
         "public record %1$sOther(String name) {}\n",
-        VIA_CHILDREN + "public record %1$sSrc<X extends %1$sOther>(java.util.List<X> children) {}\n",
+        "public record %1$sSrc<X extends %1$sOther>(java.util.List<X> children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
         viaRow("children")
       ),
@@ -12063,7 +12028,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "a Map whose keys are a variable",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.Map<X, String> children) {}\n",
+        "public record %1$sSrc<X>(java.util.Map<X, String> children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
         viaRow("children")
       ),
@@ -12072,7 +12038,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "a Map whose keys are the child",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc(java.util.Map<%1$sCh, String> children) {}\n",
+        "public record %1$sSrc(java.util.Map<%1$sCh, String> children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.Map<%1$sChDto, String> children) {}\n",
         viaRow("children")
       ),
@@ -12081,7 +12048,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "an array of a variable",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc<X>(X[] children) {}\n",
+        "public record %1$sSrc<X>(X[] children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(%1$sChDto[] children) {}\n",
         viaRow("children")
       ),
@@ -12090,7 +12058,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "an array of the child",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc(%1$sCh[] children) {}\n",
+        "public record %1$sSrc(%1$sCh[] children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(%1$sChDto[] children) {}\n",
         viaRow("children")
       ),
@@ -12099,7 +12068,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "a List of Lists of a variable",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc<X>(java.util.List<java.util.List<X>> children) {}\n",
+        "public record %1$sSrc<X>(java.util.List<java.util.List<X>> children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
         viaRow("children")
       ),
@@ -12108,7 +12078,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "a List of Lists of the child",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc(java.util.List<java.util.List<%1$sCh>> children) {}\n",
+        "public record %1$sSrc(java.util.List<java.util.List<%1$sCh>> children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.List<java.util.List<%1$sChDto>> children) {}\n",
         viaRow("children")
       ),
@@ -12121,7 +12092,8 @@ class CrossPathCorpusTest {
         "public class %1$sChMap {\n" +
           "  public static %1$sChDto forward(final %1$sOther c) { return new %1$sChDto(c.name()); }\n" +
           "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
-        VIA_CHILD + "public record %1$sSrc<X extends %1$sCh>(X child) {}\n",
+        "public record %1$sSrc<X extends %1$sCh>(X child) {}\n",
+        viaChild("child"),
         "public record %1$sTgt(%1$sChDto child) {}\n",
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -12136,7 +12108,8 @@ class CrossPathCorpusTest {
     new ViaNeverFits(
       "a child source into a List target",
       List.of(
-        VIA_CHILDREN + "public record %1$sSrc(%1$sCh children) {}\n",
+        "public record %1$sSrc(%1$sCh children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
         viaRow("children")
       ),
@@ -12146,7 +12119,8 @@ class CrossPathCorpusTest {
       "an interface the child, a record, does not implement",
       List.of(
         "public interface %1$sNamed { String name(); }\n",
-        VIA_CHILDREN + "public record %1$sSrc(%1$sNamed children) {}\n",
+        "public record %1$sSrc(%1$sNamed children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(%1$sChDto children) {}\n",
         viaRow("children")
       ),
@@ -12165,7 +12139,8 @@ class CrossPathCorpusTest {
         "public class %1$sChMap {\n" +
           "  public static %1$sChDto forward(final %1$sPlain p) { return new %1$sChDto(p.getName()); }\n" +
           "  public static %1$sPlain backward(final %1$sChDto d) { final var p = new %1$sPlain(); p.setName(d.name()); return p; }\n}\n",
-        VIA_CHILDREN + "public record %1$sSrc(%1$sShape children) {}\n",
+        "public record %1$sSrc(%1$sShape children) {}\n",
+        viaChild("children"),
         "public record %1$sTgt(%1$sChDto children) {}\n",
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -12185,7 +12160,8 @@ class CrossPathCorpusTest {
           "  public static %1$sOtherDto forward(final %1$sCh c) { return new %1$sOtherDto(c.name()); }\n" +
           "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"q\")"),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -12205,7 +12181,8 @@ class CrossPathCorpusTest {
           "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
           "  public static %1$sOther backward(final %1$sChDto d) { return new %1$sOther(d.name()); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"q\")"),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -12224,7 +12201,8 @@ class CrossPathCorpusTest {
           "  public static String[] forward(final %1$sCh c) { return new String[] { c.name() }; }\n" +
           "  public static %1$sCh backward(final String d) { return new %1$sCh(d); }\n}\n",
         CHILD_BASE,
-        VIA_CHILD + childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")"),
+        viaChild("getChild"),
         childBean("%1$sTgt", "String", "%1$sTgt", "\"q\""),
         "public class %1$sRuntime {\n" +
           "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -12425,7 +12403,7 @@ class CrossPathCorpusTest {
       "#0(child=#1(name=\"q\"))"
     ),
     new RawWrite(
-      "a @ViaMapper result into a generic target whose setter is inherited",
+      "a via row's result into a generic target whose setter is inherited",
       concat(
         List.of(
           "public record %1$sCh(String name) {}\n",
@@ -12433,22 +12411,22 @@ class CrossPathCorpusTest {
           "public class %1$sChMap {\n" +
             "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
             "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
-          VIA_CHILD +
-            "public class %1$sSrc {\n" +
+          "public class %1$sSrc {\n" +
             "  private %1$sCh child;\n" +
             "  public %1$sCh getChild() { return child; }\n" +
             "  public void setChild(final %1$sCh child) { this.child = child; }\n" +
-            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n"
+            "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.child = new %1$sCh(\"a\"); return s; }\n}\n",
+          viaChild("getChild")
         ),
         concat(
           inheritedSetter("Tgt", "child", "%1$sChDto", "%1$sBase.Marker", "null", "new %1$sChDto(\"q\")", ""),
           "public class %1$sRuntime {\n" +
-            "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-            "  public static Object mapper() {\n" +
-            "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class);\n" +
-            "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
-            "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
-            " child));\n  }\n}\n"
+          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+          "  public static Object mapper() {\n" +
+          "    final var child = io.github.eschizoid.telescope.Telescope.mapper(%1$sCh.class, %1$sChDto.class);\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild, %1$sTgt::getChild," +
+          " child));\n  }\n}\n"
         ).toArray(String[]::new)
       ),
       "#0(child=#1(name=\"a\"))",
@@ -12567,9 +12545,8 @@ class CrossPathCorpusTest {
    * c;} each way.
    */
   private static final List<String> LOGGED_CHILD = List.of(
-    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sCDto.class, transforms =" +
-      " @io.github.eschizoid.telescope.annotations.Transform(field = \"n\", using = %1$sCFn.class))\n" +
-      "public record %1$sC(String n) {}\n",
+    "public record %1$sC(String n) {}\n",
+    fieldBridge("%1$sC", "%1$sCDto", "to(%1$sC::n, %1$sCDto::n, %1$sCFn.class)"),
     "public record %1$sCDto(String n) {}\n",
     "public class %1$sCFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
       "  public String forward(final String a) { %1$sLog.LOG.append(\"c;\"); return a; }\n" +
@@ -12577,7 +12554,8 @@ class CrossPathCorpusTest {
   );
 
   /**
-   * {@code %1$sVFn}, a transform from {@code String} to {@code to} that logs {@code v;} each way.
+   * {@code %1$sVFn}, a conversion from {@code String} to {@code to} that logs {@code v;} each way,
+   * with a static {@code ahead} converting forward as {@code forward} does.
    */
   private static String loggedValueFn(final String to) {
     return (
@@ -12589,7 +12567,10 @@ class CrossPathCorpusTest {
       " forward(final String a) { %1$sLog.LOG.append(\"v;\"); return a; }\n" +
       "  public String backward(final " +
       to +
-      " b) { %1$sLog.LOG.append(\"v;\"); return String.valueOf(b); }\n}\n"
+      " b) { %1$sLog.LOG.append(\"v;\"); return String.valueOf(b); }\n" +
+      "  public static " +
+      to +
+      " ahead(final String a) { return new %1$sVFn().forward(a); }\n}\n"
     );
   }
 
@@ -12601,14 +12582,16 @@ class CrossPathCorpusTest {
    */
   private record OrderRow(String name, List<String> declarations, String forward, String backward, String patch) {}
 
-  /** {@code @Bridge} to {@code %1$sTgt} with a transform on {@code v} through {@code %1$sVFn}. */
+  /**
+   * {@code %1$sCarrier}, whose {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} converts
+   * {@code v} through {@code %1$sVFn}, both ways, or through its {@code ahead} on a {@code
+   * mapperForward} field. The row reads the target's {@code v}, typed by its class's variable, as
+   * {@code Object}.
+   */
   private static String loggedTransform(final boolean forwardOnly) {
-    return (
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
-      " @io.github.eschizoid.telescope.annotations.Transform(field = \"v\", using = %1$sVFn.class" +
-      (forwardOnly ? ", forwardOnly = true" : "") +
-      "))\n"
-    );
+    return forwardOnly
+      ? typedField(true, "<%1$sSrc, %1$sTgt, String, Object>toOneWay(%1$sSrc::v, %1$sTgt::v, %1$sVFn::ahead)")
+      : typedField(false, "<%1$sSrc, %1$sTgt, String, Object>to(%1$sSrc::v, %1$sTgt::v, %1$sVFn.class)");
   }
 
   /**
@@ -12638,23 +12621,29 @@ class CrossPathCorpusTest {
    */
   private static final String LOGGING_FN =
     "public class %1$sLFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
+    "  public static final %1$sLFn INSTANCE = new %1$sLFn();\n" +
     "  public String forward(final String a) { %1$sLog.LOG.append(a + \";\"); return a; }\n" +
     "  public String backward(final String b) { %1$sLog.LOG.append(b + \";\"); return b; }\n}\n";
 
   /**
-   * {@code @Bridge} to {@code %1$sTgt} converting {@code first%1$s} and {@code second%1$s} through
-   * {@code %1$sLFn}.
+   * {@code %1$sCarrier}, whose {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} converts
+   * {@code first%1$s} and {@code second%1$s} through {@code %1$sLFn}, reading them through {@code
+   * srcFirst}, {@code tgtFirst}, {@code srcSecond} and {@code tgtSecond}: both ways, or forward
+   * only on a {@code mapperForward} field.
    */
-  private static String twoLoggedTransforms(final boolean forwardOnly) {
-    final var only = forwardOnly ? ", forwardOnly = true" : "";
-    return (
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms = {\n" +
-      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"first%1$s\", using = %1$sLFn.class" +
-      only +
-      "),\n" +
-      "  @io.github.eschizoid.telescope.annotations.Transform(field = \"second%1$s\", using = %1$sLFn.class" +
-      only +
-      ")})\n"
+  private static String twoLoggedTransforms(
+    final boolean forwardOnly,
+    final String srcFirst,
+    final String tgtFirst,
+    final String srcSecond,
+    final String tgtSecond
+  ) {
+    final var row = forwardOnly ? "toOneWay" : "to";
+    final var fn = forwardOnly ? "%1$sLFn.INSTANCE::forward" : "%1$sLFn.class";
+    return typedField(
+      forwardOnly,
+      row + "(%1$sSrc::" + srcFirst + ", %1$sTgt::" + tgtFirst + ", " + fn + ")",
+      row + "(%1$sSrc::" + srcSecond + ", %1$sTgt::" + tgtSecond + ", " + fn + ")"
     );
   }
 
@@ -12789,7 +12778,8 @@ class CrossPathCorpusTest {
         LOGGED_CHILD,
         ORDER_LOG,
         loggedValueFn("Object"),
-        loggedTransform(false) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        loggedTransform(false),
         "public record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
           "  public static %1$sTgt<Object> sample() { return new %1$sTgt<>(\"q\", new %1$sCDto(\"b\")); }\n}\n",
         loggedRuntime(false, "v", "Object")
@@ -12806,7 +12796,8 @@ class CrossPathCorpusTest {
         LOGGED_CHILD,
         ORDER_LOG,
         loggedValueFn("CharSequence"),
-        loggedTransform(true) + sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        sampled("%1$sSrc", "String v, %1$sC c", "new %1$sSrc(\"x\", new %1$sC(\"a\"))"),
+        loggedTransform(true),
         "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y v, %1$sCDto c) {\n" +
           "  public %1$sTgt(final CharSequence v, final %1$sCDto c) { this((Y) (\"CharSequence:\" + v), c); }\n" +
           "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\", new %1$sCDto(\"b\")); }\n}\n",
@@ -12825,7 +12816,8 @@ class CrossPathCorpusTest {
         REVERSED_NAMES,
         ORDER_LOG,
         LOGGING_FN,
-        twoLoggedTransforms(false) + FIRST_SECOND_RECORD,
+        FIRST_SECOND_RECORD,
+        twoLoggedTransforms(false, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s"),
         setterPair("Tgt", ""),
         twoLoggedRows(false, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
       ),
@@ -12839,7 +12831,8 @@ class CrossPathCorpusTest {
         REVERSED_NAMES,
         ORDER_LOG,
         LOGGING_FN,
-        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        FIRST_SECOND_RECORD,
+        twoLoggedTransforms(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s"),
         BUILDER_PAIR,
         twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
       ),
@@ -12853,7 +12846,8 @@ class CrossPathCorpusTest {
         REVERSED_NAMES,
         ORDER_LOG,
         LOGGING_FN,
-        twoLoggedTransforms(true) + FIRST_SECOND_RECORD,
+        FIRST_SECOND_RECORD,
+        twoLoggedTransforms(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s"),
         CONSTRUCTOR_PAIR,
         twoLoggedRows(true, "first%1$s", "getFirst%1$s", "second%1$s", "getSecond%1$s")
       ),
@@ -12867,7 +12861,8 @@ class CrossPathCorpusTest {
         REVERSED_NAMES,
         ORDER_LOG,
         LOGGING_FN,
-        setterPair("Src", twoLoggedTransforms(false)),
+        setterPair("Src", ""),
+        twoLoggedTransforms(false, "getFirst%1$s", "first%1$s", "getSecond%1$s", "second%1$s"),
         "public record %1$sTgt(String first%1$s, String second%1$s) {\n" +
           "  public static %1$sTgt sample() { return new %1$sTgt(\"5\", \"6\"); }\n}\n",
         twoLoggedRows(false, "getFirst%1$s", "first%1$s", "getSecond%1$s", "second%1$s")
@@ -12885,9 +12880,9 @@ class CrossPathCorpusTest {
         LOGGED_CHILD,
         ORDER_LOG,
         LOGGING_FN,
-        twoLoggedTransforms(false) +
-          "public record %1$sSrc(String first%1$s, %1$sC c, String second%1$s) {\n" +
+        "public record %1$sSrc(String first%1$s, %1$sC c, String second%1$s) {\n" +
           "  public static %1$sSrc sample() { return new %1$sSrc(\"1\", new %1$sC(\"a\"), \"2\"); }\n}\n",
+        twoLoggedTransforms(false, "first%1$s", "first%1$s", "second%1$s", "second%1$s"),
         "public record %1$sTgt(String first%1$s, %1$sCDto c, String second%1$s) {\n" +
           "  public static %1$sTgt sample() { return new %1$sTgt(\"3\", new %1$sCDto(\"b\"), \"4\"); }\n}\n",
         twoLoggedRows(false, "first%1$s", "first%1$s", "second%1$s", "second%1$s")
