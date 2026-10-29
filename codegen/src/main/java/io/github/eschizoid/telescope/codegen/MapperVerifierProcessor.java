@@ -1227,9 +1227,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
-     * Whether {@code row}, or the row a {@code when} wraps, is a {@code constant} or {@code compute}
-     * whose target is an accessor of {@code target} or a class it extends, or a path one {@code
-     * field} hop long.
+     * Whether {@code row}, or the row a {@code when} wraps, is a {@code constant} or {@code
+     * compute} whose target is an accessor of {@code target} or a class it extends, or a path one
+     * {@code field} hop long.
      */
     private boolean writesOneTargetProperty(final MethodInvocationTree row, final TypeElement target) {
       var call = row;
@@ -1271,7 +1271,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         var call = row;
         if (
           elementAt(call.getMethodSelect()) instanceof ExecutableElement outer &&
-        outer.getSimpleName().contentEquals("when") &&
+          outer.getSimpleName().contentEquals("when") &&
           call.getArguments().size() == 2 &&
           call.getArguments().get(1) instanceof MethodInvocationTree inner
         ) {
