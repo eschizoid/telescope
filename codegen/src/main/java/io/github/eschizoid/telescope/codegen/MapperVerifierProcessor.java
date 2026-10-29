@@ -617,6 +617,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     private Map<String, Set<String>> nestedConsumed = Map.of();
     // The rows of the call being verified, as the shared walk reads them.
     private List<PairWalk.KeyedRow<TypeMirror>> callRows = List.of();
+    // Whether every row of the call being verified was read into callRows, other than a cases row
+    // or a hint, which apply to no property.
+    private boolean callRowsComplete = true;
 
     @Override
     public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
@@ -678,6 +681,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       nestedSourceClaims = Map.of();
       nestedConsumed = Map.of();
       callRows = List.of();
+      callRowsComplete = true;
       if (srcEl != null && tgtEl != null) nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       if (
         srcEl != null &&
@@ -1099,16 +1103,29 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var all = new ArrayList<PairWalk.KeyedRow<TypeMirror>>();
       callRows = all;
       for (var i = 2; i < args.size(); i++) {
-        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        if (!(args.get(i) instanceof MethodInvocationTree row)) {
+          callRowsComplete = false;
+          continue;
+        }
         if (
           !(elementAt(row.getMethodSelect()) instanceof ExecutableElement rowExec) ||
-          !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
-          !rowOwner.getQualifiedName().contentEquals(MAPPING_FQN)
+          !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner)
         ) {
+          callRowsComplete = false;
+          continue;
+        }
+        final var owner = rowOwner.getQualifiedName().toString();
+        if (!MAPPING_FQN.equals(owner)) {
+          if (!CASES_FQN.equals(owner) && !WRITE_HINT_FQN.equals(owner) && !NULL_HINT_FQN.equals(owner)) {
+            callRowsComplete = false;
+          }
           continue;
         }
         final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
-        if (keyed == null) continue;
+        if (keyed == null) {
+          callRowsComplete = false;
+          continue;
+        }
         final var key = pairKey(keyed.source(), keyed.target());
         all.add(shared(keyed));
         if (key.equals(pairKey(srcEl, tgtEl))) continue;
@@ -1172,6 +1189,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         if (read != null) all.add(read);
       }
       return all;
+    }
+
+    /**
+     * Whether every row of the call was read and none has a side given as a path, a constant or a
+     * compute. Construction leaves a target property no row pairs with unwritten at a pair such a
+     * row applies to, since the row may write it, and which pair a path row applies to is not read
+     * here.
+     */
+    private boolean callRowsAllAccessors() {
+      if (!callRowsComplete) return false;
+      for (final var row : callRows) if (row.kind() == PairWalk.RowKind.PATH) return false;
+      return true;
     }
 
     /**
@@ -2011,6 +2040,25 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           consumedAt(srcEl, tgtEl),
           claimed == null ? Set.of() : claimed
         );
+        // A strict mapper refuses, at any pair with rows of its own, a target property no row
+        // writes whose same-named source a row reads. A call with a row this does not read, or a
+        // path row, is left to construction.
+        if (!forwardOnly && claimed != null && callRowsAllAccessors()) {
+          for (final var name : match.unmatchedTargets()) {
+            if (!sides.source().containsKey(name)) continue;
+            report(
+              at,
+              PairingMessages.sameNameSourceRead(
+                srcEl.getSimpleName().toString(),
+                tgtEl.getSimpleName().toString(),
+                tgtEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                srcEl.getKind() == ElementKind.RECORD ? "field" : "property",
+                name
+              )
+            );
+            return;
+          }
+        }
         for (final var name : match.matched()) {
           verifyProperty(srcEl, tgtEl, sides, name, name, name, at, seen, forwardOnly);
         }

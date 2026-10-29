@@ -229,7 +229,8 @@ class SealedInterfaceRowAgreementTest {
             holder(
               "Telescope.mapper(@@Frame.class, @@FrameDto.class, " +
                 CASES +
-                ", to(@@Circle::name, @@CircleDto::title), to(@@Shape::label, @@ShapeDto::title)).forward(new @@Frame(" +
+                ", to(@@Circle::name, @@CircleDto::title), to(@@Circle::name, @@CircleDto::name)," +
+                " to(@@Shape::label, @@ShapeDto::title)).forward(new @@Frame(" +
                 CIRCLE +
                 "))"
             )
@@ -248,7 +249,8 @@ class SealedInterfaceRowAgreementTest {
             holder(
               "Telescope.mapper(@@Frame.class, @@FrameDto.class, " +
                 CASES +
-                ", to(@@Circle::name, @@CircleDto::title, s -> s + \"!\", s -> s), to(@@Shape::label, @@ShapeDto::title))" +
+                ", to(@@Circle::name, @@CircleDto::title, s -> s + \"!\", s -> s), to(@@Circle::name, @@CircleDto::name)," +
+                " to(@@Shape::label, @@ShapeDto::title))" +
                 ".forward(new @@Frame(" +
                 CIRCLE +
                 "))"

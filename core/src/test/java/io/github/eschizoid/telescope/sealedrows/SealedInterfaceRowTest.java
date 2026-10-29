@@ -14,7 +14,8 @@ import org.junit.jupiter.api.Test;
  * A row keyed to two sealed interfaces applies to every pair of their cases the mapper converts,
  * wherever the mapper meets that pair, and a case's own bridge gives way to it as it does to a row
  * keyed to the case pair itself. {@link SrCircle}'s bridge fills the title from the label, so a
- * title filled from the name shows the row applied.
+ * title filled from the name shows the row applied. The row reads the name, so the name is not
+ * also paired with the target's name: a forward-only mapper leaves that unwritten.
  */
 class SealedInterfaceRowTest {
 
@@ -27,8 +28,8 @@ class SealedInterfaceRowTest {
       cases(SrSquare.class, SrSquareDto.class),
       to(SrShape::name, SrShapeDto::title)
     );
-    assertEquals(new SrCircleDto("n", "n"), mapper.forward(new SrCircle("n", "l")));
-    assertEquals(new SrSquareDto("s", "s"), mapper.forward(new SrSquare("s", "q")));
+    assertEquals(new SrCircleDto(null, "n"), mapper.forward(new SrCircle("n", "l")));
+    assertEquals(new SrSquareDto(null, "s"), mapper.forward(new SrSquare("s", "q")));
   }
 
   @Test
@@ -41,7 +42,7 @@ class SealedInterfaceRowTest {
       to(SrShape::name, SrShapeDto::title)
     );
     assertEquals(
-      new SrFrameDto(new SrSquareDto("s", "s"), new SrCircleDto("c", "c")),
+      new SrFrameDto(new SrSquareDto(null, "s"), new SrCircleDto(null, "c")),
       mapper.forward(new SrFrame(new SrSquare("s", "q"), new SrCircle("c", "l")))
     );
   }
@@ -49,7 +50,12 @@ class SealedInterfaceRowTest {
   @Test
   @DisplayName("a mapper holding only a case, and never the interfaces, takes the row")
   void onlyACase() {
-    final var mapper = Telescope.mapper(SrOnly.class, SrOnlyDto.class, to(SrShape::name, SrShapeDto::title));
+    final var mapper = Telescope.mapper(
+      SrOnly.class,
+      SrOnlyDto.class,
+      to(SrShape::name, SrShapeDto::title),
+      to(SrShape::name, SrShapeDto::name)
+    );
     assertEquals(new SrOnlyDto(new SrCircleDto("c", "c")), mapper.forward(new SrOnly(new SrCircle("c", "l"))));
   }
 
@@ -64,7 +70,7 @@ class SealedInterfaceRowTest {
       to(SrShape::name, SrShapeDto::title)
     );
     assertEquals(new SrSquareDto("s", "q"), mapper.forward(new SrSquare("s", "q")));
-    assertEquals(new SrCircleDto("c", "c"), mapper.forward(new SrCircle("c", "l")));
+    assertEquals(new SrCircleDto(null, "c"), mapper.forward(new SrCircle("c", "l")));
   }
 
   @Test

@@ -883,6 +883,7 @@ class MapperVerifierProcessorTest {
         import static io.github.eschizoid.telescope.mapping.Mapping.constant;
         import static io.github.eschizoid.telescope.mapping.Mapping.to;
         import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.ForwardMapper;
         import io.github.eschizoid.telescope.conversion.Mapper;
         record Num(Integer n) {}
         record NumDto(String label, Long n) {}
@@ -894,12 +895,42 @@ class MapperVerifierProcessorTest {
           static final Mapper<Num, NumDto> FLAT =
             Telescope.mapper(Num.class, NumDto.class, to(Num::n, NumDto::label, Holder::show, Holder::read),
               constant(NumDto::n, 5L));
+          static final ForwardMapper<Outer, OuterDto> NESTED =
+            Telescope.mapperForward(Outer.class, OuterDto.class, to(Num::n, NumDto::label, Holder::show, Holder::read));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName(
+      "a target field whose same-name source a rename reads, at a nested pair with rows, is a compile error with the construction-time message"
+    )
+    void aTargetANestedRenameLeavesErrors() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        record Num(Integer n) {}
+        record NumDto(String label, Long n) {}
+        record Outer(String id, Num in) {}
+        record OuterDto(String id, NumDto in) {}
+        class Holder {
+          static String show(Integer n) { return "#" + n; }
+          static Integer read(String s) { return Integer.valueOf(s.substring(1)); }
           static final Mapper<Outer, OuterDto> NESTED =
             Telescope.mapper(Outer.class, OuterDto.class, to(Num::n, NumDto::label, Holder::show, Holder::read));
         }
         """
       );
-      assertTrue(compilation.success(), compilation::errorMessages);
+      assertFalse(compilation.success(), () -> compilation.errorMessages());
+      assertTrue(
+        compilation.hasError(PairingMessages.sameNameSourceRead("Num", "NumDto", "field", "field", "n")),
+        compilation::errorMessages
+      );
     }
 
     @Test

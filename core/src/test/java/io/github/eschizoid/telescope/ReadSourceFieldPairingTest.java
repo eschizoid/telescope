@@ -8,13 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * A source field a row reads, a rename or a drop, is not paired with the target field of its own
- * name: the row says where the field goes. That target field is left to the other rows, so a strict
- * mapper with no row writing it refuses it by name and a forward-only mapper leaves it unwritten.
+ * A source field a row reads, a rename, a drop or a path one field hop long, is not paired with the
+ * target field of its own name: the row says where the field goes. That target field is left to the
+ * other rows, so a strict mapper with no row writing it refuses it by name, at the mapper's own pair
+ * and at a nested pair with rows of its own, and a forward-only mapper leaves it unwritten.
  */
 class ReadSourceFieldPairingTest {
 
@@ -39,6 +41,16 @@ class ReadSourceFieldPairingTest {
   record Outer(String id, Num in) {}
 
   record OuterDto(String id, NumDto in) {}
+
+  record KeptDto(String id, String n) {}
+
+  record KeptOuter(String id, Kept in) {}
+
+  record KeptOuterDto(String id, KeptDto in) {}
+
+  record Wrap(Inner n) {}
+
+  record WrapDto(String label, Inner n) {}
 
   private static String show(final Integer n) {
     return "#" + n;
@@ -101,13 +113,58 @@ class ReadSourceFieldPairingTest {
   @Test
   @DisplayName("a renamed field of a nested pair is not held to the shape of the target field of its own name")
   void aNestedRenameIsNotHeldToTheShapeOfItsNamesake() {
-    final var mapper = Telescope.mapper(
+    final var mapper = Telescope.mapperForward(
       Outer.class,
       OuterDto.class,
       to(Num::n, NumDto::label, ReadSourceFieldPairingTest::show, ReadSourceFieldPairingTest::read)
     );
     assertEquals(new OuterDto("i", new NumDto("#7", null)), mapper.forward(new Outer("i", new Num(7))));
-    assertEquals(new Outer("j", new Num(3)), mapper.backward(new OuterDto("j", new NumDto("#3", 9L))));
+  }
+
+  @Test
+  @DisplayName("a strict mapper refuses, at a nested pair with rows of its own, the target field a rename leaves")
+  void aStrictMapperRefusesTheNamesakeARenameLeavesAtANestedPair() {
+    final var refused = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(
+        Outer.class,
+        OuterDto.class,
+        to(Num::n, NumDto::label, ReadSourceFieldPairingTest::show, ReadSourceFieldPairingTest::read)
+      )
+    );
+    assertEquals(PairingMessages.sameNameSourceRead("Num", "NumDto", "field", "field", "n"), refused.getMessage());
+  }
+
+  @Test
+  @DisplayName("a strict mapper refuses, at a nested pair, the target field of a dropped field's name")
+  void aStrictMapperRefusesTheNamesakeADropLeavesAtANestedPair() {
+    final var refused = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(KeptOuter.class, KeptOuterDto.class, drop(Kept::n, KeptDto.class))
+    );
+    assertEquals(PairingMessages.sameNameSourceRead("Kept", "KeptDto", "field", "field", "n"), refused.getMessage());
+    assertEquals(
+      new KeptOuterDto("o", new KeptDto("i", null)),
+      Telescope.mapperForward(KeptOuter.class, KeptOuterDto.class, drop(Kept::n, KeptDto.class)).forward(
+        new KeptOuter("o", new Kept("i", "v"))
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a path one field hop long reads its field as an accessor does, so the field is not paired by name")
+  void aOneHopPathIsNotPairedByName() {
+    final var mapper = Telescope.mapperForward(Src.class, Tgt.class, to(Telescope.of(Src.class).field(Src::n), Tgt::label));
+    assertEquals(new Tgt("v", null), mapper.forward(new Src("v")));
+  }
+
+  @Test
+  @DisplayName("a path reading below a field leaves the field to pair by name")
+  void aLongerPathLeavesItsFirstFieldToPairByName() {
+    final var mapper = Telescope.mapperForward(
+      Wrap.class,
+      WrapDto.class,
+      to(Telescope.of(Wrap.class).field(Wrap::n).field(Inner::v), WrapDto::label)
+    );
+    assertEquals(new WrapDto("x", new Inner("x")), mapper.forward(new Wrap(new Inner("x"))));
   }
 
   @Test

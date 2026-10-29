@@ -1276,6 +1276,9 @@ public final class DeepMap {
       // OK.
       final var telescopeReadsSrc = new HashSet<String>();
       final var telescopeWritesTgt = new HashSet<String>();
+      // The source fields rows read through a path one field hop long, outside a `when`. Such a
+      // path reads that one field, as an accessor does, so the field does not pair by name.
+      final var pathReadsSrc = new HashSet<String>();
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
       for (final var rawRow : rowsAt(overrides, key)) {
@@ -1316,6 +1319,9 @@ public final class DeepMap {
             telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            if (
+              firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty()
+            ) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1483,10 +1489,14 @@ public final class DeepMap {
         );
       }
       // A target field no row writes pairs with the source field of its name only when no row
-      // reads that source field, since a row reading it, a rename or a drop, says where it goes.
+      // reads that source field. The rows that read one are those with a source accessor, a
+      // drop, and a path one field hop long; a longer path reads below the field and leaves it to
+      // pair by name.
       final var tgtNames = tgtRefl.names(target);
+      final var readSrc = new HashSet<>(claimedSrc);
+      readSrc.addAll(pathReadsSrc);
       final var byName = new HashSet<>(
-        PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), claimedSrc, claimedTgt).matched()
+        PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, claimedTgt).matched()
       );
       for (final var name : tgtNames) {
         if (claimedTgt.contains(name)) continue;
@@ -1505,12 +1515,17 @@ public final class DeepMap {
           // asked for, or a case of the two sealed interfaces the user asked for. Missing fields
           // there ARE a configuration mistake worth surfacing.
           final var isNested = topStepsOut == null;
+          // A target field left unpaired because a row reads the source field of its name sits at
+          // a pair with rows of its own, which the user configured, so a strict mapper refuses it
+          // at any depth. A pair with a path, constant or compute row is still let through, since
+          // that row may write the field.
+          final var readNamesake = srcNameSet.contains(name) && !lenient && !forwardOnly;
           // `lenient` is set by `resolveForward` — forward-only mappers don't run `backward()`,
           // so the bijection invariant doesn't apply and unmatched target fields silently take
           // the JLS default rather than abort construction. Matches MapStruct's default behaviour
           // and removes "13 drops + 2 constants for a 3-field rename" friction on small-DTO →
           // large-entity migration shapes.
-          if (!telescopeFixups.isEmpty() || isNested || lenient) {
+          if (!telescopeFixups.isEmpty() || (isNested && !readNamesake) || lenient) {
             // Telescope-row placeholder for a target field with no same-name source. Three cases,
             // type-driven:
             //   - field type is a record AND a telescope row claims it as a first hop: allocate a
