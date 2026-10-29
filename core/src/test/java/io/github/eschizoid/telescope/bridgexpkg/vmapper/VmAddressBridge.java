@@ -4,8 +4,8 @@ import io.github.eschizoid.telescope.bridgexpkg.vm.VmAddress;
 import io.github.eschizoid.telescope.bridgexpkg.vm.VmAddressDto;
 
 /**
- * User-supplied @ViaMapper bridge in its OWN package (cross-package to the generated parent
- * bridge).
+ * A hand-written class a via row names, with static {@code forward} and {@code backward}, in its
+ * OWN package (cross-package to the generated parent bridge).
  */
 public final class VmAddressBridge {
 

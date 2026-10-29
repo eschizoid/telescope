@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.unwalked;
 
-/** Converts a back-reference to an empty one, as a @ViaMapper holder with static methods. */
+/** Converts a back-reference to an empty one, as a class a via row names, with static methods. */
 public final class UvBackMapper {
 
   private UvBackMapper() {}

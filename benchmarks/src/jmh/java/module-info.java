@@ -25,5 +25,10 @@ module io.github.eschizoid.telescope.benchmarks {
       io.github.eschizoid.telescope.benchmarks.ShField3ToShDst3BridgeProvider,
       io.github.eschizoid.telescope.benchmarks.ShField4ToShDst4BridgeProvider,
       io.github.eschizoid.telescope.benchmarks.VbFieldSrcToVbTgtBridgeProvider,
-      io.github.eschizoid.telescope.benchmarks.VbClassSrcToVbTgtBridgeProvider;
+      io.github.eschizoid.telescope.benchmarks.VbClassSrcToVbTgtBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.VbSrcToVbTgtBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.CycleSeatToCycleSeatDtoBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.BenchWrapSrcToBenchWrapTgtBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.BenchTxWideSrcToBenchTxTgtBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.BenchTxSrcToBenchTxTgtBridgeProvider;
 }

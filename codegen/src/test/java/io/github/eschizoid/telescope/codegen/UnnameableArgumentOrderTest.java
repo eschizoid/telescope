@@ -21,7 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
  * every argument after it stays inline too, and the call evaluates them in component order.
  *
  * <p>The target's first component is a container nested in a class that is not public, which a
- * forward-only transform produces: the bridge passes the transform's result straight to the
+ * forward-only row's static method produces: the bridge passes the method's result straight to the
  * constructor and never names its type. The second is a pair whose own bridge converts it. Both
  * conversions log as they run. The classes live in two packages, so they are compiled into a jar
  * and loaded through a loader of their own.
@@ -62,6 +62,7 @@ class UnnameableArgumentOrderTest {
           return out;
         }
         @Override public java.util.List<String> backward(final Hid.Bag<String> in) { return in; }
+        public static Hid.Bag<String> bag(final java.util.List<String> in) { return new ToBag().forward(in); }
       }
       """
     ),
@@ -84,18 +85,24 @@ class UnnameableArgumentOrderTest {
       "p7.C",
       """
       package p7;
-      @io.github.eschizoid.telescope.annotations.Bridge(value = q7.CDto.class, transforms =
-        @io.github.eschizoid.telescope.annotations.Transform(field = "n", using = CFn.class))
-      public record C(String n) {}
+      public record C(String n) {
+        @io.github.eschizoid.telescope.annotations.Bridge
+        public static final io.github.eschizoid.telescope.conversion.Mapper<C, q7.CDto> MAPPER =
+          io.github.eschizoid.telescope.Telescope.mapper(C.class, q7.CDto.class,
+            io.github.eschizoid.telescope.mapping.Mapping.to(C::n, q7.CDto::n, CFn.class));
+      }
       """
     ),
     ProcessorHarness.source(
       "p7.Src",
       """
       package p7;
-      @io.github.eschizoid.telescope.annotations.Bridge(value = q7.Dst.class, transforms =
-        @io.github.eschizoid.telescope.annotations.Transform(field = "items", using = q7.ToBag.class, forwardOnly = true))
-      public record Src(java.util.List<String> items, C c) {}
+      public record Src(java.util.List<String> items, C c) {
+        @io.github.eschizoid.telescope.annotations.Bridge
+        public static final io.github.eschizoid.telescope.conversion.ForwardMapper<Src, q7.Dst> MAPPER =
+          io.github.eschizoid.telescope.Telescope.mapperForward(Src.class, q7.Dst.class,
+            io.github.eschizoid.telescope.mapping.Mapping.toOneWay(Src::items, q7.Dst::items, q7.ToBag::bag));
+      }
       """
     ),
     ProcessorHarness.source(
@@ -137,7 +144,7 @@ class UnnameableArgumentOrderTest {
       final var log = (StringBuilder) loader.loadClass("p7.Log").getField("LOG").get(null);
       final var sample = src.getConstructors()[0].newInstance(List.of("a"), c.getConstructors()[0].newInstance("b"));
       log.setLength(0);
-      loader.loadClass("p7.SrcBridge").getMethod("forward", src).invoke(null, sample);
+      loader.loadClass("p7.SrcToDstBridge").getMethod("forward", src).invoke(null, sample);
       final var generated = log.toString();
       @SuppressWarnings("unchecked")
       final var mapper = (ForwardMapper<Object, Object>) loader

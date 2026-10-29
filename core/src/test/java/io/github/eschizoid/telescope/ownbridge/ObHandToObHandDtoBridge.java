@@ -4,7 +4,7 @@ import java.util.Locale;
 
 /**
  * A hand-written class under the long name a generated bridge for {@code (ObHand, ObHandDto)} would
- * take, with no {@code BRIDGE} field: the shape a {@code @ViaMapper} class may have.
+ * take, with no {@code BRIDGE} field: the shape a class a via row names may have.
  */
 public final class ObHandToObHandDtoBridge {
 

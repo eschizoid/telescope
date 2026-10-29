@@ -675,7 +675,7 @@ class SealedInterfaceRowAgreementTest {
   }
 
   @Test
-  @DisplayName("a @Bridge on a sealed interface that sets how fields convert is refused by name")
+  @DisplayName("a @Bridge field on a sealed interface whose rows set how properties convert is refused by name")
   void sealedBridgeWithFieldSettings() {
     final var compilation = compile(
       List.of(new BridgeProcessor()),
@@ -683,9 +683,16 @@ class SealedInterfaceRowAgreementTest {
         "demo.Shape",
         """
         package demo;
-        import io.github.eschizoid.telescope.annotations.*;
-        @Bridge(value = ShapeDto.class, renames = @Rename(source = "label", target = "title"), drops = "note")
-        public sealed interface Shape permits Circle { String label(); }
+        import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+        public sealed interface Shape permits Circle {
+          @Bridge
+          Mapper<Shape, ShapeDto> MAPPER = Telescope.mapper(Shape.class, ShapeDto.class, writeBeans(WriteStrategy.SETTERS));
+          String label();
+        }
         """
       ),
       source(
@@ -706,8 +713,8 @@ class SealedInterfaceRowAgreementTest {
     assertFalse(compilation.success());
     assertTrue(
       compilation.hasError(
-        "@Bridge sealed Shape converts each case through the case's own @Bridge, which this bridge's drops, renames" +
-          " would not reach. Declare them on the @Bridge of each case they apply to."
+        "@Bridge sealed Shape converts each case through the case's own @Bridge, which this bridge's write" +
+          " strategy would not reach. Declare them on the @Bridge of each case they apply to."
       ),
       compilation::errorMessages
     );

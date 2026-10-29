@@ -308,7 +308,7 @@ class TelescopeSpringProcessorTest {
     );
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
     assertThat(result.generated().get("demo.ExternalMapperImpl"))
-      .contains("return io.github.eschizoid.telescope.spring.blueprint.UserBridge.forward(input);")
+      .contains("return io.github.eschizoid.telescope.spring.blueprint.UserToUserDtoBridge.forward(input);")
       .doesNotContain("transformers");
   }
 
@@ -722,7 +722,7 @@ class TelescopeSpringProcessorTest {
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
     assertThat(result.generated().get("demo.InheritedTranslateProjectionImpl"))
       .contains("InheritedTranslateProjection.super.translate(builder);")
-      .doesNotContain("UserBridge.forward");
+      .doesNotContain("UserToUserDtoBridge.forward");
   }
 
   @Test
@@ -747,8 +747,10 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
-    assertThat(result.generated().get("demo.UnrelatedTranslateMapperImpl")).contains("UserBridge.forward(input)");
-    assertThat(result.generated().get("demo.UnrelatedTranslateImpl")).contains("UserBridge.forward(input)");
+    assertThat(result.generated().get("demo.UnrelatedTranslateMapperImpl")).contains(
+      "UserToUserDtoBridge.forward(input)"
+    );
+    assertThat(result.generated().get("demo.UnrelatedTranslateImpl")).contains("UserToUserDtoBridge.forward(input)");
   }
 
   @Test
@@ -912,7 +914,7 @@ class TelescopeSpringProcessorTest {
     );
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
     assertThat(result.generated().get("demo.PlainProjectionImpl"))
-      .contains("UserBridge.forward")
+      .contains("UserToUserDtoBridge.forward")
       .contains("ObjectProvider<TelescopeCustomizer<PlainProjection>> customizers")
       .contains("private final List<TelescopeTransformation<User, ?>> transformers;")
       .doesNotContain("volatile")

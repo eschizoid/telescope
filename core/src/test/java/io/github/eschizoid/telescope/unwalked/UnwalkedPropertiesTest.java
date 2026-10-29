@@ -23,14 +23,14 @@ class UnwalkedPropertiesTest {
   }
 
   @Test
-  @DisplayName("a field converted through a @ViaMapper leaves the pair to its own bridge")
+  @DisplayName("a field converted through a via row leaves the pair to its own bridge")
   void aViaMapperFieldLeavesThePairToItsBridge() {
     final var dto = Telescope.mapper(UvTop.class, UvTopDto.class).forward(new UvTop(new UvX("ab", new UvBack(null))));
     assertEquals(new UvXDto("ab", new UvBackDto(null)), dto.x());
   }
 
   @Test
-  @DisplayName("a target field a @Constant fills leaves the pair to its own bridge")
+  @DisplayName("a target field a constant row fills leaves the pair to its own bridge")
   void aConstantFieldLeavesThePairToItsBridge() {
     final var dto = Telescope.mapperForward(UkTop.class, UkTopDto.class).forward(
       new UkTop(new UkX("ab", new UkBack(null)))
@@ -39,7 +39,7 @@ class UnwalkedPropertiesTest {
   }
 
   @Test
-  @DisplayName("a target field a @Compute fills leaves the pair to its own bridge")
+  @DisplayName("a target field a compute row fills leaves the pair to its own bridge")
   void aComputedFieldLeavesThePairToItsBridge() {
     final var dto = Telescope.mapperForward(UcTop.class, UcTopDto.class).forward(
       new UcTop(new UcX("ab", new UcBack(null)))

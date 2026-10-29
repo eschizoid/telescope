@@ -28,8 +28,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Three modules compiled apart, as separate builds compile them: {@code a} declares a record and a
- * bean whose setter takes a different type than its getter gives, {@code b} declares a carrier
- * {@code @Bridge} for that pair that converts the property through a transform of its own, and
+ * bean whose setter takes a different type than its getter gives, {@code b} declares a {@code
+ * @Bridge} field for that pair, on a class of its own, that converts the property by a row, and
  * {@code c} calls {@code Telescope.mapperForward} on the pair and on a pair holding it. Each module
  * is compiled into a jar the next one has on its class path.
  *
@@ -146,10 +146,13 @@ class CarrierOnClassPathTest {
         source(
           "cm612.b.SrcToBean",
           "package cm612.b;\n" +
-            "@io.github.eschizoid.telescope.annotations.Bridge(source = cm612.a.Src.class," +
-            " target = cm612.a.Bean.class, transforms = @io.github.eschizoid.telescope.annotations.Transform(" +
-            "field = \"x\", using = Conv.class, method = \"text\", forwardOnly = true))\n" +
-            "public final class SrcToBean {}\n"
+            "public final class SrcToBean {\n" +
+            "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+            "  public static final io.github.eschizoid.telescope.conversion.ForwardMapper<cm612.a.Src, cm612.a.Bean>" +
+            " MAPPER = io.github.eschizoid.telescope.Telescope.mapperForward(cm612.a.Src.class, cm612.a.Bean.class," +
+            " io.github.eschizoid.telescope.mapping.Mapping.<cm612.a.Src, cm612.a.Bean, Integer, Object>toOneWay(" +
+            "cm612.a.Src::x, cm612.a.Bean::getX, Conv::text));\n" +
+            "}\n"
         ),
         // A bridge on its own source, not a carrier, leaves no marker.
         source(

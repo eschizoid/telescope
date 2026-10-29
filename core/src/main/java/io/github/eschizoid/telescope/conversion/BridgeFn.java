@@ -147,8 +147,8 @@ public interface BridgeFn<A, B> {
 
   /**
    * The properties of the target this bridge does not walk: those a converting {@code to} row or a
-   * {@code via} row writes, and those a {@code constant} or a {@code compute} row fills. See
-   * {@link #unwalkedSourceProperties()}.
+   * {@code via} row writes, and those a {@code constant} or a {@code compute} row fills. See {@link
+   * #unwalkedSourceProperties()}.
    */
   default Set<String> unwalkedTargetProperties() {
     return Set.of();

@@ -221,11 +221,11 @@ class UnnameableContainerTest {
   }
 
   @Test
-  @DisplayName("a forward-only transform into an unnameable type is bridged, since nothing reads it back")
+  @DisplayName("a forward-only row into an unnameable type is bridged, since nothing reads it back")
   void aForwardOnlyTransformIntoAnUnnameableTypeIsBridged() {
-    // Forward hands the transform's result straight to the target's constructor without a local,
-    // and backward reads no target field for a forward-only row, so the bridge never writes the
-    // target type's name.
+    // Forward hands the static method's result straight to the target's constructor without a
+    // local, and backward reads no target field for a forward-only row, so the bridge never writes
+    // the target type's name.
     final var compilation = bridgeHidden(
       target("Hid.Bag<String>"),
       ProcessorHarness.source(
@@ -241,6 +241,7 @@ class UnnameableContainerTest {
             return out;
           }
           @Override public java.util.List<String> backward(final Hid.Bag<String> in) { return in; }
+          public static Hid.Bag<String> bag(final java.util.List<String> in) { return new ToBag().forward(in); }
         }
         """
       ),
@@ -248,12 +249,18 @@ class UnnameableContainerTest {
         "p6.Src",
         """
         package p6;
+        import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
+        import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = q6.Dst.class, transforms = {
-          @Transform(field = "items", using = q6.ToBag.class, forwardOnly = true)
-        })
-        public record Src(java.util.List<String> items) {}
+        import io.github.eschizoid.telescope.conversion.ForwardMapper;
+        public record Src(java.util.List<String> items) {
+          @Bridge
+          public static final ForwardMapper<Src, q6.Dst> MAPPER = Telescope.mapperForward(
+            Src.class,
+            q6.Dst.class,
+            toOneWay(Src::items, q6.Dst::items, q6.ToBag::bag)
+          );
+        }
         """
       )
     );

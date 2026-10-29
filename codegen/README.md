@@ -80,14 +80,14 @@ members before they read a Lombok class. The JPMS setup is in [docs/codegen.md](
 The jar registers six processors. You do not pick them one by one. Each one acts only on its own annotation, except the
 mapper verifier, which checks every class it compiles.
 
-| Processor                  | Trigger                                               | Generates                                                                         |
-| -------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `FocusProcessor`           | `@Focus` on a record                                  | `<X>Telescope<R>` navigator and `<X>FieldOptics` holder                           |
-| `BeanFocusProcessor`       | `@BeanFocus` on a POJO                                | `<X>Telescope<R>` navigator and `<X>FieldOptics` holder                           |
-| `BridgeProcessor`          | `@Bridge` (repeatable, or `@Bridges`)                 | `<Source>Bridge` converter                                                        |
-| `FromMapProcessor`         | `@FromMap` on a record or POJO                        | `<X>FromMap` binder from `Map<String, Object>`                                    |
-| `TelescopeMapperProcessor` | `@TelescopeMapper` or `@TelescopeTransformer`         | a Spring `@Component`, see the [Spring starter](../spring-boot-starter/README.md) |
-| `MapperVerifierProcessor`  | any `Telescope.map`, `mapper` or `mapperForward` call | compile errors for mappings the runtime would refuse                              |
+| Processor                  | Trigger                                                   | Generates                                                                         |
+| -------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `FocusProcessor`           | `@Focus` on a record                                      | `<X>Telescope<R>` navigator and `<X>FieldOptics` holder                           |
+| `BeanFocusProcessor`       | `@BeanFocus` on a POJO                                    | `<X>Telescope<R>` navigator and `<X>FieldOptics` holder                           |
+| `BridgeProcessor`          | `@Bridge` on a type (or `@Bridges`), or on a mapper field | `<Source>Bridge` or `<Source>To<Target>Bridge` converter                          |
+| `FromMapProcessor`         | `@FromMap` on a record or POJO                            | `<X>FromMap` binder from `Map<String, Object>`                                    |
+| `TelescopeMapperProcessor` | `@TelescopeMapper` or `@TelescopeTransformer`             | a Spring `@Component`, see the [Spring starter](../spring-boot-starter/README.md) |
+| `MapperVerifierProcessor`  | any `Telescope.map`, `mapper` or `mapperForward` call     | compile errors for mappings the runtime would refuse                              |
 
 All annotations have source retention, so they leave nothing in the compiled classes. An annotated type must be a
 top-level record or class, and the processor reports a nested one as a compile error.
@@ -215,27 +215,30 @@ that holds 0 or `false`. It always returns a new object, even when `partial` is 
 only the root object. A field that `partial` leaves `null` keeps the object `base` holds, so a nested object or list is
 shared with `base`.
 
-### Attributes of `@Bridge`
+### Attributes of `@Bridge` on a class
 
-| Attribute          | Use                                                                                                 |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `value`            | the target type, when the annotation is on the source                                               |
-| `source`, `target` | the two types, when the annotation is on a separate carrier class                                   |
-| `drops`            | source fields the target lacks, which backward fills with `null`, zero or `false`                   |
-| `renames`          | `@Rename(source = "...", target = "...")` pairs for fields whose names differ                       |
-| `transforms`       | `@Transform(field = "...", using = X.class)`, where `X` is a `BridgeFn` that converts one field     |
-| `constants`        | `@Constant(field = "...", value = "...")`, a literal written to a target field on forward           |
-| `computes`         | `@Compute(field = "...", using = X.class)`, where `X` is a `Supplier` called on forward             |
-| `defaults`         | `@Default(field = "...", value = "...")`, a literal used when the source field is `null`            |
-| `viaMappers`       | `@ViaMapper(field = "...", using = X.class)`, where `X` has static `forward` and `backward` methods |
-| `writeStrategy`    | `WriteStrategy.AUTO` (the default), `CONSTRUCTOR`, `BUILDER` or `SETTERS`, for a POJO target        |
-| `lenient`          | `true` skips the check that every field has a counterpart, and unmatched fields get defaults        |
+| Attribute          | Use                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| `value`            | the target type, when the annotation is on the source                                        |
+| `source`, `target` | the two types, when the annotation is on a separate carrier class                            |
+| `writeStrategy`    | `WriteStrategy.AUTO` (the default), `CONSTRUCTOR`, `BUILDER` or `SETTERS`, for a POJO target |
+| `lenient`          | `true` skips the check that every field has a counterpart, and unmatched fields get defaults |
 
-`@Rename` and `@Transform` also take `forwardOnly`, and `@Transform` takes `method` to call a named static method
-instead of a `BridgeFn`. The field names in these attributes are strings, and a name that does not exist is a compile
-error.
+On a class, `@Bridge` declares a pair with no rows, whose properties are matched by name. A pair that renames, converts,
+drops or fills a property is declared on a field instead.
+
+### Rows on a `@Bridge` field
+
+`@Bridge` on a `static final` field initialised by `Telescope.mapper(...)` or `Telescope.mapperForward(...)` takes no
+attributes: the rows of that call are the whole declaration, and the processor compiles them into the generated bridge.
+`mapper` gives a two-way, strict bridge, and `mapperForward` a forward-only, lenient one. The bridge is named after its
+pair, `<Source>To<Target>Bridge`, in the package of the class that declares the field, and the factory returns a mapper
+over it when the field is initialised.
 
 ```java
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.*;
+
 public final class Cents implements BridgeFn<BigDecimal, Long> {
 
   public Long forward(BigDecimal x) {
@@ -247,21 +250,49 @@ public final class Cents implements BridgeFn<BigDecimal, Long> {
   }
 }
 
-@Bridge(
-  value = OrderDto.class,
-  renames = @Rename(source = "orderNumber", target = "reference"),
-  transforms = @Transform(field = "total", using = Cents.class),
-  defaults = @Default(field = "region", value = "EMEA"),
-  constants = @Constant(field = "channel", value = "API"),
-  drops = "internalNote"
-)
-public record Order(String orderNumber, BigDecimal total, String region, String internalNote) {}
+public record OrderEntity(String orderNumber, BigDecimal total, String region, String internalNote) {
+  @Bridge
+  static final Mapper<OrderEntity, OrderDto> DTO = mapper(
+    OrderEntity.class,
+    OrderDto.class,
+    to(OrderEntity::orderNumber, OrderDto::reference),
+    to(OrderEntity::total, OrderDto::totalCents, Cents.class),
+    toOrElse(OrderEntity::region, OrderDto::region, "EMEA"),
+    constant(OrderDto::channel, "API"),
+    drop(OrderEntity::internalNote)
+  );
+}
 
-public record OrderDto(String reference, long total, String region, String channel) {}
+public record OrderDto(String reference, long totalCents, String region, String channel) {}
 ```
 
-With these, `OrderBridge.forward(new Order("N-1", new BigDecimal("12.34"), null, "secret"))` returns
-`OrderDto[reference=N-1, total=1234, region=EMEA, channel=API]`.
+With these, `OrderEntity.DTO.forward(new OrderEntity("N-1", new BigDecimal("12.34"), null, "secret"))` returns
+`OrderDto[reference=N-1, totalCents=1234, region=EMEA, channel=API]`, through the generated
+`OrderEntityToOrderDtoBridge`.
+
+Records name a property by its component (`X::name`), and POJOs by its getter (`X::getName`).
+
+| Row                                                     | Use                                                                                               |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `to(Src::a, Tgt::b)`                                    | a property whose name differs on the two sides                                                    |
+| `to(Src::a, Tgt::b, Fn.class)`                          | converts through a `BridgeFn`, built once through its no-arg constructor                          |
+| `to(Src::a, Tgt::b, Fns.CONVERSION)`                    | converts through a `BridgeFn` held in a `static final` field                                      |
+| `to(Src::a, Tgt::b, Helper::forward, Helper::backward)` | converts through two method references, one for each direction                                    |
+| `toOneWay(Src::a, Tgt::b, Helper::forward)`             | converts forward only, so it belongs on a `mapperForward` field                                   |
+| `via(Src::a, Tgt::b, Nested.DTO)`                       | converts through the bridge another `@Bridge` field declares for the nested pair                  |
+| `via(Src::a, Tgt::b, Hw.class)`                         | converts through the static `forward` and `backward` of a class written by hand                   |
+| `toOrElse(Src::a, Tgt::a, "EMEA")`                      | a literal used when the source value is `null`                                                    |
+| `toOrElseGet(Src::a, Tgt::a, Defaults::region)`         | a supplier called when the source value is `null`                                                 |
+| `constant(Tgt::a, "API")`                               | a literal or enum constant written to a target property on forward                                |
+| `compute(Tgt::a, Clock::now)`                           | a supplier called on forward: a method reference, or a `static final` field holding a supplier    |
+| `drop(Src::a)`                                          | a source property the target lacks, which backward fills with `null`, zero or `false`             |
+| `writeBean(Side.class, SETTERS)`, `writeBeans(SETTERS)` | how a POJO side is rebuilt, as `writeStrategy` does on a class (static-imported from `WriteHint`) |
+
+A converter or supplier is a reference to a static method, to an unbound instance method such as `String::trim`, or to a
+constructor. The processor writes a small generated class for each such reference, default and constant, and the bridge
+calls it. A row the processor cannot compile, such as an inline lambda, is a compile error on the row that names what to
+write instead. One source property written to several targets is a `mapperForward` field with one `to` row per target,
+since the backward direction would have to choose between them.
 
 A `@Bridge` with `lenient = true` loses data on the way back. Every source field with no target counterpart comes back
 as `null`, zero or `false`, whatever the original held.

@@ -165,10 +165,9 @@ from the source's package with `Class.forName`, and reads its `BRIDGE` field. Wh
 `ServiceLoader` instead.
 
 In an image, a holder class that is not registered reads as absent. The mapper then walks the pair by name, so the
-bridge's transforms, renames and other settings are not applied, and the result differs from the JVM's without an error.
-Register each `<Source>Bridge` and `<Source>To<Target>Bridge` a runtime mapper can reach: the class, and its `BRIDGE`
-field for reading. Keep the `META-INF/services` entries the processor writes for carrier bridges, as for any other
-service.
+bridge's rows are not applied, and the result differs from the JVM's without an error. Register each `<Source>Bridge`
+and `<Source>To<Target>Bridge` a runtime mapper can reach: the class, and its `BRIDGE` field for reading. Keep the
+`META-INF/services` entries the processor writes for carrier bridges, as for any other service.
 
 The mapper looks up both names for every nested pair it reaches, and for most pairs neither class exists. Under
 GraalVM's strict missing-registration mode, a `Class.forName` of a name that is not registered throws an error rather

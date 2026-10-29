@@ -32,8 +32,8 @@ import org.junit.jupiter.api.io.TempDir;
  * Holds the compile-time verifier and mapper construction to one answer on whether a nested pair
  * converts through its own {@code @Bridge} or is walked, which decides the pairs a row can be keyed
  * to. Construction lets the bridge stand in unless something the mapper is given reaches below the
- * properties the bridge walks itself; the verifier reads those properties from the {@code @Bridge}
- * in the same compilation and asks the same shared question. A row reachable only through a
+ * properties the bridge walks itself; the verifier reads those properties from the rows of the
+ * {@code @Bridge} field in the same compilation and asks the same shared question. A row reachable only through a
  * property the bridge converts its own way is then refused by both with one message, and a row the
  * bridge's walked properties reach makes both walk the pair and accept the row.
  *
@@ -51,6 +51,8 @@ class OwnBridgeAgreementTest {
     import io.github.eschizoid.telescope.Telescope;
     import io.github.eschizoid.telescope.annotations.*;
     import io.github.eschizoid.telescope.conversion.BridgeFn;
+    import io.github.eschizoid.telescope.conversion.ForwardMapper;
+    import io.github.eschizoid.telescope.conversion.Mapper;
     import io.github.eschizoid.telescope.mapping.NullHint;
     import io.github.eschizoid.telescope.mapping.WriteHint;
     import java.util.function.Supplier;
@@ -120,6 +122,38 @@ class OwnBridgeAgreementTest {
     return "class @@Holder { static Object build() { return " + call + "; } }\n";
   }
 
+  /**
+   * The record {@code @@Inner}, of {@code components}, with a {@code @Bridge} field into {@code
+   * @@InnerDto} that {@code Telescope.mapper} builds from {@code rows}.
+   */
+  private static String inner(final String components, final String... rows) {
+    return bridgedInner("Mapper", "mapper", components, rows);
+  }
+
+  /** As {@link #inner}, through {@code Telescope.mapperForward}, which is lenient. */
+  private static String forwardInner(final String components, final String... rows) {
+    return bridgedInner("ForwardMapper", "mapperForward", components, rows);
+  }
+
+  private static String bridgedInner(
+    final String type,
+    final String factory,
+    final String components,
+    final String... rows
+  ) {
+    return (
+      "record @@Inner(" +
+      components +
+      ") {\n  @Bridge\n  static final " +
+      type +
+      "<@@Inner, @@InnerDto> MAPPER = Telescope." +
+      factory +
+      "(@@Inner.class, @@InnerDto.class" +
+      (rows.length == 0 ? "" : ", " + String.join(", ", rows)) +
+      ");\n}\n"
+    );
+  }
+
   private static void assertBothRefuse(final Outcome outcome) {
     assertNotNull(outcome.construction(), "construction built the mapper");
     assertTrue(outcome.construction().contains("never visits"), outcome.construction());
@@ -146,15 +180,14 @@ class OwnBridgeAgreementTest {
             "  public @@PartDto forward(final @@Part p) { return p == null ? null : new @@PartDto(p.v()); }\n" +
             "  public @@Part backward(final @@PartDto p) { return p == null ? null : new @@Part(p.v()); }\n" +
             "}\n" +
-            "@Bridge(value = @@InnerDto.class, transforms = @Transform(field = \"part\", using = @@PartFn.class))\n" +
-            "record @@Inner(String name, @@Part part) {}\n" +
+            inner("String name, @@Part part", "to(@@Inner::part, @@InnerDto::part, @@PartFn.class)") +
             holder(CALL)
         )
       );
     }
 
     @Test
-    @DisplayName("a property the bridge converts through a @ViaMapper")
+    @DisplayName("a property the bridge converts through a via row naming a class")
     void viaMapper() {
       assertBothRefuse(
         outcome(
@@ -164,8 +197,28 @@ class OwnBridgeAgreementTest {
             "  public static @@PartDto forward(final @@Part p) { return p == null ? null : new @@PartDto(p.v()); }\n" +
             "  public static @@Part backward(final @@PartDto p) { return p == null ? null : new @@Part(p.v()); }\n" +
             "}\n" +
-            "@Bridge(value = @@InnerDto.class, viaMappers = @ViaMapper(field = \"part\", using = @@PartMap.class))\n" +
+            inner("String name, @@Part part", "via(@@Inner::part, @@InnerDto::part, @@PartMap.class)") +
+            holder(CALL)
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a property converted by a bridge whose field another class of the pair's package declares")
+    void declaredBeside() {
+      // Construction finds the bridge by its pair's name, beside the source, whichever class of the
+      // package declares the field.
+      assertBothRefuse(
+        outcome(
+          "ObK",
+          NESTED +
+            TRANSFORM_PART +
             "record @@Inner(String name, @@Part part) {}\n" +
+            "final class @@Carrier {\n" +
+            "  @Bridge\n" +
+            "  static final Mapper<@@Inner, @@InnerDto> MAPPER = Telescope.mapper(@@Inner.class, @@InnerDto.class," +
+            " to(@@Inner::part, @@InnerDto::part, @@PartFn.class));\n" +
+            "}\n" +
             holder(CALL)
         )
       );
@@ -185,10 +238,11 @@ class OwnBridgeAgreementTest {
             record @@InnerDto(@@PartDto part, @@Part spare) {}
             """ +
             TRANSFORM_PART +
-            "@Bridge(value = @@InnerDto.class, drops = \"part\"," +
-            " renames = @Rename(source = \"piece\", target = \"part\")," +
-            " transforms = @Transform(field = \"piece\", using = @@PartFn.class))\n" +
-            "record @@Inner(@@Part piece, @@Part part, @@Part spare) {}\n" +
+            inner(
+              "@@Part piece, @@Part part, @@Part spare",
+              "drop(@@Inner::part)",
+              "to(@@Inner::piece, @@InnerDto::part, @@PartFn.class)"
+            ) +
             holder(CALL)
         )
       );
@@ -203,8 +257,14 @@ class OwnBridgeAgreementTest {
           """
             record @@Tree(String n, @@Branch b) {}
             record @@TreeDto(String n, @@BranchDto b) {}
-            @Bridge(value = @@BranchDto.class, drops = "part", lenient = true)
-            record @@Branch(@@Tree back, @@Part part) {}
+            record @@Branch(@@Tree back, @@Part part) {
+              @Bridge
+              static final ForwardMapper<@@Branch, @@BranchDto> MAPPER = Telescope.mapperForward(
+                @@Branch.class,
+                @@BranchDto.class,
+                drop(@@Branch::part)
+              );
+            }
             record @@BranchDto(@@TreeDto back, @@PartDto part) {}
             """ +
             holder("Telescope.mapperForward(@@Tree.class, @@TreeDto.class, to(@@Part::v, @@PartDto::v))")
@@ -224,11 +284,11 @@ class OwnBridgeAgreementTest {
           record @@OuterDto(@@InnerDto in) {}
           record @@InnerDto(@@PartDto part, @@Part spare) {}
           final class @@PartMaker implements Supplier<@@PartDto> {
+            static final @@PartMaker INSTANCE = new @@PartMaker();
             public @@PartDto get() { return new @@PartDto("made"); }
           }
-          @Bridge(value = @@InnerDto.class, drops = "part", computes = @Compute(field = "part", using = @@PartMaker.class))
-          record @@Inner(@@Part part, @@Part spare) {}
           """ +
+          inner("@@Part part, @@Part spare", "drop(@@Inner::part)", "compute(@@InnerDto::part, @@PartMaker.INSTANCE)") +
           holder(CALL)
       )
     );
@@ -246,8 +306,7 @@ class OwnBridgeAgreementTest {
           "ObI",
           NESTED +
             TRANSFORM_PART +
-            "@Bridge(value = @@InnerDto.class, transforms = @Transform(field = \"part\", using = @@PartFn.class))\n" +
-            "record @@Inner(String name, @@Part part) {}\n" +
+            inner("String name, @@Part part", "to(@@Inner::part, @@InnerDto::part, @@PartFn.class)") +
             holder(
               "Telescope.mapperForward(@@Outer.class, @@OuterDto.class, to(@@Part::v, @@PartDto::v), " +
                 "NullHint.nullSourceValues(NullHint.NullStrategy.DEFAULT))"
@@ -264,8 +323,7 @@ class OwnBridgeAgreementTest {
           "ObL",
           NESTED +
             TRANSFORM_PART +
-            "@Bridge(value = @@InnerDto.class, transforms = @Transform(field = \"part\", using = @@PartFn.class))\n" +
-            "record @@Inner(String name, @@Part part) {}\n" +
+            inner("String name, @@Part part", "to(@@Inner::part, @@InnerDto::part, @@PartFn.class)") +
             holder(
               "Telescope.mapperForward(@@Outer.class, @@OuterDto.class, to(@@Part::v, @@PartDto::v), " +
                 "WriteHint.writeBeans(WriteHint.WriteStrategy.SETTERS))"
@@ -274,38 +332,6 @@ class OwnBridgeAgreementTest {
       );
     }
 
-    @Test
-    @DisplayName("a pair two bridges on its source name, the bridge generated from the last walking the property")
-    void namedTwice() {
-      assertBothAccept(
-        outcome(
-          "ObJ",
-          NESTED +
-            TRANSFORM_PART +
-            "@Bridge(value = @@InnerDto.class, transforms = @Transform(field = \"part\", using = @@PartFn.class))\n" +
-            "@Bridge(@@InnerDto.class)\n" +
-            "record @@Inner(String name, @@Part part) {}\n" +
-            holder(CALL)
-        )
-      );
-    }
-
-    @Test
-    @DisplayName("a pair a carrier class names, whose bridge construction finds through its registration")
-    void carrier() {
-      assertBothAccept(
-        outcome(
-          "ObK",
-          NESTED +
-            TRANSFORM_PART +
-            "record @@Inner(String name, @@Part part) {}\n" +
-            "@Bridge(source = @@Inner.class, target = @@InnerDto.class, " +
-            "transforms = @Transform(field = \"part\", using = @@PartFn.class))\n" +
-            "final class @@Carrier {}\n" +
-            holder(CALL)
-        )
-      );
-    }
   }
 
   @Nested
@@ -322,9 +348,8 @@ class OwnBridgeAgreementTest {
             record @@Outer(@@Inner in) {}
             record @@OuterDto(@@InnerDto in) {}
             record @@InnerDto(String title, @@PartDto part) {}
-            @Bridge(value = @@InnerDto.class, renames = @Rename(source = "name", target = "title"))
-            record @@Inner(String name, @@Part part) {}
             """ +
+            inner("String name, @@Part part", "to(@@Inner::name, @@InnerDto::title)") +
             holder(CALL)
         )
       );
@@ -361,9 +386,8 @@ class OwnBridgeAgreementTest {
           record @@Outer(@@Inner in) {}
           record @@OuterDto(@@InnerDto in) {}
           record @@InnerDto(String name, @@PartDto piece) {}
-          @Bridge(value = @@InnerDto.class, renames = @Rename(source = "part", target = "piece"))
-          record @@Inner(String name, @@Part part) {}
           """ +
+          inner("String name, @@Part part", "to(@@Inner::part, @@InnerDto::piece)") +
           holder(CALL)
       )
     );
@@ -401,8 +425,12 @@ class OwnBridgeAgreementTest {
         source(
           "oba.Inner",
           "package oba;\n" +
-            "@io.github.eschizoid.telescope.annotations.Bridge(value = InnerDto.class, drops = \"part\", lenient = true)\n" +
-            "public record Inner(String name, Part part) {}\n"
+            "public record Inner(String name, Part part) {\n" +
+            "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+            "  public static final io.github.eschizoid.telescope.conversion.ForwardMapper<Inner, InnerDto> MAPPER =" +
+            " io.github.eschizoid.telescope.Telescope.mapperForward(Inner.class, InnerDto.class," +
+            " io.github.eschizoid.telescope.mapping.Mapping.drop(Inner::part));\n" +
+            "}\n"
         ),
         source("oba.InnerDto", "package oba;\npublic record InnerDto(String name, PartDto part) {}\n"),
         source("oba.Outer", "package oba;\npublic record Outer(Inner in) {}\n"),

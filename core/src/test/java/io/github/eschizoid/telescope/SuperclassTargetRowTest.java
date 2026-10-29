@@ -233,28 +233,28 @@ class SuperclassTargetRowTest {
   }
 
   @Test
-  @DisplayName("constant through an abstract base's getter converts as the generated bridge's @Constant does")
+  @DisplayName("constant through an abstract base's getter converts as the generated bridge's constant row does")
   void constantMatchesTheGeneratedBridge() {
     final var runtime = Telescope.mapper(
       SuperRowBridged.class,
       SuperRowAbstractSub.class,
       constant(SuperRowAbstractBase::getName, "fixed")
     ).forward(new SuperRowBridged(7));
-    final var generated = SuperRowBridgedBridge.BRIDGE.read(new SuperRowBridged(7));
+    final var generated = SuperRowBridgedToSuperRowAbstractSubBridge.BRIDGE.read(new SuperRowBridged(7));
     assertSame(generated.getClass(), runtime.getClass());
     assertEquals(generated.getName(), runtime.getName());
     assertEquals(generated.getN(), runtime.getN());
   }
 
   @Test
-  @DisplayName("compute through a generic base's getter converts as the generated bridge's @Compute does")
+  @DisplayName("compute through a generic base's getter converts as the generated bridge's compute row does")
   void computeMatchesTheGeneratedBridge() {
     final var runtime = Telescope.mapper(
       SuperRowComputedBridged.class,
       SuperRowGenericSub.class,
       compute(SuperRowGenericBase<String>::getName, new SuperRowNameSupplier())
     ).forward(new SuperRowComputedBridged(7));
-    final var generated = SuperRowComputedBridgedBridge.BRIDGE.read(new SuperRowComputedBridged(7));
+    final var generated = SuperRowComputedBridgedToSuperRowGenericSubBridge.BRIDGE.read(new SuperRowComputedBridged(7));
     assertSame(generated.getClass(), runtime.getClass());
     assertEquals(generated.getName(), runtime.getName());
     assertEquals(generated.getN(), runtime.getN());
@@ -383,14 +383,14 @@ class SuperclassTargetRowTest {
   }
 
   @Test
-  @DisplayName("constant through an interface converts as the generated bridge's @Constant does")
+  @DisplayName("constant through an interface converts as the generated bridge's constant row does")
   void interfaceConstantMatchesTheGeneratedBridge() {
     final var runtime = Telescope.mapper(
       SuperRowNamedBridged.class,
       SuperRowNamedRecord.class,
       constant(SuperRowNamed::name, "fixed")
     ).forward(new SuperRowNamedBridged(7));
-    assertEquals(SuperRowNamedBridgedBridge.BRIDGE.read(new SuperRowNamedBridged(7)), runtime);
+    assertEquals(SuperRowNamedBridgedToSuperRowNamedRecordBridge.BRIDGE.read(new SuperRowNamedBridged(7)), runtime);
   }
 
   @Test

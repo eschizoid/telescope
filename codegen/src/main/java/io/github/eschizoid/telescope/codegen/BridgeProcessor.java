@@ -1610,6 +1610,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (forwardChecked) forwardArguments.put(t, argumentCheck(fwdAccepts, source, t));
           if (backwardChecked) backwardArguments.put(t, argumentCheck(bwdAccepts, target, tName));
         }
+      } else {
+        // A static method converting forward only takes what a BridgeFn's forward takes: a
+        // property declared with a type variable is handed to a method taking a class narrower
+        // than the variable's bound after a check of its class.
+        final var sfType = sourceFields
+          .stream()
+          .filter(f -> f.name().equals(t))
+          .findFirst()
+          .orElseThrow()
+          .type();
+        final var accepts = methodParameter(transforms.get(t), txMethod, heldAs(sfType), bridgePackage);
+        if (readsByCheck(sfType, heldAs(sfType), accepts)) forwardArguments.put(t, argumentCheck(accepts, source, t));
       }
     }
 
@@ -5260,7 +5272,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Qualifier dispatch: emit a direct {@code UsingClass.methodName(value)} call. Otherwise
       // dispatch through the {@code __tx_<field>} BridgeFn singleton instance (legacy shape).
       case TRANSFORM -> plan.qualifierMethod() != null
-        ? plan.subBridgeName() + "." + plan.qualifierMethod() + "(" + readExpr + ")"
+        ? plan.subBridgeName() +
+        "." +
+        plan.qualifierMethod() +
+        "(" +
+        checkedArgument(forwardArguments.get(fieldName), readExpr) +
+        ")"
         : "__tx_" + fieldName + ".forward(" + checkedArgument(forwardArguments.get(fieldName), readExpr) + ")";
     };
   }
@@ -7798,6 +7815,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       accepts.toString(),
       types.erasure(accepts) + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(property)
     );
+  }
+
+  /**
+   * The parameter of the one-argument static method {@code name} of {@code owner} a call handed a
+   * value held as {@code held} binds to, or, where none takes it, of the only such method; null
+   * where there is neither.
+   */
+  private TypeMirror methodParameter(
+    final String owner,
+    final String name,
+    final TypeMirror held,
+    final PackageElement callerPackage
+  ) {
+    final var ownerEl = processingEnv.getElementUtils().getTypeElement(owner);
+    if (ownerEl == null) return null;
+    if (resolvedFn(ownerEl, name, held, callerPackage) instanceof Resolution.Bound bound) {
+      return bound.member().getParameterTypes().getFirst();
+    }
+    final var named = ElementFilter.methodsIn(ownerEl.getEnclosedElements())
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals(name) && m.getParameters().size() == 1)
+      .filter(m -> m.getModifiers().contains(Modifier.STATIC))
+      .toList();
+    return named.size() == 1 ? named.getFirst().getParameters().getFirst().asType() : null;
   }
 
   /** {@code value}, checked as {@code check} says and cast to the class it names, or as it is. */

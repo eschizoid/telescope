@@ -9,7 +9,9 @@ import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
+import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
@@ -40,6 +42,7 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 
 /**
@@ -684,11 +687,29 @@ final class FieldRows {
         final var name = bridgeName + camel(s.property()) + "Fn";
         transforms.put(s.property(), qualified(name));
         if (!twoWay) forwardOnly.add(s.property());
-        classes.add(bridgeFn(name, s.type(), t.type(), ((Call) forward).expression(), backward));
+        classes.add(bridgeFn(name, s.type(), converted(args.get(2), t.type()), ((Call) forward).expression(), backward));
       }
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
       return null;
+    }
+
+    /**
+     * The class a converting row's {@code forward} reference gives its values as, which Java infers
+     * for the row from both the reference and the target's accessor: {@code into} itself, or a class
+     * wider than it when the reference returns one. A result of a wider class is written into the
+     * property after a check of its class, as the runtime writes it. {@code into} where the inferred
+     * class names a type variable, which the class the processor writes cannot name.
+     */
+    private TypeMirror converted(final ExpressionTree forward, final TypeMirror into) {
+      if (!(trees.getTypeMirror(TreePath.getPath(unit, forward)) instanceof DeclaredType function)) return into;
+      final var arguments = function.getTypeArguments();
+      if (arguments.size() != 2) return into;
+      var gives = arguments.get(1);
+      if (gives instanceof WildcardType wildcard) gives = wildcard.getExtendsBound();
+      if (gives == null || !nameable(gives)) return into;
+      final var types = env.getTypeUtils();
+      return types.isAssignable(gives, into) ? into : gives;
     }
 
     /**
@@ -1223,7 +1244,7 @@ final class FieldRows {
       final var read = ((ExecutableType) declared).getReturnType();
       final var type = read.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) read).asType() : read;
       final var method = accessor.getSimpleName().toString();
-      return new Accessor(property(method, side), type, method, arg);
+      return new Accessor(property(method, side), type, read.getKind().isPrimitive(), method, arg);
     }
 
     /**
@@ -1295,12 +1316,24 @@ final class FieldRows {
 
     /**
      * The Java source of a constant row's value, written into the property {@code into}, or the
-     * refusal: a value that is not a literal or an enum constant, or whose type the property does
-     * not hold.
+     * refusal: a value that is not a literal, a literal cast to a primitive type, or an enum
+     * constant, a {@code null} for a primitive property, or a value whose type the property does not
+     * hold. A {@code short} or {@code byte} value is written as a cast literal, since Java converts
+     * no {@code int} literal to {@code Short} or {@code Byte} in a method's argument.
      */
     private Object constantText(final ExpressionTree arg, final Accessor into) {
       final String text;
-      if (arg instanceof LiteralTree literal && literal.getKind() != Tree.Kind.NULL_LITERAL) {
+      if (arg instanceof LiteralTree literal && literal.getKind() == Tree.Kind.NULL_LITERAL) {
+        if (into.primitive()) {
+          return new Refused(
+            arg,
+            "the value null cannot be written into the property '" +
+              into.property() +
+              "', which holds a primitive; write a value of its type"
+          );
+        }
+        return "null";
+      } else if (arg instanceof LiteralTree literal) {
         text = literal.toString();
       } else if (
         arg instanceof UnaryTree unary &&
@@ -1308,6 +1341,15 @@ final class FieldRows {
         unary.getExpression() instanceof LiteralTree
       ) {
         text = "(" + unary + ")";
+      } else if (
+        arg instanceof TypeCastTree cast &&
+        cast.getType() instanceof PrimitiveTypeTree &&
+        (cast.getExpression() instanceof LiteralTree ||
+          (cast.getExpression() instanceof UnaryTree negated &&
+            negated.getKind() == Tree.Kind.UNARY_MINUS &&
+            negated.getExpression() instanceof LiteralTree))
+      ) {
+        text = "(" + cast + ")";
       } else if (
         (arg instanceof IdentifierTree || arg instanceof MemberSelectTree) &&
         elementAt(unit, arg) instanceof VariableElement constant &&
@@ -1494,7 +1536,11 @@ final class FieldRows {
     }
   }
 
-  private record Accessor(String property, TypeMirror type, String method, Tree at) {}
+  /**
+   * A property a row's method reference reads: its name, its type, boxed where the accessor returns
+   * a primitive, which {@code primitive} says, the accessor's name, and the reference itself.
+   */
+  private record Accessor(String property, TypeMirror type, boolean primitive, String method, Tree at) {}
 
   /**
    * Whether {@code accessor} of {@code declaring} reads a property: a record's component accessor,

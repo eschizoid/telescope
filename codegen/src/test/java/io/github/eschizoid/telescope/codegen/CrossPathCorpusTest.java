@@ -491,11 +491,20 @@ class CrossPathCorpusTest {
     final String prefix,
     final Set<String> done
   ) {
-    final var bridgeName = PACKAGE + "." + prefix + "SrcBridge";
     final var defined = defineAdded(processed, plain, name -> !done.contains(name));
-    final var bridge = defined.get(bridgeName);
-    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
-    return bridge;
+    for (final var bridgeName : ownBridgeNames(prefix)) {
+      final var bridge = defined.get(bridgeName);
+      if (bridge != null) return bridge;
+    }
+    throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
+  }
+
+  /**
+   * The names the cell's own bridge takes: a {@code @Bridge} field's, named by its pair, and a
+   * {@code @Bridge} on {@code Src}'s, named by its source.
+   */
+  private static List<String> ownBridgeNames(final String prefix) {
+    return List.of(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge", PACKAGE + "." + prefix + "SrcBridge");
   }
 
   /**
@@ -523,8 +532,12 @@ class CrossPathCorpusTest {
     final ProcessorHarness.Compilation plain,
     final String prefix
   ) {
-    final var own = PACKAGE + "." + prefix + "SrcBridge";
-    return defineAdded(processed, plain, name -> !name.equals(own) && !name.startsWith(own + "$")).keySet();
+    final var own = ownBridgeNames(prefix);
+    return defineAdded(
+      processed,
+      plain,
+      name -> own.stream().noneMatch(bridge -> name.equals(bridge) || name.startsWith(bridge + "$"))
+    ).keySet();
   }
 
   /**
@@ -3733,6 +3746,51 @@ class CrossPathCorpusTest {
 
   private static final String BRIDGE_TO_TGT = "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\n";
 
+  /**
+   * A class, {@code <source>Carrier}, declaring the pair of {@code source} and {@code target} as a
+   * {@code @Bridge} field of {@code Telescope.mapper} with {@code rows}, each a {@code Mapping} row
+   * written as source text. The field's bridge is the pair's own, {@code <source>To<target>Bridge}.
+   */
+  private static String fieldBridge(final String source, final String target, final String... rows) {
+    return field("mapper", "Mapper", source, target, rows);
+  }
+
+  /** As {@link #fieldBridge}, declared through {@code Telescope.mapperForward}, which is lenient. */
+  private static String forwardFieldBridge(final String source, final String target, final String... rows) {
+    return field("mapperForward", "ForwardMapper", source, target, rows);
+  }
+
+  private static String field(
+    final String factory,
+    final String type,
+    final String source,
+    final String target,
+    final String... rows
+  ) {
+    return (
+      "import static io.github.eschizoid.telescope.mapping.Mapping.*;\n" +
+      "public class " +
+      source +
+      "Carrier {\n" +
+      "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+      "  public static final io.github.eschizoid.telescope.conversion." +
+      type +
+      "<" +
+      source +
+      ", " +
+      target +
+      "> MAPPER = io.github.eschizoid.telescope.Telescope." +
+      factory +
+      "(\n    " +
+      source +
+      ".class,\n    " +
+      target +
+      ".class" +
+      (rows.length == 0 ? "" : ",\n    " + String.join(",\n    ", rows)) +
+      "\n  );\n}\n"
+    );
+  }
+
   /** Two people who manage each other, as {@code type}. */
   private static String pair(final String type) {
     return (
@@ -4039,9 +4097,8 @@ class CrossPathCorpusTest {
       "a nested pair on the cycle whose own bridge renames the property leading back",
       List.of(
         BRIDGE_TO_TGT + bean("%1$sSrc", group("%1$sSrc", "%1$sGroup", "%1$sHolder", "Node"), "%1$sGroup g"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sGroupDto.class, renames =" +
-          " @io.github.eschizoid.telescope.annotations.Rename(source = \"node\", target = \"child\"))\n" +
-          bean("%1$sGroup", "", "%1$sHolder node"),
+        bean("%1$sGroup", "", "%1$sHolder node"),
+        fieldBridge("%1$sGroup", "%1$sGroupDto", "to(%1$sGroup::getNode, %1$sGroupDto::getChild)"),
         bean("%1$sHolder", "", "%1$sSrc back"),
         bean("%1$sTgt", group("%1$sTgt", "%1$sGroupDto", "%1$sHolderDto", "Child"), "%1$sGroupDto g"),
         bean("%1$sGroupDto", "", "%1$sHolderDto child"),
@@ -4055,9 +4112,8 @@ class CrossPathCorpusTest {
       "a nested pair on the cycle whose own bridge fills a constant",
       List.of(
         BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, constants =" +
-          " @io.github.eschizoid.telescope.annotations.Constant(field = \"tag\", value = \"k\"))\n" +
-          bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sHolder", "", "%1$sSrc back"),
+        fieldBridge("%1$sHolder", "%1$sHolderDto", "constant(%1$sHolderDto::getTag, \"k\")"),
         bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
         bean("%1$sHolderDto", "", "String tag", "%1$sTgt back")
       ),
@@ -4069,10 +4125,10 @@ class CrossPathCorpusTest {
       "a nested pair on the cycle whose own bridge computes a value",
       List.of(
         BRIDGE_TO_TGT + bean("%1$sSrc", held("%1$sSrc", "%1$sHolder"), "%1$sHolder h"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sHolderDto.class, computes =" +
-          " @io.github.eschizoid.telescope.annotations.Compute(field = \"tag\", using = %1$sTagFn.class))\n" +
-          bean("%1$sHolder", "", "%1$sSrc back"),
+        bean("%1$sHolder", "", "%1$sSrc back"),
+        fieldBridge("%1$sHolder", "%1$sHolderDto", "compute(%1$sHolderDto::getTag, %1$sTagFn.INSTANCE)"),
         "public class %1$sTagFn implements java.util.function.Supplier<String> {\n" +
+          "  public static final %1$sTagFn INSTANCE = new %1$sTagFn();\n" +
           "  public String get() { return \"c\"; }\n" +
           "}\n",
         bean("%1$sTgt", held("%1$sTgt", "%1$sHolderDto"), "%1$sHolderDto h"),
@@ -4087,9 +4143,8 @@ class CrossPathCorpusTest {
       List.of(
         BRIDGE_TO_TGT + bean("%1$sSrc", walkedBetween("%1$sSrc", "%1$sA", "%1$sMid"), "%1$sA a"),
         bean("%1$sA", "", "%1$sMid m"),
-        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sMidDto.class, transforms =" +
-          " @io.github.eschizoid.telescope.annotations.Transform(field = \"label\", using = %1$sUpFn.class))\n" +
-          bean("%1$sMid", "", "String label", "%1$sA back"),
+        bean("%1$sMid", "", "String label", "%1$sA back"),
+        fieldBridge("%1$sMid", "%1$sMidDto", "to(%1$sMid::getLabel, %1$sMidDto::getLabel, %1$sUpFn.class)"),
         "public class %1$sUpFn implements io.github.eschizoid.telescope.conversion.BridgeFn<String, String> {\n" +
           "  public String forward(final String s) { return s == null ? null : s.toUpperCase(); }\n" +
           "  public String backward(final String s) { return s == null ? null : s.toLowerCase(); }\n" +
@@ -4255,26 +4310,19 @@ class CrossPathCorpusTest {
   @Test
   @DisplayName("a field mapped through a bridge the same compilation generates converts the same way on both paths")
   void aFieldThroughAGeneratedBridgeConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
-    // The @ViaMapper names a bridge the processor writes in the same compilation, so the source
-    // cannot compile without the processor and every class comes from the processed compilation.
+    // The via row names the @Bridge field of the nested pair, whose bridge the processor writes in
+    // the same compilation, so every class comes from the processed compilation.
     final var head = "package " + PACKAGE + ";\n";
     final var processed = bridged(
-      source(
-        "VmAddress",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(VmAddressDto.class)\n" +
-          "public record VmAddress(String line) {}\n"
-      ),
+      source("VmAddress", head + "public record VmAddress(String line) {}\n"),
       source("VmAddressDto", head + "public record VmAddressDto(String line) {}\n"),
+      source("VmAddressCarrier", head + fieldBridge("VmAddress", "VmAddressDto")),
+      source("VmSrc", head + "public record VmSrc(String id, VmAddress address) {}\n"),
+      source("VmTgt", head + "public record VmTgt(String id, VmAddressDto address) {}\n"),
       source(
-        "VmSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = VmTgt.class, viaMappers = {\n" +
-          "  @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"address\", using = VmAddressBridge.class)\n" +
-          "})\n" +
-          "public record VmSrc(String id, VmAddress address) {}\n"
-      ),
-      source("VmTgt", head + "public record VmTgt(String id, VmAddressDto address) {}\n")
+        "VmSrcCarrier",
+        head + fieldBridge("VmSrc", "VmTgt", "via(VmSrc::address, VmTgt::address, VmAddressCarrier.MAPPER)")
+      )
     );
     assertTrue(processed.success(), () -> "the pair should compile: " + processed.errorMessages());
     final var classes = processed.define(MethodHandles.lookup());
@@ -4282,7 +4330,7 @@ class CrossPathCorpusTest {
     final Class<Object> tgt = cast(classes.get(PACKAGE + ".VmTgt"));
     final var address = classes.get(PACKAGE + ".VmAddress");
     final var addressDto = classes.get(PACKAGE + ".VmAddressDto");
-    final var bridge = classes.get(PACKAGE + ".VmSrcBridge");
+    final var bridge = classes.get(PACKAGE + ".VmSrcToVmTgtBridge");
     final Attempt source = () ->
       src
         .getConstructor(String.class, address)
@@ -4508,12 +4556,8 @@ class CrossPathCorpusTest {
           "  public void setExtra(final java.util.List<T> extra) { this.extra = extra; }\n" +
           "}\n"
       ),
-      source(
-        "PtdSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtdTgt.class, drops = {\"extra\"})\n" +
-          "public class PtdSrc<X> extends PtdBase<X> {}\n"
-      ),
+      source("PtdSrc", head + "public class PtdSrc<X> extends PtdBase<X> {}\n"),
+      source("PtdSrcCarrier", head + fieldBridge("PtdSrc", "PtdTgt", "drop(PtdSrc::getExtra)")),
       source(
         "PtdTgt",
         head +
@@ -5893,7 +5937,8 @@ class CrossPathCorpusTest {
       "a forward result wider than the target property's type",
       true,
       List.of(
-        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        valueBean("%1$sSrc", "String", "\"x\""),
+        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, String, Object"),
         overloadedValueBean("Tgt", "q"),
         transformFn("String", "Object", "a", "String.valueOf(b)"),
         runtimeRow(true, "getValue", "String", "Object")
@@ -5906,7 +5951,8 @@ class CrossPathCorpusTest {
       "a backward result wider than the source property's type",
       false,
       List.of(
-        transformedValue(false) + overloadedValueBean("Src", "x"),
+        overloadedValueBean("Src", "x"),
+        transformedField(false, "getValue", "%1$sSrc, %1$sTgt, Object, String"),
         valueBean("%1$sTgt", "String", "\"q\""),
         transformFn("Object", "String", "String.valueOf(a)", "b"),
         runtimeRow(false, "getValue", "Object", "String")
@@ -5922,7 +5968,8 @@ class CrossPathCorpusTest {
       "a forward result wider than the property's type, into a generic target whose setter is inherited",
       true,
       List.of(
-        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        valueBean("%1$sSrc", "String", "\"x\""),
+        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, String, CharSequence"),
         "public class %1$sBase<T> {\n" +
           "  protected String value;\n" +
           "  public void setValue(final T v) { this.value = \"T:\" + v; }\n}\n",
@@ -6083,7 +6130,8 @@ class CrossPathCorpusTest {
     final String forward
   ) {
     return List.of(
-      transformedValue(forwardOnly) + valueBean("%1$sSrc", "String", "\"x\""),
+      valueBean("%1$sSrc", "String", "\"x\""),
+      transformedField(forwardOnly, "getValue", "%1$sSrc, %1$sTgt, " + "String" + ", " + rowType),
       valueBean("%1$sTgt", targetType, "null"),
       transformFn("String", result, forward, "String.valueOf(b)"),
       runtimeRow(forwardOnly, "getValue", "String", rowType)
@@ -6189,9 +6237,8 @@ class CrossPathCorpusTest {
         forward +
         "; }\n" +
         "  public static %1$sCh backward(final java.util.List<String> d) { return new %1$sCh(d.get(0)); }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = %1$sChMap.class))\n" +
-        sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+      sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+      forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::getChild, %1$sChMap.class)"),
       valueBean("%1$sTgt", "java.util.List<String>", "null").replace("Value", "Child").replace("value", "child"),
       "public class %1$sRuntime {\n" +
         "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -6232,9 +6279,8 @@ class CrossPathCorpusTest {
         " d) { return " +
         backward +
         "; }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = %1$sChMap.class))\n" +
-        sampled("%1$sSrc", sourceType + " child", "new %1$sSrc(" + sample + ")"),
+      sampled("%1$sSrc", sourceType + " child", "new %1$sSrc(" + sample + ")"),
+      forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::getChild, %1$sChMap.class)"),
       valueBean("%1$sTgt", property, "null").replace("Value", "Child").replace("value", "child"),
       "public class %1$sRuntime {\n" +
         "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
@@ -6259,7 +6305,8 @@ class CrossPathCorpusTest {
   /** The declarations of a forward-only transform row between two records holding {@code value}. */
   private static List<String> recordResultRow(final String targetType, final String result, final String forward) {
     return List.of(
-      transformedValue(true) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+      sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+      transformedField(true, "value", "%1$sSrc, %1$sTgt, " + "String" + ", " + result),
       sampled("%1$sTgt", targetType + " value", "new %1$sTgt(" + defaultFor(targetType) + ")"),
       transformFn("String", result, forward, "String.valueOf(b)"),
       runtimeRow(true, "value", "String", result)
@@ -6302,9 +6349,8 @@ class CrossPathCorpusTest {
         forward +
         "; }\n" +
         "  public static %1$sCh backward(final %1$sChDto d) { return new %1$sCh(d.name()); }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = %1$sChMap.class))\n" +
-        sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+      sampled("%1$sSrc", "%1$sCh child", "new %1$sSrc(new %1$sCh(\"a\"))"),
+      forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::getChild, %1$sChMap.class)"),
       "public class %1$sTgt {\n" +
         "  private %1$sChDto child;\n" +
         "  public %1$sTgt() {}\n" +
@@ -6328,7 +6374,8 @@ class CrossPathCorpusTest {
   /** The declarations of a forward-only transform row from a {@code String} source. */
   private static List<String> resultRow(final String target, final String result, final String forward) {
     return List.of(
-      transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+      valueBean("%1$sSrc", "String", "\"x\""),
+      transformedField(true, "getValue", "%1$sSrc, %1$sTgt, " + "String" + ", " + result),
       target,
       transformFn("String", result, forward, "String.valueOf(b)"),
       runtimeRow(true, "getValue", "String", result)
@@ -6544,7 +6591,8 @@ class CrossPathCorpusTest {
     new ResultRow(
       "an Object property a builder writes, a transform returning String, written through the overload for Object",
       List.of(
-        transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+        valueBean("%1$sSrc", "String", "\"x\""),
+        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, String, Object"),
         BUILT_OBJECT_TARGET,
         transformFn("String", "String", "a", "b"),
         runtimeRow(true, "getValue", "String", "Object")
@@ -6748,16 +6796,18 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a transform result whose type arguments do not fit those its property fixes is refused by name, not by javac"
+    "a conversion result whose type arguments do not fit those its property fixes is refused at its row, never" +
+      " inside the generated file"
   )
   void aResultWhoseArgumentsDoNotFitIsRefusedByName() {
     // A check of the value's class cannot see its arguments, so a result is written into a
     // property that fixes them only where its own arguments can be shown to fit. Each row: the
-    // prefix, the transform's result type and what it returns, the target where it is not the plain
-    // bean, and any class the result names, on a lenient bridge with a forward-only row. A setter
-    // for Object besides the one
-    // the property's type chooses takes nothing from this: every path writes through the chosen
-    // one.
+    // prefix, the conversion's result type and what it returns, the target where it is not the
+    // plain bean, and any class the result names, on a converting row of a forward field. A
+    // conversion class whose declared types do not fit the row's accessors is refused by javac at
+    // the row; one javac accepts, through a class used raw, is refused by name by the processor.
+    // A setter for Object besides the one the property's type chooses takes nothing from this:
+    // every path writes through the chosen one.
     final var rows = List.of(
       List.of("Tja", "java.util.List<Object>", "java.util.List.of(a)"),
       List.of("Tjo", "Object", "java.util.List.of(a)"),
@@ -6779,10 +6829,8 @@ class CrossPathCorpusTest {
       final var prefix = row.get(0);
       final var declarations = new ArrayList<>(
         List.of(
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true, transforms =" +
-            " @io.github.eschizoid.telescope.annotations.Transform(field = \"value\", using = %1$sFn.class," +
-            " forwardOnly = true))\n" +
-            valueBean("%1$sSrc", "String", "\"x\""),
+          valueBean("%1$sSrc", "String", "\"x\""),
+          forwardFieldBridge("%1$sSrc", "%1$sTgt", "to(%1$sSrc::getValue, %1$sTgt::getValue, %1$sFn.class)"),
           row.size() > 3 && !row.get(3).isEmpty()
             ? row.get(3)
             : valueBean("%1$sTgt", "java.util.List<String>", "java.util.List.of(\"q\")"),
@@ -6797,8 +6845,8 @@ class CrossPathCorpusTest {
         .map(code -> source(declaredName(code), head + code))
         .toArray(JavaFileObject[]::new);
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all);
-      if (!plain.success()) {
-        failures.add(prefix + ": the pair should compile without the processor: " + plain.errorMessages());
+      if (!plain.success() && !refusedAtTheRow(plain)) {
+        failures.add(prefix + ": the pair should compile, or be refused at its row: " + plain.errorMessages());
         continue;
       }
       // A warning in the generated file fails this row and the others still run.
@@ -6809,8 +6857,14 @@ class CrossPathCorpusTest {
         failures.add(prefix + ": " + warned.getMessage());
         continue;
       }
-      if (processed.success() || !processed.hasError("@Transform field=\"value\" does not fit forward")) {
+      if (
+        plain.success() &&
+        (processed.success() || !processed.hasError("a converting row of 'value' does not fit forward"))
+      ) {
         failures.add(prefix + ": the processor owed a refusal naming the property, saw " + describe(processed));
+      }
+      if (!plain.success() && (processed.success() || !refusedAtTheRow(processed))) {
+        failures.add(prefix + ": the row javac refuses should be refused there alone, saw " + describe(processed));
       }
       if (processed.errorMessages().contains("cannot be converted to")) {
         failures.add(prefix + ": and no error inside the generated file: " + processed.errorMessages());
@@ -6963,7 +7017,7 @@ class CrossPathCorpusTest {
       final var prefix = row.get(0);
       final var property = row.size() > 4 ? row.get(4) : "java.util.List<String>";
       final var all = viaListRow("java.util.List<String>", row.get(2))
-        .subList(0, 4)
+        .subList(0, 5)
         .stream()
         .map(declaration ->
           declaration
@@ -6985,7 +7039,7 @@ class CrossPathCorpusTest {
         continue;
       }
       final var processed = bridged(all);
-      if (processed.success() || !processed.hasError("@ViaMapper field=\"child\"") || !processed.hasError(row.get(3))) {
+      if (processed.success() || !processed.hasError("via(...) of 'child'") || !processed.hasError(row.get(3))) {
         failures.add(prefix + ": the processor owed a refusal naming the mapper, saw " + describe(processed));
       }
       if (
@@ -7000,59 +7054,55 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "a result written back into the source is held to the same argument rule, for a transform and a @ViaMapper"
+    "a result written back into the source is held to the same argument rule, for a converting row and a via row"
   )
   void aBackwardResultWhoseArgumentsDoNotFitIsRefusedByName() {
     final var head = "package " + PACKAGE + ";\n";
     final var failures = new ArrayList<String>();
-    // A transform whose backward returns a List used raw, into the source's List<String>.
+    // A conversion whose backward returns a List used raw, into the source's List<String>.
     final var transform = List.of(
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = UbtTgt.class, transforms =" +
-        " @io.github.eschizoid.telescope.annotations.Transform(field = \"value\", using = UbtFn.class))\n" +
-        valueBean("UbtSrc", "java.util.List<String>", "java.util.List.of(\"x\")"),
+      valueBean("UbtSrc", "java.util.List<String>", "java.util.List.of(\"x\")"),
+      fieldBridge("UbtSrc", "UbtTgt", "to(UbtSrc::getValue, UbtTgt::getValue, UbtFn.class)"),
       valueBean("UbtTgt", "String", "\"q\""),
       "@SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
         "public class UbtFn implements io.github.eschizoid.telescope.conversion.BridgeFn<java.util.List<String>, String> {\n" +
         "  public String forward(final java.util.List<String> a) { return String.valueOf(a); }\n" +
         "  public java.util.List backward(final String b) { return new java.util.ArrayList(java.util.List.of(b)); }\n}\n"
     );
-    // A @ViaMapper whose backward returns Collection<Integer>, into the source's List<String>.
+    // A via row whose class's backward returns Collection<Integer>, into the source's List<String>.
     final var via = List.of(
       "public record UbvChDto(String name) {}\n",
       "public class UbvChMap {\n" +
         "  public static UbvChDto forward(final java.util.List<String> l) { return new UbvChDto(l.get(0)); }\n" +
         "  public static java.util.Collection<Integer> backward(final UbvChDto d) { return new java.util.ArrayList<>(); }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = UbvTgt.class, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = UbvChMap.class))\n" +
-        "public record UbvSrc(java.util.List<String> child) {}\n",
+      "public record UbvSrc(java.util.List<String> child) {}\n",
+      fieldBridge("UbvSrc", "UbvTgt", "via(UbvSrc::child, UbvTgt::child, UbvChMap.class)"),
       "public record UbvTgt(UbvChDto child) {}\n"
     );
-    // The same rule on a lenient bridge, whose backward returns a list of a variable bounded by
+    // The same rule on a forward field, whose backward returns a list of a variable bounded by
     // Number into the source's List<String>.
     final var lenient = List.of(
       "public record UblChDto(String name) {}\n",
       "public class UblChMap {\n" +
         "  public static UblChDto forward(final java.util.List<String> l) { return new UblChDto(l.get(0)); }\n" +
         "  public static <T extends Number> java.util.List<T> backward(final UblChDto d) { return new java.util.ArrayList<T>(); }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = UblTgt.class, lenient = true, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = UblChMap.class))\n" +
-        "public record UblSrc(java.util.List<String> child) {}\n",
+      "public record UblSrc(java.util.List<String> child) {}\n",
+      forwardFieldBridge("UblSrc", "UblTgt", "via(UblSrc::child, UblTgt::child, UblChMap.class)"),
       "public record UblTgt(UblChDto child) {}\n"
     );
-    // A @ViaMapper whose backward returns a list of its own variable, inferred from the
+    // A via row whose class's backward returns a list of its own variable, inferred from the
     // UbgChDto handed to it, into the source's List<String>.
     final var inferred = List.of(
       "public record UbgChDto(String name) {}\n",
       "public class UbgChMap {\n" +
         "  public static UbgChDto forward(final java.util.List<String> l) { return new UbgChDto(l.get(0)); }\n" +
         "  public static <T> java.util.List<T> backward(final T d) { return java.util.List.of(d); }\n}\n",
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = UbgTgt.class, viaMappers =" +
-        " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"child\", using = UbgChMap.class))\n" +
-        "public record UbgSrc(java.util.List<String> child) {}\n",
+      "public record UbgSrc(java.util.List<String> child) {}\n",
+      fieldBridge("UbgSrc", "UbgTgt", "via(UbgSrc::child, UbgTgt::child, UbgChMap.class)"),
       "public record UbgTgt(UbgChDto child) {}\n"
     );
     final var rows = List.of(
-      Map.entry(transform, "@Transform field=\"value\" does not fit backward"),
+      Map.entry(transform, "a converting row of 'value' does not fit backward"),
       Map.entry(via, "'s backward returns java.util.Collection<java.lang.Integer>"),
       Map.entry(inferred, "'s backward returns java.util.List<T>, which no instantiation of its type variables"),
       Map.entry(lenient, "UblChMap's backward returns java.util.List<T>, which no instantiation of its type variables")
@@ -7080,6 +7130,17 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** Whether every error {@code compilation} reports is in a carrier, at the row that declares it. */
+  private static boolean refusedAtTheRow(final ProcessorHarness.Compilation compilation) {
+    return (
+      !compilation.errors().isEmpty() &&
+      compilation
+        .errors()
+        .stream()
+        .allMatch(d -> d.getSource() != null && d.getSource().getName().endsWith("Carrier.java"))
+    );
   }
 
   /** What {@code attempt} produced, or the refusal with its message. */
@@ -7175,7 +7236,8 @@ class CrossPathCorpusTest {
     final var prefix = "Goc";
     final var head = "package " + PACKAGE + ";\n";
     final var declarations = List.of(
-      transformedValue(true) + valueBean("%1$sSrc", "String", "\"x\""),
+      valueBean("%1$sSrc", "String", "\"x\""),
+      transformedField(true, "getValue", "%1$sSrc, %1$sTgt, String, Integer"),
       overloadedValueBean("Tgt", "q"),
       transformFn("String", "Integer", "7", "String.valueOf(b)")
     );
@@ -9240,15 +9302,19 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * {@code @Bridge} to {@code %1$sTgt} with a transform on {@code value} through {@code %1$sFn}.
+   * The {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} converting {@code value},
+   * read through {@code accessor} on both sides, by {@code %1$sFn}: through its class, both ways,
+   * or through its {@code forward}, forward only, on a {@code mapperForward} field. The row's type
+   * arguments are {@code witness}, those of the cell's runtime row, since a method reference to a
+   * member of a generic class names it raw.
    */
-  private static String transformedValue(final boolean forwardOnly) {
-    return (
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, transforms =" +
-      " @io.github.eschizoid.telescope.annotations.Transform(field = \"value\", using = %1$sFn.class" +
-      (forwardOnly ? ", forwardOnly = true" : "") +
-      "))\n"
-    );
+  private static String transformedField(final boolean forwardOnly, final String accessor, final String witness) {
+    final var src = "%1$sSrc::" + accessor;
+    final var tgt = "%1$sTgt::" + accessor;
+    final var row = "io.github.eschizoid.telescope.mapping.Mapping.<" + witness + ">";
+    return forwardOnly
+      ? forwardFieldBridge("%1$sSrc", "%1$sTgt", row + "toOneWay(" + src + ", " + tgt + ", %1$sFn.INSTANCE::forward)")
+      : fieldBridge("%1$sSrc", "%1$sTgt", row + "to(" + src + ", " + tgt + ", %1$sFn.class)");
   }
 
   /**
@@ -9262,6 +9328,7 @@ class CrossPathCorpusTest {
       ", " +
       to +
       "> {\n" +
+      "  public static final %1$sFn INSTANCE = new %1$sFn();\n" +
       "  public " +
       to +
       " forward(final " +
@@ -9436,7 +9503,8 @@ class CrossPathCorpusTest {
       "a source property typed by the source's variable, forward only",
       true,
       List.of(
-        transformedValue(true) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        transformedField(true, "value", "%1$sSrc, %1$sTgt, Object, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("Object", "String", "\"<\" + a + \">\"", "b"),
         runtimeRow(true, "value", "Object", "String")
@@ -9449,7 +9517,8 @@ class CrossPathCorpusTest {
       "a source property typed by the source's variable, both ways",
       false,
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, Object, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
         runtimeRow(false, "value", "Object", "String")
@@ -9462,7 +9531,8 @@ class CrossPathCorpusTest {
       "a target property typed by the target's variable, both ways",
       false,
       List.of(
-        transformedValue(false) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"abc\")"),
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"abc\")"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, String, Object"),
         sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(5)"),
         transformFn("String", "Object", "a.length()", "\"#\" + b"),
         runtimeRow(false, "value", "String", "Object")
@@ -9475,7 +9545,8 @@ class CrossPathCorpusTest {
       "a source property typed by a variable bounded by Number, both ways",
       false,
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, Number, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"41\")"),
         transformFn("Number", "String", "String.valueOf(a.intValue() + 1)", "Integer.valueOf(b)"),
         runtimeRow(false, "value", "Number", "String")
@@ -9488,8 +9559,8 @@ class CrossPathCorpusTest {
       "a source list of the source's variable, both ways",
       false,
       List.of(
-        transformedValue(false) +
-          sampledGeneric("%1$sSrc<X>", "java.util.List<X> value", "new %1$sSrc<>(java.util.List.of(1, 2))"),
+        sampledGeneric("%1$sSrc<X>", "java.util.List<X> value", "new %1$sSrc<>(java.util.List.of(1, 2))"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, java.util.List, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("java.util.List<Object>", "String", "a.size() + \":\" + a", "java.util.List.of(b, b)"),
         runtimeRow(false, "value", "java.util.List", "String")
@@ -9505,9 +9576,11 @@ class CrossPathCorpusTest {
       "a source list of the source's variable, through the transform's overload for a list",
       true,
       List.of(
-        transformedValue(true) + valueBean("%1$sSrc<X>", "java.util.List<X>", "java.util.List.of(1, 2)"),
+        valueBean("%1$sSrc<X>", "java.util.List<X>", "java.util.List.of(1, 2)"),
+        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, java.util.List, Object"),
         valueBean("%1$sTgt", "Object", "\"q\""),
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<Object, String> {\n" +
+          "  public static final %1$sFn INSTANCE = new %1$sFn();\n" +
           "  public String forward(final Object a) { return \"any\"; }\n" +
           "  public Integer forward(final java.util.List<Object> a) { return a.size(); }\n" +
           "  public Object backward(final String b) { return b; }\n}\n",
@@ -9521,7 +9594,8 @@ class CrossPathCorpusTest {
       "a bean property typed by the bean's variable, both ways",
       false,
       List.of(
-        transformedValue(false) + valueBean("%1$sSrc<X>", "X", "7"),
+        valueBean("%1$sSrc<X>", "X", "7"),
+        transformedField(false, "getValue", "%1$sSrc, %1$sTgt, Object, String"),
         valueBean("%1$sTgt", "String", "\"q\""),
         transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
         runtimeRow(false, "getValue", "Object", "String")
@@ -9534,7 +9608,8 @@ class CrossPathCorpusTest {
       "a bean property read and written through generic methods, both ways",
       false,
       List.of(
-        genericAccessorBean(transformedValue(false), "%1$sSrc", "value", "7"),
+        genericAccessorBean("", "%1$sSrc", "value", "7"),
+        transformedField(false, "getValue", "%1$sSrc, %1$sTgt, Object, String"),
         valueBean("%1$sTgt", "String", "\"q\""),
         transformFn("Object", "String", "\"<\" + a + \">\"", "b + \"!\""),
         runtimeRow(false, "getValue", "Object", "String")
@@ -10631,7 +10706,8 @@ class CrossPathCorpusTest {
     final var rows = List.of(
       List.of(
         "Vr0",
-        transformedValue(false) + sampledGeneric("%1$sSrc<X extends Number>", "X value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<X extends Number>", "X value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, Number, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("String", "String", "a", "b"),
         runtimeRow(false, "value", "Number", "String"),
@@ -10765,8 +10841,7 @@ class CrossPathCorpusTest {
         "  public void setValue(final " +
         declared +
         " value) { this.value = value; }\n}\n",
-      transformedValue(false) +
-        "public class %1$sSrc<X" +
+      "public class %1$sSrc<X" +
         bound +
         "> extends %1$sBase<X> {\n" +
         "  public static %1$sSrc<" +
@@ -10776,6 +10851,7 @@ class CrossPathCorpusTest {
         "> s = new %1$sSrc<>(); s.setValue(" +
         srcSample +
         "); return s; }\n}\n",
+      transformedField(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object"),
       "public class %1$sTgt extends %1$sBase<" +
         fixed +
         "> {\n" +
@@ -10871,7 +10947,8 @@ class CrossPathCorpusTest {
       "a row typed by both classes' arguments, with a transform on String",
       "value",
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(\"a\")"),
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(\"a\")"),
+        transformedField(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String"),
         sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(\"q\")"),
         transformFn("String", "String", "a + \"!\"", "b + \"?\""),
         witnessedRow(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String")
@@ -10881,7 +10958,8 @@ class CrossPathCorpusTest {
       "a row typed by the source's argument under Number, with a transform on Integer",
       "value",
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer"),
         sampled("%1$sTgt", "Integer value", "new %1$sTgt(41)"),
         transformFn("Integer", "Integer", "a + 1", "b - 1"),
         witnessedRow(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer")
@@ -10891,7 +10969,8 @@ class CrossPathCorpusTest {
       "a row typed by both classes' arguments, with a transform on String, given values of another class",
       "value",
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(5)"),
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(5)"),
+        transformedField(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String"),
         sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(6)"),
         transformFn("String", "String", "a + \"!\"", "b + \"?\""),
         witnessedRow(false, "value", "%1$sSrc<String>, %1$sTgt<String>, String, String")
@@ -10901,7 +10980,8 @@ class CrossPathCorpusTest {
       "a row typed by the source's argument under Number, with a transform on Integer, given a Long",
       "value",
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7L)"),
+        sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7L)"),
+        transformedField(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer"),
         sampled("%1$sTgt", "Integer value", "new %1$sTgt(41)"),
         transformFn("Integer", "Integer", "a + 1", "b - 1"),
         witnessedRow(false, "value", "%1$sSrc<Integer>, %1$sTgt, Integer, Integer")
@@ -10911,7 +10991,8 @@ class CrossPathCorpusTest {
       "a row reading a variable bounded by Number as Object, with a backward returning Object",
       "value",
       List.of(
-        transformedValue(false) + sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        sampledGeneric("%1$sSrc<T extends Number>", "T value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, Object, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("Object", "String", "String.valueOf(a)", "b"),
         witnessedRow(false, "value", "%1$sSrc, %1$sTgt, Object, String")
@@ -12380,7 +12461,8 @@ class CrossPathCorpusTest {
     new RawWrite(
       "a transform result into a generic record with a second constructor of the same arity",
       List.of(
-        transformedValue(true) + sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        transformedField(true, "value", "%1$sSrc, %1$sTgt, String, Object"),
         "@SuppressWarnings(\"unchecked\")\npublic record %1$sTgt<Y>(Y value) {\n" +
           "  public %1$sTgt(final CharSequence c) { this((Y) (\"CharSequence:\" + c)); }\n" +
           "  public static %1$sTgt<Object> sample() { return new %1$sTgt<Object>((Object) \"q\"); }\n}\n",

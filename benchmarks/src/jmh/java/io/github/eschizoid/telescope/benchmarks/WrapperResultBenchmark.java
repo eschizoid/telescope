@@ -10,7 +10,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 /**
- * A generated bridge writing a {@code @ViaMapper}'s {@code Integer} result into an {@code int}:
+ * A generated bridge writing the {@code Integer} result of a via row's class into an {@code int}:
  * forward, backward, and patch, from a partial holding a value and from one whose slot is null, so
  * the base's own {@code int} is written. The values sit outside the {@code Integer} cache, so a
  * boxing on the write path shows as allocation. The hand-written rows, which construct the same
@@ -38,22 +38,22 @@ public class WrapperResultBenchmark {
 
   @Benchmark
   public BenchWrapTgt generatedForward() {
-    return BenchWrapSrcBridge.forward(source);
+    return BenchWrapSrcToBenchWrapTgtBridge.forward(source);
   }
 
   @Benchmark
   public BenchWrapSrc generatedBackward() {
-    return BenchWrapSrcBridge.backward(target);
+    return BenchWrapSrcToBenchWrapTgtBridge.backward(target);
   }
 
   @Benchmark
   public BenchWrapSrc generatedPatch() {
-    return BenchWrapSrcBridge.patch(source, target);
+    return BenchWrapSrcToBenchWrapTgtBridge.patch(source, target);
   }
 
   @Benchmark
   public BenchWrapSrc generatedPatchFromBase() {
-    return BenchWrapSrcBridge.patch(source, nullSlot);
+    return BenchWrapSrcToBenchWrapTgtBridge.patch(source, nullSlot);
   }
 
   @Benchmark

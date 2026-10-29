@@ -92,12 +92,12 @@ import java.lang.annotation.Target;
  * how each side is rebuilt. Accessors are method references; a converter or supplier is a reference
  * to a static method, an unbound instance method, a constructor, or a method of a {@code static
  * final} field, and a supplier may also be a {@code static final} field holding one; a constant or
- * default is a literal or an enum constant. Any other row or
- * argument is refused at compile time by name. A field's bridge is its pair's own bridge, so a pair
- * is declared once. The class that declares the field builds every other mapper as a static field
- * initialised in place by {@code Telescope.mapper} or {@code mapperForward}, naming literal classes
- * of a pair no {@code @Bridge} field of the class declares; any other call to either factory in the
- * class, or reference to one, is refused at compile time. A nested class is a class of its own.
+ * default is a literal or an enum constant. Any other row or argument is refused at compile time by
+ * name. A field's bridge is its pair's own bridge, so a pair is declared once. The class that
+ * declares the field builds every other mapper as a static field initialised in place by {@code
+ * Telescope.mapper} or {@code mapperForward}, naming literal classes of a pair no {@code @Bridge}
+ * field of the class declares; any other call to either factory in the class, or reference to one,
+ * is refused at compile time. A nested class is a class of its own.
  *
  * @see io.github.eschizoid.telescope.Telescope#map(Class, Class,
  *     io.github.eschizoid.telescope.mapping.MapStep...)

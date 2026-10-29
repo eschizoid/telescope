@@ -31,7 +31,10 @@ class LombokPropertyOrderTest {
     final var sample = source.getConstructors()[0].newInstance("1", "2");
 
     OrderedLog.LOG.setLength(0);
-    final Method forward = Class.forName(FIXTURES + "OrderedLombokSourceBridge").getMethod("forward", source);
+    final Method forward = Class.forName(FIXTURES + "OrderedLombokSourceToOrderedLombokTargetBridge").getMethod(
+      "forward",
+      source
+    );
     forward.invoke(null, sample);
     final var generated = OrderedLog.LOG.toString();
 

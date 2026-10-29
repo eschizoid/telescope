@@ -271,7 +271,7 @@ class SealedRootsTest {
   void aBridgeTransformingASealedFieldStillDecides() {
     final var mapper = Telescope.mapper(SvTop.class, SvTopDto.class);
     final var top = new SvTop(new SvX("ab", new SvLeaf(1)));
-    assertEquals(new SvTopDto(SvXBridge.forward(top.x())), mapper.forward(top));
+    assertEquals(new SvTopDto(SvXToSvXDtoBridge.forward(top.x())), mapper.forward(top));
     assertEquals(new SvTopDto(new SvXDto("AB", new SvLeafDto(100))), mapper.forward(top));
     assertEquals(
       new SvTop(new SvX("ab", new SvLeaf(5))),
@@ -419,7 +419,7 @@ class SealedRootsTest {
   void aBridgeTransformingAFieldLeadingBackStillDecides() {
     final var mapper = Telescope.mapper(StTop.class, StTopDto.class);
     final var top = new StTop(new StX("ab", new StBack(null)));
-    assertEquals(new StTopDto(StXBridge.forward(top.x())), mapper.forward(top));
+    assertEquals(new StTopDto(StXToStXDtoBridge.forward(top.x())), mapper.forward(top));
     assertEquals(new StTopDto(new StXDto("AB", new StBackDto(null))), mapper.forward(top));
   }
 

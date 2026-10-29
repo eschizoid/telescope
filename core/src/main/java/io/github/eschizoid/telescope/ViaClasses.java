@@ -19,13 +19,13 @@ import java.util.Set;
 /**
  * The runtime path's reading of a {@code via(src, tgt, Hw.class)} row: the {@code forward} and
  * {@code backward} of the class chosen for the property's types, as the {@code @Bridge} processor
- * chooses them for the same row on a mapper field, made into the {@link Via} row the deep
- * mapping already converts through. Where the two sides are containers of one kind and the class
- * has a {@code forward} taking the source's element and a {@code backward} taking the target's, and
- * not a pair of overloads converting the whole property both ways, the row converts element by
- * element. Otherwise each direction calls the overload Java binds for the property's value: the
- * most specific one it applies to, without boxing where one applies so, then a generic one whose
- * type variable admits the value, and otherwise the one method a value of the property can be an
+ * chooses them for the same row on a mapper field, made into the {@link Via} row the deep mapping
+ * already converts through. Where the two sides are containers of one kind and the class has a
+ * {@code forward} taking the source's element and a {@code backward} taking the target's, and not a
+ * pair of overloads converting the whole property both ways, the row converts element by element.
+ * Otherwise each direction calls the overload Java binds for the property's value: the most
+ * specific one it applies to, without boxing where one applies so, then a generic one whose type
+ * variable admits the value, and otherwise the one method a value of the property can be an
  * instance of the parameter of, which the call checks the value's class against.
  */
 final class ViaClasses {

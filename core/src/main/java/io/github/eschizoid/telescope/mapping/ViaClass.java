@@ -6,9 +6,9 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 /**
  * The row {@link Mapping#via(Accessor, Accessor, Class)} builds: a property converted by the static
  * {@code forward} and {@code backward} methods of a class written by hand, chosen for the
- * property's types. The row holds the class
- * alone; the runtime path reads its methods when it builds a mapper from the row, and a mapper a
- * {@code @Bridge} field declares, which runs its generated bridge, never does.
+ * property's types. The row holds the class alone; the runtime path reads its methods when it
+ * builds a mapper from the row, and a mapper a {@code @Bridge} field declares, which runs its
+ * generated bridge, never does.
  *
  * <p>Internal: users build the row with {@code via(...)} and never name this type.
  */

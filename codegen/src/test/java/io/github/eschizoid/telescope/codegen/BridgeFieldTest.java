@@ -574,6 +574,54 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName("a converter giving a class wider than the target's property is written after a check, on both paths")
+  void aWiderConverterResultIsCheckedOnBothPaths() throws Exception {
+    final var wide =
+      HEADER +
+      "public record Wide(String value, String other) {\n" +
+      "  @Bridge static final ForwardMapper<Wide, WideView> TO_VIEW = Telescope.mapperForward(Wide.class," +
+      " WideView.class,\n" +
+      "      toOneWay(Wide::value, WideView::value, Widen.INSTANCE::up)," +
+      " toOneWay(Wide::other, WideView::other, Widen.INSTANCE::number));\n" +
+      "}\n";
+    final var view = "package fb; public record WideView(String value, String other) {}";
+    final var widen =
+      "package fb;\n" +
+      "public final class Widen {\n" +
+      "  public static final Widen INSTANCE = new Widen();\n" +
+      "  public Object up(final String s) { return s == null ? null : s + \"!\"; }\n" +
+      "  public Object number(final String s) { return s == null ? null : s.length(); }\n" +
+      "}\n";
+    final var generated = compile(sources("fb.Wide", wide, "fb.WideView", view, "fb.Widen", widen));
+    assertTrue(generated.success(), generated::errorMessages);
+    assertTrue(
+      generated.generated().get("fb.WideToWideViewBridgeValueFn").contains("BridgeFn<java.lang.String, java.lang.Object>"),
+      () -> generated.generated().get("fb.WideToWideViewBridgeValueFn")
+    );
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Wide", wide, "fb.WideView", view, "fb.Widen", widen)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final var outcomes = new ArrayList<String>();
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Wide", "TO_VIEW");
+        final var wideClass = loader.loadClass("fb.Wide");
+        outcomes.add(mapper.forward(wideClass.getConstructors()[0].newInstance("a", null)).toString());
+        final var thrown = assertThrows(RuntimeException.class, () ->
+          mapper.forward(wideClass.getConstructors()[0].newInstance("a", "bc"))
+        );
+        outcomes.add(thrown.getClass().getSimpleName());
+      }
+    }
+    assertEquals("WideView[value=a!, other=null]", outcomes.get(0));
+    assertEquals(outcomes.subList(0, 2), outcomes.subList(2, 4));
+  }
+
+  @Test
   @DisplayName("a field initialised by a statically imported factory runs its bridge")
   void aStaticallyImportedFactoryRunsItsBridge() throws Exception {
     final var c = compile(
@@ -1005,7 +1053,7 @@ class BridgeFieldTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("viaClassShapes")
-  @DisplayName("a via row naming a class converts the same on both paths, as @ViaMapper does")
+  @DisplayName("a via row naming a class converts the same on both paths")
   void aViaRowNamingAClassAgreesOnBothPaths(
     final String shape,
     final String sourceType,
