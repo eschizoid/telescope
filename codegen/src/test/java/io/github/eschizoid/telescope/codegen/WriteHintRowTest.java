@@ -111,6 +111,53 @@ class WriteHintRowTest {
     "package wh; public record OuterS(Sh inner) {}",
     "wh.OuterSDto",
     "package wh; public record OuterSDto(ShDto inner) {}",
+    "wh.HalfB",
+    "package wh; @io.github.eschizoid.telescope.annotations.Bridge(HalfBDto.class) public record HalfB(Acct src) {}",
+    "wh.HalfBDto",
+    "package wh; public record HalfBDto(Ledger src) {}",
+    "wh.DeepB",
+    "package wh; public record DeepB(HalfB inner) {}",
+    "wh.DeepBDto",
+    "package wh; public record DeepBDto(HalfBDto inner) {}",
+    "wh.HalfF",
+    HEADER +
+      "public record HalfF(Acct src) {\n" +
+      "  @Bridge static final Mapper<HalfF, HalfFDto> OWN = Telescope.mapper(HalfF.class, HalfFDto.class);\n" +
+      "}\n",
+    "wh.HalfFDto",
+    "package wh; public record HalfFDto(Ledger src) {}",
+    "wh.DeepF",
+    "package wh; public record DeepF(HalfF inner) {}",
+    "wh.DeepFDto",
+    "package wh; public record DeepFDto(HalfFDto inner) {}",
+    "wh.Sr",
+    "package wh; public sealed interface Sr permits SrA {}",
+    "wh.SrA",
+    "package wh; @io.github.eschizoid.telescope.annotations.Bridge(SrADto.class) public record SrA(Acct src) implements Sr {}",
+    "wh.SrDto",
+    "package wh; public sealed interface SrDto permits SrADto {}",
+    "wh.SrADto",
+    "package wh; public record SrADto(Ledger src) implements SrDto {}",
+    "wh.OuterR",
+    "package wh; public record OuterR(Sr inner) {}",
+    "wh.OuterRDto",
+    "package wh; public record OuterRDto(SrDto inner) {}",
+    "wh.Pure",
+    "package wh; public sealed interface Pure permits PureA {}",
+    "wh.PureA",
+    "package wh; @io.github.eschizoid.telescope.annotations.Bridge(PureADto.class) public record PureA(Src src) implements Pure {}",
+    "wh.PureDto",
+    "package wh; public sealed interface PureDto permits PureADto {}",
+    "wh.PureADto",
+    "package wh; public record PureADto(Dto src) implements PureDto {}",
+    "wh.OuterP",
+    "package wh; public record OuterP(Pure inner, java.util.List<Src> items) {}",
+    "wh.OuterPDto",
+    "package wh; public record OuterPDto(PureDto inner, java.util.List<Dto> items) {}",
+    "wh.Node",
+    "package wh; public record Node(String name, Node next) {}",
+    "wh.NodeDto",
+    "package wh; public record NodeDto(String name, NodeDto next) {}",
     "wh.Wrap",
     "package wh; public record Wrap(Src inner) {}",
     "wh.WrapDto",
@@ -361,6 +408,18 @@ class WriteHintRowTest {
       new String[] {
         "Telescope.mapper(OuterS.class, OuterSDto.class, writeBeans(WriteStrategy.SETTERS))",
         "ShA -> ShADto",
+      },
+      new String[] {
+        "Telescope.mapper(DeepB.class, DeepBDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "Acct -> Ledger",
+      },
+      new String[] {
+        "Telescope.mapper(DeepF.class, DeepFDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "Acct -> Ledger",
+      },
+      new String[] {
+        "Telescope.mapper(OuterR.class, OuterRDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "Acct -> Ledger",
       }
     );
   }
@@ -379,6 +438,21 @@ class WriteHintRowTest {
       ),
       generated::errorMessages
     );
+  }
+
+  static List<String> defaultsReachingNoBean() {
+    return List.of(
+      "Telescope.mapper(OuterP.class, OuterPDto.class, writeBeans(WriteStrategy.SETTERS))",
+      "Telescope.mapper(Node.class, NodeDto.class, writeBeans(WriteStrategy.SETTERS))"
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("defaultsReachingNoBean")
+  @DisplayName("a writeBeans default reaching only records, through sealed cases, containers or a cycle, is compiled")
+  void aDefaultReachingNoBeanIsCompiled(final String mapper) {
+    final var generated = generated(withMapper(mapper));
+    assertTrue(generated.success(), generated::errorMessages);
   }
 
   @Test

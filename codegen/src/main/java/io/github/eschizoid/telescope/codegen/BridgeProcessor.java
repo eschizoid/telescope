@@ -201,48 +201,134 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> multiTargetSources = new HashSet<>();
 
   /**
-   * The refusal of a nested pair {@code sub} that a pair carrying a {@code writeBeans} default
-   * rebuilds through a bean: the runtime mapper builds that bean with the default, and the bridge
-   * would hand it to a bridge of its own. Null where the parent carries no default or the nested
-   * pair has no bean side. A pair carries the default its own field declares, or the one a parent
-   * hands down to a nested pair with no bean side ({@link #inheritWriteDefault}), so a bean reached
-   * below records or through the cases of a sealed interface is refused where it is met.
+   * The refusal of a {@code writeBeans} default, {@code strategy}, on the pair of {@code source}
+   * and {@code target}, where a pair it reaches below the pair rebuilds a bean: the runtime mapper
+   * builds every bean it reaches with the default, while the generated bridge hands a nested pair
+   * to a bridge of its own, which the default does not reach. Every pair the walked properties lead
+   * to is read, whatever plans it: through nested records, the cases of a sealed interface, the
+   * elements of a container, and a nested pair a {@code @Bridge} of its own converts, since a
+   * mapper given a default walks such a pair too. Null where no such pair is reached.
    */
-  private String writeDefaultReaches(
-    final TypeElement parentSource,
-    final TypeElement parentTarget,
-    final TypeElement subSource,
-    final TypeElement subTarget
+  private String beanBelowDefault(
+    final TypeElement source,
+    final TypeElement target,
+    final String strategy,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Set<String> unwalkedSource,
+    final Set<String> unwalkedTarget,
+    final Function<String, List<String>> targetsOf
   ) {
-    final var strategy = writeDefaults.get(
-      new TypePair(parentSource.getQualifiedName().toString(), parentTarget.getQualifiedName().toString())
-    );
-    if (strategy == null) return null;
-    final var bean = subSource.getKind() == ElementKind.CLASS || subTarget.getKind() == ElementKind.CLASS;
-    if (!bean) return null;
-    return (
-      "writeBeans(" +
-      strategy +
-      ") builds every bean the mapper reaches, and the generated bridge builds the nested pair " +
-      subSource.getSimpleName() +
-      " -> " +
-      subTarget.getSimpleName() +
-      " through its own bridge, which the hint does not reach; key the hint to this pair's source or target" +
-      " with writeBean(Class, strategy), and give the nested pair its own @Bridge field with its own hint"
-    );
+    final var visited = new HashSet<String>();
+    visited.add(source.getQualifiedName() + "->" + target.getQualifiedName());
+    for (final var sf : sourceFields) {
+      if (unwalkedSource.contains(sf.name())) continue;
+      for (final var name : targetsOf.apply(sf.name())) {
+        if (unwalkedTarget.contains(name)) continue;
+        final var tf = targetFields
+          .stream()
+          .filter(f -> f.name().equals(name))
+          .findFirst()
+          .orElse(null);
+        if (tf == null) continue;
+        final var reached = beanPairBelow(sf.type(), tf.type(), visited);
+        if (reached != null) {
+          return (
+            "writeBeans(" +
+            strategy +
+            ") builds every bean the mapper reaches, and the generated bridge builds the nested pair " +
+            reached[0].getSimpleName() +
+            " -> " +
+            reached[1].getSimpleName() +
+            " through its own bridge, which the hint does not reach; key the hint to this pair's source or" +
+            " target with writeBean(Class, strategy), and give the nested pair its own @Bridge field with its own" +
+            " hint"
+          );
+        }
+      }
+    }
+    return null;
   }
 
   /**
-   * Hands the {@code writeBeans} default the pair of {@code parentSource} and {@code parentTarget}
-   * carries down to {@code sub}, a nested pair of it with no bean side, so a bean the nested pair
-   * reaches in turn, below its properties or through its cases, is refused as one the parent
-   * reaches directly is.
+   * The first pair with a bean side that a value of {@code source} converted into {@code target}
+   * reaches, the two themselves included, or null: an array or a container leads to its elements,
+   * paired by position, a sealed interface to each of its cases, and a pair of records to each pair
+   * of components of one name. {@code visited} holds the pairs already read, which a cycle meets
+   * again.
    */
-  private void inheritWriteDefault(final TypeElement parentSource, final TypeElement parentTarget, final TypePair sub) {
-    final var strategy = writeDefaults.get(
-      new TypePair(parentSource.getQualifiedName().toString(), parentTarget.getQualifiedName().toString())
+  private TypeElement[] beanPairBelow(final TypeMirror source, final TypeMirror target, final Set<String> visited) {
+    if (source instanceof ArrayType sa && target instanceof ArrayType ta) {
+      return beanPairBelow(sa.getComponentType(), ta.getComponentType(), visited);
+    }
+    if (!(source instanceof DeclaredType sd) || !(target instanceof DeclaredType td)) return null;
+    final var se = (TypeElement) sd.asElement();
+    final var te = (TypeElement) td.asElement();
+    if (container(sd) && container(td)) {
+      final var sArgs = sd.getTypeArguments();
+      final var tArgs = td.getTypeArguments();
+      if (sArgs.size() != tArgs.size()) return null;
+      for (var i = 0; i < sArgs.size(); i++) {
+        final var reached = beanPairBelow(sArgs.get(i), tArgs.get(i), visited);
+        if (reached != null) return reached;
+      }
+      return null;
+    }
+    if (!se.getPermittedSubclasses().isEmpty() || !te.getPermittedSubclasses().isEmpty()) {
+      for (final var sc : casesOf(sd)) {
+        for (final var tc : casesOf(td)) {
+          final var reached = beanPairBelow(sc, tc, visited);
+          if (reached != null) return reached;
+        }
+      }
+      return null;
+    }
+    if (!isReflectableDeclared(sd) || !isReflectableDeclared(td)) return null;
+    if (!visited.add(se.getQualifiedName() + "->" + te.getQualifiedName())) return null;
+    if (se.getKind() == ElementKind.CLASS || te.getKind() == ElementKind.CLASS) return new TypeElement[] { se, te };
+    final var targetFields = fieldsOf(te);
+    for (final var sf : fieldsOf(se)) {
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(sf.name()))
+        .findFirst()
+        .orElse(null);
+      if (tf == null) continue;
+      final var reached = beanPairBelow(memberOf(sd, sf.type()), memberOf(td, tf.type()), visited);
+      if (reached != null) return reached;
+    }
+    return null;
+  }
+
+  /**
+   * Whether {@code type} is a collection, a map or an {@code Optional}, which holds its elements.
+   */
+  private boolean container(final DeclaredType type) {
+    return (
+      assignableToRaw(type, "java.util.Collection") ||
+      assignableToRaw(type, "java.util.Map") ||
+      assignableToRaw(type, "java.util.Optional")
     );
-    if (strategy != null) writeDefaults.putIfAbsent(sub, strategy);
+  }
+
+  /** The cases of {@code type}, a sealed class or interface, or {@code type} itself. */
+  private List<TypeMirror> casesOf(final DeclaredType type) {
+    final var permitted = ((TypeElement) type.asElement()).getPermittedSubclasses();
+    return permitted.isEmpty() ? List.of(type) : List.copyOf(permitted);
+  }
+
+  /**
+   * {@code declared}, the type of a member of {@code owner}, with a variable of the owner's class
+   * read as the type {@code owner} gives it, where it gives one.
+   */
+  private TypeMirror memberOf(final DeclaredType owner, final TypeMirror declared) {
+    if (!(declared instanceof TypeVariable variable)) return declared;
+    final var parameters = ((TypeElement) owner.asElement()).getTypeParameters();
+    final var arguments = owner.getTypeArguments();
+    for (var i = 0; i < parameters.size() && i < arguments.size(); i++) {
+      if (parameters.get(i).equals(variable.asElement())) return arguments.get(i);
+    }
+    return declared;
   }
 
   /**
@@ -1376,6 +1462,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var unwalked = Unwalked.of(drops, transforms.keySet(), viaMappers.keySet(), computes.keySet(), renamedTo);
     final var unwalkedSource = unwalked.source();
     final var unwalkedTarget = unwalked.target();
+    final var writeDefault = writeDefaults.get(thisPair);
+    if (writeDefault != null) {
+      final var refusal = beanBelowDefault(
+        source,
+        target,
+        writeDefault,
+        sourceFields,
+        targetFields,
+        unwalkedSource,
+        unwalkedTarget,
+        targetsOf
+      );
+      if (refusal != null) {
+        error(source, refusal);
+        return;
+      }
+    }
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
@@ -2589,12 +2692,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // already in the queue; this is idempotent via `seen`. Route Lombok-touching sub-pairs to
       // deferredPairs so they wait for processingOver() like the top-level deferred pairs.
       final var casePair = new TypePair(sourceCaseEl.getQualifiedName().toString(), targetCaseFq);
-      final var writeDefault = writeDefaultReaches(source, target, sourceCaseEl, targetCaseEl);
-      if (writeDefault != null) {
-        error(reportOn, writeDefault);
-        return;
-      }
-      inheritWriteDefault(source, target, casePair);
       if (seen.add(casePair)) {
         if (shouldDeferSubPair(sourceCaseEl, targetCaseEl)) deferredPairs.add(casePair);
         else pending.add(casePair);
@@ -3694,12 +3791,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
           return null;
         }
-        final var writeDefault = writeDefaultReaches(source, target, subSourceEl, subTargetEl);
-        if (writeDefault != null) {
-          error(source, writeDefault);
-          return null;
-        }
-        inheritWriteDefault(source, target, subPair);
         if (!lenient) recordStrictReference(subPair, source, target, sf.type(), tf.type(), sf.name());
         // Sub-pairs whose source or target carries a Lombok-synthesizing annotation must wait for
         // processingOver() — same rationale as the top-level deferral. shouldDeferSubPair returns
@@ -3855,12 +3946,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         subTargetEl.getQualifiedName().toString()
       );
       if (dispatchesCases(sd, td, fieldName)) sealedSubPairParents.putIfAbsent(subPair, parentSource);
-      final var writeDefault = writeDefaultReaches(parentSource, parentTarget, subSourceEl, subTargetEl);
-      if (writeDefault != null) {
-        error(parentSource, writeDefault);
-        return null;
-      }
-      inheritWriteDefault(parentSource, parentTarget, subPair);
       if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
