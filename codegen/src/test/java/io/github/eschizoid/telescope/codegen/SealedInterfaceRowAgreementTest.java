@@ -229,7 +229,8 @@ class SealedInterfaceRowAgreementTest {
             holder(
               "Telescope.mapper(@@Frame.class, @@FrameDto.class, " +
                 CASES +
-                ", to(@@Circle::name, @@CircleDto::title), to(@@Shape::label, @@ShapeDto::title)).forward(new @@Frame(" +
+                ", to(@@Circle::name, @@CircleDto::title), to(@@Circle::name, @@CircleDto::name)," +
+                " to(@@Shape::label, @@ShapeDto::title)).forward(new @@Frame(" +
                 CIRCLE +
                 "))"
             )
@@ -248,7 +249,8 @@ class SealedInterfaceRowAgreementTest {
             holder(
               "Telescope.mapper(@@Frame.class, @@FrameDto.class, " +
                 CASES +
-                ", to(@@Circle::name, @@CircleDto::title, s -> s + \"!\", s -> s), to(@@Shape::label, @@ShapeDto::title))" +
+                ", to(@@Circle::name, @@CircleDto::title, s -> s + \"!\", s -> s), to(@@Circle::name, @@CircleDto::name)," +
+                " to(@@Shape::label, @@ShapeDto::title))" +
                 ".forward(new @@Frame(" +
                 CIRCLE +
                 "))"
@@ -578,6 +580,32 @@ class SealedInterfaceRowAgreementTest {
             )
         ),
         "SiNCircleDto[name=n, title=l, part=SiNPartDto[v=p]]"
+      );
+    }
+
+    @Test
+    @DisplayName("a row reading a property whose same-named target counterpart is of another type")
+    void readingRowOnACaseHeldAsItself() {
+      assertBothApply(
+        outcome(
+          "SiW",
+          """
+            package io.github.eschizoid.telescope.codegen;
+            import static io.github.eschizoid.telescope.mapping.Mapping.*;
+            import io.github.eschizoid.telescope.Telescope;
+            sealed interface @@N permits @@NA { String name(); }
+            record @@NA(String name) implements @@N {}
+            sealed interface @@NDto permits @@NADto { String title(); }
+            record @@NADto(Long name, String title) implements @@NDto {}
+            record @@NOnly(@@NA a) {}
+            record @@NOnlyDto(@@NADto a) {}
+            """ +
+            holder(
+              "Telescope.mapperForward(@@NOnly.class, @@NOnlyDto.class, to(@@N::name, @@NDto::title))" +
+                ".forward(new @@NOnly(new @@NA(\"x\")))"
+            )
+        ),
+        "SiWNOnlyDto[a=SiWNADto[name=null, title=x]]"
       );
     }
   }

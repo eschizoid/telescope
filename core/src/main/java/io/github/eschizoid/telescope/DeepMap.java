@@ -702,6 +702,38 @@ public final class DeepMap {
     return all;
   }
 
+  /**
+   * Whether a row writes the property {@code name} of {@code target} through its target path, past
+   * the property of the pair it is keyed to, or may: true too when a row's target path records no
+   * hops, so what it writes is not known.
+   */
+  private static boolean writtenThroughPath(
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Class<?> target,
+    final String name
+  ) {
+    for (final var rows : overrides.values()) {
+      for (final var raw : rows) {
+        final Mapping<?, ?> row = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
+        final Telescope<?, ?> path = switch (row) {
+          case TelescopeTo<?, ?, ?> t -> t.targetTelescope();
+          case TelescopeToTelescope<?, ?, ?> t -> t.targetTelescope();
+          case Constant<?, ?, ?> t -> t.targetTelescope();
+          case Compute<?, ?, ?> t -> t.targetTelescope();
+          default -> null;
+        };
+        if (path == null) continue;
+        if (path.hops == null) return true;
+        for (var i = path.rootStepIndex() + 1; i < path.hops.size(); i++) {
+          final var hop = path.hops.get(i);
+          if (hop.kind() != Fusion.Hop.Kind.FIELD || hop.owner() == null) continue;
+          if (name.equals(hop.component()) && hop.owner().isAssignableFrom(target)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /** Whether a row keyed to two sealed interfaces the pair's classes implement applies to it. */
   private static boolean inheritsRows(final Map<TypePair, List<Mapping<?, ?>>> overrides, final TypePair pair) {
     for (final var keyed : overrides.keySet()) {
@@ -1276,6 +1308,12 @@ public final class DeepMap {
       // OK.
       final var telescopeReadsSrc = new HashSet<String>();
       final var telescopeWritesTgt = new HashSet<String>();
+      // The source fields rows read through a path one field hop long, outside a `when`. Such a
+      // path reads that one field, as an accessor does, so the field does not pair by name.
+      final var pathReadsSrc = new HashSet<String>();
+      // Whether a path row of this pair names no first hop on the target, so which target field it
+      // writes is not known.
+      var unknownTgtWrite = false;
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
       for (final var rawRow : rowsAt(overrides, key)) {
@@ -1305,6 +1343,7 @@ public final class DeepMap {
             telescopeReadsSrc.add(srcField);
             final var firstTgtHop = tRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+            else unknownTgtWrite = true;
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1316,6 +1355,8 @@ public final class DeepMap {
             telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
+            if (readsOne) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1329,6 +1370,7 @@ public final class DeepMap {
             final var firstTgtHop = ttRow.targetTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+            else unknownTgtWrite = true;
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1346,12 +1388,14 @@ public final class DeepMap {
           case Constant<?, ?, ?> cRow -> {
             final var firstTgtHop = cRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+            else unknownTgtWrite = true;
             telescopeFixups.add(rawRow);
             yield false;
           }
           case Compute<?, ?, ?> cpRow -> {
             final var firstTgtHop = cpRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+            else unknownTgtWrite = true;
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1482,16 +1526,27 @@ public final class DeepMap {
           )
         );
       }
-      for (final var name : tgtRefl.names(target)) {
+      // A target field no row writes pairs with the source field of its name only when no row
+      // reads that source field. The rows that read one are those with a source accessor, a
+      // drop, and a path one field hop long; a longer path reads below the field and leaves it to
+      // pair by name.
+      final var tgtNames = tgtRefl.names(target);
+      final var readSrc = new HashSet<>(claimedSrc);
+      readSrc.addAll(pathReadsSrc);
+      final var byName = new HashSet<>(
+        PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, claimedTgt).matched()
+      );
+      for (final var name : tgtNames) {
         if (claimedTgt.contains(name)) continue;
-        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target
-        // fields with no same-name source get a NULLING_ISO placeholder. The post-fixup overlays it
-        // if a TelescopeToTelescope / FromTelescopeTo writes through that field; otherwise the
-        // field
-        // stays null. Telescope rows can't recover their top-level target field name from a
+        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, a
+        // target field nothing pairs with by name gets a NULLING_ISO placeholder. The post-fixup
+        // overlays it if a telescope row writes through that field; otherwise the field stays
+        // null. Telescope rows can't recover their top-level target field name from a
         // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
-        // every nested write. Without any telescope row, the strict same-name check still fires.
-        if (!srcNameSet.contains(name)) {
+        // every nested write. Two cases still refuse: a pair with no telescope row, and a target
+        // field whose same-named source a row reads, which only a row naming that field lets
+        // through.
+        if (!byName.contains(name)) {
           // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
           // topStepsOut) was never explicitly configured by the user — it was visited because a
           // parent field's genericType is reflectable. An unmatched target field there should stay
@@ -1500,12 +1555,23 @@ public final class DeepMap {
           // asked for, or a case of the two sealed interfaces the user asked for. Missing fields
           // there ARE a configuration mistake worth surfacing.
           final var isNested = topStepsOut == null;
+          // A target field left unpaired because a row reads the source field of its name sits at
+          // a pair with rows of its own, which the user configured, so a strict mapper refuses it
+          // at any depth unless a row writes it: a path, constant or compute row naming it, at this
+          // pair or through a path from a pair above.
+          final var unwrittenNamesake =
+            srcNameSet.contains(name) &&
+            !lenient &&
+            !forwardOnly &&
+            !telescopeWritesTgt.contains(name) &&
+            !unknownTgtWrite &&
+            !writtenThroughPath(overrides, target, name);
           // `lenient` is set by `resolveForward` — forward-only mappers don't run `backward()`,
           // so the bijection invariant doesn't apply and unmatched target fields silently take
           // the JLS default rather than abort construction. Matches MapStruct's default behaviour
           // and removes "13 drops + 2 constants for a 3-field rename" friction on small-DTO →
           // large-entity migration shapes.
-          if (!telescopeFixups.isEmpty() || isNested || lenient) {
+          if (!unwrittenNamesake && (!telescopeFixups.isEmpty() || isNested || lenient)) {
             // Telescope-row placeholder for a target field with no same-name source. Three cases,
             // type-driven:
             //   - field type is a record AND a telescope row claims it as a first hop: allocate a
@@ -1532,13 +1598,21 @@ public final class DeepMap {
             continue;
           }
           throw new IllegalStateException(
-            PairingMessages.noSameNameSource(
-              source.getSimpleName(),
-              target.getSimpleName(),
-              slot(tgtRefl),
-              slot(srcRefl),
-              name
-            )
+            srcNameSet.contains(name)
+              ? PairingMessages.sameNameSourceRead(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(tgtRefl),
+                  slot(srcRefl),
+                  name
+                )
+              : PairingMessages.noSameNameSource(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(tgtRefl),
+                  slot(srcRefl),
+                  name
+                )
           );
         }
         final var autoPaired = Reflective.pairedTypes(srcRefl, source, name, tgtRefl, target, name);

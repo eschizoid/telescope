@@ -263,6 +263,15 @@ public sealed class Telescope<
     return firstHopName;
   }
 
+  /**
+   * Whether this path is one {@code field} hop off its root and nothing else: no filter, no
+   * narrowing, no traversal and no pending edit. Such a path reads one property of the root, as
+   * that property's accessor does.
+   */
+  boolean readsOneProperty() {
+    return hops != null && !hasPendingEdits() && hops.size() == 1 && hops.getFirst().kind() == Fusion.Hop.Kind.FIELD;
+  }
+
   // The index of the first hop that moves the focus off the path's root value: the first hop after
   // any leading filters, observers and narrowings, which all keep the focus on the root value. -1
   // when the path records no hops or none moves the focus.

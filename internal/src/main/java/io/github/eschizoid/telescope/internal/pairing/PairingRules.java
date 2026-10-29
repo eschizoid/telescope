@@ -1391,6 +1391,12 @@ public final class PairingRules<T> {
    * explicit rows. Pure set logic — the strictness gates (what happens to the unmatched leftovers)
    * are the caller's policy; the matches and leftovers themselves are decided here, identically in
    * both worlds. Iteration order follows the target side, matching construction order.
+   *
+   * <p>{@code claimedTarget} holds the target properties rows write, and {@code claimedSource} the
+   * source properties rows read. A target property no row writes pairs with the source property of
+   * its own name only when no row reads that source property either: a row reading it, a rename or
+   * a {@code drop}, says where the property goes, so the target property of its name is left
+   * unmatched, as it is on a generated bridge.
    */
   public static MatchResult matchFields(
     final List<String> sourceNames,
@@ -1404,7 +1410,7 @@ public final class PairingRules<T> {
     final var claimedSrcNow = new LinkedHashSet<>(claimedSource);
     for (final var name : targetNames) {
       if (claimedTarget.contains(name)) continue;
-      if (srcNameSet.contains(name)) {
+      if (srcNameSet.contains(name) && !claimedSource.contains(name)) {
         matched.add(name);
         claimedSrcNow.add(name);
       } else {

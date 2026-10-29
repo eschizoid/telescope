@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -2120,5 +2121,231 @@ class BridgeFieldTest {
     final var expected = position(code, "Telescope.mapper(Address.class, Wider.class)");
     assertEquals("/fb/Mappers.java", refusal.getSource().getName());
     assertEquals(expected[0], refusal.getLineNumber(), c::errorMessages);
+  }
+
+  /**
+   * Converters the rows of the pairs below name, each a static method a generated bridge can call.
+   */
+  private static final String NUM =
+    "package fb;\n" +
+    "public final class Num {\n" +
+    "  public static String show(final Integer i) { return \"#\" + i; }\n" +
+    "  public static Integer read(final String s) { return Integer.valueOf(s.substring(1)); }\n" +
+    "  public static String up(final String s) { return s.toUpperCase(); }\n" +
+    "  public static String down(final String s) { return s.toLowerCase(); }\n" +
+    "  public static String made() { return \"made\"; }\n" +
+    "}\n";
+
+  /**
+   * A pair whose rows read a source property, by a rename or a drop, that has a target property of
+   * its own name: the components of {@code Src} and {@code Tgt}, the rows, the samples each side's
+   * constructor takes, and what both paths owe forward, backward and laid over the source sample. A
+   * forward-only pair owes no backward or patch.
+   */
+  record ReadSource(
+    String name,
+    String src,
+    String tgt,
+    boolean forwardOnly,
+    String rows,
+    List<Object> srcSample,
+    List<Object> tgtSample,
+    String forward,
+    String backward,
+    String patch
+  ) {
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
+
+  static List<ReadSource> readSources() {
+    return List.of(
+      new ReadSource(
+        "a rename beside a constant on the renamed property's namesake",
+        "String n",
+        "String label, String n",
+        false,
+        "to(Src::n, Tgt::label), constant(Tgt::n, \"k\")",
+        List.of("v"),
+        List.of("lbl", "w"),
+        "Tgt[label=v, n=k]",
+        "Src[n=lbl]",
+        "Src[n=lbl]"
+      ),
+      new ReadSource(
+        "a rename beside a value computed into the renamed property's namesake",
+        "String n",
+        "String label, String n",
+        false,
+        "to(Src::n, Tgt::label), compute(Tgt::n, Num::made)",
+        List.of("v"),
+        List.of("lbl", "w"),
+        "Tgt[label=v, n=made]",
+        "Src[n=lbl]",
+        "Src[n=lbl]"
+      ),
+      new ReadSource(
+        "a rename through a conversion beside a constant on the namesake",
+        "String n",
+        "String label, String n",
+        false,
+        "to(Src::n, Tgt::label, Num::up, Num::down), constant(Tgt::n, \"k\")",
+        List.of("v"),
+        List.of("LBL", "w"),
+        "Tgt[label=V, n=k]",
+        "Src[n=lbl]",
+        "Src[n=lbl]"
+      ),
+      new ReadSource(
+        "a rename beside a constant on a namesake of another type",
+        "Integer n",
+        "String label, Long n",
+        false,
+        "to(Src::n, Tgt::label, Num::show, Num::read), constant(Tgt::n, 5L)",
+        List.of(7),
+        List.of("#3", 9L),
+        "Tgt[label=#7, n=5]",
+        "Src[n=3]",
+        "Src[n=3]"
+      ),
+      new ReadSource(
+        "a forward-only rename with no row for the namesake",
+        "String n",
+        "String label, String n",
+        true,
+        "to(Src::n, Tgt::label)",
+        List.of("v"),
+        List.of(),
+        "Tgt[label=v, n=null]",
+        null,
+        null
+      ),
+      new ReadSource(
+        "a forward-only rename with no row for a namesake of another type",
+        "Integer n",
+        "String label, Long n",
+        true,
+        "toOneWay(Src::n, Tgt::label, Num::show)",
+        List.of(7),
+        List.of(),
+        "Tgt[label=#7, n=null]",
+        null,
+        null
+      ),
+      new ReadSource(
+        "a drop beside a constant on the dropped property's namesake",
+        "String id, String n",
+        "String id, String n",
+        false,
+        "drop(Src::n), constant(Tgt::n, \"k\")",
+        List.of("i", "v"),
+        List.of("j", "w"),
+        "Tgt[id=i, n=k]",
+        "Src[id=j, n=null]",
+        "Src[id=j, n=v]"
+      ),
+      new ReadSource(
+        "a forward-only drop with no row for the namesake",
+        "String id, String n",
+        "String id, String n",
+        true,
+        "drop(Src::n)",
+        List.of("i", "v"),
+        List.of(),
+        "Tgt[id=i, n=null]",
+        null,
+        null
+      )
+    );
+  }
+
+  /**
+   * The pair {@code Src} to {@code Tgt} with {@code Num}, and {@code Mappers} holding its mapper.
+   */
+  private static JavaFileObject[] readSourcePair(final ReadSource pair, final boolean bridge) {
+    final var type = pair.forwardOnly() ? "ForwardMapper" : "Mapper";
+    return new JavaFileObject[] {
+      ProcessorHarness.source("fb.Src", "package fb; public record Src(" + pair.src() + ") {}"),
+      ProcessorHarness.source("fb.Tgt", "package fb; public record Tgt(" + pair.tgt() + ") {}"),
+      ProcessorHarness.source("fb.Num", NUM),
+      ProcessorHarness.source(
+        "fb.Mappers",
+        HEADER +
+          "public final class Mappers {\n  " +
+          (bridge ? "@Bridge " : "") +
+          "public static final " +
+          type +
+          "<Src, Tgt> M = Telescope." +
+          (pair.forwardOnly() ? "mapperForward" : "mapper") +
+          "(Src.class, Tgt.class, " +
+          pair.rows() +
+          ");\n}\n"
+      ),
+    };
+  }
+
+  /**
+   * What the mapper field of {@code c} gives for the pair's samples, forward, backward and patch.
+   */
+  private static List<String> readSourceResults(final ProcessorHarness.Compilation c, final ReadSource pair)
+    throws Exception {
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      final var src = loader.loadClass("fb.Src").getConstructors()[0].newInstance(pair.srcSample().toArray());
+      final var mapper = field(loader, "fb.Mappers", "M");
+      if (pair.forwardOnly()) {
+        @SuppressWarnings("unchecked")
+        final var forward = (ForwardMapper<Object, Object>) mapper;
+        return Arrays.asList(String.valueOf(forward.forward(src)), null, null);
+      }
+      @SuppressWarnings("unchecked")
+      final var both = (Mapper<Object, Object>) mapper;
+      final var tgt = loader.loadClass("fb.Tgt").getConstructors()[0].newInstance(pair.tgtSample().toArray());
+      return List.of(
+        String.valueOf(both.forward(src)),
+        String.valueOf(both.backward(tgt)),
+        String.valueOf(both.patch(src, tgt))
+      );
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("readSources")
+  @DisplayName("a source property a rename or a drop reads is not paired with its namesake, on either path")
+  void aReadSourcePropertyIsNotPairedByName(final ReadSource pair) throws Exception {
+    final var generated = compile(readSourcePair(pair, true));
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), readSourcePair(pair, false));
+    final var owed = Arrays.asList(pair.forward(), pair.backward(), pair.patch());
+    assertEquals(owed, readSourceResults(generated, pair), "generated");
+    assertEquals(owed, readSourceResults(runtime, pair), "runtime");
+  }
+
+  static List<String[]> unwrittenNamesakes() {
+    return List.of(
+      new String[] { "a rename", "String n", "String label, String n", "to(Src::n, Tgt::label)" },
+      new String[] { "a drop", "String id, String n", "String id, String n", "drop(Src::n)" }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("unwrittenNamesakes")
+  @DisplayName("a strict pair refuses, on both paths, the namesake of a property a row reads when no row writes it")
+  void aStrictPairRefusesAnUnwrittenNamesake(final String name, final String src, final String tgt, final String rows)
+    throws Exception {
+    final var pair = new ReadSource(name, src, tgt, false, rows, List.of(), List.of(), null, null, null);
+    final var generated = compile(readSourcePair(pair, true));
+    assertFalse(generated.success(), name);
+    assertTrue(generated.hasError("must expose the same field names (a bijection)"), generated::errorMessages);
+    final var refusal = PairingMessages.sameNameSourceRead("Src", "Tgt", "field", "field", "n");
+    final var verified = compile(readSourcePair(pair, false));
+    assertTrue(verified.hasError(refusal), verified::errorMessages);
+    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), readSourcePair(pair, false));
+    assertTrue(runtime.success(), runtime::errorMessages);
+    try (final var loader = load(runtime)) {
+      final var thrown = assertThrows(ExceptionInInitializerError.class, () -> field(loader, "fb.Mappers", "M"));
+      assertEquals(refusal, thrown.getCause().getMessage());
+    }
   }
 }
