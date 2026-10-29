@@ -1319,9 +1319,8 @@ public final class DeepMap {
             telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
-            if (
-              firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty()
-            ) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
+            if (readsOne) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
             telescopeFixups.add(rawRow);
             yield false;
           }

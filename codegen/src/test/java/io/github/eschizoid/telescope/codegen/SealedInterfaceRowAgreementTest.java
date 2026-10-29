@@ -590,16 +590,16 @@ class SealedInterfaceRowAgreementTest {
         outcome(
           "SiW",
           """
-          package io.github.eschizoid.telescope.codegen;
-          import static io.github.eschizoid.telescope.mapping.Mapping.*;
-          import io.github.eschizoid.telescope.Telescope;
-          sealed interface @@N permits @@NA { String name(); }
-          record @@NA(String name) implements @@N {}
-          sealed interface @@NDto permits @@NADto { String title(); }
-          record @@NADto(Long name, String title) implements @@NDto {}
-          record @@NOnly(@@NA a) {}
-          record @@NOnlyDto(@@NADto a) {}
-          """ +
+            package io.github.eschizoid.telescope.codegen;
+            import static io.github.eschizoid.telescope.mapping.Mapping.*;
+            import io.github.eschizoid.telescope.Telescope;
+            sealed interface @@N permits @@NA { String name(); }
+            record @@NA(String name) implements @@N {}
+            sealed interface @@NDto permits @@NADto { String title(); }
+            record @@NADto(Long name, String title) implements @@NDto {}
+            record @@NOnly(@@NA a) {}
+            record @@NOnlyDto(@@NADto a) {}
+            """ +
             holder(
               "Telescope.mapperForward(@@NOnly.class, @@NOnlyDto.class, to(@@N::name, @@NDto::title))" +
                 ".forward(new @@NOnly(new @@NA(\"x\")))"

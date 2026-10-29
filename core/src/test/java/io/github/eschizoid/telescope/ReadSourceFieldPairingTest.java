@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * A source field a row reads, a rename, a drop or a path one field hop long, is not paired with the
  * target field of its own name: the row says where the field goes. That target field is left to the
- * other rows, so a strict mapper with no row writing it refuses it by name, at the mapper's own pair
- * and at a nested pair with rows of its own, and a forward-only mapper leaves it unwritten.
+ * other rows, so a strict mapper with no row writing it refuses it by name, at the mapper's own
+ * pair and at a nested pair with rows of its own, and a forward-only mapper leaves it unwritten.
  */
 class ReadSourceFieldPairingTest {
 
@@ -152,7 +152,11 @@ class ReadSourceFieldPairingTest {
   @Test
   @DisplayName("a path one field hop long reads its field as an accessor does, so the field is not paired by name")
   void aOneHopPathIsNotPairedByName() {
-    final var mapper = Telescope.mapperForward(Src.class, Tgt.class, to(Telescope.of(Src.class).field(Src::n), Tgt::label));
+    final var mapper = Telescope.mapperForward(
+      Src.class,
+      Tgt.class,
+      to(Telescope.of(Src.class).field(Src::n), Tgt::label)
+    );
     assertEquals(new Tgt("v", null), mapper.forward(new Src("v")));
   }
 

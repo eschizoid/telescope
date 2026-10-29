@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
  * A row keyed to two sealed interfaces applies to every pair of their cases the mapper converts,
  * wherever the mapper meets that pair, and a case's own bridge gives way to it as it does to a row
  * keyed to the case pair itself. {@link SrCircle}'s bridge fills the title from the label, so a
- * title filled from the name shows the row applied. The row reads the name, so the name is not
- * also paired with the target's name: a forward-only mapper leaves that unwritten.
+ * title filled from the name shows the row applied. The row reads the name, so the name is not also
+ * paired with the target's name: a forward-only mapper leaves that unwritten.
  */
 class SealedInterfaceRowTest {
 

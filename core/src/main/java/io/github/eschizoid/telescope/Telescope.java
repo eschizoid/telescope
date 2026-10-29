@@ -269,9 +269,7 @@ public sealed class Telescope<
    * that property's accessor does.
    */
   boolean readsOneProperty() {
-    return (
-      hops != null && !hasPendingEdits() && hops.size() == 1 && hops.getFirst().kind() == Fusion.Hop.Kind.FIELD
-    );
+    return hops != null && !hasPendingEdits() && hops.size() == 1 && hops.getFirst().kind() == Fusion.Hop.Kind.FIELD;
   }
 
   // The index of the first hop that moves the focus off the path's root value: the first hop after
