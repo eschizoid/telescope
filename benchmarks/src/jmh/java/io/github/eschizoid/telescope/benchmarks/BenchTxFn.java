@@ -5,6 +5,9 @@ import io.github.eschizoid.telescope.conversion.BridgeFn;
 /** A transform typed as the property it fills, handing each value back as it is. */
 public class BenchTxFn implements BridgeFn<String, String> {
 
+  /** The one instance the fixtures convert through. */
+  public static final BenchTxFn INSTANCE = new BenchTxFn();
+
   @Override
   public String forward(final String value) {
     return value;

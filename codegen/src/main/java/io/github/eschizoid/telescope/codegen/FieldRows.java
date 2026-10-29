@@ -729,7 +729,7 @@ final class FieldRows {
       if (types.isSubtype(types.erasure(into.type()), types.erasure(gives))) return gives;
       return new Refused(
         forward,
-        forward + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+        forward + " gives " + gives + ", which the " + shown(into) + " property '" + into.property() + "' does not hold"
       );
     }
 
@@ -1209,7 +1209,7 @@ final class FieldRows {
       if (!types.isAssignable(types.erasure(gives), types.erasure(into.type()))) {
         return new Refused(
           arg,
-          arg + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+          arg + " gives " + gives + ", which the " + shown(into) + " property '" + into.property() + "' does not hold"
         );
       }
       return owner.getQualifiedName() + "." + held.getSimpleName() + ".get()";
@@ -1503,15 +1503,20 @@ final class FieldRows {
             " is " +
             valueType +
             ", which the " +
-            into.type() +
+            shown(into) +
             " property '" +
             into.property() +
             "' does not hold; write it as a " +
-            into.type() +
+            shown(into) +
             " value"
         );
       }
       return text;
+    }
+
+    /** The type a refusal names {@code into}'s property by: the primitive, where it holds one. */
+    private TypeMirror shown(final Accessor into) {
+      return into.primitive() ? env.getTypeUtils().unboxedType(into.type()) : into.type();
     }
 
     /** The refusal of a supplier whose result the property {@code into} does not hold, or null. */
@@ -1522,7 +1527,7 @@ final class FieldRows {
       if (types.isAssignable(types.erasure(gives), types.erasure(into.type()))) return null;
       return new Refused(
         arg,
-        arg + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+        arg + " gives " + gives + ", which the " + shown(into) + " property '" + into.property() + "' does not hold"
       );
     }
 

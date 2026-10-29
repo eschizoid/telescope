@@ -345,8 +345,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var name = annotation.getQualifiedName().toString();
       if (name.equals(BRIDGE_FQN)) collectBridgeSetting(type, mirror, settings, twice);
       else if (name.equals(BRIDGES_FQN)) {
-        for (final var each : listValue(mirror, "value")) {
-          if (each.getValue() instanceof AnnotationMirror nested) collectBridgeSetting(type, nested, settings, twice);
+        // The container of a repeated @Bridge holds each one, in its required array value.
+        for (final var each : (List<?>) annotationValue(mirror, "value").getValue()) {
+          collectBridgeSetting(type, (AnnotationMirror) ((AnnotationValue) each).getValue(), settings, twice);
         }
       }
     }
@@ -380,17 +381,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (entry.getKey().getSimpleName().contentEquals(name)) return entry.getValue();
     }
     return null;
-  }
-
-  private static List<? extends AnnotationValue> listValue(final AnnotationMirror mirror, final String name) {
-    final var value = annotationValue(mirror, name);
-    if (value == null) return List.of();
-    if (value.getValue() instanceof List<?> list) {
-      final var values = new ArrayList<AnnotationValue>();
-      for (final var each : list) if (each instanceof AnnotationValue element) values.add(element);
-      return values;
-    }
-    return List.of(value);
   }
 
   private void collectBridges(final TypeElement type, final Set<String> named) {

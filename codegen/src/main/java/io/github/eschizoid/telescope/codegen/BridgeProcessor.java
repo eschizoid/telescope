@@ -204,7 +204,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The refusal of a nested pair {@code sub} that a pair declared with a {@code writeBeans} default
    * rebuilds through a bean: the runtime mapper builds that bean with the default, and the bridge
    * would hand it to a bridge of its own. Null where the parent has no default or the nested pair
-   * rebuilds only records, or the cases of a sealed interface, which are refused one by one.
+   * rebuilds only records. A pair of sealed interfaces given a default is refused before its cases
+   * are planned, since a default is a write strategy its cases' bridges would not reach.
    */
   private String writeDefaultReaches(
     final TypeElement parentSource,
@@ -231,15 +232,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Single per-pair configuration record holding every modifier parsed from the {@code @Bridge}
-   * annotation. Consolidating ten separate {@code Map<TypePair, ?>} fields into one {@code
-   * Map<TypePair, BridgeConfig>} eliminates the {@code clear()} maintenance hazard — adding a new
-   * attribute means adding a record component, not declaring a new instance field AND remembering
-   * to clear it at the top of each {@link #process(Set, RoundEnvironment)} round.
+   * What a pair's bridge is built from: for a {@code @Bridge} field, what its rows say; for a
+   * {@code @Bridge} on a class, which has no rows, its write strategy, its leniency and its
+   * carrier. One record per pair, so a new setting is a new component rather than another map to
+   * clear at the top of each {@link #process(Set, RoundEnvironment)} round.
    *
-   * <p>Each component holds the per-pair view of one modifier; an empty map / set / null
-   * placeholder is fine when that modifier wasn't used on the pair. {@link #EMPTY} is the
-   * fall-through value for pairs that were never registered.
+   * <p>A setting the pair does not use is an empty map or set, {@code AUTO}, or null. {@link
+   * #EMPTY} is the value for a pair nothing registered.
    */
   private record BridgeConfig(
     Set<String> drops,
@@ -258,15 +257,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // instead of instantiating a BridgeFn. The source field also lands in forwardOnlyTransforms
     // whenever this map carries an entry for it.
     Map<String, String> transformMethods,
-    // Carrier-form emission override. When set, the generated bridge class
-    // lives in this carrier's package and is named after the carrier — the source's package and
-    // simple name are ignored for emission purposes. `null` means model-anchored form (the legacy
-    // path: source class IS the annotated element, package + name derive from it).
+    // The class declaring the pair, a carrier class or the class holding a @Bridge field, whose
+    // package the generated bridge is written into. Null for a @Bridge on the source class, whose
+    // bridge takes its package and name from the source.
     String carrierFq,
-    // @Bridge(lenient = true) — when set, the bijection check is skipped: unmatched target
-    // components take their JLS default in the forward direction; unmatched source components are
-    // silently ignored. Produces a partial-Iso whose backward (BRIDGE.set(source, target))
-    // direction is documented as lossy.
+    // @Bridge(lenient = true), or a field initialised by Telescope.mapperForward: the bijection
+    // check is skipped, unmatched target components take their JLS default in the forward
+    // direction, and unmatched source components are ignored. The bridge's backward is lossy.
     boolean lenient,
     // The @Bridge field this pair's rows were read from, as declared in the carrier, or null
     // for a @Bridge on a class. A field's bridge is named after the field and registered with
@@ -297,14 +294,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
 
     /**
-     * Stands in for a declared pair whose {@code @Bridge} cannot be read until a later round. It
-     * declares the pair and carries its carrier, which decide the name its bridge is written under.
+     * Stands in for the pair a {@code @Bridge} field declares while its rows cannot be read until a
+     * later round. It declares the pair and carries the field's class and name, which decide the
+     * name its bridge is written under.
      */
-    static BridgeConfig placeholder(final TypeElement carrierEl) {
-      return placeholder(carrierEl, null);
-    }
-
-    /** As {@link #placeholder(TypeElement)}, for the pair a {@code @Bridge} field declares. */
     static BridgeConfig placeholder(final TypeElement carrierEl, final String declaringField) {
       return new BridgeConfig(
         Set.of(),
@@ -317,7 +310,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "AUTO",
         Map.of(),
         Map.of(),
-        carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
+        carrierEl.getQualifiedName().toString(),
         false,
         declaringField,
         List.of(),
@@ -2581,11 +2574,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Defensively enqueue the per-case pair too — if the user @Bridge'd it (required), it's
       // already in the queue; this is idempotent via `seen`. Route Lombok-touching sub-pairs to
       // deferredPairs so they wait for processingOver() like the top-level deferred pairs.
-      final var writeDefault = writeDefaultReaches(source, target, sourceCaseEl, targetCaseEl);
-      if (writeDefault != null) {
-        error(reportOn, writeDefault);
-        return;
-      }
       final var casePair = new TypePair(sourceCaseEl.getQualifiedName().toString(), targetCaseFq);
       if (seen.add(casePair)) {
         if (shouldDeferSubPair(sourceCaseEl, targetCaseEl)) deferredPairs.add(casePair);
@@ -7663,10 +7651,40 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       orElseKinds.add(kind);
       return erasingBridge + ".__orElse(" + value + ", " + primitiveDefaultLiteral(kind).orElseThrow() + ")";
     }
-    if (reachesByCheck(gives, parameter) || inferredIntoPrimitive(gives, parameter)) {
+    if (
+      reachesByCheck(gives, parameter) || inferredIntoPrimitive(gives, parameter) || targetInferred(gives, parameter)
+    ) {
       return checkedResult(value, parameter, owner, property);
     }
     return value;
+  }
+
+  /**
+   * Whether a result typed by a variable its method declares and no parameter of the method names,
+   * {@code gives}, is written into a reference {@code parameter} given no type arguments, other
+   * than {@code Object}. Only the call's target then fixes the variable, so the cast javac writes
+   * at the call is all the value meets; passed where {@code Object} is taken and checked by {@code
+   * FixedClass.result}, a value of another class is refused with the message the runtime gives. A
+   * parameter given type arguments keeps javac's cast, since a check of the value's class cannot
+   * see them.
+   */
+  private boolean targetInferred(final TypeMirror gives, final TypeMirror parameter) {
+    if (!(gives instanceof TypeVariable variable) || parameter == null || parameter.getKind().isPrimitive()) {
+      return false;
+    }
+    if (!(variable.asElement().getEnclosingElement() instanceof ExecutableElement method)) return false;
+    if (
+      method
+        .getParameters()
+        .stream()
+        .anyMatch(p -> mirrorProps().mentionsTypeVariable(p.asType()))
+    ) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (mirrorProps().mentionsTypeVariable(parameter) || !types.isSameType(parameter, types.erasure(parameter))) {
+      return false;
+    }
+    final var object = processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType();
+    return !types.isSameType(parameter, object);
   }
 
   /**
@@ -7890,7 +7908,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String property
   ) {
     if (gives == null || parameter == null) return value;
-    if (reachesByCheck(gives, parameter) || unboxedThroughCheck(gives, parameter)) {
+    if (reachesByCheck(gives, parameter) || unboxedThroughCheck(gives, parameter) || targetInferred(gives, parameter)) {
       return writtenResult(value, gives, parameter, owner, property);
     }
     final var types = processingEnv.getTypeUtils();

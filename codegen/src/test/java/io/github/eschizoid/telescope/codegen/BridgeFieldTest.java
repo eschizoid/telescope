@@ -306,7 +306,7 @@ class BridgeFieldTest {
       new String[] { "to(User::toString, UserDto::kind)", "User::toString is not the accessor of a property of User" },
       new String[] {
         "constant(UserDto::userId, 5)",
-        "the value 5 is int, which the java.lang.Long property 'userId' does not hold",
+        "the value 5 is int, which the long property 'userId' does not hold; write it as a long value",
       },
       new String[] { "drop(User::secret), drop(User::secret)", "a property is dropped once, by a row of its own" },
       new String[] {
@@ -340,6 +340,10 @@ class BridgeFieldTest {
         "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place",
       },
       new String[] { "compute(UserDto::kind, Conv.INSTANCE.held)", "held is not static and final" },
+      new String[] {
+        "Mapping.<User, UserDto, Object>compute(UserDto::userId, Conv::region)",
+        "Conv::region gives java.lang.String, which the long property 'userId' does not hold",
+      },
       new String[] {
         "compute(UserDto::kind, HIDDEN)",
         "Mappers.HIDDEN cannot be called from the generated bridge in package 'fb'",
@@ -748,6 +752,98 @@ class BridgeFieldTest {
     }
     assertEquals("BinsView[any=[b, a], sink=[1, n]]", outcomes.get(0));
     assertEquals(outcomes.get(0), outcomes.get(1));
+  }
+
+  @Test
+  @DisplayName("a converter whose result only the call's target types is checked, and refused alike on both paths")
+  void aTargetTypedConverterResultIsCheckedOnBothPaths() throws Exception {
+    final var lone =
+      HEADER +
+      "public record Lone(String name) {\n" +
+      "  @Bridge static final ForwardMapper<Lone, LoneView> TO_VIEW = Telescope.mapperForward(Lone.class," +
+      " LoneView.class, toOneWay(Lone::name, LoneView::name, Gen::length));\n" +
+      "}\n";
+    final var view = "package fb; public record LoneView(String name) {}";
+    final var gen =
+      "package fb;\n" +
+      "public final class Gen {\n" +
+      "  private Gen() {}\n" +
+      "  @SuppressWarnings(\"unchecked\")\n" +
+      "  public static <T> T length(final String s) { return (T) (Object) Integer.valueOf(s.length()); }\n" +
+      "}\n";
+    final var generated = compile(sources("fb.Lone", lone, "fb.LoneView", view, "fb.Gen", gen));
+    assertTrue(generated.success(), generated::errorMessages);
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Lone", lone, "fb.LoneView", view, "fb.Gen", gen)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final var refusals = new ArrayList<String>();
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Lone", "TO_VIEW");
+        final var source = loader.loadClass("fb.Lone").getConstructors()[0].newInstance("abc");
+        refusals.add(assertThrows(ClassCastException.class, () -> mapper.forward(source)).getMessage());
+      }
+    }
+    assertEquals(
+      PairingMessages.resultClassMismatch("fb.LoneView", "name", "java.lang.Integer", "java.lang.String"),
+      refusals.get(0)
+    );
+    assertEquals(refusals.get(0), refusals.get(1));
+  }
+
+  static List<String[]> variableTypedResults() {
+    return List.of(
+      new String[] { "toOneWay(Lot::name, LotView::name, Gen::same)", "LotView[name=abc, any=null, names=null]" },
+      new String[] { "toOneWay(Lot::name, LotView::any, Gen::length)", "LotView[name=null, any=3, names=null]" },
+      new String[] { "toOneWay(Lot::name, LotView::names, Gen::listed)", "LotView[name=null, any=null, names=[abc]]" }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("variableTypedResults")
+  @DisplayName(
+    "a converter result its argument types, or written into Object or a class given type arguments, runs alike"
+  )
+  void aVariableTypedResultTheCallFixesRunsOnBothPaths(final String row, final String expected) throws Exception {
+    final var lot =
+      HEADER +
+      "public record Lot(String name) {\n" +
+      "  @Bridge static final ForwardMapper<Lot, LotView> TO_VIEW = Telescope.mapperForward(Lot.class," +
+      " LotView.class, " +
+      row +
+      ");\n" +
+      "}\n";
+    final var view = "package fb; public record LotView(String name, Object any, java.util.List<String> names) {}";
+    final var gen =
+      "package fb;\n" +
+      "public final class Gen {\n" +
+      "  private Gen() {}\n" +
+      "  public static <T> T same(final T t) { return t; }\n" +
+      "  @SuppressWarnings(\"unchecked\")\n" +
+      "  public static <T> T length(final String s) { return (T) (Object) Integer.valueOf(s.length()); }\n" +
+      "  @SuppressWarnings(\"unchecked\")\n" +
+      "  public static <T> T listed(final String s) { return (T) java.util.List.of(s); }\n" +
+      "}\n";
+    final var generated = compile(sources("fb.Lot", lot, "fb.LotView", view, "fb.Gen", gen));
+    assertTrue(generated.success(), generated::errorMessages);
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Lot", lot, "fb.LotView", view, "fb.Gen", gen)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Lot", "TO_VIEW");
+        final var source = loader.loadClass("fb.Lot").getConstructors()[0].newInstance("abc");
+        assertEquals(expected, mapper.forward(source).toString());
+      }
+    }
   }
 
   static List<String[]> typeVariableFills() {

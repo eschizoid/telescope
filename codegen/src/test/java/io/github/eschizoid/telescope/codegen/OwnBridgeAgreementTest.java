@@ -355,6 +355,22 @@ class OwnBridgeAgreementTest {
     }
 
     @Test
+    @DisplayName("a row below a property the bridges of a source with two targets walk")
+    void repeatedBridges() {
+      assertBothAccept(
+        outcome(
+          "ObJ",
+          NESTED +
+            "record @@InnerView(String name, @@PartDto part) {}\n" +
+            "@Bridge(@@InnerDto.class)\n" +
+            "@Bridge(@@InnerView.class)\n" +
+            "record @@Inner(String name, @@Part part) {}\n" +
+            holder(CALL)
+        )
+      );
+    }
+
+    @Test
     @DisplayName("a row below a property a lenient bridge walks")
     void lenientBridge() {
       assertBothAccept(

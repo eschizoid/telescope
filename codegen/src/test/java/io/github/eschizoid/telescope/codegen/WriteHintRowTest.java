@@ -182,6 +182,42 @@ class WriteHintRowTest {
         "Telescope.mapper(Acct.class, Ledger.class, writeBeans(WriteStrategy.SETTERS))",
         "backward",
         "setters",
+      },
+      new String[] {
+        "no hint rebuilds the source through its builder on patch",
+        "Telescope.mapper(Acct.class, Dto.class)",
+        "patch",
+        "builder",
+      },
+      new String[] {
+        "writeBean keyed to the source rebuilds it through its setters on patch",
+        "Telescope.mapper(Acct.class, Dto.class, writeBean(Acct.class, WriteStrategy.SETTERS))",
+        "patch",
+        "setters",
+      },
+      new String[] {
+        "writeBean keyed to the source rebuilds it through its setters on a patch with no partial",
+        "Telescope.mapper(Acct.class, Dto.class, writeBean(Acct.class, WriteStrategy.SETTERS))",
+        "patch with no partial",
+        "setters",
+      },
+      new String[] {
+        "writeBean keyed to the target leaves the source to its builder on patch",
+        "Telescope.mapper(Acct.class, Ledger.class, writeBean(Ledger.class, WriteStrategy.SETTERS))",
+        "patch",
+        "builder",
+      },
+      new String[] {
+        "writeBeans rebuilds the source through its setters on patch",
+        "Telescope.mapper(Acct.class, Ledger.class, writeBeans(WriteStrategy.SETTERS))",
+        "patch",
+        "setters",
+      },
+      new String[] {
+        "writeBeans rebuilds the source through its setters on a patch with no partial",
+        "Telescope.mapper(Acct.class, Ledger.class, writeBeans(WriteStrategy.SETTERS))",
+        "patch with no partial",
+        "setters",
       }
     );
   }
@@ -216,7 +252,11 @@ class WriteHintRowTest {
         } else {
           final var acct = loader.loadClass("wh.Acct").getConstructor().newInstance();
           acct.getClass().getMethod("setName", String.class).invoke(acct, "a");
-          converted = m.backward(m.forward(acct));
+          converted = switch (direction) {
+            case "backward" -> m.backward(m.forward(acct));
+            case "patch" -> m.patch(acct, m.forward(acct));
+            default -> m.patch(acct, null);
+          };
         }
         assertEquals(
           expected,
