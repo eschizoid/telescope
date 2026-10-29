@@ -269,59 +269,6 @@ class TransformDirectionFitTest {
     assertTrue(compilation.success(), () -> "order must not decide the verdict: " + compilation.errorMessages());
   }
 
-  private static JavaFileObject rawFn(final String forwardReturn) {
-    return ProcessorHarness.source(
-      "demo.RawFn",
-      """
-      package demo;
-      import io.github.eschizoid.telescope.conversion.BridgeFn;
-      @SuppressWarnings("rawtypes")
-      public final class RawFn implements BridgeFn {
-        @Override public %s forward(final Object o) { return null; }
-        @Override public String backward(final Object o) { return String.valueOf(o); }
-      }
-      """.formatted(forwardReturn)
-    );
-  }
-
-  private static JavaFileObject[] rawPair(final String forwardReturn) {
-    return new JavaFileObject[] {
-      rawFn(forwardReturn),
-      src("String v", "to(Src::v, Tgt::v, RawFn.class)"),
-      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}"),
-    };
-  }
-
-  @Test
-  @DisplayName("a raw implementation is checked through the methods it declares, having no arguments to" + " read")
-  void rawImplementationIsStillChecked() {
-    // The one shape with no type arguments to fall back on was also the one shape not checked at
-    // all, so a mismatch reached the generated file. The class still declares the two methods the
-    // call sites bind to, and those are what the check compares.
-    final var compilation = compile(rawPair("Number"));
-
-    assertFalse(compilation.success(), "a Number does not fit a String slot");
-    assertTrue(
-      compilation.hasError("does not fit forward"),
-      () -> "the diagnostic should name the direction: " + compilation.errorMessages()
-    );
-    assertFalse(
-      compilation.errorMessages().contains("cannot be converted to"),
-      () -> "and replace the raw error, not accompany it: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
-  @DisplayName("a raw implementation whose methods do fit is accepted, not refused for being raw")
-  void rawImplementationThatFitsIsAccepted() {
-    // The control. Rawness is not the defect — an unchecked conversion is. A class declaring
-    // String forward(Object) genuinely produces what a String slot takes, and a check that
-    // refused every raw implementation would pass the test above while breaking this.
-    final var compilation = compile(rawPair("String"));
-
-    assertTrue(compilation.success(), () -> "its declared methods fit: " + compilation.errorMessages());
-  }
-
   @Test
   @DisplayName("an overload the bridge cannot reach across packages is not selected either")
   void unreachableAcrossPackagesIsNotSelected() {
@@ -330,19 +277,18 @@ class TransformDirectionFitTest {
     // refuse a pair javac resolves to the public overload, which fits.
     final var compilation = compile(
       ProcessorHarness.source(
-        "other.RawFn",
+        "other.PkgFn",
         """
         package other;
         import io.github.eschizoid.telescope.conversion.BridgeFn;
-        @SuppressWarnings("rawtypes")
-        public final class RawFn implements BridgeFn {
+        public final class PkgFn implements BridgeFn<Object, String> {
           @Override public String forward(final Object o) { return String.valueOf(o); }
           Integer forward(final String s) { return 1; }
-          @Override public String backward(final Object o) { return String.valueOf(o); }
+          @Override public String backward(final String s) { return s; }
         }
         """
       ),
-      src("String v", "to(Src::v, Tgt::v, other.RawFn.class)"),
+      src("String v", "to(Src::v, Tgt::v, other.PkgFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -357,19 +303,18 @@ class TransformDirectionFitTest {
     // while missing a member javac really does bind.
     final var compilation = compile(
       ProcessorHarness.source(
-        "demo.RawFn",
+        "demo.PkgFn",
         """
         package demo;
         import io.github.eschizoid.telescope.conversion.BridgeFn;
-        @SuppressWarnings("rawtypes")
-        public final class RawFn implements BridgeFn {
+        public final class PkgFn implements BridgeFn<Object, String> {
           @Override public String forward(final Object o) { return String.valueOf(o); }
           Integer forward(final String s) { return 1; }
-          @Override public String backward(final Object o) { return String.valueOf(o); }
+          @Override public String backward(final String s) { return s; }
         }
         """
       ),
-      src("String v", "to(Src::v, Tgt::v, RawFn.class)"),
+      src("String v", "to(Src::v, Tgt::v, PkgFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -498,9 +443,9 @@ class TransformDirectionFitTest {
     assertFalse(compilation.success(), "a result held as a Collection<? extends Number> is no List<Number>");
     assertTrue(
       compilation.hasError(
-        "does not fit forward: demo.ListFn's forward resolves to (java.util.Collection<? extends java.lang.Number>)" +
-          " -> java.util.Collection<? extends java.lang.Number>, which does not carry" +
-          " java.util.List<java.lang.Integer> -> java.util.List<java.lang.Number>"
+        "a converting row of 'value' does not fit forward: demo.SrcToTgtBridgeValueFn's forward resolves to" +
+          " (java.util.List<java.lang.Integer>) -> java.util.Collection<? extends java.lang.Number>, which does not" +
+          " carry java.util.List<java.lang.Integer> -> java.util.List<java.lang.Number>"
       ),
       () -> "the diagnostic should name the result and the member: " + compilation.errorMessages()
     );

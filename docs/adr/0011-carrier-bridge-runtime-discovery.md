@@ -2,6 +2,8 @@
 
 **Status:** Accepted · **Date:** 2026-06-24
 
+> **Amendment (2026-10-29, after ADR-0022).** The `@Rename` this context names is retired; a carrier pair that renames declares a `to` row on a `@Bridge` field instead, and the factory finds that field's generated bridge through a `ServiceLoader` provider, as ADR-0022 sets out.
+
 ## Context
 
 Two features shipped independently and were never connected:

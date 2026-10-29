@@ -5513,7 +5513,7 @@ class BridgeProcessorTest {
         )
       );
 
-      assertFalse(compilation.success(), "defaults + transforms overlap should fail");
+      assertFalse(compilation.success(), "a toOrElse and a converting row on one property should fail");
       assertTrue(
         compilation.hasError("duplicate override row for target field 'name'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
@@ -5766,7 +5766,7 @@ class BridgeProcessorTest {
         source("demo.B", "package demo; public record B(String id, String ts) {}")
       );
 
-      assertFalse(compilation.success(), "computes + transforms overlap should fail");
+      assertFalse(compilation.success(), "a compute and a converting row on one property should fail");
       assertTrue(
         compilation.hasError("duplicate override row for target field 'ts'"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
@@ -5775,7 +5775,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName("a compute row and a via row writing one property are rejected at build")
-    void computeAndViaMapperOnSameFieldRejected() {
+    void computeAndViaOnSameFieldRejected() {
       final var compilation = compile(
         source(
           "demo.NowSupplier",
@@ -6368,7 +6368,7 @@ class BridgeProcessorTest {
 
       assertTrue(
         compilation.success(),
-        () -> "carrier + renames + drops should compile; saw " + compilation.errorMessages()
+        () -> "rows on a third class should compile; saw " + compilation.errorMessages()
       );
       final var bridge = compilation.generated().get("c.SrcRDToDstRDBridge");
       assertNotNull(bridge);

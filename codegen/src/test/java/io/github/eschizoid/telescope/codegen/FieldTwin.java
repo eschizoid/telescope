@@ -120,9 +120,9 @@ final class FieldTwin {
         () -> "the class form is refused and its field twin is not:\n" + original.errorMessages()
       );
       // The field form refuses with the class form's words, once a refusal made on a field's rows
-      // is read without its prefix. It refuses earlier where a side is nested in another class,
-      // which a field's side may not be.
-      final var refusal = original.errors().getFirst().getMessage(Locale.ROOT);
+      // is read without its prefix, on either side, since the original may declare fields too. It
+      // refuses earlier where a side is nested in another class, which a field's side may not be.
+      final var refusal = FIELD_PREFIX.matcher(original.errors().getFirst().getMessage(Locale.ROOT)).replaceFirst("");
       final var twinRefusals = compiled
         .errors()
         .stream()

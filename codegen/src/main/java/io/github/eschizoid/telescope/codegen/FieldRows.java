@@ -58,9 +58,9 @@ import javax.lang.model.util.ElementFilter;
  *
  * <p>A converter, a supplier, a default and a constant are each compiled as a small class the
  * reader writes beside the bridge: a {@code BridgeFn} for a conversion, a {@code Supplier} for a
- * value the target is filled with. The bridge converts through such a class the way it converts
- * through a {@code @Transform} or {@code @Compute} class, so every check the emitter makes on those
- * applies to the row unchanged.
+ * value the target is filled with. The bridge converts through such a class as it converts through
+ * a class a row names, so every check the emitter makes on a conversion or a supplier applies to the
+ * row unchanged.
  */
 final class FieldRows {
 
@@ -675,25 +675,44 @@ final class FieldRows {
         forwardMethod.getModifiers().contains(Modifier.STATIC) &&
         ((TypeElement) forwardMethod.getEnclosingElement()).getNestingKind() == NestingKind.TOP_LEVEL
       ) {
-        // A static method converting forward only is called by name from the bridge, as a
-        // @Transform naming a method is.
+        // A static method of a top-level class converting forward only is called by name from the
+        // bridge, with no generated class between them.
         transforms.put(s.property(), ((TypeElement) forwardMethod.getEnclosingElement()).getQualifiedName().toString());
         transformMethods.put(s.property(), forwardMethod.getSimpleName().toString());
         forwardOnly.add(s.property());
       }
       if (!transforms.containsKey(s.property())) {
-        final var unnamed = unnameable(s, t);
+        final var from = rowTyped(s);
+        final var into = rowTyped(t);
+        final var unnamed = unnameable(from, into);
         if (unnamed != null) return unnamed;
-        final var gives = converted(args.get(2), forwardMethod, t);
+        final var gives = converted(args.get(2), forwardMethod, into);
         if (gives instanceof Refused refused) return refused;
         final var name = bridgeName + camel(s.property()) + "Fn";
         transforms.put(s.property(), qualified(name));
         if (!twoWay) forwardOnly.add(s.property());
-        classes.add(bridgeFn(name, s.type(), (TypeMirror) gives, ((Call) forward).expression(), backward));
+        classes.add(bridgeFn(name, from.type(), (TypeMirror) gives, ((Call) forward).expression(), backward));
       }
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
       return null;
+    }
+
+    /**
+     * {@code side} as the row's converter takes or gives it, where the property's own type names a
+     * type variable of its class: javac types a method reference to a member of a class named raw
+     * by the erasure, or by the type the row's type arguments give it, and the class the processor
+     * writes for the row takes that type, as a {@code BridgeFn} class declared for the row does.
+     * Otherwise {@code side} as it is.
+     */
+    private Accessor rowTyped(final Accessor side) {
+      if (nameable(side.type())) return side;
+      if (!(trees.getTypeMirror(TreePath.getPath(unit, side.at())) instanceof DeclaredType accessor)) return side;
+      final var arguments = accessor.getTypeArguments();
+      if (arguments.size() != 2) return side;
+      final var typed = arguments.get(1);
+      if (typed instanceof WildcardType || !nameable(typed)) return side;
+      return new Accessor(side.property(), typed, side.primitive(), side.method(), side.at());
     }
 
     /**
@@ -740,8 +759,8 @@ final class FieldRows {
 
     /**
      * A {@code to} row converting through one {@code BridgeFn}: a class literal, which the bridge
-     * builds once as it builds a {@code @Transform} class, or a {@code static final} field holding
-     * one, which a generated class calls.
+     * builds once through its no-argument constructor, or a {@code static final} field holding one,
+     * which a generated class calls.
      */
     private Refused twoWay(final MethodInvocationTree row) {
       final var args = row.getArguments();
@@ -946,9 +965,8 @@ final class FieldRows {
     }
 
     /**
-     * A {@code via} row naming a class written by hand, which compiles to what
-     * {@code @ViaMapper(using = ...)} names, so the bridge chooses the class's methods for the
-     * property's types as it does for the annotation.
+     * A {@code via} row naming a class written by hand, whose static methods the bridge chooses for
+     * the property's types, converting the whole property or each element of a container.
      */
     private Refused viaClass(
       final MethodInvocationTree row,
@@ -966,8 +984,8 @@ final class FieldRows {
 
     /**
      * A {@code via} row converting through two methods: the static {@code forward} and {@code
-     * backward} of one class, which the bridge calls as it calls a {@code @ViaMapper} class, on the
-     * whole property or on each element of a container, as the class's methods take.
+     * backward} of one class, which compiles as the row naming that class does, so the bridge calls
+     * them on the whole property or on each element of a container, as the class's methods take.
      */
     private Refused viaMethods(final MethodInvocationTree row, final Accessor src, final Accessor tgt) {
       final var args = row.getArguments();
@@ -1633,14 +1651,22 @@ final class FieldRows {
       return null;
     }
 
+    /**
+     * Whether a class the processor writes can name {@code type}: a primitive, an array of a type it
+     * can name, or a declared type whose every type argument it can name, a wildcard argument
+     * included where its bound has a name. A type variable has none outside its declaration.
+     */
     private boolean nameable(final TypeMirror type) {
       if (type.getKind() == TypeKind.ARRAY) return nameable(((ArrayType) type).getComponentType());
-      if (type.getKind() != TypeKind.DECLARED) return type.getKind().isPrimitive();
+      if (type instanceof WildcardType wildcard) {
+        final var bound = wildcard.getExtendsBound() != null ? wildcard.getExtendsBound() : wildcard.getSuperBound();
+        return bound == null || nameable(bound);
+      }
       if (type instanceof DeclaredType declared) {
         for (final var argument : declared.getTypeArguments()) if (!nameable(argument)) return false;
         return true;
       }
-      return type.getKind() == TypeKind.ARRAY || type.getKind().isPrimitive();
+      return type.getKind().isPrimitive();
     }
   }
 

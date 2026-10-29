@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  * null-in/null-out contract. Each test asserts the absolute expected value AND codegen/runtime
  * equality, so two implementations agreeing on a wrong answer cannot pass.
  */
-class ViaMapperNullGuardTest {
+class ViaClassNullGuardTest {
 
   private static Mapper<VmSource, VmTarget> runtime() {
     final var sub = Telescope.mapper(VmAddress.class, VmAddressDto.class);

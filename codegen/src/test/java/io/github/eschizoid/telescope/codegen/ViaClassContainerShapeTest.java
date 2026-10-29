@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -19,9 +22,59 @@ import org.junit.jupiter.api.Test;
  * keys differ between the sides is refused when the bridge is generated, as the reflective path
  * refuses the same row when its mapper is built.
  */
-class ViaMapperContainerShapeTest {
+class ViaClassContainerShapeTest {
 
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
+
+  /**
+   * {@code <prefix>Carrier}, whose {@code @Bridge} field converts {@code <prefix>Src} into {@code
+   * <prefix>Tgt} by a {@code via} row naming {@code using}, reading the property by {@code
+   * srcAccessor} and {@code tgtAccessor}. {@code src} and {@code tgt} are the row's type arguments,
+   * a generic side given some, since a method reference to a member of a generic class names it
+   * raw. The field sits on a class of its own, so building a source never initialises it.
+   */
+  private static JavaFileObject carrier(
+    final String prefix,
+    final String src,
+    final String tgt,
+    final String srcAccessor,
+    final String tgtAccessor,
+    final String using
+  ) {
+    return ProcessorHarness.source(
+      PACKAGE + "." + prefix + "Carrier",
+      "package " +
+        PACKAGE +
+        ";\nfinal class " +
+        prefix +
+        "Carrier {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+        "  static final io.github.eschizoid.telescope.conversion.Mapper<" +
+        prefix +
+        "Src, " +
+        prefix +
+        "Tgt> MAPPER = io.github.eschizoid.telescope.Telescope.mapper(" +
+        prefix +
+        "Src.class, " +
+        prefix +
+        "Tgt.class, io.github.eschizoid.telescope.mapping.Mapping.<" +
+        src +
+        ", " +
+        tgt +
+        ">via(" +
+        src +
+        "::" +
+        srcAccessor +
+        ", " +
+        tgt +
+        "::" +
+        tgtAccessor +
+        ", " +
+        using +
+        ".class));\n}\n"
+    );
+  }
 
   @Test
   @DisplayName("a mapper of the whole list on a list both sides type by a variable is handed the list")
@@ -44,14 +97,9 @@ class ViaMapperContainerShapeTest {
         "package " +
           PACKAGE +
           ";\n" +
-          "public record WlSrc<X>(java.util.List<X> children) {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<WlSrc, WlTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(WlSrc.class, WlTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(WlSrc::children, WlTgt::children, WlListMap.class));\n" +
-          "}\n"
+          "public record WlSrc<X>(java.util.List<X> children) {}\n"
       ),
+      carrier("Wl", "WlSrc<Object>", "WlTgt<Object>", "children", "children", "WlListMap"),
       ProcessorHarness.source(
         PACKAGE + ".WlTgt",
         "package " + PACKAGE + ";\npublic record WlTgt<Y>(java.util.List<Y> children) {}\n"
@@ -94,14 +142,9 @@ class ViaMapperContainerShapeTest {
         "package " +
           PACKAGE +
           ";\n" +
-          "public record WkSrc(java.util.Map<String, WkCh> children) {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<WkSrc, WkTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(WkSrc.class, WkTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(WkSrc::children, WkTgt::children, WkChMap.class));\n" +
-          "}\n"
+          "public record WkSrc(java.util.Map<String, WkCh> children) {}\n"
       ),
+      carrier("Wk", "WkSrc", "WkTgt", "children", "children", "WkChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WkTgt",
         "package " + PACKAGE + ";\npublic record WkTgt(java.util.Map<Integer, WkChDto> children) {}\n"
@@ -118,7 +161,7 @@ class ViaMapperContainerShapeTest {
   }
 
   /** The child pair {@code %1$sCh} and {@code %1$sChDto}. */
-  private static List<javax.tools.JavaFileObject> childPair(final String prefix) {
+  private static List<JavaFileObject> childPair(final String prefix) {
     return List.of(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Ch",
@@ -144,7 +187,7 @@ class ViaMapperContainerShapeTest {
     final String srcComponents,
     final String tgtComponents
   ) {
-    final var sources = new java.util.ArrayList<>(childPair(prefix));
+    final var sources = new ArrayList<>(childPair(prefix));
     sources.add(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "ChMap",
@@ -162,15 +205,22 @@ class ViaMapperContainerShapeTest {
           srcHeader +
           "(" +
           srcComponents +
-          ") {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(%1$sSrc::children, %1$sTgt::children," +
-          " %1$sChMap.class));\n" +
-          "}\n"
+          ") {}\n"
         ).formatted(prefix)
+      )
+    );
+    // A generic source is named in the row by its variable's bound.
+    final var variable = srcHeader.indexOf('<');
+    final var bound = variable < 0 ? "" : srcHeader.substring(variable + 1, srcHeader.length() - 1);
+    final var argument = bound.contains(" extends ") ? bound.substring(bound.indexOf(" extends ") + 9) : "Object";
+    sources.add(
+      carrier(
+        prefix,
+        variable < 0 ? prefix + "Src" : prefix + "Src<" + argument + ">",
+        prefix + "Tgt",
+        "children",
+        "children",
+        prefix + "ChMap"
       )
     );
     sources.add(
@@ -182,7 +232,7 @@ class ViaMapperContainerShapeTest {
     return ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
-      sources.toArray(javax.tools.JavaFileObject[]::new)
+      sources.toArray(JavaFileObject[]::new)
     );
   }
 
@@ -389,14 +439,9 @@ class ViaMapperContainerShapeTest {
         "package " +
           PACKAGE +
           ";\n" +
-          "public record WrSrc(java.util.List<WrCh> children) {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<WrSrc, WrTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(WrSrc.class, WrTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(WrSrc::children, WrTgt::children, WrChMap.class));\n" +
-          "}\n"
+          "public record WrSrc(java.util.List<WrCh> children) {}\n"
       ),
+      carrier("Wr", "WrSrc", "WrTgt<Object>", "children", "children", "WrChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WrTgt",
         "package " + PACKAGE + ";\npublic record WrTgt<Y>(java.util.List<Y> children) {}\n"
@@ -474,15 +519,9 @@ class ViaMapperContainerShapeTest {
       ProcessorHarness.source(
         PACKAGE + ".WhSrc",
         head +
-          "public class WhSrc extends WhBase<WhCh> {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<WhSrc, WhTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(WhSrc.class, WhTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(WhSrc::getV, WhTgt::getV, WhChMap.class));\n" +
-          "  public WhSrc() {}\n" +
-          "}\n"
+          "public class WhSrc extends WhBase<WhCh> { public WhSrc() {} }\n"
       ),
+      carrier("Wh", "WhSrc", "WhTgt", "getV", "getV", "WhChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WhTgt",
         head + "public class WhTgt extends WhBase<WhChDto> { public WhTgt() {} }\n"
@@ -561,14 +600,9 @@ class ViaMapperContainerShapeTest {
       ProcessorHarness.source(
         PACKAGE + ".WkSrc",
         head +
-          "public record WkSrc(java.util.List<WkCh> children) {\n" +
-          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
-          "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
-          "  public static final io.github.eschizoid.telescope.conversion.Mapper<WkSrc, WkTgt> MAPPER =" +
-          " io.github.eschizoid.telescope.Telescope.mapper(WkSrc.class, WkTgt.class," +
-          " io.github.eschizoid.telescope.mapping.Mapping.via(WkSrc::children, WkTgt::children, WkChMap.class));\n" +
-          "}\n"
+          "public record WkSrc(java.util.List<WkCh> children) {}\n"
       ),
+      carrier("Wk", "WkSrc", "WkTgt", "children", "children", "WkChMap"),
       ProcessorHarness.source(PACKAGE + ".WkTgt", head + "public record WkTgt(java.util.List<WkChDto> children) {}\n")
     );
     assertTrue(compilation.success(), compilation::errorMessages);
@@ -625,8 +659,9 @@ class ViaMapperContainerShapeTest {
     return compilation
       .errors()
       .stream()
-      .map(d -> d.getMessage(java.util.Locale.ROOT))
+      .map(d -> d.getMessage(Locale.ROOT))
       .filter(m -> m.contains("never holds"))
+      .map(m -> m.replaceFirst("^In the rows of @Bridge field \\w+\\.\\w+: ", ""))
       .findFirst()
       .orElse(null);
   }

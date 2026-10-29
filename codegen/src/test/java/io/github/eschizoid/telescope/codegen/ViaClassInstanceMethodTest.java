@@ -14,7 +14,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * cannot call, generic or not. Such a class is refused by name, never written into a call that
  * does not compile.
  */
-class ViaMapperInstanceMethodTest {
+class ViaClassInstanceMethodTest {
 
   @ParameterizedTest(name = "{0}")
   @ValueSource(

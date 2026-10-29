@@ -254,10 +254,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     String writeStrategy,
     String sourceWriteStrategy,
     Map<String, String> computes,
-    // Per-source-field qualifier method name. Set when @Transform supplies a non-empty `method`
-    // attribute — codegen emits a direct {@code UsingClass.methodName(value)} call instead of
-    // instantiating a BridgeFn. Always implicitly forward-only; the source field also lands in
-    // forwardOnlyTransforms when this map carries an entry for it.
+    // Per-source-field method name, set when a forward-only converting row names a static method
+    // of a top-level class: codegen emits a direct {@code UsingClass.methodName(value)} call
+    // instead of instantiating a BridgeFn. The source field also lands in forwardOnlyTransforms
+    // whenever this map carries an entry for it.
     Map<String, String> transformMethods,
     // Carrier-form emission override. When set, the generated bridge class
     // lives in this carrier's package and is named after the carrier — the source's package and
@@ -1625,10 +1625,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
-    // Validate viaMappers fields exist and don't overlap with drops, transforms, or defaults. A
-    // default substitutes a literal of the source's type, which the mapper's forward does not
-    // take. A rename on the same field names the target slot the mapper writes, as it does for a
-    // transform.
+    // Validate that each via row reads a property of the source. A rename on the same property
+    // names the target slot the row's class writes, as it does for a transform.
     for (final var v : viaMappers.keySet()) {
       if (sourceFields.stream().noneMatch(f -> f.name().equals(v))) {
         error(
@@ -1944,12 +1942,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
     // no source counterpart. Otherwise reverse-rename to find the matching source field, then use
-    // the source name to look up the plan and read the source. When the source field has a
-    // @Default, wrap the source read in a (s.x() == null ? <literal> : s.x()) coalesce so the
-    // forward direction substitutes the default for null sources.
+    // the source name to look up the plan and read the source.
     // Every source read is hoisted into one `final` local per field, and the conversion
     // expression references the local. Several plan shapes substitute their read expression more
-    // than once (a null-guard plus the guarded use, a @Default coalesce), which is only sound when
+    // than once (a null-guard plus the guarded use), which is only sound when
     // the expression is a plain accessor: a defensive-copy getter would copy twice, a lazy-loading
     // proxy would resolve twice, and a volatile-backed getter can legally return null on the
     // second load after a non-null first — turning the emitted null-guard into an NPE. Reading
@@ -1973,7 +1969,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       final var read = local;
       final var plan = fieldPlans.get(srcName);
-      // A @ViaMapper bridge is user code with no guaranteed null tolerance — auto-derived
+      // A via row's class is user code with no guaranteed null tolerance — auto-derived
       // sub-bridges open with their own null guard, a user class may not — so the call is
       // null-gated here. Both mentions reference the hoisted local, so nothing is re-read.
       //
@@ -2038,7 +2034,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var forwardGives = new HashMap<String, TypeMirror>();
     final var backwardGives = new HashMap<String, TypeMirror>();
     // Fields whose value reaches the setter as a reference that may be null although the field's
-    // own type is primitive: a @ViaMapper result, which the read gates on a null source.
+    // own type is primitive: a via row's result, which the read gates on a null source.
     final var referenceTargets = new HashSet<String>();
     final var referenceSources = new HashSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
@@ -2080,7 +2076,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backward = transformGives(usingEl, "backward", heldAs(tf.type()), bridgePackage, true, 0);
       if (backward != null) backwardGives.put(t, backward);
     }
-    // A @ViaMapper's result is written as a transform's is: through the member the property's type
+    // A via row's result is written as a transform's is: through the member the property's type
     // chooses, after a check of its class where the mapper's method returns a wider type, and only
     // where its type arguments can be shown to fit that member's; any other result is refused by
     // the mapper's name. One whose mapper converts each element of a container is left as it is.
@@ -2236,9 +2232,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           patchUnboxed(sourceName, pLocal, checkedPartial, baseRead, gives, sf.type())
         );
       }
-      // @Default is a forward-direction null-coalesce and is never applied here: a slot null in
-      // both partial and base stays null rather than resurrecting the default on a field the
-      // caller never wrote.
+      // A toOrElse default is a forward-direction null-coalesce, and its row's backward is the
+      // identity: a slot null in both partial and base stays null rather than taking the default
+      // on a field the caller never wrote.
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
@@ -2330,14 +2326,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         (configsByPair.containsKey(thisPair) ? "." : " (auto-generated for nested sub-pair " + targetFq + ")."),
       source,
       out -> {
-        // Per-field @Transform: one static instance of each user-declared BridgeFn
-        // implementation,
-        // named `__tx_<sourceField>`. applyForward / applyBackward emit
-        // `__tx_<field>.forward(...)`
-        // / `.backward(...)` on the transformed slot.
+        // Per converted property: one static instance of the row's BridgeFn class, named
+        // `__tx_<sourceField>`. applyForward / applyBackward emit `__tx_<field>.forward(...)` /
+        // `.backward(...)` on the converted slot.
         //
-        // Qualifier-dispatch rows (cfg.transformMethods()) skip the singleton declaration — the
-        // emitted code calls UsingClass.methodName(...) directly, so no instance is needed.
+        // A row converting through a static method (cfg.transformMethods()) skips the instance:
+        // the emitted code calls UsingClass.methodName(...) directly.
         if (!transforms.isEmpty()) {
           boolean anyEmitted = false;
           for (final var e : transforms.entrySet()) {
@@ -2349,9 +2343,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           }
           if (anyEmitted) out.println();
         }
-        // Per-field @Compute: one static instance of each user-declared Supplier implementation,
-        // named `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward
-        // slot.
         // A constructor argument typed by the target's type variable is passed through this
         // identity, which hands javac the erasure the raw class's constructor takes.
         if (erasedArgumentUsed) {
@@ -2378,6 +2369,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println("  }");
           out.println();
         }
+        // Per computed property: one static instance of the row's Supplier class, named
+        // `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward slot.
         if (!computes.isEmpty()) {
           for (final var e : computes.entrySet()) {
             out.println(
@@ -2992,7 +2985,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // subclasses do not inherit the JDK copy ctor, so both route to the self-contained helpers
     // instead of the inline copy-ctor path.
     boolean rawContainer,
-    // RECURSE only: true when subBridgeName is a user-supplied @ViaMapper class rather than an
+    // RECURSE only: true when subBridgeName is the class a via row names rather than an
     // auto-derived sub-bridge. Auto-derived bridges open their forward/backward with a null
     // guard; a user class carries no such guarantee, so the caller emits the guard.
     boolean userSuppliedBridge
@@ -3072,7 +3065,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     }
 
-    // A RECURSE plan whose bridge is the user's @ViaMapper class rather than an auto-derived
+    // A RECURSE plan whose bridge is the class a via row names rather than an auto-derived
     // sub-bridge — the caller must null-guard the conversion call.
     static FieldPlan viaBridge(final String subBridgeName) {
       return new FieldPlan(
@@ -3475,7 +3468,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // contract. Emit a RECURSE plan whose subBridgeName is the user's class FQN; applyForward /
       // applyBackward already emit `<class>.forward(...)` / `<class>.backward(...)` for RECURSE,
       // so no new dispatch arm is needed.
-      // A @ViaMapper lifted over a container's elements is planned as any other container whose
+      // A via row lifted over a container's elements is planned as any other container whose
       // elements convert, with its own element class in place of a sub-bridge.
       final var lift = viaLifts.get(sf.name());
       if (viaMappers.containsKey(sf.name()) && lift == null) {
@@ -3746,7 +3739,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The element plan for a {@code @ViaMapper} lifted over a container: a nested element class whose
+   * The element plan for a {@code via} row lifted over a container: a nested element class whose
    * {@code forward} and {@code backward} call the lifted methods on each element that is not null,
    * as a lifted element mapper does on the reflective path.
    */
@@ -4048,7 +4041,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The nested element classes the pair being planned needs, by class name. */
   private final Map<String, NestedElement> nestedElements = new LinkedHashMap<>();
 
-  /** The methods each nested element class of a lifted {@code @ViaMapper} calls, by its name. */
+  /** The methods each nested element class of a lifted {@code via} row calls, by its name. */
   private final Map<String, ViaLift> viaElementMethods = new HashMap<>();
 
   private FieldPlan planNestedElement(
@@ -4134,7 +4127,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * One direction of a nested element class that converts each element through {@code method}, a
-   * {@code @ViaMapper}'s {@code forward} or {@code backward}: a null element stays null, since the
+   * {@code via} row's {@code forward} or {@code backward}: a null element stays null, since the
    * mapper is user code with no promise to take one, and any other is handed over cast to the
    * method's parameter where the element is held as a wider type.
    */
@@ -4537,13 +4530,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Per source property a {@code @ViaMapper} converts, the class its {@code forward} and its {@code
+   * Per source property a {@code via} row converts, the class its {@code forward} and its {@code
    * backward} call cast their argument to, where the call takes the value only through a cast.
    */
   private record ViaCasts(Map<String, String> forwardCasts, Map<String, String> backwardCasts) {}
 
   /**
-   * A {@code @ViaMapper} whose mapper converts the elements of a container property rather than the
+   * A {@code via} row whose mapper converts the elements of a container property rather than the
    * container: the mapper's {@code forward} that takes the source's element, and its {@code
    * backward} that takes the target's; or, with no methods, the refusal of a row whose element
    * method cannot be chosen.
@@ -4551,7 +4544,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private record ViaLift(ExecutableElement forward, ExecutableElement backward, String refusal) {}
 
   /**
-   * The casts each {@code @ViaMapper} call needs, or null after refusing a row by the property's
+   * The casts each {@code via} row's call needs, or null after refusing a row by the property's
    * name. Only a property whose type names a type variable on either side is checked here: the
    * bridge holds it as {@link #reachedAs the type it reaches it as}, which may be wider than the
    * mapper's parameter. Its {@code forward} is handed the source's value and its result is written
@@ -4645,7 +4638,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The {@code @ViaMapper} rows whose mapper converts the elements of a container property, by
+   * The {@code via} rows whose mapper converts the elements of a container property, by
    * source property, each with the methods it lifts; see {@link #viaLift}. Null after refusing a
    * row whose element method cannot be chosen. Every row reaching here names a property both sides
    * have and a class that resolves: the rest are refused or retried before a pair is emitted.
@@ -4680,7 +4673,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * How a {@code @ViaMapper} on a pair of containers converts their elements, or null when its
+   * How a {@code via} row on a pair of containers converts their elements, or null when its
    * mapper converts the property itself. The two sides must be containers of one kind, List, Set,
    * Optional or a map's values, and the mapper must declare a {@code forward} taking an element of
    * the source's container and a {@code backward} taking an element of the target's: the reflective
@@ -4724,7 +4717,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The refusal of a {@code @ViaMapper} not lifted over its property's elements whose mapper is
+   * The refusal of a {@code via} row not lifted over its property's elements whose mapper is
    * handed a property no value of which it can take, or null. The source's property is handed to
    * {@code forward} and the target's to {@code backward}; a side is refused when no method of that
    * name takes a class a value of the property can be an instance of, as the reflective path
@@ -4863,7 +4856,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether {@code method} returns a type variable. A {@code @ViaMapper}'s methods are static, so
+   * Whether {@code method} returns a type variable. A {@code via} row's methods are static, so
    * such a variable is the method's own, and javac infers it at the call as the property the call
    * writes, intersected with whatever bound the variable declares, so the call binds whatever that
    * bound is.
@@ -4914,7 +4907,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A {@code @ViaMapper} call: the class its argument is cast to, or null for none, and its result,
+   * A {@code via} row's call: the class its argument is cast to, or null for none, and its result,
    * or null where the call infers it.
    */
   private record ViaCall(String cast, TypeMirror result) {}
@@ -4993,7 +4986,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The refusal of a {@code @ViaMapper} whose {@code name} binds no method: the class declares no
+   * The refusal of a {@code via} row whose {@code name} binds no method: the class declares no
    * method of that name the bridge can call, or none of them takes the value; see {@link
    * #viaUnbound}.
    */
@@ -5024,7 +5017,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Why a {@code @ViaMapper} call's result cannot be written through the member that writes {@code
+   * Why a {@code via} row's call result cannot be written through the member that writes {@code
    * property} of the side {@code name} writes, the target for {@code forward} and the source for
    * {@code backward}, or null when it can. A result no value of which can be an instance of the
    * class the member takes is refused as the reflective path refuses a {@code via} row whose mapper
@@ -5073,13 +5066,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A {@code @ViaMapper} call's result as the bridge writes it, and why it cannot be written, or
+   * A {@code via} row's call result as the bridge writes it, and why it cannot be written, or
    * null where it can.
    */
   private record ViaResult(TypeMirror gives, String refusal) {}
 
   /**
-   * How a {@code @ViaMapper}'s {@code name} result is written into {@code property} of {@code
+   * How a {@code via} row's {@code name} result is written into {@code property} of {@code
    * owner}: through the member the property's type chooses, as it is or after a check of its class,
    * with type arguments shown to fit the member's. A result typed by the method's own type
    * variables is read with each variable its shape fixes in place, as {@link MethodInstantiation}
@@ -5155,7 +5148,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * parameter is a type variable the method declares and whose bound takes {@code argType}, which
    * javac binds by inferring the variable; of several, the one whose variable's bound is a subtype
    * of every other's, which javac finds most specific; null where there is none or no such one. The
-   * bridge calls a {@code @ViaMapper}'s methods on its class, so an instance method is none of
+   * bridge calls a {@code via} row's methods on its class, so an instance method is none of
    * them.
    */
   private Resolution.Bound inferringFn(
@@ -6955,8 +6948,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The properties of each side a generated bridge does not walk, in name order: on the source,
-   * those it drops, transforms or converts through a {@code @ViaMapper}; on the target, those it
-   * fills with a constant or a computed value, and those a transformed or {@code @ViaMapper}
+   * those it drops, transforms or converts through a {@code via} row; on the target, those it
+   * fills with a constant or a computed value, and those a transformed or {@code via} row's
    * property fills. A converted property fills the target properties {@code renamedTo} lists for
    * it, and the property of its own name where it lists none.
    */
@@ -8229,7 +8222,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Base<String>}, is written through a cast to its own erasure where that is narrower than the
    * read.
    *
-   * <p>A pair in {@code ownConversions}, which a transform or a {@code @ViaMapper} converts, is
+   * <p>A pair in {@code ownConversions}, which a transform or a {@code via} row converts, is
    * read as neither of these: the conversion takes what the source gives and returns what the
    * target takes, so each side is held as the bridge reaches it ({@link #heldAs}).
    *

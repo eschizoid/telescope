@@ -2,6 +2,8 @@
 
 **Status:** Accepted — shipped in #148 · **Date:** 2026-06-16 (accepted 2026-06-21)
 
+> **Amendment (2026-10-29, after ADR-0022).** The per-field annotations this record's examples use are retired. `lenient` stays on the class form of `@Bridge`; a lenient pair with rows is a `@Bridge` field initialised by `Telescope.mapperForward(...)`, which is lenient in the same way, and its renames are `to` rows.
+
 ## Context
 
 `@Bridge` enforces strict bijection at codegen time: every component on the source must have a same-name component on

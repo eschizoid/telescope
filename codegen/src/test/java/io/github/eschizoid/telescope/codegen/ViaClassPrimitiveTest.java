@@ -29,7 +29,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * processing-only harness does not attribute, so an assertion made there would hold no matter what
  * was emitted, and a reference-typed fixture cannot reach the primitive's case at all.
  */
-class ViaMapperPrimitiveTest {
+class ViaClassPrimitiveTest {
 
   private static Compilation compile(final JavaFileObject... sources) {
     return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);

@@ -36,6 +36,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Set;
@@ -433,9 +434,9 @@ class CrossPathCorpusTest {
     assertTrue(unsampled <= 0, () -> "fields naming a class not run, for want of a sample, rose to " + unsampled);
   }
 
-  private static final int TWINNED_FLOOR = 0;
-  private static final int UNTWINNED_CEILING = 0;
-  private static final int RUN_BOTH_WAYS_FLOOR = 0;
+  private static final int TWINNED_FLOOR = 460;
+  private static final int UNTWINNED_CEILING = 7;
+  private static final int RUN_BOTH_WAYS_FLOOR = 52;
 
   private static final int FIELD_TWIN_CORPUS = 600;
 
@@ -4563,7 +4564,15 @@ class CrossPathCorpusTest {
           "}\n"
       ),
       source("PtdSrc", head + "public class PtdSrc<X> extends PtdBase<X> {}\n"),
-      source("PtdSrcCarrier", head + fieldBridge("PtdSrc", "PtdTgt", "drop(PtdSrc::getExtra)")),
+      source(
+        "PtdSrcCarrier",
+        head +
+          fieldBridge(
+            "PtdSrc",
+            "PtdTgt",
+            "io.github.eschizoid.telescope.mapping.Mapping.<PtdSrc, PtdTgt>drop(PtdSrc::getExtra)"
+          )
+      ),
       source(
         "PtdTgt",
         head +
@@ -6872,8 +6881,8 @@ class CrossPathCorpusTest {
       if (!plain.success() && (processed.success() || !refusedAtTheRow(processed))) {
         failures.add(prefix + ": the row javac refuses should be refused there alone, saw " + describe(processed));
       }
-      if (processed.errorMessages().contains("cannot be converted to")) {
-        failures.add(prefix + ": and no error inside the generated file: " + processed.errorMessages());
+      if (!errorsInGenerated(processed).isEmpty()) {
+        failures.add(prefix + ": and no error inside the generated file: " + errorsInGenerated(processed));
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
@@ -7138,6 +7147,22 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
+  /** The errors {@code compilation} reports inside a source file a processor generated. */
+  private static List<String> errorsInGenerated(final ProcessorHarness.Compilation compilation) {
+    final var files = compilation
+      .generated()
+      .keySet()
+      .stream()
+      .map(name -> "/" + name.replace('.', '/') + ".java")
+      .collect(Collectors.toSet());
+    return compilation
+      .errors()
+      .stream()
+      .filter(d -> d.getSource() != null && files.contains(d.getSource().getName()))
+      .map(d -> d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT))
+      .toList();
+  }
+
   /** Whether every error {@code compilation} reports is in a carrier, at the row that declares it. */
   private static boolean refusedAtTheRow(final ProcessorHarness.Compilation compilation) {
     return (
@@ -7218,68 +7243,53 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
-  /**
-   * Shapes only the generated path can express, each with what the generated bridge writes. A
-   * runtime row's function returns a type the property's own type reaches, so a result of any other
-   * type has no runtime row to agree with; the row's test also holds javac to refusing that row.
-   *
-   * <p>An entry no row exercises, or whose row the generated path stops giving, fails the test.
-   */
-  private static final Map<String, String> GENERATED_ONLY_CAPABILITIES = Map.of(
-    // Inherent to the runtime row's typing: an accessor reading a String property cannot be
-    // typed
-    // to an Integer, so no runtime row returns one. The bridge passes the Integer as it is,
-    // and
-    // javac binds the setter overload that takes it.
-    "a transform result of a type the property's type does not reach",
-    "Object:7"
-  );
-
   @Test
-  @DisplayName("a generated-only capability gives what its register records, and no runtime row can be typed for it")
-  void aGeneratedOnlyCapabilityGivesWhatItsRegisterRecords() throws ReflectiveOperationException {
-    final var name = "a transform result of a type the property's type does not reach";
+  @DisplayName(
+    "a conversion result of a type the property's type does not reach is refused by javac on its row, on both paths"
+  )
+  void aResultThePropertyDoesNotReachIsRefusedOnBothPaths() {
+    // A row is typed by the accessors it names, on a field as at run time: a converter returning
+    // Integer cannot convert into a property read as String, whatever setter overloads the target
+    // declares, so javac refuses the field's row and the runtime row alike, and the processor
+    // writes nothing.
     final var prefix = "Goc";
     final var head = "package " + PACKAGE + ";\n";
-    final var declarations = List.of(
+    final var all = List.of(
       valueBean("%1$sSrc", "String", "\"x\""),
       transformedField(true, "getValue", "%1$sSrc, %1$sTgt, String, Integer"),
       overloadedValueBean("Tgt", "q"),
-      transformFn("String", "Integer", "7", "String.valueOf(b)")
-    );
-    final var sources = declarations
+      transformFn("String", "Integer", "7", "String.valueOf(b)"),
+      runtimeRow(true, "getValue", "String", "Integer")
+    )
       .stream()
       .map(declaration -> declaration.formatted(prefix))
       .map(code -> source(declaredName(code), head + code))
       .toList();
-    final var compilation = bridged(sources.toArray(JavaFileObject[]::new));
-    assertTrue(compilation.success(), compilation::errorMessages);
-    final var classes = compilation.define(MethodHandles.lookup());
-    final var source = classes.get(PACKAGE + ".GocSrc");
-    final var target = classes.get(PACKAGE + ".GocTgt");
-    final var built = classes
-      .get(PACKAGE + ".GocSrcBridge")
-      .getMethod("forward", source)
-      .invoke(null, source.getMethod("sample").invoke(null));
-    final var written = String.valueOf(target.getMethod("getValue").invoke(built));
-    assertTrue(
-      GENERATED_ONLY_CAPABILITIES.keySet().equals(Set.of(name)),
-      () -> "registered capabilities with no row: " + GENERATED_ONLY_CAPABILITIES.keySet()
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      all.subList(0, 4).toArray(JavaFileObject[]::new)
     );
+    assertFalse(processed.success(), "the field's row compiled");
+    // javac reports the row's refusal while the processor attributes the row, which may leave the
+    // diagnostic with no source file; it is never in a file the processor wrote.
     assertTrue(
-      written.equals(GENERATED_ONLY_CAPABILITIES.get(name)),
-      () -> name + ": the bridge wrote " + written + ", registered " + GENERATED_ONLY_CAPABILITIES.get(name)
-    );
-    final var withRow = new ArrayList<>(sources);
-    withRow.add(source("GocRuntime", head + runtimeRow(true, "getValue", "String", "Integer").formatted(prefix)));
-    final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), withRow.toArray(JavaFileObject[]::new));
-    assertTrue(
-      !runtime.success() &&
-        runtime
+      processed.hasError("bad return type in method reference") &&
+        processed
           .errors()
           .stream()
-          .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith("GocRuntime.java")),
-      () -> name + ": javac owed a refusal of the runtime row alone, saw " + describe(runtime)
+          .allMatch(e -> e.getSource() == null || e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
+      () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
+    );
+    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+    assertTrue(
+      !plain.success() &&
+        plain
+          .errors()
+          .stream()
+          .anyMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "Runtime.java")),
+      () -> "javac owed a refusal of the runtime row, saw " + describe(plain)
     );
   }
 
@@ -9583,7 +9593,7 @@ class CrossPathCorpusTest {
       false,
       List.of(
         sampledGeneric("%1$sSrc<X>", "java.util.List<X> value", "new %1$sSrc<>(java.util.List.of(1, 2))"),
-        transformedField(false, "value", "%1$sSrc, %1$sTgt, java.util.List, String"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt, java.util.List<Object>, String"),
         sampled("%1$sTgt", "String value", "new %1$sTgt(\"q\")"),
         transformFn("java.util.List<Object>", "String", "a.size() + \":\" + a", "java.util.List.of(b, b)"),
         runtimeRow(false, "value", "java.util.List", "String")
@@ -9600,7 +9610,7 @@ class CrossPathCorpusTest {
       true,
       List.of(
         valueBean("%1$sSrc<X>", "java.util.List<X>", "java.util.List.of(1, 2)"),
-        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, java.util.List, Object"),
+        transformedField(true, "getValue", "%1$sSrc, %1$sTgt, java.util.List<Object>, Object"),
         valueBean("%1$sTgt", "Object", "\"q\""),
         "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<Object, String> {\n" +
           "  public static final %1$sFn INSTANCE = new %1$sFn();\n" +
@@ -10623,10 +10633,12 @@ class CrossPathCorpusTest {
         continue;
       }
       final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      // A refusal made on a field's rows opens by naming the field, and says the rest as the
+      // runtime does.
       final var generated = processed
         .errors()
         .stream()
-        .map(d -> d.getMessage(Locale.ROOT))
+        .map(d -> d.getMessage(Locale.ROOT).replaceFirst("^In the rows of @Bridge field \\w+\\.\\w+: ", ""))
         .toList();
       if (processed.success() || !generated.contains(runtime)) {
         failures.add(row.name() + ": the generated path owed the runtime's refusal, " + runtime + ", saw " + generated);
@@ -10692,13 +10704,18 @@ class CrossPathCorpusTest {
   /**
    * {@code %1$sCarrier}, whose {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} converts
    * {@code child}, read through {@code accessor} on both sides, through the class {@code
-   * %1$sChMap}.
+   * %1$sChMap}. The row is given the pair raw, as {@link #viaRow} is: a method reference to a member
+   * of a generic class names the class raw, so javac cannot infer a generic side from it.
    */
   private static String viaChild(final String accessor) {
     return fieldBridge(
       "%1$sSrc",
       "%1$sTgt",
-      "via(%1$sSrc::" + accessor + ", %1$sTgt::" + accessor + ", %1$sChMap.class)"
+      "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::" +
+        accessor +
+        ", %1$sTgt::" +
+        accessor +
+        ", %1$sChMap.class)"
     );
   }
 
@@ -10774,15 +10791,18 @@ class CrossPathCorpusTest {
   /**
    * A generic bean {@code %1$sBase<T bound>} whose one property, {@code value}, is declared {@code
    * declared}, a type naming {@code T}; a source {@code %1$sSrc<X bound>} with a transform on it
-   * that passes its own variable through; and a target {@code %1$sTgt} that fixes the variable to
-   * {@code fixed}. Each side's {@code sample()} holds the given value.
+   * that passes its own variable through, on a field whose row reads it as the first of {@code
+   * converted} and writes it as the second, the types the conversion class declares; and a target
+   * {@code %1$sTgt} that fixes the variable to {@code fixed}. Each side's {@code sample()} holds the
+   * given value.
    */
   private static List<String> fixedByTarget(
     final String bound,
     final String declared,
     final String fixed,
     final String srcSample,
-    final String tgtSample
+    final String tgtSample,
+    final String converted
   ) {
     return List.of(
       "public class %1$sBase<T" +
@@ -10807,7 +10827,7 @@ class CrossPathCorpusTest {
         "> s = new %1$sSrc<>(); s.setValue(" +
         srcSample +
         "); return s; }\n}\n",
-      transformedField(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object"),
+      transformedField(false, "getValue", "%1$sSrc, %1$sTgt, " + converted),
       "public class %1$sTgt extends %1$sBase<" +
         fixed +
         "> {\n" +
@@ -10830,7 +10850,7 @@ class CrossPathCorpusTest {
       "a target that fixes the variable to String, with a transform returning Object",
       "value",
       concat(
-        fixedByTarget("", "T", "String", "\"a\"", "\"q\""),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"", "Object, Object"),
         transformFn("Object", "Object", "\"<\" + a + \">\"", "b"),
         witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Object, Object")
       )
@@ -10839,7 +10859,7 @@ class CrossPathCorpusTest {
       "a target that fixes a variable bounded by Number to Integer, with a transform on Number",
       "value",
       concat(
-        fixedByTarget(" extends Number", "T", "Integer", "7", "41"),
+        fixedByTarget(" extends Number", "T", "Integer", "7", "41", "Number, Number"),
         transformFn("Number", "Number", "a.intValue() + 1", "b.intValue() - 1"),
         witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, Number, Number")
       )
@@ -10853,7 +10873,8 @@ class CrossPathCorpusTest {
           "java.util.Map<String, T>",
           "String",
           "java.util.Map.of(\"k\", \"a\")",
-          "java.util.Map.of(\"k\", \"q\")"
+          "java.util.Map.of(\"k\", \"q\")",
+          "java.util.Map<?, ?>, java.util.Map<?, ?>"
         ),
         transformFn(
           "java.util.Map<?, ?>",
@@ -10873,7 +10894,8 @@ class CrossPathCorpusTest {
           "java.util.Optional<T>",
           "String",
           "java.util.Optional.of(\"a\")",
-          "java.util.Optional.of(\"q\")"
+          "java.util.Optional.of(\"q\")",
+          "java.util.Optional<?>, java.util.Optional<?>"
         ),
         transformFn("java.util.Optional<?>", "java.util.Optional<?>", "a.map(v -> \"<\" + v + \">\")", "b"),
         witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.Optional, java.util.Optional")
@@ -10883,8 +10905,9 @@ class CrossPathCorpusTest {
       "a target built through a generic builder its builder() fixes to String, with a transform returning Object",
       "value",
       List.of(
-        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(0),
-        fixedByTarget("", "T", "String", "\"a\"", "\"q\"").get(1),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"", "Object, Object").get(0),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"", "Object, Object").get(1),
+        fixedByTarget("", "T", "String", "\"a\"", "\"q\"", "Object, Object").get(2),
         "public class %1$sTgt {\n" +
           "  private final String value;\n" +
           "  %1$sTgt(final String value) { this.value = value; }\n" +
@@ -12928,7 +12951,12 @@ class CrossPathCorpusTest {
       }
       // A transform on a type-variable component is evaluated into a local of the variable's
       // erasure, ahead of the constructor call, as an argument of a nameable type is.
-      final var text = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
+      final var text = ownBridgeNames(prefix)
+        .stream()
+        .map(processed.generated()::get)
+        .filter(Objects::nonNull)
+        .findFirst()
+        .orElseThrow();
       final var local = text.indexOf("final java.lang.Object __cv_v = ");
       final var call = text.indexOf("new " + PACKAGE + "." + prefix + "Tgt(");
       if (row.name().contains("type-variable") && (local < 0 || local > call)) {

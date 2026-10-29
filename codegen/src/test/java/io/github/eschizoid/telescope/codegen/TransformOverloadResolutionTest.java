@@ -233,14 +233,11 @@ class TransformOverloadResolutionTest {
   @MethodSource("cases")
   @DisplayName("every conversion in the matrix is a class somebody could actually write")
   void everyFixtureCompilesOnItsOwn(final Case c) {
-    // A processor error stops compilation before class bodies are attributed, so a fixture that
-    // javac would reject on its own still produces exactly the diagnostic a row asserts — and the
-    // row passes while describing a shape no user could reach. One of these was an overload of the
-    // raw interface's method rather than an implementation of it, and nothing here noticed.
-    // All three sources, not just the transform. A processor error preempts attribution of every
-    // source in the compilation, so a malformed target or source record is masked exactly as the
-    // transform was -- the row would see the diagnostic it asserts and pass while describing a
-    // program that does not exist.
+    // A processor error stops compilation before class bodies are attributed, so a fixture javac
+    // would reject on its own still produces exactly the diagnostic a row asserts, and the row
+    // passes while describing a shape no user could reach. That holds for every source in the
+    // compilation, the conversion class, the source with its row and the target alike, so all
+    // three are compiled here without the processor, the row built on the runtime path.
     final var compilation = ProcessorHarness.compileFully(List.of(), List.of(), sourcesFor(c));
 
     assertTrue(compilation.success(), () -> "the fixture itself does not compile: " + compilation.errorMessages());

@@ -2,6 +2,8 @@
 
 **Status:** Proposed · **Date:** 2026-10-09
 
+> **Amendment (2026-10-29, after ADR-0022).** The per-field annotations the context and steps 3 and 4 name are retired, so each step that lands adds a row to the field form only.
+
 ## Context
 
 The generated mapper is the path a MapStruct user moves to, because it compiles a mapping to plain Java the way

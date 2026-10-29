@@ -147,6 +147,19 @@ the existing emitter without a second one.
 > same words. The generated provider records each hint's kind with the rows', so a call with other hints runs the
 > runtime mapper.
 
+> **Amendment: the retirement.** Item 7 lands with no deprecated aliases, and each removed form has a row of the same
+> meaning on the field form. `@Rename` is `to(src, tgt)`, and a fan-out of one source property into several targets is
+> one `to` row per target on a `mapperForward` field, since a strict mapper refuses a fan-out. `@Transform` naming a
+> `BridgeFn` class is `to(src, tgt, Fn.class)`. One that is forward-only, or names a `method`, is
+> `toOneWay(src, tgt, Helper::method)` on a `mapperForward` field; a conversion that needs its backward is the two-way
+> `to(src, tgt, forward, backward)`. `@ViaMapper(using = Hw.class)` is `via(src, tgt, Hw.class)`, which compiles to the
+> configuration the annotation named, so a class the method-reference row refuses still converts through it.
+> `@Constant` is `constant(tgt, literal)`, `@Default` is `toOrElse(src, tgt, literal)`, `@Compute(using = S.class)` is
+> `compute(tgt, S.INSTANCE)` naming a `static final` field that holds the supplier, and `drops` is one `drop(src)` row
+> each. A constant, default or compute row compiles to a small generated `Supplier` or `BridgeFn` class the bridge calls,
+> with the result the annotation gave. The class form of `@Bridge` keeps `value`, `writeStrategy`, `lenient` and the
+> carrier's `source` and `target`.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the
