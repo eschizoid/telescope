@@ -16,7 +16,6 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -27,19 +26,19 @@ import java.util.regex.Pattern;
 import javax.tools.JavaFileObject;
 
 /**
- * The same declarations written as {@code @Bridge} fields, for a compilation that declares its
- * pairs with {@code @Bridge} on their source classes.
+ * Two holds on a compilation of {@code @Bridge} declarations beyond the one its own gate makes.
  *
- * <p>A field's rows feed the configuration a class's {@code @Bridge} attributes feed, so the two
- * forms of one declaration owe the same generated code, and the same refusal. A gate that compares
- * a class-form bridge against the runtime mapper then holds the field form to the runtime mapper
- * too, on every shape it compiles. Every class-form {@code @Bridge} of the compilation becomes a
- * field of a carrier class in its package, so a {@code @ViaMapper} naming another of them becomes a
- * {@code via} row naming that field, and one naming a class written by hand a {@code via} row of
- * that class's {@code forward} and {@code backward}. The twin is built when every attribute has a
- * row of the same meaning: the target, {@code lenient}, {@code renames} and {@code drops}, a
- * {@code @Transform} naming a {@code BridgeFn} class both ways or a method forward only, and a
- * {@code @ViaMapper}. Every other compilation is counted as having no twin.
+ * <p>A compilation declaring its pairs with {@code @Bridge} on their source classes is written
+ * again with each pair as a {@code @Bridge} field of a carrier class in its package, which the
+ * field form owes the same generated code and the same refusal: a class form names its target and
+ * at most {@code lenient}, and a field with no rows, through {@code Telescope.mapperForward} where
+ * the class form is lenient, says the same. A compilation whose class-form declarations carry
+ * anything else is counted as having no twin.
+ *
+ * <p>A {@code @Bridge} field with a {@code via} row naming a class written by hand has the runtime
+ * path choose that class's methods from its own reading of the class, so the compilation is built
+ * again without the processor, and for a source and a target that each give a {@code sample()}, the
+ * field's runtime mapper is held to the generated bridge in each direction it converts.
  */
 final class FieldTwin {
 
@@ -50,19 +49,36 @@ final class FieldTwin {
     "^(?:\\s|@[\\w.]+(?:\\([^)]*\\))?|public|final|abstract|sealed|non-sealed|static|strictfp)*" +
       "(record|class|interface|enum)\\s+(\\w+)"
   );
-  private static final Pattern MODIFIER = Pattern.compile("(Rename|Transform|ViaMapper)\\s*\\(([^)]*)\\)");
-  private static final Pattern ATTRIBUTE = Pattern.compile("(\\w+)\\s*=\\s*(\"(\\w+)\"|[\\w.]+)");
-  private static final Pattern QUOTED = Pattern.compile("\"(\\w+)\"");
-  private static final Pattern PLACEHOLDER = Pattern.compile("%(\\w+)%:(\\w+)");
   private static final String CARRIER = "TwinCarrier";
-  private static final Pattern EXTENDS = Pattern.compile("\\bextends\\s+(\\w+)");
 
-  /** How many compilations were held to a field twin, and how many had none. */
+  /**
+   * A {@code @Bridge} field: its mapper type, the pair it names, its name, and the start of its
+   * initializer.
+   */
+  private static final Pattern FIELD = Pattern.compile(
+    "@(?:io\\.github\\.eschizoid\\.telescope\\.annotations\\.)?Bridge\\s+" +
+      "(?:(?:public|private|protected|static|final)\\s+)*(?:[\\w.]+\\.)?(Mapper|ForwardMapper)\\s*<\\s*([\\w.]+)\\s*,\\s*" +
+      "([\\w.]+)\\s*>\\s+(\\w+)\\s*="
+  );
+
+  /** A {@code via} row naming a class, as its last argument. */
+  private static final Pattern VIA_CLASS = Pattern.compile("\\bvia\\s*\\([^;]*?,\\s*[\\w.]+\\.class\\s*\\)");
+
+  /** The declarations a field may sit in, by name. */
+  private static final Pattern TYPE = Pattern.compile("\\b(?:class|record|interface|enum)\\s+(\\w+)");
+
+  /** How many compilations were compiled through the corpus's gate. */
+  static final AtomicInteger COMPILED = new AtomicInteger();
+
+  /**
+   * How many compilations with a class-form {@code @Bridge} were held to a field twin, and how many
+   * had none.
+   */
   static final AtomicInteger TWINNED = new AtomicInteger();
 
   static final AtomicInteger UNTWINNED = new AtomicInteger();
 
-  /** How many pairs naming a class were run on the runtime path against the class form's bridge. */
+  /** How many pairs naming a class were run on the runtime path against the generated bridge. */
   static final AtomicInteger RUN_BOTH_WAYS = new AtomicInteger();
 
   /**
@@ -72,56 +88,31 @@ final class FieldTwin {
 
   private static final Pattern FIELD_PREFIX = Pattern.compile("^In the rows of @Bridge field \\w+\\.\\w+: ");
 
-  /**
-   * Where a refusal of a class converting one property places it: a {@code @ViaMapper} names the
-   * annotation, and a {@code via} row the pair and the row. The rest of the sentence is the same.
-   */
-  private static final Pattern VIA_SITE = Pattern.compile(
-    "^(?:@ViaMapper field=\"(\\w+)\": |Deep map \\w+ → \\w+: via\\(\\.\\.\\.\\) of '(\\w+)': )"
-  );
-
-  /**
-   * {@code refusal} with the site of a class converting one property written the same for both
-   * forms.
-   */
-  private static String sameSite(final String refusal) {
-    final var m = VIA_SITE.matcher(refusal);
-    if (!m.find()) return refusal;
-    return "via " + (m.group(1) != null ? m.group(1) : m.group(2)) + ": " + refusal.substring(m.end());
-  }
-
   private FieldTwin() {}
 
   /**
-   * Holds the field twin of {@code sources} to {@code original}: the same generated classes, each
-   * field's bridge under the name the class's had, or a refusal where the class form was refused.
+   * Holds {@code sources}, compiled with the processor as {@code original}, to the field twin of
+   * its class-form declarations, and the runtime path of each {@code @Bridge} field naming a class
+   * in a {@code via} row to the bridge generated for it.
    */
   static void assertAgrees(final ProcessorHarness.Compilation original, final JavaFileObject... sources) {
+    COMPILED.incrementAndGet();
+    final var namedClasses = fieldsNamingAClass(sources);
+    if (!namedClasses.isEmpty() && original.success()) {
+      try {
+        runtimeAgrees(original, sources, namedClasses);
+      } catch (final IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
     final var names = new LinkedHashMap<String, String>();
-    final var namedClasses = new ArrayList<Pair>();
-    final var twin = twinOf(names, namedClasses, sources);
+    final var twin = twinOf(names, sources);
+    if (twin == null) return;
     if (twin.isEmpty()) {
       UNTWINNED.incrementAndGet();
       return;
     }
     final var compiled = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), twin.get());
-    // A class a row cannot take at its types is a carrier javac refuses: a generic BridgeFn or one
-    // wider than the properties, which @Transform checks itself, or a @ViaMapper class whose
-    // backward returns a class its forward does not take. No row of the same meaning exists.
-    if (
-      compiled
-        .errors()
-        .stream()
-        .anyMatch(
-          d ->
-            d.getSource() != null &&
-            d.getSource().getName().endsWith("/" + CARRIER + ".java") &&
-            d.getMessage(Locale.ROOT).contains("cannot infer type-variable")
-        )
-    ) {
-      UNTWINNED.incrementAndGet();
-      return;
-    }
     TWINNED.incrementAndGet();
     if (!original.success()) {
       assertFalse(
@@ -129,22 +120,15 @@ final class FieldTwin {
         () -> "the class form is refused and its field twin is not:\n" + original.errorMessages()
       );
       // The field form refuses with the class form's words, once a refusal made on a field's rows
-      // is read without its prefix. It refuses earlier in two cases: a side nested in another
-      // class, which a field's side may not be, and a conversion the class form refuses because
-      // the target has no property to write it into, which a field's row cannot name at all.
-      final var refusal = sameSite(original.errors().getFirst().getMessage(Locale.ROOT));
+      // is read without its prefix, on either side, since the original may declare fields too. It
+      // refuses earlier where a side is nested in another class, which a field's side may not be.
+      final var refusal = FIELD_PREFIX.matcher(original.errors().getFirst().getMessage(Locale.ROOT)).replaceFirst("");
       final var twinRefusals = compiled
         .errors()
         .stream()
-        .map(d -> sameSite(FIELD_PREFIX.matcher(d.getMessage(Locale.ROOT)).replaceFirst("")))
+        .map(d -> FIELD_PREFIX.matcher(d.getMessage(Locale.ROOT)).replaceFirst(""))
         .toList();
-      final var earlier = twinRefusals
-        .stream()
-        .anyMatch(
-          m ->
-            m.contains("must be a top-level type") ||
-            (m.startsWith("invalid method reference") && refusal.contains("has no field it is written into"))
-        );
+      final var earlier = twinRefusals.stream().anyMatch(m -> m.contains("must be a top-level type"));
       assertTrue(
         earlier || twinRefusals.contains(refusal),
         () -> "the field twin is refused otherwise than the class form:\n  " + refusal + "\nvs\n  " + twinRefusals
@@ -180,25 +164,46 @@ final class FieldTwin {
         difference(expected, actual) +
         compiled.errorMessages()
     );
-    if (namedClasses.isEmpty()) return;
-    try {
-      runtimeAgrees(original, twin.get(), namedClasses);
-    } catch (final IOException e) {
-      throw new UncheckedIOException(e);
-    }
   }
 
   /**
-   * A pair whose twin names a class in a via row: its source and target, the carrier and field the
-   * twin declares it on, and whether it converts forward only.
+   * A {@code @Bridge} field naming a class in a via row: its source and target, the class and field
+   * declaring it, and whether it converts forward only.
    */
   private record Pair(String source, String target, String carrier, String field, boolean lenient) {}
 
+  /** The {@code @Bridge} fields of {@code sources} with a {@code via} row naming a class. */
+  private static List<Pair> fieldsNamingAClass(final JavaFileObject... sources) {
+    final var found = new ArrayList<Pair>();
+    for (final var source : sources) {
+      final var code = text(source);
+      final var pkg = packageOf(code);
+      final var prefix = pkg.isEmpty() ? "" : pkg + ".";
+      final var m = FIELD.matcher(code);
+      while (m.find()) {
+        final var end = code.indexOf(';', m.end());
+        if (end < 0 || !VIA_CLASS.matcher(code.substring(m.end(), end)).find()) continue;
+        String carrier = null;
+        for (final var type = TYPE.matcher(code.substring(0, m.start())); type.find(); ) carrier = type.group(1);
+        if (carrier == null) continue;
+        found.add(
+          new Pair(
+            m.group(2).contains(".") ? m.group(2) : prefix + m.group(2),
+            m.group(3).contains(".") ? m.group(3) : prefix + m.group(3),
+            prefix + carrier,
+            m.group(4),
+            m.group(1).equals("ForwardMapper")
+          )
+        );
+      }
+    }
+    return found;
+  }
+
   /**
-   * Holds the runtime path of each pair in {@code pairs} to the class form's generated bridge: the
-   * twin compiled without the processor builds its field's mapper from the rows, and for a source
-   * and a target that each give a {@code sample()}, converts them as the bridge does, or fails as
-   * it does.
+   * Holds the runtime path of each pair in {@code pairs} to its generated bridge: {@code sources}
+   * compiled without the processor build each field's mapper from its rows, and for a source and a
+   * target that each give a {@code sample()}, convert them as the bridge does, or fail as it does.
    */
   @SuppressWarnings("unchecked")
   private static void runtimeAgrees(
@@ -352,10 +357,15 @@ final class FieldTwin {
     }
   }
 
-  /** The class-form bridge of {@code pair} in {@code loader}, by its short name or its long one. */
+  /**
+   * The bridge generated for {@code pair} in {@code loader}: a class form's, beside the source, or
+   * a field's, named by its pair beside the class declaring the field.
+   */
   private static Class<?> bridgeOf(final ClassLoader loader, final Pair pair) {
     final var target = pair.target().substring(pair.target().lastIndexOf('.') + 1);
-    for (final var name : List.of(pair.source() + "Bridge", pair.source() + "To" + target + "Bridge")) {
+    final var source = pair.source().substring(pair.source().lastIndexOf('.') + 1);
+    final var carrierPackage = pair.carrier().substring(0, Math.max(pair.carrier().lastIndexOf('.') + 1, 0));
+    for (final var name : List.of(pair.source() + "Bridge", carrierPackage + source + "To" + target + "Bridge")) {
       try {
         return loader.loadClass(name);
       } catch (final ClassNotFoundException e) {
@@ -412,13 +422,10 @@ final class FieldTwin {
 
   /**
    * The field twin of {@code sources}, recording in {@code names} each field bridge's name against
-   * the class form's name for its single-target source, or empty when there is none.
+   * the class form's name for its single-target source: empty when a class-form declaration has no
+   * field of the same meaning, and null when {@code sources} declare none.
    */
-  private static Optional<JavaFileObject[]> twinOf(
-    final Map<String, String> names,
-    final List<Pair> namedClasses,
-    final JavaFileObject... sources
-  ) {
+  private static Optional<JavaFileObject[]> twinOf(final Map<String, String> names, final JavaFileObject... sources) {
     final var codes = new LinkedHashMap<JavaFileObject, String>();
     for (final var source : sources) codes.put(source, text(source));
     final var declared = new LinkedHashMap<String, Declared>();
@@ -433,7 +440,7 @@ final class FieldTwin {
         }
       }
     }
-    if (declared.isEmpty()) return Optional.empty();
+    if (declared.isEmpty()) return null;
     // A source naming a bridge the class form writes refers to a class the field form names
     // otherwise.
     for (final var e : codes.entrySet()) {
@@ -451,7 +458,7 @@ final class FieldTwin {
     }
     final var fields = new LinkedHashMap<String, List<String>>();
     for (final var d : declared.values()) {
-      final var field = fieldOf(d, declared, codes, names, namedClasses);
+      final var field = fieldOf(d, names);
       if (field == null) return Optional.empty();
       fields.computeIfAbsent(d.pkg(), unused -> new ArrayList<>()).add(field);
     }
@@ -495,23 +502,13 @@ final class FieldTwin {
   }
 
   /**
-   * The field declaring {@code d}'s pair with rows of the same meaning, or null when there is none.
+   * The field declaring {@code d}'s pair with the same meaning, or null when there is none: the
+   * class form's target and {@code lenient}, and no other attribute.
    */
-  private static String fieldOf(
-    final Declared d,
-    final Map<String, Declared> declared,
-    final Map<JavaFileObject, String> codes,
-    final Map<String, String> names,
-    final List<Pair> namedClasses
-  ) {
+  private static String fieldOf(final Declared d, final Map<String, String> names) {
     final var root = d.annotated();
     String target = null;
     var lenient = false;
-    final var renames = new LinkedHashMap<String, String>();
-    final var drops = new ArrayList<String>();
-    final var transforms = new LinkedHashMap<String, String>();
-    final var methods = new LinkedHashMap<String, String>();
-    final var vias = new LinkedHashMap<String, String>();
     for (final var arg : arguments(root.arguments())) {
       final var eq = topLevelEquals(arg);
       final var key = eq < 0 ? "value" : arg.substring(0, eq).strip();
@@ -522,128 +519,14 @@ final class FieldTwin {
           target = value.substring(0, value.length() - ".class".length());
         }
         case "lenient" -> lenient = value.equals("true");
-        case "drops" -> {
-          final var m = QUOTED.matcher(value);
-          while (m.find()) drops.add(m.group(1));
-        }
-        case "renames", "transforms", "viaMappers" -> {
-          final var m = MODIFIER.matcher(value);
-          var found = 0;
-          while (m.find()) {
-            found++;
-            final var attributes = attributesOf(m.group(2));
-            switch (m.group(1)) {
-              case "Rename" -> {
-                if (attributes.containsKey("forwardOnly")) return null;
-                if (renames.put(attributes.get("source"), attributes.get("target")) != null) return null;
-              }
-              case "Transform" -> {
-                final var using = attributes.get("using");
-                if (using == null || !using.endsWith(".class")) return null;
-                if (attributes.containsKey("method")) {
-                  methods.put(
-                    attributes.get("field"),
-                    using.substring(0, using.length() - ".class".length()) + "::" + attributes.get("method")
-                  );
-                  continue;
-                }
-                if ("true".equals(attributes.get("forwardOnly"))) return null;
-                transforms.put(attributes.get("field"), using);
-              }
-              default -> {
-                final var using = attributes.get("using");
-                if (using == null || !using.endsWith(".class")) return null;
-                final var nested = using.endsWith("Bridge.class")
-                  ? declared.get(
-                      using.substring(
-                        using.lastIndexOf('.', using.length() - 7) + 1,
-                        using.length() - "Bridge.class".length()
-                      )
-                    )
-                  : null;
-                // A class no @Bridge of the compilation declares is written by hand, and the row
-                // names it, as the annotation does.
-                final var written = using.substring(0, using.length() - ".class".length());
-                vias.put(
-                  attributes.get("field"),
-                  nested != null
-                    ? (nested.pkg().isEmpty() ? "" : nested.pkg() + ".") +
-                      CARRIER +
-                      "." +
-                      fieldName(nested.annotated().name())
-                    : written + ".class"
-                );
-              }
-            }
-          }
-          if (found == 0) return null;
-        }
         default -> {
           return null;
         }
       }
     }
     if (target == null) return null;
-    // A method converts forward only, which a mapper converting both ways refuses.
-    if (!methods.isEmpty() && !lenient) return null;
     final var targetSimple = target.substring(target.lastIndexOf('.') + 1);
     names.put(root.name() + "To" + targetSimple + "Bridge", root.name() + "Bridge");
-    if (
-      vias
-        .values()
-        .stream()
-        .anyMatch(v -> v.endsWith(".class"))
-    ) {
-      final var prefix = d.pkg().isEmpty() ? "" : d.pkg() + ".";
-      namedClasses.add(
-        new Pair(
-          prefix + root.name(),
-          target.contains(".") ? target : prefix + target,
-          prefix + CARRIER,
-          fieldName(root.name()),
-          lenient
-        )
-      );
-    }
-    final var rows = new ArrayList<String>();
-    final var converted = new LinkedHashSet<String>();
-    for (final var e : transforms.entrySet()) {
-      final var to = renames.getOrDefault(e.getKey(), e.getKey());
-      rows.add("to(%S%:" + e.getKey() + ", %T%:" + to + ", " + e.getValue() + ")");
-      converted.add(e.getKey());
-    }
-    for (final var e : methods.entrySet()) {
-      final var to = renames.getOrDefault(e.getKey(), e.getKey());
-      rows.add("toOneWay(%S%:" + e.getKey() + ", %T%:" + to + ", " + e.getValue() + ")");
-      converted.add(e.getKey());
-    }
-    for (final var e : vias.entrySet()) {
-      final var to = renames.getOrDefault(e.getKey(), e.getKey());
-      rows.add(
-        "io.github.eschizoid.telescope.mapping.Mapping.<" +
-          root.name() +
-          ", " +
-          target +
-          ">via(%S%:" +
-          e.getKey() +
-          ", %T%:" +
-          to +
-          ", " +
-          e.getValue() +
-          ")"
-      );
-      converted.add(e.getKey());
-    }
-    for (final var e : renames.entrySet()) {
-      if (!converted.contains(e.getKey())) rows.add("to(%S%:" + e.getKey() + ", %T%:" + e.getValue() + ")");
-    }
-    for (final var drop : drops) rows.add("drop(%S%:" + drop + ")");
-    final var resolved = new ArrayList<String>();
-    for (final var row : rows) {
-      final var written = accessors(row, codes, root.name(), targetSimple, target);
-      if (written == null) return null;
-      resolved.add(written);
-    }
     final var type = lenient ? "ForwardMapper" : "Mapper";
     return (
       "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
@@ -657,9 +540,7 @@ final class FieldTwin {
       root.name() +
       ".class, " +
       target +
-      ".class" +
-      (resolved.isEmpty() ? "" : ",\n    " + String.join(",\n    ", resolved)) +
-      ");\n"
+      ".class);\n"
     );
   }
 
@@ -669,16 +550,6 @@ final class FieldTwin {
    */
   private static String fieldName(final String simple) {
     return Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
-  }
-
-  /**
-   * The attributes of a nested annotation, by name: a quoted value unquoted, any other as written.
-   */
-  private static Map<String, String> attributesOf(final String text) {
-    final var out = new LinkedHashMap<String, String>();
-    final var m = ATTRIBUTE.matcher(text);
-    while (m.find()) out.put(m.group(1), m.group(3) != null ? m.group(3) : m.group(2));
-    return out;
   }
 
   /**
@@ -706,54 +577,6 @@ final class FieldTwin {
       );
     }
     return found;
-  }
-
-  /**
-   * {@code row} with each {@code %S%:property} and {@code %T%:property} written as a method
-   * reference to the accessor of that property, or null when one has no accessor to name.
-   */
-  private static String accessors(
-    final String row,
-    final Map<JavaFileObject, String> codes,
-    final String source,
-    final String targetSimple,
-    final String target
-  ) {
-    final var m = PLACEHOLDER.matcher(row);
-    final var out = new StringBuilder();
-    while (m.find()) {
-      final var onSource = m.group(1).equals("S");
-      final var accessor = accessorOf(codes, onSource ? source : targetSimple, m.group(2));
-      if (accessor == null) return null;
-      m.appendReplacement(out, (onSource ? source : target) + "::" + accessor);
-    }
-    m.appendTail(out);
-    return out.toString();
-  }
-
-  /** The accessor of {@code property} on the type named {@code type}: a component, or a getter. */
-  private static String accessorOf(final Map<JavaFileObject, String> codes, final String type, final String property) {
-    if (property == null) return null;
-    if (declaresRecord(codes, type)) return property;
-    final var cap = Character.toUpperCase(property.charAt(0)) + property.substring(1);
-    final var getter = Pattern.compile("\\b(get|is)" + cap + "\\s*\\(\\s*\\)");
-    final var declaration = Pattern.compile("\\bclass\\s+" + type + "\\b([^{]*)\\{");
-    for (final var code : codes.values()) {
-      final var declared = declaration.matcher(code);
-      if (!declared.find()) continue;
-      final var found = getter.matcher(code);
-      if (found.find()) return found.group(1) + cap;
-      // A getter the class inherits is declared in the class it extends.
-      final var parent = EXTENDS.matcher(declared.group(1));
-      return parent.find() ? accessorOf(codes, parent.group(1), property) : null;
-    }
-    return null;
-  }
-
-  private static boolean declaresRecord(final Map<JavaFileObject, String> codes, final String name) {
-    final var record = Pattern.compile("\\brecord\\s+" + name + "\\b");
-    for (final var code : codes.values()) if (record.matcher(code).find()) return true;
-    return false;
   }
 
   /** The index of the parenthesis closing the one at {@code open}, skipping strings, or -1. */

@@ -1,7 +1,16 @@
 package io.github.eschizoid.telescope.sealedroots;
 
-import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Rename;
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
-@Bridge(value = SbTextDto.class, renames = @Rename(source = "body", target = "text"))
-public record SbText(String body, int size) implements SbNote {}
+import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.Mapper;
+
+public record SbText(String body, int size) implements SbNote {
+  @Bridge
+  public static final Mapper<SbText, SbTextDto> DTO = mapper(
+    SbText.class,
+    SbTextDto.class,
+    to(SbText::body, SbTextDto::text)
+  );
+}

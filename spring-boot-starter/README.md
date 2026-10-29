@@ -255,16 +255,15 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
 ```
 
 `constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection that
-overrides `translate` maps through a core `Mapper` instead of the bridge, so it also supports `patch`. `@Bridge` has
-annotation equivalents (`@Rename`, `@Constant`, `@Compute`), but they name fields with strings. The processor reports a
-string that names no field as a compile error, and an IDE rename does not update the string.
+overrides `translate` maps through a core `Mapper` instead of the bridge, so it also supports `patch`. On a `@Bridge`
+field the same rows declare the pair's generated bridge, which a projection with no `translate` override calls.
 
 ### Bridge or core mapper
 
 The processor picks what the generated bean maps through when it compiles the interface:
 
-- A projection whose pair has a generated `@Bridge` and no `translate` override calls the bridge. The bridge's defaults,
-  renames and conversions apply.
+- A projection whose pair has a generated `@Bridge` and no `translate` override calls the bridge. The bridge's rows and
+  settings apply.
 - A projection that overrides `translate`, directly or through a parent interface, builds a core `Mapper` once, when
   Spring constructs the bean. The `translate` rows are layered over same-name matching, and the bridge is not used even
   when one exists.

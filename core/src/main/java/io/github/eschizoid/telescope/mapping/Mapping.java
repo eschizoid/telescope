@@ -150,8 +150,8 @@ public sealed interface Mapping<A, B>
    * to(UserEntity::email, UserDto::contact, EmailFn.class)
    * }</pre>
    *
-   * <p>In a {@code @Bridge} mapper the generated bridge builds the class once and converts through
-   * it, as it does for a class a {@code @Transform} names.
+   * <p>In a {@code @Bridge} mapper the generated bridge builds the class once, through its
+   * no-argument constructor, and converts through it.
    */
   static <A, B, X, Y> Mapping<A, B> to(
     final Accessor<A, X> src,
@@ -531,16 +531,16 @@ public sealed interface Mapping<A, B>
 
   /**
    * Nested correspondence converted by the static {@code forward} and {@code backward} methods of
-   * {@code using}, a class written by hand, chosen for the property's types as a
-   * {@code @ViaMapper(using = ...)} chooses them. Where the two sides are containers of one kind, a
-   * {@code List}, {@code Set}, {@code Optional} or the values of a {@code Map}, and the class has a
-   * {@code forward} taking the source's element and a {@code backward} taking the target's, the row
-   * converts element by element; a class whose {@code forward} and {@code backward} each have an
-   * overload taking one side's container and giving the other side's converts the property as it
-   * is. Otherwise each direction calls the overload Java would bind for the property's value. The
-   * methods are those code in the row's package can call on the class: public, or package-private
-   * in that package, declared by the class or inherited from a superclass. A null value, or a null
-   * element, stays null and is not handed to either method.
+   * {@code using}, a class written by hand, chosen for the property's types. Where the two sides
+   * are containers of one kind, a {@code List}, {@code Set}, {@code Optional} or the values of a
+   * {@code Map}, and the class has a {@code forward} taking the source's element and a {@code
+   * backward} taking the target's, the row converts element by element; a class whose {@code
+   * forward} and {@code backward} each have an overload taking one side's container and giving the
+   * other side's converts the property as it is. Otherwise each direction calls the overload Java
+   * would bind for the property's value. The methods are those code in the row's package can call
+   * on the class: public, or package-private in that package, declared by the class or inherited
+   * from a superclass. A null value, or a null element, stays null and is not handed to either
+   * method.
    *
    * <pre>{@code
    * via(Order::lines, OrderDto::lines, LineMapper.class) // LineMapper.forward(Line), backward(LineDto)
@@ -549,10 +549,9 @@ public sealed interface Mapping<A, B>
    * <p>Unlike {@link #via(Accessor, Accessor, Accessor, Accessor)}, naming the class leaves the
    * choice of method to the property's types, so a class whose {@code backward} returns a narrower
    * class than its {@code forward} takes, whose methods are generic in their result, or that has
-   * overloads for an element and for the whole container converts as the class form does. In a
-   * {@code @Bridge} mapper the row compiles to what {@code @ViaMapper(using = ...)} names, and the
-   * generated bridge is the one the class form writes; the runtime path reads the class's methods
-   * only when it builds a mapper from the row.
+   * overloads for an element and for the whole container converts too. In a {@code @Bridge} mapper
+   * the generated bridge calls the chosen methods by name; the runtime path reads the class's
+   * methods only when it builds a mapper from the row.
    */
   static <A, B> Mapping<A, B> via(final Accessor<A, ?> src, final Accessor<B, ?> tgt, final Class<?> using) {
     return new ViaClass<>(src, tgt, Objects.requireNonNull(using, "using"));

@@ -34,8 +34,8 @@ public final class RegistryFixtures {
 
   /**
    * A real {@code Telescope<BridgeSrc, BridgeTgt>} that renames {@code alpha → beta} — what a
-   * carrier {@code @Bridge} with a {@code @Rename} produces. Same-name {@code DeepMap} would leave
-   * {@code beta} null, so routing through this bridge is observably different.
+   * {@code @Bridge} field with a renaming {@code to} row produces. Same-name {@code DeepMap} would
+   * leave {@code beta} null, so routing through this bridge is observably different.
    */
   public static final Object RENAMING_BRIDGE = Telescope.from(BridgeSrc.class)
     .to(BridgeTgt.class)

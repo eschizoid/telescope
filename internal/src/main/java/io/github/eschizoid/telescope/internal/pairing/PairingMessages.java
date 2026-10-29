@@ -39,6 +39,11 @@ public final class PairingMessages {
     );
   }
 
+  /** Two {@code writeBeans} defaults in one mapper. */
+  public static String duplicateWriteBeansDefault() {
+    return "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call.";
+  }
+
   /** Two {@code writeBean} hints for the same target class. */
   public static String duplicateWriteBeanHint(final String binaryName) {
     return (
@@ -294,10 +299,10 @@ public final class PairingMessages {
   }
 
   /**
-   * A {@code via} row, or a {@code @ViaMapper}, whose mapper is handed one side's property as it
-   * is, though no value of that property can be an instance of the class the mapper converts on
-   * that side: the property is not a List, Set, Optional or a map's values the mapper's elements
-   * lift over, so every call would fail.
+   * A {@code via} row whose mapper is handed one side's property as it is, though no value of that
+   * property can be an instance of the class the mapper converts on that side: the property is not
+   * a List, Set, Optional or a map's values the mapper's elements lift over, so every call would
+   * fail.
    */
   public static String viaMapperNeverFits(
     final String source,
@@ -325,10 +330,9 @@ public final class PairingMessages {
   }
 
   /**
-   * A {@code via} row, or a {@code @ViaMapper}, whose mapper's result is written into one side's
-   * property, though no value of the class the mapper returns can be an instance of the class the
-   * property takes there, the class that side fixes the property's type variable to among them:
-   * every write would fail.
+   * A {@code via} row whose mapper's result is written into one side's property, though no value of
+   * the class the mapper returns can be an instance of the class the property takes there, the
+   * class that side fixes the property's type variable to among them: every write would fail.
    */
   public static String viaResultNeverFits(
     final String source,

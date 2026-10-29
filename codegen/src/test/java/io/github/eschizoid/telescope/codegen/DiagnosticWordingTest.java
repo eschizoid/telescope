@@ -23,64 +23,6 @@ class DiagnosticWordingTest {
   }
 
   @Test
-  @DisplayName("an unparseable @Default value is reported against @Default, not @Constant")
-  void unparseableDefaultNamesDefault() {
-    final var compilation = compile(
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Default;
-        @Bridge(value = demo.Dst.class, defaults = @Default(field = "count", value = "not-a-number"))
-        public record Src(String name, Integer count) {}
-        """
-      ),
-      ProcessorHarness.source("demo.Dst", "package demo; public record Dst(String name, Integer count) {}")
-    );
-
-    assertFalse(compilation.success(), "an unparseable default must not compile");
-    assertTrue(
-      compilation.hasError("@Default value=\"not-a-number\""),
-      () -> "the diagnostic must name the annotation the source carries: " + compilation.errorMessages()
-    );
-    assertFalse(
-      compilation.errorMessages().contains("@Constant"),
-      () -> "there is no @Constant in this source: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
-  @DisplayName("an unparseable @Constant value still names @Constant")
-  void unparseableConstantStillNamesConstant() {
-    // The control for the test above: the shared parser takes the name from its caller, so the
-    // other caller has to keep reporting its own.
-    final var compilation = compile(
-      ProcessorHarness.source(
-        "demo.CSrc",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Constant;
-        @Bridge(value = demo.CDst.class, constants = @Constant(field = "count", value = "not-a-number"))
-        public record CSrc(String name) {}
-        """
-      ),
-      ProcessorHarness.source("demo.CDst", "package demo; public record CDst(String name, Integer count) {}")
-    );
-
-    assertFalse(compilation.success(), "an unparseable constant must not compile");
-    assertTrue(
-      compilation.hasError("@Constant value=\"not-a-number\""),
-      () -> "the constant path must keep naming @Constant: " + compilation.errorMessages()
-    );
-    assertFalse(
-      compilation.errorMessages().contains("@Default"),
-      () -> "there is no @Default in this source: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
   @DisplayName("a plain interface target is reported as an interface, not as a bijection failure")
   void plainInterfaceTargetIsNamedAsSuch() {
     final var compilation = compile(
@@ -133,30 +75,6 @@ class DiagnosticWordingTest {
     assertFalse(
       compilation.errorMessages().contains("Failed to write"),
       () -> "the generic write-failure wording gives the reader nothing to do: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
-  @DisplayName("a multi-character value for a char field says so, naming its annotation")
-  void multiCharConstantIsRejected() {
-    final var compilation = compile(
-      ProcessorHarness.source(
-        "demo.MSrc",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Constant;
-        @Bridge(value = demo.MDst.class, constants = @Constant(field = "initial", value = "xy"))
-        public record MSrc(String name) {}
-        """
-      ),
-      ProcessorHarness.source("demo.MDst", "package demo; public record MDst(String name, char initial) {}")
-    );
-
-    assertFalse(compilation.success(), "two characters do not fit a char");
-    assertTrue(
-      compilation.hasError("@Constant value=\"xy\" must be a single character"),
-      () -> "the char arm reports through the same caller-supplied name: " + compilation.errorMessages()
     );
   }
 

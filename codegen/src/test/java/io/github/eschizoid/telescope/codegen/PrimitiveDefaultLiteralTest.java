@@ -98,9 +98,14 @@ class PrimitiveDefaultLiteralTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.drop;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          @Bridge(value = demo.Tgt.class, drops = { "gone" })
-          public record Src(String keep, %s gone) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public record Src(String keep, %s gone) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class, drop(Src::gone));
+          }
           """.formatted(primitive)
         ),
         ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String keep) {}"),
@@ -111,7 +116,7 @@ class PrimitiveDefaultLiteralTest {
       compilation.success(),
       () -> "the emitted default does not reach a " + primitive + " slot: " + compilation.errorMessages()
     );
-    final var bridge = compilation.generated().get("demo.SrcBridge");
+    final var bridge = compilation.generated().get("demo.SrcToTgtBridge");
     assertNotNull(bridge, "no bridge was emitted, which every other assertion here would tolerate");
     assertTrue(
       bridge.contains("new demo.Src(__bt_keep, " + EXPECTED.get(primitive) + ")"),
@@ -226,6 +231,7 @@ class PrimitiveDefaultLiteralTest {
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
           public final class Fn implements BridgeFn<%s, String> {
+            public static final Fn INSTANCE = new Fn();
             @Override public String forward(final %s v) { return String.valueOf(v); }
             @Override public %s backward(final String s) { return %s; }
           }
@@ -235,12 +241,18 @@ class PrimitiveDefaultLiteralTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
-          })
-          public record Src(%s v) {}
+          import io.github.eschizoid.telescope.conversion.ForwardMapper;
+          public record Src(%s v) {
+            @Bridge
+            public static final ForwardMapper<Src, Tgt> MAPPER = Telescope.mapperForward(
+              Src.class,
+              Tgt.class,
+              toOneWay(Src::v, Tgt::v, Fn.INSTANCE::forward)
+            );
+          }
           """.formatted(primitive)
         ),
         ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}"),
@@ -251,7 +263,7 @@ class PrimitiveDefaultLiteralTest {
       compilation.success(),
       () -> "the emitted default does not reach a " + primitive + " slot: " + compilation.errorMessages()
     );
-    final var bridge = compilation.generated().get("demo.SrcBridge");
+    final var bridge = compilation.generated().get("demo.SrcToTgtBridge");
     assertNotNull(bridge, "no bridge was emitted");
     assertTrue(
       bridge.contains("new demo.Src(" + EXPECTED.get(primitive) + ")"),

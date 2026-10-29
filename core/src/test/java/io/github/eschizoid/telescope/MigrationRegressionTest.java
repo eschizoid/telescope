@@ -2702,7 +2702,7 @@ class MigrationRegressionTest {
       src.setImageUrls(urls);
       src.setIcVerificationExt("ext-1");
 
-      final var dst = CustomWrapperSourceBridge.BRIDGE.read(src);
+      final var dst = CustomWrapperSourceToCustomWrapperTargetBridge.BRIDGE.read(src);
 
       // 1. The custom wrapper's elements are converted (not verbatim-copied) into a fresh target
       //    wrapper of the declared subtype.
@@ -2714,7 +2714,7 @@ class MigrationRegressionTest {
       assertNull(dst.getExtra());
 
       // 4. Backward round-trips into a fresh source wrapper with the elements bridged back.
-      final var back = CustomWrapperSourceBridge.BRIDGE.set(src, dst);
+      final var back = CustomWrapperSourceToCustomWrapperTargetBridge.BRIDGE.set(src, dst);
       assertInstanceOf(CustomWrapperSrcUrls.class, back.getImageUrls());
       assertEquals(new CustomWrapperSrcUrl("a"), back.getImageUrls().get(0));
       assertEquals("ext-1", back.getIcVerificationExt());

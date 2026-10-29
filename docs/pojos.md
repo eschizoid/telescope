@@ -172,9 +172,10 @@ final Page lowered = Telescope.of(Page.class)
 ```
 
 It auto-detects each side's strategy at compile time (record canonical constructor; POJO builder → name-matched
-constructor → no-arg + setters, the order the runtime takes). Renames and per-field transforms can't be expressed in an
-annotation — use the runtime `map` / `from/to/using` for those. Wire up `telescope-codegen` as shown under
-[Compile-time codegen](codegen.md#installing-the-processor).
+constructor → no-arg + setters, the order the runtime takes). Renames and per-field conversions are rows on a `@Bridge`
+field initialised by `Telescope.mapper(...)`, which the processor compiles into the bridge; see
+[a generated mapper declared on its field](codegen.md#a-generated-mapper-declared-on-its-field-bridge). Wire up
+`telescope-codegen` as shown under [Compile-time codegen](codegen.md#installing-the-processor).
 
 **`from/to/using` — hand-written.** When the mapping is lossy, one-directional, or just custom, write both functions
 yourself:

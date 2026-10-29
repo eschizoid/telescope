@@ -1,15 +1,24 @@
 package io.github.eschizoid.telescope.bridgexpkg;
 
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
+
 import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.ViaMapper;
 import io.github.eschizoid.telescope.bridgexpkg.vm.VmAddress;
 import io.github.eschizoid.telescope.bridgexpkg.vmapper.VmAddressBridge;
+import io.github.eschizoid.telescope.conversion.Mapper;
 
 /**
- * Model-anchored @Bridge with a @ViaMapper field whose type AND mapper class are both in different
- * packages than this source. The @ViaMapper subBridgeName is the user's FQN
- * (vmapper.VmAddressBridge); the cross-package import logic must NOT fabricate a bogus import from
+ * A {@code @Bridge} field whose via row names a property type AND a hand-written class in packages
+ * other than this source's. The class is named by its qualified name ({@code
+ * vmapper.VmAddressBridge}); the cross-package import logic must NOT fabricate a bogus import from
  * it.
  */
-@Bridge(value = VmTarget.class, viaMappers = @ViaMapper(field = "address", using = VmAddressBridge.class))
-public record VmSource(String id, VmAddress address) {}
+public record VmSource(String id, VmAddress address) {
+  @Bridge
+  public static final Mapper<VmSource, VmTarget> TARGET = mapper(
+    VmSource.class,
+    VmTarget.class,
+    via(VmSource::address, VmTarget::address, VmAddressBridge.class)
+  );
+}

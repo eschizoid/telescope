@@ -55,13 +55,13 @@ class InheritedAccessorRowTest {
     );
     final var source = new RowBridged("ann", "k1", "t");
     final var runtime = mapper.forward(source);
-    final var generated = RowBridgedBridge.BRIDGE.read(source);
+    final var generated = RowBridgedToRowNamedSubBridge.BRIDGE.read(source);
     assertSame(generated.getClass(), runtime.getClass());
     assertEquals(generated.getName(), runtime.getName());
     assertEquals(generated.getCode(), runtime.getCode());
     assertEquals(generated.getTag(), runtime.getTag());
     final var target = sub("bo", "k2", "u");
-    assertEquals(RowBridgedBridge.BRIDGE.set(source, target), mapper.backward(target));
+    assertEquals(RowBridgedToRowNamedSubBridge.BRIDGE.set(source, target), mapper.backward(target));
   }
 
   @Test

@@ -1,12 +1,17 @@
 package io.github.eschizoid.telescope.sealedroots;
 
-import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Transform;
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
-@Bridge(
-  value = StXDto.class,
-  transforms = {
-    @Transform(field = "name", using = SvUpper.class), @Transform(field = "back", using = StBackDrop.class),
-  }
-)
-public record StX(String name, StBack back) {}
+import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.Mapper;
+
+public record StX(String name, StBack back) {
+  @Bridge
+  public static final Mapper<StX, StXDto> DTO = mapper(
+    StX.class,
+    StXDto.class,
+    to(StX::name, StXDto::name, SvUpper.class),
+    to(StX::back, StXDto::back, StBackDrop.class)
+  );
+}

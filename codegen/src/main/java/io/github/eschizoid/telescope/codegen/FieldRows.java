@@ -9,7 +9,9 @@ import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
+import com.sun.source.tree.PrimitiveTypeTree;
 import com.sun.source.tree.Tree;
+import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreePath;
@@ -40,6 +42,7 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 
 /**
@@ -55,14 +58,16 @@ import javax.lang.model.util.ElementFilter;
  *
  * <p>A converter, a supplier, a default and a constant are each compiled as a small class the
  * reader writes beside the bridge: a {@code BridgeFn} for a conversion, a {@code Supplier} for a
- * value the target is filled with. The bridge converts through such a class the way it converts
- * through a {@code @Transform} or {@code @Compute} class, so every check the emitter makes on those
- * applies to the row unchanged.
+ * value the target is filled with. The bridge converts through such a class as it converts through
+ * a class a row names, so every check the emitter makes on a conversion or a supplier applies to
+ * the row unchanged.
  */
 final class FieldRows {
 
   static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
+  private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
+  private static final String WRITE_STRATEGY_FQN = WRITE_HINT_FQN + ".WriteStrategy";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
   private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
@@ -77,7 +82,9 @@ final class FieldRows {
     "constant",
     "compute",
     "zip",
-    "when"
+    "when",
+    "writeBean",
+    "writeBeans"
   );
 
   /** What the reader found for a field. */
@@ -88,7 +95,9 @@ final class FieldRows {
    * classes the rows need written; {@code awaits} the classes, written by this compilation, that
    * must exist before the bridge is planned. {@code rowKinds} are the classes of the rows the
    * runtime builds from the same call, in order, and {@code rowAccessors} the accessor methods each
-   * names, as {@code source>target}; the generated provider records both.
+   * names, as {@code source>target}; the generated provider records both. {@code beanStrategies}
+   * are the write strategies {@code writeBean} rows name, by the qualified name of the class each
+   * is keyed to, and {@code defaultStrategy} the one a {@code writeBeans} row names, or null.
    */
   record Parsed(
     TypeElement source,
@@ -105,8 +114,20 @@ final class FieldRows {
     List<String> rowKinds,
     List<String> rowAccessors,
     List<GeneratedClass> classes,
-    Set<String> awaits
-  ) implements Result {}
+    Set<String> awaits,
+    Map<String, String> beanStrategies,
+    String defaultStrategy
+  ) implements Result {
+    /**
+     * How {@code side} is rebuilt: the strategy a {@code writeBean} row keyed to it names, else the
+     * {@code writeBeans} default, else {@code AUTO}.
+     */
+    String writeStrategyOf(final TypeElement side) {
+      final var keyed = beanStrategies.get(side.getQualifiedName().toString());
+      if (keyed != null) return keyed;
+      return defaultStrategy != null ? defaultStrategy : "AUTO";
+    }
+  }
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
   record GeneratedClass(String qualifiedName, String source) {}
@@ -492,6 +513,8 @@ final class FieldRows {
     private final List<String> rowAccessors = new ArrayList<>();
     private final List<GeneratedClass> classes = new ArrayList<>();
     private final Set<String> awaits = new LinkedHashSet<>();
+    private final Map<String, String> beanStrategies = new LinkedHashMap<>();
+    private String defaultStrategy;
 
     /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
     private final String fieldName;
@@ -530,7 +553,9 @@ final class FieldRows {
         rowKinds,
         rowAccessors,
         classes,
-        awaits
+        awaits,
+        beanStrategies,
+        defaultStrategy
       );
     }
 
@@ -550,6 +575,13 @@ final class FieldRows {
         if (rowElement == null || typed == null || typed.getKind() == TypeKind.ERROR) return Refused.javacReports(row);
       }
       if (
+        rowElement instanceof ExecutableElement hintExec &&
+        hintExec.getEnclosingElement() instanceof TypeElement hintOwner &&
+        hintOwner.getQualifiedName().contentEquals(WRITE_HINT_FQN)
+      ) {
+        return hint(row, hintExec.getSimpleName().toString());
+      }
+      if (
         !(rowElement instanceof ExecutableElement rowExec) ||
         !(rowExec.getEnclosingElement() instanceof TypeElement rowOwner) ||
         !rowOwner.getQualifiedName().contentEquals(MAPPING_FQN)
@@ -558,7 +590,8 @@ final class FieldRows {
           row,
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
-            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute"
+            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute, and the hints writeBean and" +
+            " writeBeans"
         );
       }
       final var rowArgs = row.getArguments();
@@ -642,19 +675,23 @@ final class FieldRows {
         forwardMethod.getModifiers().contains(Modifier.STATIC) &&
         ((TypeElement) forwardMethod.getEnclosingElement()).getNestingKind() == NestingKind.TOP_LEVEL
       ) {
-        // A static method converting forward only is called by name from the bridge, as a
-        // @Transform naming a method is.
+        // A static method of a top-level class converting forward only is called by name from the
+        // bridge, with no generated class between them.
         transforms.put(s.property(), ((TypeElement) forwardMethod.getEnclosingElement()).getQualifiedName().toString());
         transformMethods.put(s.property(), forwardMethod.getSimpleName().toString());
         forwardOnly.add(s.property());
       }
       if (!transforms.containsKey(s.property())) {
-        final var unnamed = unnameable(s, t);
+        final var from = rowTyped(s);
+        final var into = rowTyped(t);
+        final var unnamed = unnameable(from, into);
         if (unnamed != null) return unnamed;
+        final var gives = converted(args.get(2), forwardMethod, into);
+        if (gives instanceof Refused refused) return refused;
         final var name = bridgeName + camel(s.property()) + "Fn";
         transforms.put(s.property(), qualified(name));
         if (!twoWay) forwardOnly.add(s.property());
-        classes.add(bridgeFn(name, s.type(), t.type(), ((Call) forward).expression(), backward));
+        classes.add(bridgeFn(name, from.type(), (TypeMirror) gives, ((Call) forward).expression(), backward));
       }
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
@@ -662,9 +699,68 @@ final class FieldRows {
     }
 
     /**
+     * {@code side} as the row's converter takes or gives it, where the property's own type names a
+     * type variable of its class: javac types a method reference to a member of a class named raw
+     * by the erasure, or by the type the row's type arguments give it, and the class the processor
+     * writes for the row takes that type, as a {@code BridgeFn} class declared for the row does.
+     * Otherwise {@code side} as it is.
+     */
+    private Accessor rowTyped(final Accessor side) {
+      if (nameable(side.type())) return side;
+      if (!(trees.getTypeMirror(TreePath.getPath(unit, side.at())) instanceof DeclaredType accessor)) return side;
+      final var arguments = accessor.getTypeArguments();
+      if (arguments.size() != 2) return side;
+      final var typed = arguments.get(1);
+      if (typed instanceof WildcardType || !nameable(typed)) return side;
+      return new Accessor(side.property(), typed, side.primitive(), side.method(), side.at());
+    }
+
+    /**
+     * What the class the processor writes for a converting row gives its values as: the property
+     * {@code into}'s own class, or a wider class that {@code forward}'s method returns, whose
+     * result is written into the property after a check of its class, as the runtime writes it. The
+     * refusal where the method returns a class no value of the property can be. Where the return
+     * names a type variable, the class Java infers for the row is read in its place, and where
+     * neither has a name the written class can use, the property's own.
+     */
+    private Object converted(final ExpressionTree forward, final ExecutableElement method, final Accessor into) {
+      final var types = env.getTypeUtils();
+      var gives = declaredResult(method);
+      if (gives == null) gives = inferredResult(forward);
+      if (gives == null || !nameable(gives) || types.isAssignable(gives, into.type())) return into.type();
+      if (types.isSubtype(types.erasure(into.type()), types.erasure(gives))) return gives;
+      return new Refused(
+        forward,
+        forward + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+      );
+    }
+
+    /**
+     * What {@code method} returns, boxed, or the class a constructor builds; null where it names a
+     * type variable.
+     */
+    private TypeMirror declaredResult(final ExecutableElement method) {
+      final var types = env.getTypeUtils();
+      final var result =
+        method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
+      if (result.getKind().isPrimitive()) return types.boxedClass((PrimitiveType) result).asType();
+      if (result.getKind() == TypeKind.TYPEVAR || !nameable(result)) return null;
+      return result;
+    }
+
+    /** The result type Java infers for a reference converting one value, or null. */
+    private TypeMirror inferredResult(final ExpressionTree forward) {
+      if (!(trees.getTypeMirror(TreePath.getPath(unit, forward)) instanceof DeclaredType function)) return null;
+      final var arguments = function.getTypeArguments();
+      if (arguments.size() != 2) return null;
+      final var gives = arguments.get(1);
+      return gives instanceof WildcardType wildcard ? wildcard.getExtendsBound() : gives;
+    }
+
+    /**
      * A {@code to} row converting through one {@code BridgeFn}: a class literal, which the bridge
-     * builds once as it builds a {@code @Transform} class, or a {@code static final} field holding
-     * one, which a generated class calls.
+     * builds once through its no-argument constructor, or a {@code static final} field holding one,
+     * which a generated class calls.
      */
     private Refused twoWay(final MethodInvocationTree row) {
       final var args = row.getArguments();
@@ -695,6 +791,8 @@ final class FieldRows {
         if (!reachable(held, heldOwner)) return new Refused(conversion, unreachable(heldOwner, held.getSimpleName()));
         final var unnamed = unnameable(s, t);
         if (unnamed != null) return unnamed;
+        final var raw = rawMisfit(held, s, t);
+        if (raw != null) return new Refused(conversion, raw);
         final var reference = heldOwner.getQualifiedName() + "." + held.getSimpleName();
         final var name = bridgeName + camel(s.property()) + "Fn";
         using = qualified(name);
@@ -714,6 +812,56 @@ final class FieldRows {
       }
       rowKinds.add("TypedTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
+      return null;
+    }
+
+    /**
+     * Why a {@code BridgeFn} that {@code held} declares raw cannot convert {@code src} into {@code
+     * tgt}, or null when it can: a raw class's {@code forward} and {@code backward} take and give
+     * what its type variables erase to, and the class the processor writes calls them with the
+     * property's values and returns what they give.
+     */
+    private String rawMisfit(final VariableElement held, final Accessor src, final Accessor tgt) {
+      if (!(held.asType() instanceof DeclaredType type) || !type.getTypeArguments().isEmpty()) return null;
+      if (((TypeElement) type.asElement()).getTypeParameters().isEmpty()) return null;
+      final var types = env.getTypeUtils();
+      final var members = ElementFilter.methodsIn(env.getElementUtils().getAllMembers((TypeElement) type.asElement()));
+      for (final var direction : List.of("forward", "backward")) {
+        final var takes = direction.equals("forward") ? src.type() : tgt.type();
+        final var gives = direction.equals("forward") ? tgt.type() : src.type();
+        ExecutableType misfit = null;
+        var fits = false;
+        for (final var method : members) {
+          if (!method.getSimpleName().contentEquals(direction) || method.getParameters().size() != 1) continue;
+          if (method.getModifiers().contains(Modifier.STATIC)) continue;
+          final var erased = (ExecutableType) types.asMemberOf(type, method);
+          if (
+            types.isAssignable(takes, erased.getParameterTypes().getFirst()) &&
+            types.isAssignable(erased.getReturnType(), gives)
+          ) {
+            fits = true;
+          } else if (misfit == null) {
+            misfit = erased;
+          }
+        }
+        if (fits || misfit == null) continue;
+        return (
+          held.getSimpleName() +
+          " holds a raw " +
+          type.asElement().getSimpleName() +
+          ", whose " +
+          direction +
+          " is (" +
+          misfit.getParameterTypes().getFirst() +
+          ") -> " +
+          misfit.getReturnType() +
+          ", which does not carry " +
+          takes +
+          " -> " +
+          gives +
+          "; declare the field with its type arguments"
+        );
+      }
       return null;
     }
 
@@ -817,9 +965,8 @@ final class FieldRows {
     }
 
     /**
-     * A {@code via} row naming a class written by hand, which compiles to what
-     * {@code @ViaMapper(using = ...)} names, so the bridge chooses the class's methods for the
-     * property's types as it does for the annotation.
+     * A {@code via} row naming a class written by hand, whose static methods the bridge chooses for
+     * the property's types, converting the whole property or each element of a container.
      */
     private Refused viaClass(
       final MethodInvocationTree row,
@@ -837,8 +984,8 @@ final class FieldRows {
 
     /**
      * A {@code via} row converting through two methods: the static {@code forward} and {@code
-     * backward} of one class, which the bridge calls as it calls a {@code @ViaMapper} class, on the
-     * whole property or on each element of a container, as the class's methods take.
+     * backward} of one class, which compiles as the row naming that class does, so the bridge calls
+     * them on the whole property or on each element of a container, as the class's methods take.
      */
     private Refused viaMethods(final MethodInvocationTree row, final Accessor src, final Accessor tgt) {
       final var args = row.getArguments();
@@ -971,23 +1118,164 @@ final class FieldRows {
         if (text instanceof Refused refused) return refused;
         value = (String) text;
       } else {
-        final var supplier = call(args.get(1), null, 0);
-        if (supplier instanceof Refused refused) return refused;
-        final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
-        if (refusedType != null) return refusedType;
-        value = ((Call) supplier).expression();
+        final var held = heldSupplier(args.get(1), t);
+        if (held instanceof Refused refused) return refused;
+        if (held instanceof String read) {
+          value = read;
+        } else {
+          final var supplier = call(args.get(1), null, 0);
+          if (supplier instanceof Refused refused) return refused;
+          final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
+          if (refusedType != null) return refusedType;
+          value = ((Call) supplier).expression();
+        }
       }
       if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
-      final var unnamed = unnameable(t);
-      if (unnamed != null) return unnamed;
+      final var filledAs = nameable(t.type()) ? t.type() : suppliedType(args.get(1), constant);
+      if (filledAs == null || !nameable(filledAs)) return unnameable(t);
       final var name = bridgeName + camel(t.property()) + (constant ? "Constant" : "Compute");
       computes.put(t.property(), qualified(name));
-      classes.add(supplier(name, t.type(), value));
+      classes.add(supplier(name, filledAs, value));
       rowKinds.add(constant ? "Constant" : "Compute");
       rowAccessors.add(">");
       return null;
+    }
+
+    /**
+     * The class a constant or compute row's value is, which the class the processor writes for the
+     * row supplies where the property's own type has no name it can use, as a type variable: the
+     * value's own type for a constant, and what the supplier gives for a compute row; null where
+     * neither is known.
+     */
+    private TypeMirror suppliedType(final ExpressionTree arg, final boolean constant) {
+      final var types = env.getTypeUtils();
+      final TypeMirror given;
+      if (constant) {
+        given = trees.getTypeMirror(TreePath.getPath(unit, arg));
+      } else if (elementAt(unit, arg) instanceof VariableElement held && held.getKind() == ElementKind.FIELD) {
+        final var get = env
+          .getElementUtils()
+          .getTypeElement("java.util.function.Supplier")
+          .getEnclosedElements()
+          .stream()
+          .filter(e -> e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals("get"))
+          .findFirst()
+          .orElseThrow();
+        given = ((ExecutableType) types.asMemberOf((DeclaredType) held.asType(), get)).getReturnType();
+      } else if (elementAt(unit, arg) instanceof ExecutableElement method) {
+        given =
+          method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
+      } else {
+        given = null;
+      }
+      if (given == null || given.getKind() == TypeKind.NULL) return null;
+      return given.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) given).asType() : given;
+    }
+
+    /**
+     * The expression a {@code compute} row reads its value with when its supplier is a {@code
+     * static final} field, {@code Clock.NOW} or {@code NOW}: a call of that field's {@code get()},
+     * which a generated class makes, as the runtime path calls the same instance. The refusal where
+     * the field is not static and final, the generated bridge cannot reach it, or its supplier
+     * gives a value the target's property does not hold; null where {@code arg} names no field.
+     */
+    private Object heldSupplier(final ExpressionTree arg, final Accessor into) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (!(elementAt(unit, arg) instanceof VariableElement held) || held.getKind() != ElementKind.FIELD) return null;
+      if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper computes a value from a supplier the generated bridge can name: a method" +
+            " reference (Clock::now), or a static final field holding the supplier; " +
+            held.getSimpleName() +
+            " is not static and final"
+        );
+      }
+      final var owner = (TypeElement) held.getEnclosingElement();
+      if (!reachable(held, owner)) return new Refused(arg, unreachable(owner, held.getSimpleName()));
+      final var types = env.getTypeUtils();
+      final var get = env
+        .getElementUtils()
+        .getTypeElement("java.util.function.Supplier")
+        .getEnclosedElements()
+        .stream()
+        .filter(e -> e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals("get"))
+        .findFirst()
+        .orElseThrow();
+      final var gives = ((ExecutableType) types.asMemberOf((DeclaredType) held.asType(), get)).getReturnType();
+      if (!types.isAssignable(types.erasure(gives), types.erasure(into.type()))) {
+        return new Refused(
+          arg,
+          arg + " gives " + gives + ", which the " + into.type() + " property '" + into.property() + "' does not hold"
+        );
+      }
+      return owner.getQualifiedName() + "." + held.getSimpleName() + ".get()";
+    }
+
+    /**
+     * A {@code writeBean} or {@code writeBeans} hint, which decides how the bridge rebuilds a side
+     * of its pair, as {@code @Bridge(writeStrategy = ...)} does for both: {@code writeBean} keyed
+     * to the source or the target decides that side, and {@code writeBeans} every side no {@code
+     * writeBean} names. A {@code writeBean} keyed to any other class, and a {@code writeBeans}
+     * default on a pair whose bridge builds a nested bean pair, would reach a pair the bridge does
+     * not rebuild itself, which the generated bridge has no form for; the first is refused here,
+     * and the second when the nested pair is planned.
+     */
+    private Refused hint(final MethodInvocationTree row, final String kind) {
+      final var args = row.getArguments();
+      final var strategy = strategyOf(args.get(args.size() - 1));
+      if (strategy == null) {
+        return new Refused(
+          args.get(args.size() - 1),
+          "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place," +
+            " such as SETTERS or WriteStrategy.BUILDER"
+        );
+      }
+      if (kind.equals("writeBeans")) {
+        if (defaultStrategy != null) return new Refused(row, PairingMessages.duplicateWriteBeansDefault());
+        defaultStrategy = strategy;
+        rowKinds.add("DefaultWriteHint");
+        return null;
+      }
+      final var keyed = classLiteral(unit, args.get(0));
+      if (keyed == null) {
+        return new Refused(args.get(0), "a @Bridge mapper compiles a writeBean hint keyed to a class literal");
+      }
+      final var binary = env.getElementUtils().getBinaryName(keyed).toString();
+      if (keyed.getKind() == ElementKind.RECORD) {
+        return new Refused(row, PairingMessages.writeBeanTargetsRecord(binary));
+      }
+      if (!keyed.equals(source) && !keyed.equals(target)) {
+        return new Refused(
+          row,
+          "writeBean(" +
+            keyed.getSimpleName() +
+            ".class, ...) is keyed to a class other than " +
+            simple(source) +
+            " and " +
+            simple(target) +
+            ", a nested pair the generated bridge has no hint for yet; give that pair its own @Bridge field" +
+            " with its own writeBean row"
+        );
+      }
+      if (beanStrategies.put(keyed.getQualifiedName().toString(), strategy) != null) {
+        return new Refused(row, PairingMessages.duplicateWriteBeanHint(binary));
+      }
+      rowKinds.add("BeanWriteHint");
+      return null;
+    }
+
+    /** The name of the {@code WriteStrategy} constant {@code arg} names, or null. */
+    private String strategyOf(final ExpressionTree arg) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (!(elementAt(unit, arg) instanceof VariableElement constant)) return null;
+      if (constant.getKind() != ElementKind.ENUM_CONSTANT) return null;
+      if (!((TypeElement) constant.getEnclosingElement()).getQualifiedName().contentEquals(WRITE_STRATEGY_FQN)) {
+        return null;
+      }
+      return constant.getSimpleName().toString();
     }
 
     /**
@@ -1083,7 +1371,7 @@ final class FieldRows {
       final var read = ((ExecutableType) declared).getReturnType();
       final var type = read.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) read).asType() : read;
       final var method = accessor.getSimpleName().toString();
-      return new Accessor(property(method, side), type, method, arg);
+      return new Accessor(property(method, side), type, read.getKind().isPrimitive(), method, arg);
     }
 
     /**
@@ -1155,12 +1443,24 @@ final class FieldRows {
 
     /**
      * The Java source of a constant row's value, written into the property {@code into}, or the
-     * refusal: a value that is not a literal or an enum constant, or whose type the property does
-     * not hold.
+     * refusal: a value that is not a literal, a literal cast to a primitive type, or an enum
+     * constant, a {@code null} for a primitive property, or a value whose type the property does
+     * not hold. A {@code short} or {@code byte} value is written as a cast literal, since Java
+     * converts no {@code int} literal to {@code Short} or {@code Byte} in a method's argument.
      */
     private Object constantText(final ExpressionTree arg, final Accessor into) {
       final String text;
-      if (arg instanceof LiteralTree literal && literal.getKind() != Tree.Kind.NULL_LITERAL) {
+      if (arg instanceof LiteralTree literal && literal.getKind() == Tree.Kind.NULL_LITERAL) {
+        if (into.primitive()) {
+          return new Refused(
+            arg,
+            "the value null cannot be written into the property '" +
+              into.property() +
+              "', which holds a primitive; write a value of its type"
+          );
+        }
+        return "null";
+      } else if (arg instanceof LiteralTree literal) {
         text = literal.toString();
       } else if (
         arg instanceof UnaryTree unary &&
@@ -1168,6 +1468,15 @@ final class FieldRows {
         unary.getExpression() instanceof LiteralTree
       ) {
         text = "(" + unary + ")";
+      } else if (
+        arg instanceof TypeCastTree cast &&
+        cast.getType() instanceof PrimitiveTypeTree &&
+        (cast.getExpression() instanceof LiteralTree ||
+          (cast.getExpression() instanceof UnaryTree negated &&
+            negated.getKind() == Tree.Kind.UNARY_MINUS &&
+            negated.getExpression() instanceof LiteralTree))
+      ) {
+        text = "(" + cast + ")";
       } else if (
         (arg instanceof IdentifierTree || arg instanceof MemberSelectTree) &&
         elementAt(unit, arg) instanceof VariableElement constant &&
@@ -1343,18 +1652,30 @@ final class FieldRows {
       return null;
     }
 
+    /**
+     * Whether a class the processor writes can name {@code type}: a primitive, an array of a type
+     * it can name, or a declared type whose every type argument it can name, a wildcard argument
+     * included where its bound has a name. A type variable has none outside its declaration.
+     */
     private boolean nameable(final TypeMirror type) {
       if (type.getKind() == TypeKind.ARRAY) return nameable(((ArrayType) type).getComponentType());
-      if (type.getKind() != TypeKind.DECLARED) return type.getKind().isPrimitive();
+      if (type instanceof WildcardType wildcard) {
+        final var bound = wildcard.getExtendsBound() != null ? wildcard.getExtendsBound() : wildcard.getSuperBound();
+        return bound == null || nameable(bound);
+      }
       if (type instanceof DeclaredType declared) {
         for (final var argument : declared.getTypeArguments()) if (!nameable(argument)) return false;
         return true;
       }
-      return type.getKind() == TypeKind.ARRAY || type.getKind().isPrimitive();
+      return type.getKind().isPrimitive();
     }
   }
 
-  private record Accessor(String property, TypeMirror type, String method, Tree at) {}
+  /**
+   * A property a row's method reference reads: its name, its type, boxed where the accessor returns
+   * a primitive, which {@code primitive} says, the accessor's name, and the reference itself.
+   */
+  private record Accessor(String property, TypeMirror type, boolean primitive, String method, Tree at) {}
 
   /**
    * Whether {@code accessor} of {@code declaring} reads a property: a record's component accessor,

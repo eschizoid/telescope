@@ -10,10 +10,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The fit check decides what a transform's two directions carry by resolving which overload the
- * emitted call site will bind to. Where its answer differs from the one Java gives, the row is
- * judged against a method that is not called — and the check accepts it, so the disagreement lands
- * as a javac error inside a file the author never wrote.
+ * The fit check decides what a converting row's two directions carry, through the {@code BridgeFn}
+ * class the row names, by resolving which overload the emitted call site will bind to. Where its
+ * answer differs from the one Java gives, the row is judged against a method that is not called —
+ * and the check accepts it, so the disagreement lands as a javac error inside a file the author
+ * never wrote.
  *
  * <p>The cases below are a verdict matrix rather than separate tests: overload shape against field
  * types against direction against the expected verdict. Resolution rules interact, so a change that
@@ -25,32 +26,25 @@ import org.junit.jupiter.params.provider.MethodSource;
 class TransformOverloadResolutionTest {
 
   /**
-   * @param extra extra {@code @Transform} arguments, which decides whether a backward is emitted at
-   *     all and therefore whether its overloads are a question anything asks
    * @param expected a fragment of the diagnostic, so a row cannot pass by being refused for an
    *     unrelated reason
    */
-  private record Case(
-    String label,
-    String fnBody,
-    String srcField,
-    String tgtField,
-    String extra,
-    boolean accept,
-    String expected
-  ) {
+  private record Case(String label, String fnBody, String srcField, String tgtField, boolean accept, String expected) {
     @Override
     public String toString() {
       return label;
     }
   }
 
-  /** Two overloads Java can order: String is more specific than CharSequence, so String wins. */
+  /**
+   * Two overloads Java can order: String is more specific than CharSequence, so String wins. The
+   * backward narrows its result to String, which the source's property holds.
+   */
   private static final String ORDERABLE = """
     public final class Fn implements BridgeFn<CharSequence, Integer> {
       @Override public Integer forward(final CharSequence c) { return -1; }
       public Integer forward(final String s) { return s.length(); }
-      @Override public CharSequence backward(final Integer i) { return String.valueOf(i); }
+      @Override public String backward(final Integer i) { return String.valueOf(i); }
     }
     """;
 
@@ -113,27 +107,6 @@ class TransformOverloadResolutionTest {
     }
     """;
 
-  /**
-   * Raw, so there are no type arguments to stand in for a direction the resolver cannot bind. Its
-   * forward does not fit and its backward is ambiguous — two independent problems in one class.
-   *
-   * <p>It implements the raw interface's own two methods rather than overloads of them. A class
-   * that does not is rejected by javac on its own, and a processor error stops compilation before
-   * the class body is attributed — so the row would pass on a diagnostic about the transform while
-   * the fixture was a class nobody could write.
-   */
-  private static final String RAW_AMBIGUOUS_BACKWARD = """
-    @SuppressWarnings({ "rawtypes", "unchecked" })
-    public final class Fn implements BridgeFn {
-      public Number forward(final Object o) { return 0; }
-      public Object backward(final Object o) { return 0; }
-      public Integer backward(final CharSequence c) { return 1; }
-      public Integer backward(final Comparable<?> c) { return 2; }
-    }
-    """;
-
-  private static final String FORWARD_ONLY = ", forwardOnly = true";
-
   private static List<Case> cases() {
     return List.of(
       new Case(
@@ -141,7 +114,6 @@ class TransformOverloadResolutionTest {
         ORDERABLE,
         "String",
         "Integer",
-        FORWARD_ONLY,
         true,
         null
       ),
@@ -150,7 +122,6 @@ class TransformOverloadResolutionTest {
         AMBIGUOUS,
         "String",
         "Integer",
-        FORWARD_ONLY,
         false,
         "forward is ambiguous"
       ),
@@ -159,7 +130,6 @@ class TransformOverloadResolutionTest {
         AMBIGUOUS_SWAPPED,
         "String",
         "Integer",
-        FORWARD_ONLY,
         false,
         "forward is ambiguous"
       ),
@@ -168,7 +138,6 @@ class TransformOverloadResolutionTest {
         WIDENING_MISFIT,
         "int",
         "String",
-        FORWARD_ONLY,
         false,
         "does not fit forward"
       ),
@@ -177,7 +146,6 @@ class TransformOverloadResolutionTest {
         WIDENING_FITS,
         "int",
         "String",
-        FORWARD_ONLY,
         true,
         null
       ),
@@ -186,39 +154,16 @@ class TransformOverloadResolutionTest {
         CHAR_WIDENING,
         "char",
         "String",
-        FORWARD_ONLY,
         true,
         null
       ),
-      // The pair that matters most, because the two rows differ only in whether the direction
-      // they
-      // are about is emitted at all.
       new Case(
-        "an ambiguous backward is refused when a backward is emitted",
+        "an ambiguous backward is refused, the forward having resolved cleanly",
         AMBIGUOUS_BACKWARD,
         "Integer",
         "String",
-        "",
         false,
         "backward is ambiguous"
-      ),
-      new Case(
-        "an unusable backward does not take the forward check down with it",
-        RAW_AMBIGUOUS_BACKWARD,
-        "Integer",
-        "String",
-        FORWARD_ONLY,
-        false,
-        "does not fit forward"
-      ),
-      new Case(
-        "and accepted when forwardOnly means there is no backward to be ambiguous",
-        AMBIGUOUS_BACKWARD,
-        "Integer",
-        "String",
-        FORWARD_ONLY,
-        true,
-        null
       )
     );
   }
@@ -245,13 +190,15 @@ class TransformOverloadResolutionTest {
         "demo.Src",
         """
         package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.to;
+        import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "v", using = demo.Fn.class%s)
-        })
-        public record Src(%s v) {}
-        """.formatted(c.extra(), c.srcField())
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        public record Src(%s v) {
+          @Bridge
+          public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class, to(Src::v, Tgt::v, Fn.class));
+        }
+        """.formatted(c.srcField())
       ),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(%s v) {}".formatted(c.tgtField())),
     };
@@ -274,7 +221,7 @@ class TransformOverloadResolutionTest {
     // names the row it is about and none of javac's do, so requiring that is what separates them,
     // and it does not depend on javac's wording the way matching its text would.
     assertTrue(
-      compilation.hasError("@Transform field=\"v\""),
+      compilation.hasError("a converting row of 'v'"),
       () -> "this must be the check's own refusal, not javac's inside a generated file: " + compilation.errorMessages()
     );
     assertTrue(
@@ -285,16 +232,13 @@ class TransformOverloadResolutionTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("cases")
-  @DisplayName("every transform in the matrix is a class somebody could actually write")
+  @DisplayName("every conversion in the matrix is a class somebody could actually write")
   void everyFixtureCompilesOnItsOwn(final Case c) {
-    // A processor error stops compilation before class bodies are attributed, so a fixture that
-    // javac would reject on its own still produces exactly the diagnostic a row asserts — and the
-    // row passes while describing a shape no user could reach. One of these was an overload of the
-    // raw interface's method rather than an implementation of it, and nothing here noticed.
-    // All three sources, not just the transform. A processor error preempts attribution of every
-    // source in the compilation, so a malformed target or source record is masked exactly as the
-    // transform was -- the row would see the diagnostic it asserts and pass while describing a
-    // program that does not exist.
+    // A processor error stops compilation before class bodies are attributed, so a fixture javac
+    // would reject on its own still produces exactly the diagnostic a row asserts, and the row
+    // passes while describing a shape no user could reach. That holds for every source in the
+    // compilation, the conversion class, the source with its row and the target alike, so all
+    // three are compiled here without the processor, the row built on the runtime path.
     final var compilation = ProcessorHarness.compileFully(List.of(), List.of(), sourcesFor(c));
 
     assertTrue(compilation.success(), () -> "the fixture itself does not compile: " + compilation.errorMessages());
@@ -302,13 +246,13 @@ class TransformOverloadResolutionTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("rejectedCases")
-  @DisplayName("every rejection names the field, so the author knows which row to change")
+  @DisplayName("every rejection names the property, so the author knows which row to change")
   void everyRejectionNamesTheField(final Case c) {
     final var compilation = compile(c);
 
     assertFalse(compilation.success(), "this row should have been refused");
     assertTrue(
-      compilation.hasError("field=\"v\""),
+      compilation.hasError("of 'v'"),
       () -> "the diagnostic should name the row: " + compilation.errorMessages()
     );
   }

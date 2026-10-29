@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A generated bridge reads each source property exactly once per conversion, whatever the
- * conversion expression wraps around it. The {@code @Default} case is the one that separates a
+ * conversion expression wraps around it. The {@code toOrElse} case is the one that separates a
  * hoisted read from an inlined one — a coalesce names its subject twice, so an emitter that
  * substitutes the read rather than a local reads twice and fails here. The plain and {@code
  * Optional} cases read once either way; they are here so the count is pinned for every shape the
@@ -49,15 +49,15 @@ class SingleReadPerSourceFieldTest {
   }
 
   @Test
-  @DisplayName("the @Default coalesce decides null-ness and substitutes on one read")
+  @DisplayName("the toOrElse coalesce decides null-ness and substitutes on one read")
   void defaultCoalesceSharesTheSingleRead() {
     CountingRec.REGION_READS.set(0);
-    final var defaulted = CountingRecBridge.forward(new CountingRec(null));
+    final var defaulted = CountingRecToCountingRecTargetBridge.forward(new CountingRec(null));
     assertEquals("EMEA", defaulted.region(), "null region takes the declared default");
     assertEquals(1, CountingRec.REGION_READS.get(), "deciding null-ness and defaulting share one read");
 
     CountingRec.REGION_READS.set(0);
-    final var kept = CountingRecBridge.forward(new CountingRec("APAC"));
+    final var kept = CountingRecToCountingRecTargetBridge.forward(new CountingRec("APAC"));
     assertEquals("APAC", kept.region());
     assertEquals(1, CountingRec.REGION_READS.get());
   }

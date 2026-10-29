@@ -26,7 +26,49 @@ class TransformDirectionFitTest {
     return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
   }
 
-  /** A transform whose two type arguments differ, so the two directions are not interchangeable. */
+  /**
+   * {@code demo.Src}, declared by {@code declaration} with {@code body}, whose {@code @Bridge}
+   * field converts into {@code demo.Tgt} by {@code row}: both ways through {@code
+   * Telescope.mapper}, or forward only through {@code Telescope.mapperForward}.
+   */
+  private static JavaFileObject src(
+    final String declaration,
+    final String body,
+    final String row,
+    final boolean forwardOnly
+  ) {
+    return ProcessorHarness.source(
+      "demo.Src",
+      """
+      package demo;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.annotations.Bridge;
+      import io.github.eschizoid.telescope.conversion.ForwardMapper;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import java.util.List;
+      %s {
+        @Bridge
+        public static final %s<Src, Tgt> MAPPER = Telescope.%s(Src.class, Tgt.class, %s);
+      %s}
+      """.formatted(
+          declaration,
+          forwardOnly ? "ForwardMapper" : "Mapper",
+          forwardOnly ? "mapperForward" : "mapper",
+          row,
+          body
+        )
+    );
+  }
+
+  /** As {@link #src}, for a record of {@code components} converting both ways. */
+  private static JavaFileObject src(final String components, final String row) {
+    return src("public record Src(" + components + ")", "", row, false);
+  }
+
+  /**
+   * A conversion whose two type arguments differ, so the two directions are not interchangeable.
+   */
   private static JavaFileObject wideningFn() {
     return ProcessorHarness.source(
       "demo.WideFn",
@@ -34,6 +76,7 @@ class TransformDirectionFitTest {
       package demo;
       import io.github.eschizoid.telescope.conversion.BridgeFn;
       public final class WideFn implements BridgeFn<Object, String> {
+        public static final WideFn INSTANCE = new WideFn();
         @Override public String forward(final Object o) { return String.valueOf(o); }
         @Override public Number backward(final String s) { return s.length(); }
       }
@@ -41,32 +84,22 @@ class TransformDirectionFitTest {
     );
   }
 
-  private static JavaFileObject[] pair(final String extraTransformArgs) {
+  /** {@code row} converting {@code label} of a pair of records through {@code WideFn}. */
+  private static JavaFileObject[] pair(final String row, final boolean forwardOnly) {
     return new JavaFileObject[] {
       wideningFn(),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "label", using = demo.WideFn.class%s)
-        })
-        public record Src(String label) {}
-        """.formatted(extraTransformArgs)
-      ),
+      src("public record Src(String label)", "", row, forwardOnly),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String label) {}"),
     };
   }
 
   @Test
-  @DisplayName("a transform that fits forward but not backward is reported, not emitted")
+  @DisplayName("a conversion that fits forward but not backward is reported, not emitted")
   void backwardMismatchIsReported() {
     // String reaches Object, and String reaches String, so forward fits. Backward has to store the
     // Number that backward() returns into a String field, which it cannot, and that only shows up
     // once the generated file is attributed.
-    final var compilation = compile(pair(""));
+    final var compilation = compile(pair("to(Src::label, Tgt::label, WideFn.class)", false));
 
     assertFalse(compilation.success(), "a row whose backward cannot compile must be refused");
     assertTrue(
@@ -74,7 +107,7 @@ class TransformDirectionFitTest {
       () -> "the diagnostic should name the failing direction: " + compilation.errorMessages()
     );
     assertTrue(
-      compilation.hasError("forwardOnly"),
+      compilation.hasError("toOneWay(...) in a Telescope.mapperForward(...) mapper"),
       () -> "and the remedy, since the row may have been meant one-way: " + compilation.errorMessages()
     );
     assertFalse(
@@ -84,11 +117,11 @@ class TransformDirectionFitTest {
   }
 
   @Test
-  @DisplayName("the same transform declared forward-only is accepted, since no backward is emitted")
+  @DisplayName("the same conversion forward only, as the refusal advises, is accepted, since no backward is emitted")
   void forwardOnlyIsAccepted() {
     // The control, and the reason the check cannot simply demand both directions always fit: a
     // row that emits no backward has no backward to typecheck.
-    final var compilation = compile(pair(", forwardOnly = true"));
+    final var compilation = compile(pair("toOneWay(Src::label, Tgt::label, WideFn.INSTANCE::forward)", true));
 
     assertTrue(compilation.success(), () -> "forward-only rows emit no backward: " + compilation.errorMessages());
   }
@@ -111,18 +144,7 @@ class TransformDirectionFitTest {
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "v", using = demo.CovBackFn.class)
-        })
-        public record Src(Integer v) {}
-        """
-      ),
+      src("Integer v", "to(Src::v, Tgt::v, CovBackFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -146,60 +168,11 @@ class TransformDirectionFitTest {
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.CovFwdFn.class) })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, CovFwdFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
     assertTrue(compilation.success(), () -> "the class narrows both returns: " + compilation.errorMessages());
-  }
-
-  @Test
-  @DisplayName("a non-generic transform keeps its type arguments, so a mismatched one is still caught")
-  void nonGenericTransformIsNotErased() {
-    // The emitter instantiates a using class raw only when it is generic. Erasing a non-generic
-    // one's signature throws away the parameterisation the call site keeps, which lets a pair
-    // through that then fails inside the generated file -- worse than not checking at all, since
-    // the diagnostic that would have named it is the thing being skipped.
-    final var compilation = compile(
-      ProcessorHarness.source(
-        "demo.ListInv",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.conversion.BridgeFn;
-        import java.util.List;
-        public final class ListInv implements BridgeFn<List<String>, List<Integer>> {
-          @Override public List<Integer> forward(final List<String> in) { return List.of(); }
-          @Override public List<String> backward(final List<Integer> in) { return List.of(); }
-        }
-        """
-      ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.ListInv.class) })
-        public record Src(java.util.List<Long> v) {}
-        """
-      ),
-      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(java.util.List<Double> v) {}")
-    );
-
-    assertFalse(compilation.success(), "List<Long> does not fit List<String>");
-    assertFalse(
-      compilation.errorMessages().contains("cannot be converted to"),
-      () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
-    );
   }
 
   @Test
@@ -221,59 +194,11 @@ class TransformDirectionFitTest {
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.PrivFn.class) })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, PrivFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
     assertFalse(compilation.success(), "the callable overload returns a Number, which does not fit");
-    assertFalse(
-      compilation.errorMessages().contains("cannot be converted to"),
-      () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
-  @DisplayName("a mismatch on the return side alone is caught, not only one on the parameter")
-  void returnSideMismatchIsCaught() {
-    // The sibling of the erasure case above. That one mismatches on the parameter, so a check that
-    // erased only the return would still pass it — this one can fail only if the return is
-    // compared with its type arguments intact.
-    final var compilation = compile(
-      ProcessorHarness.source(
-        "demo.RetFn",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.conversion.BridgeFn;
-        import java.util.List;
-        public final class RetFn implements BridgeFn<String, List<Integer>> {
-          @Override public List<Integer> forward(final String s) { return List.of(); }
-          @Override public String backward(final List<Integer> in) { return ""; }
-        }
-        """
-      ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RetFn.class) })
-        public record Src(String v) {}
-        """
-      ),
-      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(java.util.List<String> v) {}")
-    );
-
-    assertFalse(compilation.success(), "List<Integer> does not fit a List<String> slot");
     assertFalse(
       compilation.errorMessages().contains("cannot be converted to"),
       () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
@@ -298,16 +223,7 @@ class TransformDirectionFitTest {
         """
       ),
       ProcessorHarness.source("demo.GenSub", "package demo; public final class GenSub extends GenBase<Integer> {}"),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.GenSub.class) })
-        public record Src(Integer v) {}
-        """
-      ),
+      src("Integer v", "to(Src::v, Tgt::v, GenSub.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -344,120 +260,37 @@ class TransformDirectionFitTest {
         public final class TwoFn implements BridgeFn<CharSequence, String> {
           %s
           %s
-          @Override public CharSequence backward(final String s) { return s; }
+          @Override public String backward(final String s) { return s; }
         }
         """.formatted(forwardDecl(firstParam), forwardDecl(second))
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "v", using = demo.TwoFn.class, forwardOnly = true)
-        })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, TwoFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
     assertTrue(compilation.success(), () -> "order must not decide the verdict: " + compilation.errorMessages());
   }
 
-  private static JavaFileObject rawFn(final String forwardReturn) {
-    return ProcessorHarness.source(
-      "demo.RawFn",
-      """
-      package demo;
-      import io.github.eschizoid.telescope.conversion.BridgeFn;
-      @SuppressWarnings("rawtypes")
-      public final class RawFn implements BridgeFn {
-        @Override public %s forward(final Object o) { return null; }
-        @Override public String backward(final Object o) { return String.valueOf(o); }
-      }
-      """.formatted(forwardReturn)
-    );
-  }
-
-  private static JavaFileObject[] rawPair(final String forwardReturn) {
-    return new JavaFileObject[] {
-      rawFn(forwardReturn),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
-        public record Src(String v) {}
-        """
-      ),
-      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}"),
-    };
-  }
-
-  @Test
-  @DisplayName("a raw implementation is checked through the methods it declares, having no arguments to" + " read")
-  void rawImplementationIsStillChecked() {
-    // The one shape with no type arguments to fall back on was also the one shape not checked at
-    // all, so a mismatch reached the generated file. The class still declares the two methods the
-    // call sites bind to, and those are what the check compares.
-    final var compilation = compile(rawPair("Number"));
-
-    assertFalse(compilation.success(), "a Number does not fit a String slot");
-    assertTrue(
-      compilation.hasError("does not fit forward"),
-      () -> "the diagnostic should name the direction: " + compilation.errorMessages()
-    );
-    assertFalse(
-      compilation.errorMessages().contains("cannot be converted to"),
-      () -> "and replace the raw error, not accompany it: " + compilation.errorMessages()
-    );
-  }
-
-  @Test
-  @DisplayName("a raw implementation whose methods do fit is accepted, not refused for being raw")
-  void rawImplementationThatFitsIsAccepted() {
-    // The control. Rawness is not the defect — an unchecked conversion is. A class declaring
-    // String forward(Object) genuinely produces what a String slot takes, and a check that
-    // refused every raw implementation would pass the test above while breaking this.
-    final var compilation = compile(rawPair("String"));
-
-    assertTrue(compilation.success(), () -> "its declared methods fit: " + compilation.errorMessages());
-  }
-
   @Test
   @DisplayName("an overload the bridge cannot reach across packages is not selected either")
   void unreachableAcrossPackagesIsNotSelected() {
     // The bridge is emitted beside the source and subclasses nothing, so a package-private member
-    // of a transform in another package is as unbindable as a private one. Choosing it would
+    // of a conversion in another package is as unbindable as a private one. Choosing it would
     // refuse a pair javac resolves to the public overload, which fits.
     final var compilation = compile(
       ProcessorHarness.source(
-        "other.RawFn",
+        "other.PkgFn",
         """
         package other;
         import io.github.eschizoid.telescope.conversion.BridgeFn;
-        @SuppressWarnings("rawtypes")
-        public final class RawFn implements BridgeFn {
+        public final class PkgFn implements BridgeFn<Object, String> {
           @Override public String forward(final Object o) { return String.valueOf(o); }
           Integer forward(final String s) { return 1; }
-          @Override public String backward(final Object o) { return String.valueOf(o); }
+          @Override public String backward(final String s) { return s; }
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = other.RawFn.class) })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, other.PkgFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -472,28 +305,18 @@ class TransformDirectionFitTest {
     // while missing a member javac really does bind.
     final var compilation = compile(
       ProcessorHarness.source(
-        "demo.RawFn",
+        "demo.PkgFn",
         """
         package demo;
         import io.github.eschizoid.telescope.conversion.BridgeFn;
-        @SuppressWarnings("rawtypes")
-        public final class RawFn implements BridgeFn {
+        public final class PkgFn implements BridgeFn<Object, String> {
           @Override public String forward(final Object o) { return String.valueOf(o); }
           Integer forward(final String s) { return 1; }
-          @Override public String backward(final Object o) { return String.valueOf(o); }
+          @Override public String backward(final String s) { return s; }
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, PkgFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -520,16 +343,7 @@ class TransformDirectionFitTest {
         }
         """
       ),
-      ProcessorHarness.source(
-        "demo.Src",
-        """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.OverloadedFn.class) })
-        public record Src(String v) {}
-        """
-      ),
+      src("String v", "to(Src::v, Tgt::v, OverloadedFn.class)"),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
     );
 
@@ -545,25 +359,27 @@ class TransformDirectionFitTest {
   }
 
   @Test
-  @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
+  @DisplayName("a conversion that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {
-    // A pair where forward fails too. The message should lead with forward rather than report the
-    // second failure, since fixing forward is what the author has to do first.
+    // A pair where forward fails too: an Integer binds the overload returning an Integer, which
+    // the String slot refuses, and backward returns a Number, which the Integer slot refuses. The
+    // message should lead with forward rather than report the second failure, since fixing
+    // forward is what the author has to do first.
     final var compilation = compile(
-      wideningFn(),
       ProcessorHarness.source(
-        "demo.Src",
+        "demo.BothFn",
         """
         package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "label", using = demo.WideFn.class)
-        })
-        public record Src(Integer label) {}
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class BothFn implements BridgeFn<Object, String> {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          public Integer forward(final Integer i) { return i; }
+          @Override public Number backward(final String s) { return s.length(); }
+        }
         """
       ),
-      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(Integer label) {}")
+      src("Integer label", "to(Src::label, Tgt::label, BothFn.class)"),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String label) {}")
     );
 
     assertFalse(compilation.success(), "neither direction fits");
@@ -575,8 +391,8 @@ class TransformDirectionFitTest {
 
   /**
    * A bean pair whose {@code value} is a list of {@code Integer} on the source and of {@code
-   * Number} on the target, transformed forward by {@code demo.ListFn}, which takes any collection
-   * of numbers and returns {@code body}, typed {@code result}.
+   * Number} on the target, converted forward by {@code demo.ListFn}, which takes any collection of
+   * numbers and returns {@code body}, typed {@code result}.
    */
   private static JavaFileObject[] listPair(final String result, final String body) {
     return new JavaFileObject[] {
@@ -587,27 +403,21 @@ class TransformDirectionFitTest {
         import io.github.eschizoid.telescope.conversion.BridgeFn;
         import java.util.Collection;
         public final class ListFn implements BridgeFn<Collection<? extends Number>, %1$s> {
+          public static final ListFn INSTANCE = new ListFn();
           @Override public %1$s forward(final Collection<? extends Number> a) { return %2$s; }
           @Override public Collection<? extends Number> backward(final %1$s b) { return b; }
         }
         """.formatted(result, body)
       ),
-      ProcessorHarness.source(
-        "demo.Src",
+      src(
+        "public class Src",
         """
-        package demo;
-        import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.Transform;
-        import java.util.List;
-        @Bridge(value = demo.Tgt.class, transforms = {
-          @Transform(field = "value", using = demo.ListFn.class, forwardOnly = true)
-        })
-        public class Src {
           private List<Integer> value;
           public List<Integer> getValue() { return value; }
           public void setValue(final List<Integer> value) { this.value = value; }
-        }
-        """
+        """,
+        "toOneWay(Src::getValue, Tgt::getValue, ListFn.INSTANCE::forward)",
+        true
       ),
       ProcessorHarness.source(
         "demo.Tgt",
@@ -625,7 +435,7 @@ class TransformDirectionFitTest {
   }
 
   @Test
-  @DisplayName("a transform result whose type arguments are not the member's own is refused by name")
+  @DisplayName("a conversion result whose type arguments are not the member's own is refused by name")
   void aResultWhoseArgumentsAreNotTheMembersIsRefused() {
     // A result is written as it is, and nothing shows that only the target holds it: this one is
     // the source's own list, which a write of a Double through the target's List<Number> would
@@ -635,16 +445,16 @@ class TransformDirectionFitTest {
     assertFalse(compilation.success(), "a result held as a Collection<? extends Number> is no List<Number>");
     assertTrue(
       compilation.hasError(
-        "does not fit forward: demo.ListFn's forward resolves to (java.util.Collection<? extends java.lang.Number>)" +
-          " -> java.util.Collection<? extends java.lang.Number>, which does not carry" +
-          " java.util.List<java.lang.Integer> -> java.util.List<java.lang.Number>"
+        "a converting row of 'value' does not fit forward: demo.SrcToTgtBridgeValueFn's forward resolves to" +
+          " (java.util.List<java.lang.Integer>) -> java.util.Collection<? extends java.lang.Number>, which does not" +
+          " carry java.util.List<java.lang.Integer> -> java.util.List<java.lang.Number>"
       ),
       () -> "the diagnostic should name the result and the member: " + compilation.errorMessages()
     );
   }
 
   @Test
-  @DisplayName("a transform result of a wider class with the member's own type arguments is written after a check")
+  @DisplayName("a conversion result of a wider class with the member's own type arguments is written after a check")
   void aWiderResultWithTheMembersArgumentsIsWritten() {
     final var compilation = compile(listPair("java.util.Collection<Number>", "new java.util.ArrayList<Number>(a)"));
 

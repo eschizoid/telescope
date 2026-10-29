@@ -1,11 +1,20 @@
 package io.github.eschizoid.telescope.ownbridge;
 
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+
 import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Transform;
+import io.github.eschizoid.telescope.conversion.Mapper;
 
 /** The other side, whose own bridge upper-cases its label. */
-@Bridge(value = ObCbDto.class, transforms = @Transform(field = "label", using = ObUpperFn.class))
 public class ObCb {
+
+  @Bridge
+  public static final Mapper<ObCb, ObCbDto> DTO = mapper(
+    ObCb.class,
+    ObCbDto.class,
+    to(ObCb::getLabel, ObCbDto::getLabel, ObUpperFn.class)
+  );
 
   private String label;
   private ObCa a;
