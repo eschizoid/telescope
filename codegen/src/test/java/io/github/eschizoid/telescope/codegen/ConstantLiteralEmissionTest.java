@@ -38,6 +38,7 @@ class ConstantLiteralEmissionTest {
       Arguments.of("Short", "(short) 7", "((short)7)"),
       Arguments.of("byte", "(byte) 7", "((byte)7)"),
       Arguments.of("Byte", "(byte) -7", "((byte)-7)"),
+      Arguments.of("short", "(short) -0x7", "((short)-7)"),
       Arguments.of("double", "1.5", "1.5"),
       Arguments.of("Double", "1.5", "1.5"),
       Arguments.of("float", "1.5f", "1.5F"),

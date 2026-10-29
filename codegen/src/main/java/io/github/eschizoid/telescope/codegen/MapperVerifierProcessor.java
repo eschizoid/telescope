@@ -159,7 +159,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   /**
    * What each {@code @Bridge} field declared in its source's package says of its pair, by pair,
-   * read from its rows during the processing rounds; a pair two declarations name is held as null.
+   * read from its rows during the processing rounds. The bridge processor refuses a pair declared
+   * twice, and a compilation with an error never reaches the analysis that reads these, so each
+   * pair here has the one declaration.
    */
   private final Map<String, OwnBridgeRule.Bridge> fieldSettings = new HashMap<>();
 
@@ -273,7 +275,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     // read the rows of each @Bridge field, while its trees are whole. One NOTE when the tree API
     // isn't available (non-javac compiler) — verification is additive, the construction-time
     // validation still applies.
-    if (!off && trees != null) readFieldSettings(roundEnv.processingOver());
+    if (!off && trees != null) readFieldSettings();
     if (!off && trees == null && !notedUnavailable) {
       notedUnavailable = true;
       processingEnv
@@ -327,11 +329,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
       }
     }
-    for (final var field : fieldSettings.entrySet()) {
-      if (field.getValue() == null || settings.putIfAbsent(field.getKey(), field.getValue()) != null) {
-        twice.add(field.getKey());
-      }
-    }
+    fieldSettings.forEach(settings::putIfAbsent);
     for (final var key : twice) settings.remove(key);
     bridgeSettings = settings;
     return settings;
@@ -462,7 +460,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * field whose rows the reader refuses, such as one naming a class a later round writes or a
    * getter Lombok has yet to add, is read again in the next round.
    */
-  private void readFieldSettings(final boolean last) {
+  private void readFieldSettings() {
     final var rows = new FieldRows(processingEnv, trees);
     for (final var bridge : fieldBridges) {
       final var key = bridge.owner() + "#" + bridge.field();
@@ -476,10 +474,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         .orElse(null);
       if (field == null) continue;
       final var read = rows.read(field);
-      if (read instanceof FieldRows.Refused) {
-        if (last) fieldsRead.add(key);
-        continue;
-      }
+      if (read instanceof FieldRows.Refused) continue;
       fieldsRead.add(key);
       final var parsed = (FieldRows.Parsed) read;
       if (!elements.getPackageOf(parsed.source()).equals(elements.getPackageOf(owner))) continue;
@@ -504,8 +499,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         unwalked.target(),
         bridges.takesActivePath(parsed.source(), parsed.target())
       );
-      if (fieldSettings.containsKey(pair)) fieldSettings.put(pair, null);
-      else fieldSettings.put(pair, setting);
+      fieldSettings.put(pair, setting);
       bridgeSettings = null;
     }
   }

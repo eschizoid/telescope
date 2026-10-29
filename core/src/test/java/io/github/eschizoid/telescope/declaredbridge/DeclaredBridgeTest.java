@@ -123,6 +123,17 @@ class DeclaredBridgeTest {
   }
 
   @Test
+  @DisplayName("a write hint among the rows is compared by its kind, and the declaring class's mapper runs the bridge")
+  void aWriteHintRowKeepsTheGeneratedBridge() {
+    final var mapper = HintedMappers.HINTED;
+    assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+    final var bean = mapper.forward(new Hinted("n"));
+    assertEquals("n", bean.getLabel());
+    assertEquals("setters", bean.how(), "the hint's strategy builds the bean, not the builder AUTO prefers");
+    assertEquals(new Hinted("n"), mapper.backward(bean));
+  }
+
+  @Test
   @DisplayName("a forward-only mapper the declaring class builds runs the generated bridge")
   void aForwardMapperRunsTheBridge() {
     final var before = DeclaredFixtures.GENERATED_CALLS.get();

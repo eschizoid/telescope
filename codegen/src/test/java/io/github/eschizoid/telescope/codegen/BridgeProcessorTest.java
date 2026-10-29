@@ -3083,6 +3083,52 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("a converting row through a raw generic BridgeFn whose erased methods carry the properties compiles")
+    void transformWithRawGenericBridgeFnThatFitsCompiles() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.IdFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class IdFn<T extends Number> implements BridgeFn<T, T> {
+            @SuppressWarnings("rawtypes") public static final IdFn RAW = new IdFn();
+            public IdFn() {}
+            public static String forward(final String s) { return s; }
+            @Override public T forward(T t) { return t; }
+            @Override public T backward(T t) { return t; }
+          }
+          """
+        ),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.conversion.*;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          public record Src(Number amount) {
+            @Bridge
+            @SuppressWarnings("unchecked")
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(
+              Src.class,
+              Tgt.class,
+              to(Src::amount, Tgt::amount, IdFn.RAW)
+            );
+          }
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(Number amount) {}")
+      );
+
+      assertTrue(compilation.success(), compilation::errorMessages);
+      final var fn = compilation.generated().get("demo.SrcToTgtBridgeAmountFn");
+      assertNotNull(fn, () -> "no class converts through the field: " + compilation.generated().keySet());
+      assertTrue(fn.contains("demo.IdFn.RAW.forward(v)"), fn);
+    }
+
+    @Test
     @DisplayName("a converting row accepts a BridgeFn reached through an intermediate abstract class")
     void transformAcceptsBridgeFnThroughIntermediateSupertype() {
       // The validator walks the supertype closure rather than the direct interfaces, so an

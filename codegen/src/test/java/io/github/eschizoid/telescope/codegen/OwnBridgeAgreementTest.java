@@ -402,6 +402,10 @@ class OwnBridgeAgreementTest {
     // apart from the call leaves nothing the verifier can read about which properties
     // it converts.
     "a row reachable only through a property a nested pair's own bridge, compiled apart, converts",
+    "never visits",
+    // Construction reaches a bridge whose field another package declares through the
+    // provider that field registers, which the verifier does not read.
+    "a row reachable only through a property a nested pair's own bridge, declared in another package, converts",
     "never visits"
   );
 
@@ -461,6 +465,55 @@ class OwnBridgeAgreementTest {
     ) {
       final var thrown = assertThrows(InvocationTargetException.class, () ->
         loader.loadClass("obc.Calls").getMethod("build").invoke(null)
+      );
+      assertTrue(thrown.getCause().getMessage().contains(refusal), thrown.getCause()::getMessage);
+    }
+  }
+
+  @Test
+  @DisplayName("the verifier says nothing where the nested pair's own bridge is declared by a field in another package")
+  void bridgeDeclaredInAnotherPackage() throws Exception {
+    final var refusal = VERIFIER_LIMITS.get(
+      "a row reachable only through a property a nested pair's own bridge, declared in another package, converts"
+    );
+    final var compilation = compileFully(
+      List.of(new BridgeProcessor(), new MapperVerifierProcessor()),
+      List.of("-Atelescope.verify=warn"),
+      source("obx.Part", "package obx;\npublic record Part(String v) {}\n"),
+      source("obx.PartDto", "package obx;\npublic record PartDto(String v) {}\n"),
+      source("obx.Inner", "package obx;\npublic record Inner(String name, Part part) {}\n"),
+      source("obx.InnerDto", "package obx;\npublic record InnerDto(String name, PartDto part) {}\n"),
+      source("obx.Outer", "package obx;\npublic record Outer(Inner in) {}\n"),
+      source("obx.OuterDto", "package obx;\npublic record OuterDto(InnerDto in) {}\n"),
+      source(
+        "obx.carrier.InnerMappers",
+        "package obx.carrier;\n" +
+          "import obx.Inner;\n" +
+          "import obx.InnerDto;\n" +
+          "public final class InnerMappers {\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.ForwardMapper<Inner, InnerDto> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.mapperForward(Inner.class, InnerDto.class," +
+          " io.github.eschizoid.telescope.mapping.Mapping.drop(Inner::part));\n" +
+          "}\n"
+      ),
+      source(
+        "obx.Calls",
+        "package obx;\n" +
+          "import static io.github.eschizoid.telescope.mapping.Mapping.to;\n" +
+          "import io.github.eschizoid.telescope.Telescope;\n" +
+          "public final class Calls {\n" +
+          "  public static Object build() {\n" +
+          "    return Telescope.mapperForward(Outer.class, OuterDto.class, to(Part::v, PartDto::v));\n" +
+          "  }\n" +
+          "}\n"
+      )
+    );
+    assertEquals(List.of(), warnings(compilation));
+    final var jar = jar("x", compilation);
+    try (final var loader = new URLClassLoader(new URL[] { jar.toUri().toURL() }, getClass().getClassLoader())) {
+      final var thrown = assertThrows(InvocationTargetException.class, () ->
+        loader.loadClass("obx.Calls").getMethod("build").invoke(null)
       );
       assertTrue(thrown.getCause().getMessage().contains(refusal), thrown.getCause()::getMessage);
     }

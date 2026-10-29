@@ -56,6 +56,7 @@ class BridgeFieldTest {
     "  public static String region() { called(); return \"eu\"; }\n" +
     "  public static final Conv INSTANCE = new Conv();\n" +
     "  public String shout(final String s) { called(); return s == null ? null : s.toUpperCase(); }\n" +
+    "  public final java.util.function.Supplier<String> held = () -> \"held\";\n" +
     "}\n";
 
   private static final List<JavaFileObject> MODEL = List.of(
@@ -338,6 +339,15 @@ class BridgeFieldTest {
         "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.valueOf(\"SETTERS\"))",
         "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place",
       },
+      new String[] { "compute(UserDto::kind, Conv.INSTANCE.held)", "held is not static and final" },
+      new String[] {
+        "compute(UserDto::kind, HIDDEN)",
+        "Mappers.HIDDEN cannot be called from the generated bridge in package 'fb'",
+      },
+      new String[] {
+        "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(Rows.STRATEGY)",
+        "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place",
+      },
       new String[] {
         "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(UserDto.class.asSubclass(UserDto.class)," +
         " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)",
@@ -360,6 +370,7 @@ class BridgeFieldTest {
           " Telescope.mapper(Address.class, AddressDto.class);\n" +
           "  static java.util.function.Supplier<String> MUTABLE = () -> \"m\";\n" +
           "  @SuppressWarnings(\"rawtypes\") static final java.util.function.Supplier RAW = () -> 1;\n" +
+          "  static final WriteHint.WriteStrategy STRATEGY = WriteHint.WriteStrategy.SETTERS;\n" +
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",
@@ -374,7 +385,8 @@ class BridgeFieldTest {
           "  @Bridge static final ForwardMapper<User, UserDto> USER =" +
           " Telescope.mapperForward(User.class, UserDto.class, " +
           rows.replace("User::isAdmin", "Admin::is") +
-          ");\n  private static String lower(final String s) { return s; }\n}\n"
+          ");\n  private static String lower(final String s) { return s; }\n" +
+          "  private static final java.util.function.Supplier<String> HIDDEN = () -> \"h\";\n}\n"
       )
     );
     assertFalse(c.success(), "the row must be refused");
@@ -640,6 +652,164 @@ class BridgeFieldTest {
     }
     assertEquals("WideView[value=a!, other=null]", outcomes.get(0));
     assertEquals(outcomes.subList(0, 2), outcomes.subList(2, 4));
+  }
+
+  @Test
+  @DisplayName("a converter whose result is a type variable is typed by the class Java infers for it, on both paths")
+  void anInferredConverterResultIsCheckedOnBothPaths() throws Exception {
+    final var bag =
+      HEADER +
+      "public record Bag(java.util.List<CharSequence> items) {\n" +
+      "  @Bridge static final ForwardMapper<Bag, BagView> TO_VIEW = Telescope.mapperForward(Bag.class," +
+      " BagView.class,\n" +
+      "      toOneWay(Bag::items, BagView::items, Pick.INSTANCE::first));\n" +
+      "}\n";
+    final var view = "package fb; public record BagView(String items) {}";
+    final var pick =
+      "package fb;\n" +
+      "public final class Pick {\n" +
+      "  public static final Pick INSTANCE = new Pick();\n" +
+      "  public <T> T first(final java.util.List<T> items) { return items == null ? null : items.get(0); }\n" +
+      "}\n";
+    final var generated = compile(sources("fb.Bag", bag, "fb.BagView", view, "fb.Pick", pick));
+    assertTrue(generated.success(), generated::errorMessages);
+    final var fn = generated.generated().get("fb.BagToBagViewBridgeItemsFn");
+    assertTrue(fn.contains("BridgeFn<java.util.List<java.lang.CharSequence>, java.lang.CharSequence>"), fn);
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Bag", bag, "fb.BagView", view, "fb.Pick", pick)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final var outcomes = new ArrayList<String>();
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Bag", "TO_VIEW");
+        final var bagClass = loader.loadClass("fb.Bag");
+        outcomes.add(mapper.forward(bagClass.getConstructors()[0].newInstance(List.of("a", "b"))).toString());
+        final var thrown = assertThrows(RuntimeException.class, () ->
+          mapper.forward(bagClass.getConstructors()[0].newInstance(List.of(new StringBuilder("c"))))
+        );
+        outcomes.add(thrown.getClass().getSimpleName());
+      }
+    }
+    assertEquals("BagView[items=a]", outcomes.get(0));
+    assertEquals(outcomes.subList(0, 2), outcomes.subList(2, 4));
+  }
+
+  @Test
+  @DisplayName("a converting row on a property typed with an unbounded or a super wildcard runs alike on both paths")
+  void aConverterOverOtherWildcardsRunsOnBothPaths() throws Exception {
+    final var bins =
+      HEADER +
+      "public record Bins(java.util.List<?> any, java.util.List<? super Integer> sink) {\n" +
+      "  @Bridge static final ForwardMapper<Bins, BinsView> TO_VIEW = Telescope.mapperForward(Bins.class," +
+      " BinsView.class,\n" +
+      "      toOneWay(Bins::any, BinsView::any, Copy.INSTANCE::any)," +
+      " toOneWay(Bins::sink, BinsView::sink, Copy.INSTANCE::sink));\n" +
+      "}\n";
+    final var view =
+      "package fb; public record BinsView(java.util.List<?> any, java.util.List<? super Integer> sink) {}";
+    final var copy =
+      "package fb;\n" +
+      "public final class Copy {\n" +
+      "  public static final Copy INSTANCE = new Copy();\n" +
+      "  public java.util.List<?> any(final java.util.List<?> l) { return l == null ? null : l.reversed(); }\n" +
+      "  public java.util.List<? super Integer> sink(final java.util.List<? super Integer> l) {\n" +
+      "    return l == null ? null : java.util.List.copyOf(l);\n" +
+      "  }\n" +
+      "}\n";
+    final var generated = compile(sources("fb.Bins", bins, "fb.BinsView", view, "fb.Copy", copy));
+    assertTrue(generated.success(), generated::errorMessages);
+    final var any = generated.generated().get("fb.BinsToBinsViewBridgeAnyFn");
+    assertTrue(any.contains("BridgeFn<java.util.List<?>, java.util.List<?>>"), any);
+    final var sink = generated.generated().get("fb.BinsToBinsViewBridgeSinkFn");
+    assertTrue(
+      sink.contains("BridgeFn<java.util.List<? super java.lang.Integer>, java.util.List<? super java.lang.Integer>>"),
+      sink
+    );
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Bins", bins, "fb.BinsView", view, "fb.Copy", copy)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final var outcomes = new ArrayList<String>();
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Bins", "TO_VIEW");
+        final var source = loader
+          .loadClass("fb.Bins")
+          .getConstructors()[0].newInstance(List.of("a", "b"), List.<Object>of(1, "n"));
+        outcomes.add(mapper.forward(source).toString());
+      }
+    }
+    assertEquals("BinsView[any=[b, a], sink=[1, n]]", outcomes.get(0));
+    assertEquals(outcomes.get(0), outcomes.get(1));
+  }
+
+  static List<String[]> typeVariableFills() {
+    return List.of(
+      new String[] {
+        "Mapping.<Plain, Stamped<String>, String>constant(Stamped<String>::at, \"now\")",
+        "AtConstant",
+        "java.lang.String",
+        "Stamped[id=p, at=now]",
+      },
+      new String[] {
+        "Mapping.<Plain, Stamped<String>, String>compute(Stamped<String>::at, Clock::now)",
+        "AtCompute",
+        "java.lang.String",
+        "Stamped[id=p, at=now]",
+      },
+      new String[] {
+        "Mapping.<Plain, Stamped<StringBuilder>, StringBuilder>compute(Stamped<StringBuilder>::at, StringBuilder::new)",
+        "AtCompute",
+        "java.lang.StringBuilder",
+        "Stamped[id=p, at=]",
+      }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("typeVariableFills")
+  @DisplayName("a row filling a property typed by its class's variable supplies the value's own class, on both paths")
+  void aFillIntoATypeVariableSuppliesTheValuesClass(
+    final String row,
+    final String suffix,
+    final String supplied,
+    final String expected
+  ) throws Exception {
+    final var plain =
+      HEADER +
+      "public record Plain(String id) {\n" +
+      "  @Bridge @SuppressWarnings({ \"rawtypes\", \"unchecked\" })\n" +
+      "  static final ForwardMapper<Plain, Stamped> FILL = Telescope.mapperForward(Plain.class, Stamped.class, " +
+      row +
+      ");\n" +
+      "}\n";
+    final var stamped = "package fb; public record Stamped<T>(String id, T at) {}";
+    final var clock = "package fb; public final class Clock { public static String now() { return \"now\"; } }";
+    final var generated = compile(sources("fb.Plain", plain, "fb.Stamped", stamped, "fb.Clock", clock));
+    assertTrue(generated.success(), generated::errorMessages);
+    final var fill = generated.generated().get("fb.PlainToStampedBridge" + suffix);
+    assertTrue(fill.contains("implements java.util.function.Supplier<" + supplied + ">"), fill);
+    final var runtime = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      sources("fb.Plain", plain, "fb.Stamped", stamped, "fb.Clock", clock)
+    );
+    assertTrue(runtime.success(), runtime::errorMessages);
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        @SuppressWarnings("unchecked")
+        final var mapper = (ForwardMapper<Object, Object>) packageField(loader, "fb.Plain", "FILL");
+        final var source = loader.loadClass("fb.Plain").getConstructors()[0].newInstance("p");
+        assertEquals(expected, mapper.forward(source).toString());
+      }
+    }
   }
 
   @Test

@@ -83,7 +83,19 @@ class WriteHintRowTest {
     "wh.Outer",
     "package wh; public record Outer(Acct inner) {}",
     "wh.OuterDto",
-    "package wh; public record OuterDto(Ledger inner) {}"
+    "package wh; public record OuterDto(Ledger inner) {}",
+    "wh.Many",
+    "package wh; public record Many(java.util.List<Acct> inner) {}",
+    "wh.ManyDto",
+    "package wh; public record ManyDto(java.util.List<Ledger> inner) {}",
+    "wh.Half",
+    "package wh; public record Half(Src inner) {}",
+    "wh.HalfDto",
+    "package wh; public record HalfDto(Acct inner) {}",
+    "wh.Wrap",
+    "package wh; public record Wrap(Src inner) {}",
+    "wh.WrapDto",
+    "package wh; public record WrapDto(Dto inner) {}"
   );
 
   private static JavaFileObject[] sources(final List<String> pairs) {
@@ -275,19 +287,59 @@ class WriteHintRowTest {
     );
   }
 
-  @Test
-  @DisplayName("a writeBeans default on a pair whose bridge builds a nested bean pair is refused by name")
-  void aDefaultReachingANestedBeanIsRefused() {
-    final var generated = generated(
-      withMapper("Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteStrategy.SETTERS))")
+  static List<String[]> defaultsReachingANestedBean() {
+    return List.of(
+      new String[] {
+        "Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "Acct -> Ledger",
+      },
+      new String[] { "Telescope.mapper(Half.class, HalfDto.class, writeBeans(WriteStrategy.SETTERS))", "Src -> Acct" },
+      new String[] {
+        "Telescope.mapper(Many.class, ManyDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "Acct -> Ledger",
+      }
     );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("defaultsReachingANestedBean")
+  @DisplayName("a writeBeans default on a pair whose bridge builds a nested pair with a bean side is refused by name")
+  void aDefaultReachingANestedBeanIsRefused(final String mapper, final String nested) {
+    final var generated = generated(withMapper(mapper));
     assertFalse(generated.success());
     assertTrue(
       generated.hasError(
-        "writeBeans(SETTERS) builds every bean the mapper reaches, and the generated bridge builds the nested pair" +
-          " Acct -> Ledger through its own bridge"
+        "writeBeans(SETTERS) builds every bean the mapper reaches, and the generated bridge builds the nested pair " +
+          nested +
+          " through its own bridge"
       ),
       generated::errorMessages
     );
+  }
+
+  @Test
+  @DisplayName("a writeBeans default on a pair whose nested pair is two records is compiled, as the runtime builds it")
+  @SuppressWarnings("unchecked")
+  void aDefaultOverNestedRecordsIsCompiled() throws Exception {
+    final var pairs = withMapper("Telescope.mapper(Wrap.class, WrapDto.class, writeBeans(WriteStrategy.SETTERS))");
+    final var generated = generated(pairs);
+    assertTrue(generated.success(), generated::errorMessages);
+    final var runtime = runtime(pairs);
+    assertTrue(runtime.success(), runtime::errorMessages);
+    final var converted = new ArrayList<String>();
+    for (final var compilation : List.of(generated, runtime)) {
+      try (final var loader = load(compilation)) {
+        final var m = (Mapper<Object, Object>) (compilation == generated
+          ? loader.loadClass("wh.Fields").getField("GEN").get(null)
+          : loader.loadClass("wh.Plain").getMethod("build").invoke(null));
+        final var runs = m.explain().declared().map(OpticNode.Declared::runs).orElse(OpticNode.Runs.RUNTIME);
+        assertEquals(compilation == generated ? OpticNode.Runs.GENERATED : OpticNode.Runs.RUNTIME, runs);
+        final var src = loader.loadClass("wh.Src").getConstructors()[0].newInstance("a");
+        final var forward = m.forward(loader.loadClass("wh.Wrap").getConstructors()[0].newInstance(src));
+        converted.add(forward + " / " + m.backward(forward));
+      }
+    }
+    assertEquals("WrapDto[inner=Dto[name=a]] / Wrap[inner=Src[name=a]]", converted.get(0));
+    assertEquals(converted.get(0), converted.get(1));
   }
 }

@@ -67,7 +67,6 @@ final class FieldRows {
   static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
-  private static final String WRITE_STRATEGY_FQN = WRITE_HINT_FQN + ".WriteStrategy";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
   private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
@@ -707,10 +706,9 @@ final class FieldRows {
      */
     private Accessor rowTyped(final Accessor side) {
       if (nameable(side.type())) return side;
-      if (!(trees.getTypeMirror(TreePath.getPath(unit, side.at())) instanceof DeclaredType accessor)) return side;
-      final var arguments = accessor.getTypeArguments();
-      if (arguments.size() != 2) return side;
-      final var typed = arguments.get(1);
+      // A row is read only once javac has attributed it, so its accessor is an Accessor<A, X>.
+      final var accessor = (DeclaredType) trees.getTypeMirror(TreePath.getPath(unit, side.at()));
+      final var typed = accessor.getTypeArguments().get(1);
       if (typed instanceof WildcardType || !nameable(typed)) return side;
       return new Accessor(side.property(), typed, side.primitive(), side.method(), side.at());
     }
@@ -822,7 +820,9 @@ final class FieldRows {
      * property's values and returns what they give.
      */
     private String rawMisfit(final VariableElement held, final Accessor src, final Accessor tgt) {
-      if (!(held.asType() instanceof DeclaredType type) || !type.getTypeArguments().isEmpty()) return null;
+      // A field the row reads a BridgeFn from is typed by a class, never by a variable.
+      final var type = (DeclaredType) held.asType();
+      if (!type.getTypeArguments().isEmpty()) return null;
       if (((TypeElement) type.asElement()).getTypeParameters().isEmpty()) return null;
       final var types = env.getTypeUtils();
       final var members = ElementFilter.methodsIn(env.getElementUtils().getAllMembers((TypeElement) type.asElement()));
@@ -1146,15 +1146,16 @@ final class FieldRows {
     /**
      * The class a constant or compute row's value is, which the class the processor writes for the
      * row supplies where the property's own type has no name it can use, as a type variable: the
-     * value's own type for a constant, and what the supplier gives for a compute row; null where
-     * neither is known.
+     * value's own type for a constant, and what the supplier gives for a compute row; null for a
+     * null constant, which has no class.
      */
     private TypeMirror suppliedType(final ExpressionTree arg, final boolean constant) {
       final var types = env.getTypeUtils();
       final TypeMirror given;
       if (constant) {
         given = trees.getTypeMirror(TreePath.getPath(unit, arg));
-      } else if (elementAt(unit, arg) instanceof VariableElement held && held.getKind() == ElementKind.FIELD) {
+      } else if (elementAt(unit, arg) instanceof VariableElement held) {
+        // The field holding the supplier, which the row was read through.
         final var get = env
           .getElementUtils()
           .getTypeElement("java.util.function.Supplier")
@@ -1164,13 +1165,13 @@ final class FieldRows {
           .findFirst()
           .orElseThrow();
         given = ((ExecutableType) types.asMemberOf((DeclaredType) held.asType(), get)).getReturnType();
-      } else if (elementAt(unit, arg) instanceof ExecutableElement method) {
+      } else {
+        // The method reference the row was read through.
+        final var method = (ExecutableElement) elementAt(unit, arg);
         given =
           method.getKind() == ElementKind.CONSTRUCTOR ? method.getEnclosingElement().asType() : method.getReturnType();
-      } else {
-        given = null;
       }
-      if (given == null || given.getKind() == TypeKind.NULL) return null;
+      if (given.getKind() == TypeKind.NULL) return null;
       return given.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) given).asType() : given;
     }
 
@@ -1271,10 +1272,9 @@ final class FieldRows {
     private String strategyOf(final ExpressionTree arg) {
       if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
       if (!(elementAt(unit, arg) instanceof VariableElement constant)) return null;
+      // javac typed the argument as a WriteStrategy, so an enum constant here is one of its
+      // constants.
       if (constant.getKind() != ElementKind.ENUM_CONSTANT) return null;
-      if (!((TypeElement) constant.getEnclosingElement()).getQualifiedName().contentEquals(WRITE_STRATEGY_FQN)) {
-        return null;
-      }
       return constant.getSimpleName().toString();
     }
 
@@ -1490,8 +1490,12 @@ final class FieldRows {
             " writes in place"
         );
       }
+      // A property typed by its class's variable holds whatever the variable's bound holds; the
+      // class written for the row then supplies the value as its own class.
+      final var types = env.getTypeUtils();
+      final var holds = nameable(into.type()) ? into.type() : types.erasure(into.type());
       final var valueType = trees.getTypeMirror(TreePath.getPath(unit, arg));
-      if (valueType != null && !env.getTypeUtils().isAssignable(valueType, into.type())) {
+      if (!types.isAssignable(valueType, holds)) {
         return new Refused(
           arg,
           "the value " +
