@@ -18,6 +18,8 @@ import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * A row whose accessors are declared on two sealed interfaces applies to every pair of their cases
@@ -702,19 +704,39 @@ class SealedInterfaceRowAgreementTest {
     }
   }
 
-  @Test
-  @DisplayName("a @Bridge on a sealed interface that sets how fields convert is refused by name")
-  void sealedBridgeWithFieldSettings() {
+  static List<String[]> sealedFieldSettings() {
+    return List.of(
+      new String[] { "drop(Shape::getLabel)", "drop rows" },
+      new String[] { "to(Shape::getLabel, ShapeDto::getTitle)", "renaming rows" },
+      new String[] { "to(Shape::getLabel, ShapeDto::getTitle, Trim.class)", "converting rows" },
+      new String[] { "constant(ShapeDto::getTitle, \"t\")", "constant and compute rows" },
+      new String[] { "via(Shape::getLabel, ShapeDto::getTitle, Upper.class)", "via rows" },
+      new String[] { "writeBeans(WriteStrategy.SETTERS)", "write strategy" }
+    );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("sealedFieldSettings")
+  @DisplayName("a @Bridge field on a sealed interface whose rows set how properties convert is refused by name")
+  void sealedBridgeWithFieldSettings(final String row, final String kind) {
     final var compilation = compile(
       List.of(new BridgeProcessor()),
       source(
         "demo.Shape",
         """
         package demo;
-        import io.github.eschizoid.telescope.annotations.*;
-        @Bridge(value = ShapeDto.class, renames = @Rename(source = "label", target = "title"), drops = "note")
-        public sealed interface Shape permits Circle { String label(); }
-        """
+        import static io.github.eschizoid.telescope.mapping.Mapping.*;
+        import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+        public sealed interface Shape permits Circle {
+          @Bridge
+          Mapper<Shape, ShapeDto> MAPPER = Telescope.mapper(Shape.class, ShapeDto.class, ROW);
+          String getLabel();
+        }
+        """.replace("ROW", row)
       ),
       source(
         "demo.Circle",
@@ -722,22 +744,43 @@ class SealedInterfaceRowAgreementTest {
         package demo;
         import io.github.eschizoid.telescope.annotations.*;
         @Bridge(CircleDto.class)
-        public record Circle(String label, String title) implements Shape {}
+        public record Circle(String label, String title) implements Shape {
+          public String getLabel() { return label; }
+        }
         """
       ),
-      source("demo.ShapeDto", "package demo; public sealed interface ShapeDto permits CircleDto { String title(); }"),
+      source(
+        "demo.ShapeDto",
+        "package demo; public sealed interface ShapeDto permits CircleDto { String getTitle(); }"
+      ),
       source(
         "demo.CircleDto",
-        "package demo; public record CircleDto(String label, String title) implements ShapeDto {}"
+        "package demo; public record CircleDto(String label, String title) implements ShapeDto {" +
+          " public String getTitle() { return title; } }"
+      ),
+      source(
+        "demo.Trim",
+        "package demo; public final class Trim implements io.github.eschizoid.telescope.conversion.BridgeFn<String," +
+          " String> { public String forward(String s) { return s; } public String backward(String s) { return s; } }"
+      ),
+      source(
+        "demo.Upper",
+        "package demo; public final class Upper { public static String forward(String s) { return s; }" +
+          " public static String backward(String s) { return s; } }"
       )
     );
     assertFalse(compilation.success());
+    final var refusal = compilation
+      .errors()
+      .stream()
+      .map(d -> d.getMessage(Locale.ROOT))
+      .filter(m -> m.contains("@Bridge sealed Shape converts each case through the case's own @Bridge"))
+      .findFirst();
+    assertTrue(refusal.isPresent(), compilation::errorMessages);
+    assertTrue(refusal.get().contains("which this bridge's ") && refusal.get().contains(kind), refusal::get);
     assertTrue(
-      compilation.hasError(
-        "@Bridge sealed Shape converts each case through the case's own @Bridge, which this bridge's drops, renames" +
-          " would not reach. Declare them on the @Bridge of each case they apply to."
-      ),
-      compilation::errorMessages
+      refusal.get().endsWith(" would not reach. Declare them on the @Bridge of each case they apply to."),
+      refusal::get
     );
   }
 }

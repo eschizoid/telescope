@@ -45,9 +45,7 @@
  *       processors: {@code @Focus} (records), {@code @BeanFocus} (POJOs, also for Lombok-annotated
  *       classes via the {@code telescope-lombok} module), {@code @Bridge} (compile-checked
  *       cross-paradigm conversion — records or classes, model-anchored or carrier form, with {@code
- *       lenient = true} for small-DTO → large-entity); per-field modifiers {@code @Rename} /
- *       {@code @Transform} / {@code @Constant} / {@code @Compute} / {@code @Default} /
- *       {@code @ViaMapper}.
+ *       lenient = true} for small-DTO → large-entity, or a mapper field whose rows it compiles).
  * </ul>
  *
  * <p>The {@code io.github.eschizoid.telescope.internal} packages are deliberately not exported.

@@ -158,7 +158,7 @@ public class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
-    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of(), null, null);
+    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of(), null, null, null);
   }
 
   private Mapper(
@@ -172,14 +172,15 @@ public class Mapper<A, B> {
     final BiFunction<B, A, A> postBackward,
     final List<OpticNode> explainTrail,
     final List<CaseEntry> cases,
-    final BiFunction<A, B, A> patcher
+    final BiFunction<A, B, A> patcher,
+    final Reflective sourceRefl
   ) {
     this.iso = iso;
     this.cases = cases == null ? null : List.copyOf(cases);
     this.patcher = patcher;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
-    this.sourceRefl = Reflective.of(sourceClass);
+    this.sourceRefl = sourceRefl != null ? sourceRefl : Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction. The copy keeps the
     // table's order, which is the order patch converts the partial's fields in; Map.copyOf would
@@ -293,6 +294,7 @@ public class Mapper<A, B> {
       null,
       explainTrail,
       null,
+      null,
       null
     );
   }
@@ -302,17 +304,15 @@ public class Mapper<A, B> {
    * directly, without the {@code Iso.of(forward, backward)} re-wrap {@link #create(Function,
    * Function, Class, Class, Map, List)} performs. {@code DeepMap#resolveMapper} holds the leaf Iso
    * the deep-mapping engine built; passing it straight through removes one virtual {@code Iso.to}
-   * hop from every {@code forward}/{@code backward} call (measured ~10–15% on the flat/nested
-   * runtime tiers). Same lattice value, one fewer wrapper.
+   * hop from every {@code forward}/{@code backward} call. Same lattice value, one fewer wrapper.
+   * {@code sourceRefl} is what {@link #patch} rebuilds the source with, which carries the call's
+   * write hints so a patch builds a bean the way backward does; null rebuilds it as {@link
+   * Reflective#of} does.
    *
-   * <p>The {@code exports} warning is suppressed deliberately, and this is the <b>first and
-   * only</b> place {@code conversion} puts an internal type ({@link Iso}) in a public signature — a
-   * deliberate, singular exception, not a pattern to copy. (The {@code Function}-typed {@code
-   * create} and {@code PatchEntry} are also "module-internal seams" but expose only exported types,
-   * so they need no suppression; do not read this as blessing {@code @SuppressWarnings("exports")}
-   * elsewhere.) It is fenced by the same JPMS containment {@code Telescope.mapped} relies on:
-   * {@link Iso} is qualified-exported from {@code :internal} to {@code :core} only, so no
-   * downstream module can resolve — let alone call — this overload; it stays invisible to real API
+   * <p>The {@code exports} warning is suppressed because the signature names internal types ({@link
+   * Iso}, {@link Reflective}). It is fenced by the same JPMS containment {@code Telescope.mapped}
+   * relies on: both are qualified-exported from {@code :internal} to {@code :core} only, so no
+   * downstream module can resolve — let alone call — this method; it stays invisible to real API
    * consumers. It is the only way {@code DeepMap.resolveMapper} (a different package) can hand its
    * leaf Iso to {@code Mapper}'s package-private constructor without the double wrap.
    */
@@ -322,7 +322,8 @@ public class Mapper<A, B> {
     final Class<A> sourceClass,
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField,
-    final List<OpticNode> explainTrail
+    final List<OpticNode> explainTrail,
+    final Reflective sourceRefl
   ) {
     return new Mapper<>(
       iso,
@@ -335,7 +336,8 @@ public class Mapper<A, B> {
       null,
       explainTrail,
       null,
-      null
+      null,
+      sourceRefl
     );
   }
 
@@ -352,7 +354,20 @@ public class Mapper<A, B> {
     final List<CaseEntry> cases,
     final List<OpticNode> explainTrail
   ) {
-    return new Mapper<>(iso, sourceClass, targetClass, Map.of(), null, null, null, null, explainTrail, cases, null);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      Map.of(),
+      null,
+      null,
+      null,
+      null,
+      explainTrail,
+      cases,
+      null,
+      null
+    );
   }
 
   /**
@@ -404,7 +419,20 @@ public class Mapper<A, B> {
     final var table = new LinkedHashMap<String, PatchEntry>();
     // into reads only the keys; patch goes to the patcher whole and never reads an entry.
     for (final var name : intoNames) table.put(name, new PatchEntry(name, Function.identity()));
-    return new Mapper<>(iso, sourceClass, targetClass, table, null, null, null, null, explainTrail, null, patcher);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      table,
+      null,
+      null,
+      null,
+      null,
+      explainTrail,
+      null,
+      patcher,
+      null
+    );
   }
 
   /**
@@ -521,11 +549,12 @@ public class Mapper<A, B> {
    * }</pre>
    *
    * <p>Records: rebuilds via the canonical constructor with the patched values substituted in.
-   * Beans: rebuilds via the auto-detected write strategy (builder, then name-matched all-args
-   * constructor, then no-arg + setters). The patch table is populated by the deep factory at the
-   * top level of the source/target type pair only — patches that target nested components write the
-   * <em>whole</em> nested value (since that's what the top-level component holds), not individual
-   * sub-component overlays.
+   * Beans: rebuilds through the strategy a {@code writeBean} row keyed to the source's class or a
+   * {@code writeBeans} default names, as backward does, and otherwise through the auto-detected
+   * write strategy (builder, then name-matched all-args constructor, then no-arg + setters). The
+   * patch table is populated by the deep factory at the top level of the source/target type pair
+   * only — patches that target nested components write the <em>whole</em> nested value (since
+   * that's what the top-level component holds), not individual sub-component overlays.
    *
    * <p>The result is always a new object, never {@code base} itself, even when {@code partial} is
    * null or every field it holds is null: a caller that mutates the result leaves {@code base} as
@@ -835,7 +864,8 @@ public class Mapper<A, B> {
       postBackward,
       explainTrail,
       cases,
-      patcher
+      patcher,
+      sourceRefl
     );
   }
 
@@ -891,7 +921,8 @@ public class Mapper<A, B> {
       postBackward,
       explainTrail,
       cases,
-      patcher
+      patcher,
+      sourceRefl
     );
   }
 
@@ -923,7 +954,8 @@ public class Mapper<A, B> {
       postBackward,
       explainTrail,
       cases,
-      patcher
+      patcher,
+      sourceRefl
     );
   }
 
@@ -969,7 +1001,8 @@ public class Mapper<A, B> {
       next,
       explainTrail,
       cases,
-      patcher
+      patcher,
+      sourceRefl
     );
   }
 

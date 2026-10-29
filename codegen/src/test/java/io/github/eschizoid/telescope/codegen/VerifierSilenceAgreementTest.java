@@ -38,6 +38,8 @@ class VerifierSilenceAgreementTest {
     import static io.github.eschizoid.telescope.mapping.Mapping.*;
     import io.github.eschizoid.telescope.Telescope;
     import io.github.eschizoid.telescope.annotations.*;
+    import io.github.eschizoid.telescope.conversion.ForwardMapper;
+    import io.github.eschizoid.telescope.conversion.Mapper;
     import java.util.List;
     """;
 
@@ -310,8 +312,15 @@ class VerifierSilenceAgreementTest {
 
     /** Two records a bridge pairs crosswise, whose same-named components do not pair. */
     private static final String CROSSWISE = """
-      @Bridge(value = @@InnerDto.class, renames = { @Rename(source = "x", target = "y"), @Rename(source = "y", target = "x") })
-      record @@Inner(Integer x, String y) {}
+      record @@Inner(Integer x, String y) {
+        @Bridge
+        static final Mapper<@@Inner, @@InnerDto> MAPPER = Telescope.mapper(
+          @@Inner.class,
+          @@InnerDto.class,
+          to(@@Inner::x, @@InnerDto::y),
+          to(@@Inner::y, @@InnerDto::x)
+        );
+      }
       record @@InnerDto(String x, Integer y) {}
       record @@Outer(@@Inner inner) {}
       record @@OuterDto(@@InnerDto inner) {}
@@ -334,8 +343,8 @@ class VerifierSilenceAgreementTest {
    * Construction converts a nested pair through its own bridge unless something the mapper is given
    * reaches below the properties that bridge walks itself, and then visits nothing below the pair.
    * The verifier reads the properties a bridge in the same compilation walks from its
-   * {@code @Bridge}, and asks the same shared question, so a row keyed to a pair reachable only
-   * through a property the bridge drops is refused by both.
+   * {@code @Bridge} field's rows, and asks the same shared question, so a row keyed to a pair
+   * reachable only through a property the bridge drops is refused by both.
    */
   @Test
   @DisplayName("a row reachable only through a property a nested pair's own bridge drops is refused by both")
@@ -345,8 +354,14 @@ class VerifierSilenceAgreementTest {
       """
         record @@Part(String v) {}
         record @@PartDto(String v) {}
-        @Bridge(value = @@InnerDto.class, drops = "part", lenient = true)
-        record @@Inner(String name, @@Part part) {}
+        record @@Inner(String name, @@Part part) {
+          @Bridge
+          static final ForwardMapper<@@Inner, @@InnerDto> MAPPER = Telescope.mapperForward(
+            @@Inner.class,
+            @@InnerDto.class,
+            drop(@@Inner::part)
+          );
+        }
         record @@InnerDto(String name, @@PartDto part) {}
         record @@Outer(@@Inner inner) {}
         record @@OuterDto(@@InnerDto inner) {}

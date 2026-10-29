@@ -1,9 +1,21 @@
 package io.github.eschizoid.telescope.ownbridge;
 
-import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Transform;
+import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
-/** A source declaring two targets, so each bridge gets a long-form name. */
-@Bridge(value = ObMultiDto.class, transforms = @Transform(field = "label", using = ObUpperFn.class))
+import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.Mapper;
+
+/**
+ * A source declaring two targets, one on a {@code @Bridge} field whose rows transform its label and
+ * one on the class, so the bridge to {@link ObMultiDto} is named by its pair.
+ */
 @Bridge(ObMultiView.class)
-public record ObMulti(String label) {}
+public record ObMulti(String label) {
+  @Bridge
+  public static final Mapper<ObMulti, ObMultiDto> DTO = mapper(
+    ObMulti.class,
+    ObMultiDto.class,
+    to(ObMulti::label, ObMultiDto::label, ObUpperFn.class)
+  );
+}

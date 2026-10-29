@@ -100,15 +100,14 @@ references, so IDE rename refactors follow and typos fail at javac, not at annot
 keyed by (sourceClass, targetClass) and applies at every depth where the pair recurses — less repetition than a @Mapping
 per mapper method, at the cost of broader scope when two usages of the same pair need different renames.
 
-On `@Bridge`, `@Rename(source = "email", target = "contactEmail")` names the pair of fields. A `@Transform` or a
-`@ViaMapper` on the same source field converts the value on the way, so one field is renamed and converted the way the
-four-argument `to(...)` row and `via(...)` do it on the runtime path; the generated code is the same direct call it is
-for a field that is not renamed. A forward-only fan-out (several renames from one source) through a transform writes the
-converted value into every target, and reads the source back from the first rename declared. A rename onto the target of
-another source field left under its own name is refused by that field's name by a strict bridge and the strict
-`Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the field would have nowhere
-to be written; a lenient bridge, like `mapperForward`, leaves it unread instead. A lenient bridge refuses a `@Transform`
-or `@ViaMapper` on a field it would leave unread, by the field's name, rather than drop the conversion.
+On a `@Bridge` field the same `to(Customer::email, CustomerDto::contactEmail)` row names the pair of properties, and the
+processor compiles it into the generated bridge. A converting `to` row, with a `BridgeFn` or a forward and a backward
+method reference, or a `via(...)` row renames and converts one property at once; the generated code is the same direct
+call it is for a property that is not renamed. A fan-out, one source property written into several targets by one `to`
+row each, takes a `mapperForward` field, and its rows convert the property the same way into every target. A rename onto
+the target of another source property left under its own name is refused by that property's name by a strict bridge and
+the strict `Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the property would
+have nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
@@ -118,7 +117,9 @@ core/src/main/java/io/github/eschizoid/telescope/Telescope.java, the javadoc on 
 rename row applies wherever recursion lands on that type pair);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a property both renamed
 and converted by its own conversion converts the same way on both paths' and 'a property left under its own name whose
-target a rename of another property fills is refused by name, the same way on both paths'</sub>
+target a rename of another property fills is refused by name, the same way on both paths';
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a fan-out refused on `Telescope.mapper`, and
+refused when its rows convert differently)</sub>
 
 ### Nested source path
 
@@ -247,27 +248,33 @@ Telescope.mapperForward(Order.class, OrderDto.class,
     to(Order::shipDate, OrderDto::shipDateText, D::format, s -> LocalDate.parse(s, D)), // parse leg serves a Mapper
     toOneWay(Order::createdAt, OrderDto::createdAtIso, Instant::toString));             // forward-only
 
-// Codegen (@Bridge) form — static helper via @Transform(method = ...):
-@Bridge(value = UserDto.class, transforms = {
-  @Transform(field = "expiresAt", using = DateHelpers.class, method = "expiry") })
-public record UserEntity(String id, Instant expiresAt) {}
+// Codegen (@Bridge field) form — the formatter is a static helper named by method reference:
+public record UserEntity(String id, Instant expiresAt) {
+  @Bridge
+  static final ForwardMapper<UserEntity, UserDto> DTO = Telescope.mapperForward(
+    UserEntity.class,
+    UserDto.class,
+    toOneWay(UserEntity::expiresAt, UserDto::expiresAt, DateHelpers::expiry)
+  );
+}
 ```
 
 No format-string attribute exists anywhere — no numberFormat/dateFormat analog, and a repo-wide grep finds no
 DecimalFormat/DateTimeFormatter machinery in main code. The use case is fully achievable with a typed transform row
 holding your own formatter (compile-checked, refactor-safe, arguably safer than a stringly pattern), but the migrator
 hand-writes the formatter and, for bidirectional number formats, the parse leg including checked-exception handling that
-MapStruct generates. Codegen path needs a whole @Transform + helper class per formatted field — more ceremony than one
-annotation attribute.
+MapStruct generates. On a `@Bridge` field the generated bridge cannot hold an inline lambda, so each formatted field
+names a static helper method (`toOneWay`, or `to(src, tgt, Helper::format, Helper::parse)` for both directions) or a
+`BridgeFn` — more ceremony than one annotation attribute.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java,
 `to(Accessor, Accessor, Function, Function)` (typed transform, with an Instant::toString/Instant::parse example) and
-`toOneWay` (forward-only); core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and
-`method()` (per-field BridgeFn or static-method qualifier dispatch; the `method()` javadoc carries the DateTimeFormatter
-example); README.md, "When MapStruct is the right pick" (which names `Mapping.via(...)` as the plain-Java stand-in for
-qualifier dispatch); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the test 'the
-documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field' (number<->String transform
-round-trip)</sub>
+`toOneWay` (forward-only); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a converter on a
+`@Bridge` field is a method reference or a `BridgeFn`, compiled into a small generated class, and an inline lambda is
+refused on the row); README.md, "When MapStruct is the right pick" (which names `Mapping.via(...)` as the plain-Java
+stand-in for qualifier dispatch); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the
+test 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field' (number<->String
+transform round-trip)</sub>
 
 ### Expressions
 
@@ -292,8 +299,9 @@ Telescope.mapper(Order.class, OrderDto.class,
 A better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no expression
 parser. compute() takes a Supplier (no source arg) — source-dependent expressions route through toOneWay(src, tgt, fn)
 for one source field or the typed afterForward((src, dto) -> ...) hook for multi-field derivation. compute/constant rows
-are forward-only by design (backward drops the slot). Codegen @Compute requires a top-level Supplier class (no lambdas
-in annotations) — slightly heavier than runtime form.
+are forward-only by design (backward drops the slot). On a `@Bridge` field the same `compute` row compiles when its
+supplier is a method reference (`Instant::now`) or a `static final` field holding one; an inline lambda, as in the
+`traceId` row above, and a nested target written as a telescope path are refused on the row.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `compute(Accessor, Supplier)`
 (javadoc names the expression=java(Instant.now()) gap), `compute(Telescope, Supplier)` (nested target), both
@@ -301,8 +309,9 @@ in annotations) — slightly heavier than runtime form.
 core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `afterForward(BiFunction)` (source-aware hook,
 typed @AfterMapping analog); core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java, the
 nested class 'Mapping.compute(Tgt::field, Supplier) — lazy, fresh per call' (fresh-per-call and forward-only semantics
-pinned); core/src/main/java/io/github/eschizoid/telescope/annotations/Compute.java (codegen @Compute(using =
-Supplier.class) for @Bridge); README.md, the `constant` / `compute` example under "Mapping"</sub>
+pinned); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a `compute` row on a `@Bridge`
+field takes a method reference or a `static final` field holding the supplier); README.md, the `constant` / `compute`
+example under "Mapping"</sub>
 
 ### Constants and defaults
 
@@ -321,19 +330,26 @@ Telescope.mapper(Order.class, OrderDto.class,
     toOrElse(Order::displayName, OrderDto::displayName, "(unnamed)", String::isBlank), // predicate-gated
     toOrElseGet(Order::traceId, OrderDto::traceId, () -> UUID.randomUUID().toString()));  // lazy default
 
-// Codegen (@Bridge) form:
-@Bridge(value = UserEntity.class,
-  constants = { @Constant(field = "source", value = "API") },
-  defaults  = { @Default(field = "region", value = "EMEA") })
-public record User(String id, String region) {}
+// Codegen (@Bridge field) form — the same rows, with literal values:
+public record User(String id, String region) {
+  @Bridge
+  static final Mapper<User, UserEntity> ENTITY = Telescope.mapper(
+    User.class,
+    UserEntity.class,
+    constant(UserEntity::source, "API"),
+    toOrElse(User::region, UserEntity::region, "EMEA")
+  );
+}
 ```
 
 Complete coverage in both runtime and codegen paths, statically typed (constant(OrderDto::apiVersion, 7) is an int, not
 a string literal to parse). Exceeds MapStruct: predicate-gated toOrElse/toOrElseGet handle empty-string/empty-collection
 'missing' semantics MapStruct's strictly-null defaultValue cannot, and nested-target constants (@Mapping(target="a.b.c",
 constant=...)) work via Telescope paths. Known asymmetries, documented and tested: constant is forward-only (backward
-drops the slot), and a substituted default round-trips backward as itself rather than the original null. Codegen
-@Default is strict-null only (annotation attributes cannot hold predicates).
+drops the slot), and a substituted default round-trips backward as itself rather than the original null. On a `@Bridge`
+field a constant or default is a literal or an enum constant, and `toOrElseGet` names its supplier by method reference;
+the predicate-gated `toOrElse` and `toOrElseGet` and a nested target written as a telescope path are refused on the row,
+so the generated path is strict-null only.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `constant(Accessor, Object)`
 (javadoc names the @Mapping constant gap), `constant(Telescope, Object)` (nested target), both `toOrElse` overloads
@@ -342,9 +358,8 @@ core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java
 'Mapping.constant(Tgt::field, value) — eager literal' (constant stamps the literal; backward drops it to the type
 default); core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java, every test (null->default,
 pass-through, lazy supplier, empty-string/empty-collection predicates);
-core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java and
-core/src/main/java/io/github/eschizoid/telescope/annotations/Default.java (codegen literals, parsed at emit time against
-the field's declared type; the 'Strict-null only' section of Default); README.md, the `constant` / `compute` example
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a constant or default on a `@Bridge` field
+is a literal or an enum constant, and a predicate-gated row is refused); README.md, the `constant` / `compute` example
 under "Mapping"</sub>
 
 ## Collections & containers
@@ -600,23 +615,29 @@ methods for the same type pair
 Telescope.mapper(Customer.class, CustomerDto.class,
     via(Customer::homeAddress, CustomerDto::homeAddress, homeAddressMapper),
     via(Customer::workAddress, CustomerDto::workAddress, workAddressMapper));
-// Codegen: @Named analog — several conversion methods on one helper class, picked per field:
-@Bridge(value = UserDto.class, transforms = {
-  @Transform(field = "expiresAt", using = DateHelpers.class, method = "expiry"),
-  @Transform(field = "createdAt", using = DateHelpers.class, method = "createdAt")})
-public record UserEntity(String id, Instant expiresAt, Instant createdAt) {}
+// Codegen: @Named analog — several conversion methods on one helper class, picked per row:
+public record UserEntity(String id, Instant expiresAt, Instant createdAt) {
+  @Bridge
+  static final ForwardMapper<UserEntity, UserDto> DTO = Telescope.mapperForward(
+    UserEntity.class,
+    UserDto.class,
+    toOneWay(UserEntity::expiresAt, UserDto::expiresAt, DateHelpers::expiry),
+    toOneWay(UserEntity::createdAt, UserDto::createdAt, DateHelpers::createdAt)
+  );
+}
 ```
 
 The ambiguity qualifiers solve doesn't arise at runtime: each row names its converter/mapper by reference, resolved by
-javac — safer than @Named string matching. Codegen side has the literal @Named-equivalent via @Transform(using, method)
-(forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI TelescopeMapperRegistry allows
-one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same pair has to be wrapped in your own
-type or built where it's used. On Spring, a bean declared with `@Bean(defaultCandidate = false)` also stays out of the
-registry, and on Quarkus so does a `@DefaultBean` one while another `Mapper` bean exists.
+javac — safer than @Named string matching. A `@Bridge` field names its helper methods the same way, and the generated
+bridge calls each one through a small generated class; a `toOneWay` row is forward-only (same asymmetry as a single
+MapStruct qualified method), and `to(src, tgt, Helper::format, Helper::parse)` names both directions. One corner: the DI
+TelescopeMapperRegistry allows one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same
+pair has to be wrapped in your own type or built where it's used. On Spring, a bean declared with
+`@Bean(defaultCandidate = false)` also stays out of the registry, and on Quarkus so does a `@DefaultBean` one while
+another `Mapper` bean exists.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and `method()`
-(the `using()` javadoc says the method-named form "unlocks MapStruct's @Named qualifier-dispatch pattern", and
-`method()` emits a direct UsingClass.methodName(value) static call);
+<sub>Evidence: codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a converter a `@Bridge` field
+names by method reference is called from a small generated class);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
 (exact function per row) and `via(Accessor, Accessor, Mapper)` (an exact Mapper instance);
 spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java, the constructor and
@@ -642,23 +663,31 @@ Mapper<UserEntity, UserDto> userMapper = Telescope.mapper(
 ); // List pair, auto-lifts
 
 // (nested record pairs also auto-recurse with NO via row — Telescope.mapper(A.class, B.class) builds sub-mappers itself)
-// Codegen: point a field at an existing bridge or static helper:
-@Bridge(value = OrderEntity.class, viaMappers = { @ViaMapper(field = "address", using = AddressBridge.class) })
-public record Order(String id, Address address) {}
+// Codegen: point a property at the nested pair's own @Bridge field, or at a class written by hand:
+public record Order(String id, Address address, List<Line> lines) {
+  @Bridge
+  static final Mapper<Order, OrderEntity> ENTITY = Telescope.mapper(
+    Order.class,
+    OrderEntity.class,
+    via(Order::address, OrderEntity::address, Address.ENTITY),
+    via(Order::lines, OrderEntity::lines, LineMapper.class)
+  );
+}
 ```
 
 Two mechanisms and both directions of MapStruct's uses= are covered: via(src, tgt, mapper) delegates one field to a
 pre-built Mapper (with automatic List/Set/Optional/Map element-lifting — MapStruct requires an Iterable method for
-that), and auto-recursion means the common uses= case (nested type pairs) needs no declaration at all. Codegen mirrors
-it with @ViaMapper (delegate to a bridge class) and @Transform(using = Helper.class, method = ...) for static helper
-methods. Difference in idiom: telescope binds the delegate per field explicitly, MapStruct auto-selects by type from the
+that), and auto-recursion means the common uses= case (nested type pairs) needs no declaration at all. A `@Bridge` field
+mirrors it with the same `via` row, naming the nested pair's own `@Bridge` field, whose generated bridge converts the
+property, or a class with static `forward` and `backward` methods; a converting `to` row names any other static helper
+method. Difference in idiom: telescope binds the delegate per field explicitly, MapStruct auto-selects by type from the
 uses list — telescope's form is more verbose when many fields share one nested pair but unambiguous.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `via(Accessor, Accessor, Mapper)`
 (its javadoc documents the element-level auto-lift through List/Set/Optional/Map);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Via.java (row record);
-core/src/main/java/io/github/eschizoid/telescope/annotations/ViaMapper.java (codegen per-field bridge delegation, static
-forward/backward shape); core/src/main/java/io/github/eschizoid/telescope/annotations/Bridge.java, `viaMappers()`;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a `via` row on a `@Bridge` field names
+another `@Bridge` field, a class written by hand, or that class's static `forward` and `backward`);
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the test 'via(...) takes precedence over
 auto-recursion for its target field'; core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java, the
 self-reference tests (auto-recursion builds nested sub-mappers with no delegation rows at all)</sub>
@@ -1132,8 +1161,9 @@ on every path, since no rebuild can build an `EnumSet`. A mismatch is refused wh
 generated path at compile time, naming the constants that have no counterpart, which is stronger than MapStruct's error
 on unmapped source constants alone. What's missing is the declarative sugar for asymmetric enums: per-constant renames,
 @EnumMapping prefix/suffix/case name transformations, and ANY_REMAINING/ANY_UNMAPPED defaults all require a hand-written
-(though javac-exhaustive and refactor-safe) switch inside a to(src, tgt, fwd, bwd) row on the runtime path, or a
-`@Transform` on `@Bridge`. Workaround quality is high, but it is manual code, not a factory.
+(though javac-exhaustive and refactor-safe) switch inside a to(src, tgt, fwd, bwd) row on the runtime path, or, on a
+`@Bridge` field, the same row naming two static methods that hold the switch. Workaround quality is high, but it is
+manual code, not a factory.
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `decidePair`
 (the enum-by-constant-name branch and its forward-only overload);

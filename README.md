@@ -83,9 +83,8 @@ Telescope.mapper(Cart.class, CartDto.class,
 
 `@Bridge` has the `telescope-codegen` processor generate a mapper at compile time. Put on a mapper field, it names no
 field at all: the processor compiles the rows of the field's `Telescope.mapper(...)` call, so the generated mapper is
-checked by the same method references. The older per-field annotations on a class, such as `@Rename` and `@Compute`,
-still take field names as strings, which the processor checks against the class. `@FromMap(required = ...)` also takes
-strings, which name map keys.
+checked by the same method references. Put on a class, it names only the types of a pair whose properties are matched by
+name. `@FromMap(required = ...)` takes strings, which name map keys.
 
 The [head-to-head module](examples/mapstruct-vs-telescope/) tests MapStruct's default-policy unmapped-target case. A
 rename failure can't be a passing test, because the rename has to be applied by hand to show it, so the module describes
@@ -190,8 +189,9 @@ list stays accurate.
   runtime mapper matches the arguments by parameter name, which it reads from a class compiled with `-parameters` or
   with `-g`, the debug level Gradle and Maven compile with by default. It refuses the bean compiled with neither, and
   inside a native image it refuses it without `-parameters`.
-- A nested pair can carry its own `@Bridge` with a `@Transform` or with `lenient = true`. An enum pair below it compiles
-  on the generated path. The runtime mapper refuses it unless you give it a row for the nested pair.
+- A nested pair can carry its own `@Bridge`, on a field with rows of its own or on a class with `lenient = true`. An
+  enum pair below it compiles on the generated path. The runtime mapper refuses it unless you give it a row for the
+  nested pair.
 
 ## Unconvertible fields are refused
 

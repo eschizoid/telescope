@@ -87,13 +87,17 @@ class CrossPackageSubBridgeTest {
   }
 
   @Test
-  @DisplayName("a cross-package @ViaMapper field fabricates no bogus import and bridges through the user mapper")
+  @DisplayName("a cross-package via row fabricates no bogus import and bridges through the hand-written class")
   void crossPackageViaMapperResolves() {
     final var src = new VmSource("o-1", new VmAddress("main st"));
 
-    final var tgt = VmSourceBridge.BRIDGE.read(src);
+    final var tgt = VmSourceToVmTargetBridge.BRIDGE.read(src);
 
     assertEquals("o-1", tgt.id());
-    assertEquals("main st", tgt.address().line(), "@ViaMapper bridges the cross-package field through the user mapper");
+    assertEquals(
+      "main st",
+      tgt.address().line(),
+      "the via row bridges the cross-package property through the hand-written class"
+    );
   }
 }

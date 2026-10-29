@@ -2,6 +2,11 @@
 
 **Status:** Accepted — shipped in #149 · **Date:** 2026-06-16 (accepted 2026-06-21)
 
+> **Amendment (2026-10-29, after ADR-0022).** The per-field annotations and the `@Bridge` attributes that held them
+> (`renames`, `drops` and the rest) are retired. A carrier `@Bridge` keeps `source` and `target` for a pair declared
+> with no rows; a carrier pair that renames, converts or drops is a `@Bridge` field on the carrier class, whose rows
+> name both sides by method reference.
+
 ## Context
 
 `@Bridge(Target.class)` lives on the source model class. That places a hard constraint: the source class's Maven module

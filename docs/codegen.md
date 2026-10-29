@@ -155,11 +155,11 @@ The rows the processor compiles are `to` (with no converter, with a forward and 
 `BridgeFn` class or `static final` field), `toOneWay`, `toOrElse`, `toOrElseGet`, `via` naming another `@Bridge` field
 or a class's static `forward` and `backward`
 (`via(Order::lines, OrderDto::lines, LineMap::forward, LineMap::backward)`), or the class itself
-(`via(Order::lines, OrderDto::lines, LineMap.class)`, whose methods are chosen for the property's types as a
-`@ViaMapper` class's are), `drop`, `constant` and `compute`. A converter or supplier is a reference to a static method,
-to an unbound instance method such as `String::trim`, or to a constructor; a constant or default is a literal or an enum
-constant. Any other row is a compile error on the row, naming what to write instead. `explain()` on the mapper says
-which path runs it and, when it is the runtime path although a field declares it, why.
+(`via(Order::lines, OrderDto::lines, LineMap.class)`, whose methods are chosen for the property's types), `drop`,
+`constant` and `compute`, with the write hints `writeBean` and `writeBeans`. A converter or supplier is a reference to a
+static method, to an unbound instance method such as `String::trim`, or to a constructor; a constant or default is a
+literal or an enum constant. Any other row is a compile error on the row, naming what to write instead. `explain()` on
+the mapper says which path runs it and, when it is the runtime path although a field declares it, why.
 
 A field's bridge is its pair's own bridge, so a pair is declared once in a compilation, a navigator of the source hops
 through it, and a Spring `@TelescopeMapper` for the pair calls it. The factory finds the bridge by the static

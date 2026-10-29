@@ -20,19 +20,52 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * A user-supplied bridge is called through a null gate, because it is user code with no guaranteed
- * null tolerance. A primitive field has no null to guard against, and {@code int == null} is not
- * legal Java, so the gate has to be skipped there rather than emitted and hoped over.
+ * A class written by hand that a {@code via} row names is called through a null gate, because it is
+ * user code with no guaranteed null tolerance. A primitive field has no null to guard against, and
+ * {@code int == null} is not legal Java, so the gate has to be skipped there rather than emitted
+ * and hoped over.
  *
  * <p>These compile through the full pipeline. The gate lands in a method body, which the
  * processing-only harness does not attribute, so an assertion made there would hold no matter what
- * was emitted — which is why every existing {@code @ViaMapper} fixture, all of them
- * reference-typed, could not have caught this.
+ * was emitted, and a reference-typed fixture cannot reach the primitive's case at all.
  */
-class ViaMapperPrimitiveTest {
+class ViaClassPrimitiveTest {
 
   private static Compilation compile(final JavaFileObject... sources) {
     return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+  }
+
+  /**
+   * {@code %1$sCarrier}, beside {@code %1$sSrc} and {@code %1$sDst}, whose {@code @Bridge} field
+   * converts {@code qty}, read by {@code srcAccessor} and {@code dstAccessor}, through the class
+   * {@code %1$sMap}: both ways through {@code Telescope.mapper}, or forward through the lenient
+   * {@code Telescope.mapperForward}.
+   */
+  private static JavaFileObject carrier(
+    final String prefix,
+    final String srcAccessor,
+    final String dstAccessor,
+    final boolean lenient
+  ) {
+    return ProcessorHarness.source(
+      PACKAGE + "." + prefix + "Carrier",
+      (
+        "package " +
+        PACKAGE +
+        ";\npublic final class %1$sCarrier {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  public static final io.github.eschizoid.telescope.conversion." +
+        (lenient ? "ForwardMapper" : "Mapper") +
+        "<%1$sSrc, %1$sDst> MAPPER = io.github.eschizoid.telescope.Telescope." +
+        (lenient ? "mapperForward" : "mapper") +
+        "(%1$sSrc.class, %1$sDst.class," +
+        " io.github.eschizoid.telescope.mapping.Mapping.via(%1$sSrc::" +
+        srcAccessor +
+        ", %1$sDst::" +
+        dstAccessor +
+        ", %1$sMap.class));\n}\n"
+      ).formatted(prefix)
+    );
   }
 
   private static JavaFileObject bridge(final String fromType, final String toType) {
@@ -61,12 +94,15 @@ class ViaMapperPrimitiveTest {
         "demo.PSrc",
         """
         package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.via;
+        import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.annotations.Bridge;
-        import io.github.eschizoid.telescope.annotations.ViaMapper;
-        @Bridge(value = demo.PDst.class, viaMappers = {
-          @ViaMapper(field = "qty", using = demo.QtyBridge.class)
-        })
-        public record PSrc(String id, %s qty) {}
+        import io.github.eschizoid.telescope.conversion.Mapper;
+        public record PSrc(String id, %s qty) {
+          @Bridge
+          public static final Mapper<PSrc, PDst> MAPPER = Telescope.mapper(PSrc.class, PDst.class,
+            via(PSrc::qty, PDst::qty, QtyBridge.class));
+        }
         """.formatted(srcQty)
       ),
       ProcessorHarness.source("demo.PDst", "package demo; public record PDst(String id, %s qty) {}".formatted(tgtQty)),
@@ -80,7 +116,7 @@ class ViaMapperPrimitiveTest {
     final var compilation = compile(pair("int", "String"));
 
     assertTrue(compilation.success(), () -> "an int cannot be null-checked: " + compilation.errorMessages());
-    final var generated = compilation.generated().get("demo.PSrcBridge");
+    final var generated = compilation.generated().get("demo.PSrcToPDstBridge");
     assertFalse(
       generated.contains("__fs_qty == null"),
       () -> "a primitive local has no null to test for; saw " + generated
@@ -95,7 +131,7 @@ class ViaMapperPrimitiveTest {
     final var compilation = compile(pair("String", "int"));
 
     assertTrue(compilation.success(), () -> "an int cannot be null-checked: " + compilation.errorMessages());
-    final var generated = compilation.generated().get("demo.PSrcBridge");
+    final var generated = compilation.generated().get("demo.PSrcToPDstBridge");
     assertFalse(generated.contains("__bt_qty == null"), () -> "the backward local is primitive; saw " + generated);
   }
 
@@ -106,14 +142,14 @@ class ViaMapperPrimitiveTest {
     final var compilation = compile(pair("String", "String"));
 
     assertTrue(compilation.success(), () -> "the reference pair still bridges: " + compilation.errorMessages());
-    final var generated = compilation.generated().get("demo.PSrcBridge");
+    final var generated = compilation.generated().get("demo.PSrcToPDstBridge");
     assertTrue(generated.contains("__fs_qty == null"), () -> "a reference local keeps its gate; saw " + generated);
   }
 
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
 
   /**
-   * A {@code @ViaMapper} on {@code qty} from a source record holding {@code srcType} into a target
+   * A {@code via} row on {@code qty} from a source record holding {@code srcType} into a target
    * holding an {@code int}, a record or a bean whose setter records what it is handed, through a
    * mapper declaring {@code forward}; each class named with {@code prefix}.
    */
@@ -134,16 +170,10 @@ class ViaMapperPrimitiveTest {
     return new JavaFileObject[] {
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Src",
-        head +
-          (
-            "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, lenient = true, viaMappers =" +
-            " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n" +
-            "public record %1$sSrc(" +
-            srcType +
-            " qty) {}\n"
-          ).formatted(prefix)
+        head + ("public record %1$sSrc(" + srcType + " qty) {}\n").formatted(prefix)
       ),
       ProcessorHarness.source(PACKAGE + "." + prefix + "Dst", head + target.formatted(prefix)),
+      carrier(prefix, "qty", bean ? "getQty" : "qty", true),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Map",
         head +
@@ -166,7 +196,10 @@ class ViaMapperPrimitiveTest {
     throws ReflectiveOperationException {
     final var src = classes.get(PACKAGE + "." + prefix + "Src");
     final var source = src.getDeclaredConstructors()[0].newInstance(value);
-    final var target = classes.get(PACKAGE + "." + prefix + "SrcBridge").getMethod("forward", src).invoke(null, source);
+    final var target = classes
+      .get(PACKAGE + "." + prefix + "SrcTo" + prefix + "DstBridge")
+      .getMethod("forward", src)
+      .invoke(null, source);
     return target.getClass().getMethod(target.getClass().isRecord() ? "qty" : "getQty").invoke(target);
   }
 
@@ -230,17 +263,13 @@ class ViaMapperPrimitiveTest {
     final var compilation = compile(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Src",
-        head +
-          (
-            "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
-            " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n" +
-            "public record %1$sSrc(int qty) {}\n"
-          ).formatted(prefix)
+        head + "public record %1$sSrc(int qty) {}\n".formatted(prefix)
       ),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Dst",
         head + "public record %1$sDst(Integer qty) {}\n".formatted(prefix)
       ),
+      carrier(prefix, "qty", "qty", false),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Map",
         head +
@@ -257,7 +286,7 @@ class ViaMapperPrimitiveTest {
     final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
     final var target = dst.getDeclaredConstructors()[0].newInstance(value);
     final var source = classes
-      .get(PACKAGE + "." + prefix + "SrcBridge")
+      .get(PACKAGE + "." + prefix + "SrcTo" + prefix + "DstBridge")
       .getMethod("backward", dst)
       .invoke(null, target);
     return source.getClass().getMethod("qty").invoke(source);
@@ -299,15 +328,12 @@ class ViaMapperPrimitiveTest {
     "    return (T) (i == 1 ? null : i == 2 ? (Number) Long.valueOf(i) : Integer.valueOf(i + 1));\n  }\n";
 
   /**
-   * The classes of a {@code @ViaMapper} pair from a source holding an {@code int}, a record or a
+   * The classes of a {@code via} row's pair from a source holding an {@code int}, a record or a
    * bean written through its setter whose field starts at -1, to a target record holding an {@code
    * Integer}, through {@link #PATCHED_BACKWARD}; each class named with {@code prefix}.
    */
   private static Map<String, Class<?>> patchedPair(final String prefix, final boolean bean) {
     final var head = "package " + PACKAGE + ";\n";
-    final var bridge =
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
-      " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n";
     final var source = bean
       ? "public class %1$sSrc {\n" +
         "  private int qty = -1;\n" +
@@ -316,11 +342,12 @@ class ViaMapperPrimitiveTest {
         "  public void setQty(final int qty) { this.qty = qty; }\n}\n"
       : "public record %1$sSrc(int qty) {}\n";
     final var compilation = compile(
-      ProcessorHarness.source(PACKAGE + "." + prefix + "Src", head + (bridge + source).formatted(prefix)),
+      ProcessorHarness.source(PACKAGE + "." + prefix + "Src", head + source.formatted(prefix)),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Dst",
         head + "public record %1$sDst(Integer qty) {}\n".formatted(prefix)
       ),
+      carrier(prefix, bean ? "getQty" : "qty", "qty", false),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Map",
         head +
@@ -353,7 +380,7 @@ class ViaMapperPrimitiveTest {
     }
     final var target = dst.getDeclaredConstructors()[0].newInstance(partial);
     final var patched = classes
-      .get(PACKAGE + "." + prefix + "SrcBridge")
+      .get(PACKAGE + "." + prefix + "SrcTo" + prefix + "DstBridge")
       .getMethod("patch", src, dst)
       .invoke(null, base, target);
     return patched.getClass().getMethod(src.isRecord() ? "qty" : "getQty").invoke(patched);
@@ -447,25 +474,23 @@ class ViaMapperPrimitiveTest {
   }
 
   /**
-   * The classes of a {@code @ViaMapper} pair from a source of {@code member} kind holding {@code
+   * The classes of a {@code via} row's pair from a source of {@code member} kind holding {@code
    * wrapping}'s primitive to a target record holding its wrapper, through a mapper whose
    * non-generic {@code backward} returns the wrapper: null for 1, and otherwise the value plus one.
    */
   private static Map<String, Class<?>> wrapperPair(final String prefix, final Member member, final Wrapping wrapping) {
     final var head = "package " + PACKAGE + ";\n";
-    final var bridge =
-      "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sDst.class, viaMappers =" +
-      " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = %1$sMap.class))\n";
     final var wrapper = wrapping.wrapper();
     final var compilation = compile(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Src",
-        head + (bridge + member.declaration).formatted(prefix, wrapping.primitive())
+        head + member.declaration.formatted(prefix, wrapping.primitive())
       ),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Dst",
         head + "public record %1$sDst(%2$s qty) {}\n".formatted(prefix, wrapper)
       ),
+      carrier(prefix, member == Member.RECORD ? "qty" : "getQty", "qty", false),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Map",
         head +
@@ -520,7 +545,7 @@ class ViaMapperPrimitiveTest {
   ) throws ReflectiveOperationException {
     final var src = classes.get(PACKAGE + "." + prefix + "Src");
     final var dst = classes.get(PACKAGE + "." + prefix + "Dst");
-    final var bridge = classes.get(PACKAGE + "." + prefix + "SrcBridge");
+    final var bridge = classes.get(PACKAGE + "." + prefix + "SrcTo" + prefix + "DstBridge");
     final Object held =
       partial == null || wrapping.wrapper().equals("Integer") ? partial : (Object) partial.shortValue();
     final var target = dst.getDeclaredConstructors()[0].newInstance(held);
@@ -543,13 +568,8 @@ class ViaMapperPrimitiveTest {
     // primitive already: boxing it to coalesce it would allocate on every write.
     final var head = "package " + PACKAGE + ";\n";
     final var compilation = compile(
-      ProcessorHarness.source(
-        PACKAGE + ".VmpCoSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = VmpCoDst.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"qty\", using = VmpCoMap.class))\n" +
-          "public record VmpCoSrc(int qty) {}\n"
-      ),
+      ProcessorHarness.source(PACKAGE + ".VmpCoSrc", head + "public record VmpCoSrc(int qty) {}\n"),
+      carrier("VmpCo", "qty", "qty", false),
       ProcessorHarness.source(PACKAGE + ".VmpCoDst", head + "public record VmpCoDst(Integer qty) {}\n"),
       ProcessorHarness.source(
         PACKAGE + ".VmpCoMap",
@@ -560,7 +580,7 @@ class ViaMapperPrimitiveTest {
       )
     );
     assertTrue(compilation.success(), compilation::errorMessages);
-    final var generated = compilation.generated().get(PACKAGE + ".VmpCoSrcBridge");
+    final var generated = compilation.generated().get(PACKAGE + ".VmpCoSrcToVmpCoDstBridge");
     final var backward = generated.substring(generated.indexOf(" backward(final "), generated.indexOf(" patch(final "));
     final var patch = generated.substring(generated.indexOf(" patch(final "), generated.indexOf("class Fn"));
     for (final var body : List.of(backward, patch)) {

@@ -8,20 +8,73 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * The container shapes a {@code @ViaMapper} does not lift its mapper over. One whose methods take
- * the container itself converts the whole property, even where each side's element is a type
- * variable whose bound would admit the method's parameter. One on a map whose keys differ between
- * the sides is refused when the bridge is generated, as the reflective path refuses the same row
- * when its mapper is built.
+ * The container shapes a {@code via} row naming a class does not lift the class's methods over. One
+ * whose methods take the container itself converts the whole property, even where each side's
+ * element is a type variable whose bound would admit the method's parameter. One on a map whose
+ * keys differ between the sides is refused when the bridge is generated, as the reflective path
+ * refuses the same row when its mapper is built.
  */
-class ViaMapperContainerShapeTest {
+class ViaClassContainerShapeTest {
 
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
+
+  /**
+   * {@code <prefix>Carrier}, whose {@code @Bridge} field converts {@code <prefix>Src} into {@code
+   * <prefix>Tgt} by a {@code via} row naming {@code using}, reading the property by {@code
+   * srcAccessor} and {@code tgtAccessor}. {@code src} and {@code tgt} are the row's type arguments,
+   * a generic side given some, since a method reference to a member of a generic class names it
+   * raw. The field sits on a class of its own, so building a source never initialises it.
+   */
+  private static JavaFileObject carrier(
+    final String prefix,
+    final String src,
+    final String tgt,
+    final String srcAccessor,
+    final String tgtAccessor,
+    final String using
+  ) {
+    return ProcessorHarness.source(
+      PACKAGE + "." + prefix + "Carrier",
+      "package " +
+        PACKAGE +
+        ";\nfinal class " +
+        prefix +
+        "Carrier {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+        "  static final io.github.eschizoid.telescope.conversion.Mapper<" +
+        prefix +
+        "Src, " +
+        prefix +
+        "Tgt> MAPPER = io.github.eschizoid.telescope.Telescope.mapper(" +
+        prefix +
+        "Src.class, " +
+        prefix +
+        "Tgt.class, io.github.eschizoid.telescope.mapping.Mapping.<" +
+        src +
+        ", " +
+        tgt +
+        ">via(" +
+        src +
+        "::" +
+        srcAccessor +
+        ", " +
+        tgt +
+        "::" +
+        tgtAccessor +
+        ", " +
+        using +
+        ".class));\n}\n"
+    );
+  }
 
   @Test
   @DisplayName("a mapper of the whole list on a list both sides type by a variable is handed the list")
@@ -41,13 +94,9 @@ class ViaMapperContainerShapeTest {
       ),
       ProcessorHarness.source(
         PACKAGE + ".WlSrc",
-        "package " +
-          PACKAGE +
-          ";\n" +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = WlTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = WlListMap.class))\n" +
-          "public record WlSrc<X>(java.util.List<X> children) {}\n"
+        "package " + PACKAGE + ";\n" + "public record WlSrc<X>(java.util.List<X> children) {}\n"
       ),
+      carrier("Wl", "WlSrc<Object>", "WlTgt<Object>", "children", "children", "WlListMap"),
       ProcessorHarness.source(
         PACKAGE + ".WlTgt",
         "package " + PACKAGE + ";\npublic record WlTgt<Y>(java.util.List<Y> children) {}\n"
@@ -57,7 +106,7 @@ class ViaMapperContainerShapeTest {
     final var classes = compilation.define(MethodHandles.lookup());
     final var src = classes.get(PACKAGE + ".WlSrc");
     final var tgt = classes.get(PACKAGE + ".WlTgt");
-    final var bridge = classes.get(PACKAGE + ".WlSrcBridge");
+    final var bridge = classes.get(PACKAGE + ".WlSrcToWlTgtBridge");
     final var children = List.of("a", "b");
     final var source = src.getDeclaredConstructor(List.class).newInstance(children);
     final var forward = bridge.getMethod("forward", src).invoke(null, source);
@@ -87,13 +136,9 @@ class ViaMapperContainerShapeTest {
       ),
       ProcessorHarness.source(
         PACKAGE + ".WkSrc",
-        "package " +
-          PACKAGE +
-          ";\n" +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = WkTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = WkChMap.class))\n" +
-          "public record WkSrc(java.util.Map<String, WkCh> children) {}\n"
+        "package " + PACKAGE + ";\n" + "public record WkSrc(java.util.Map<String, WkCh> children) {}\n"
       ),
+      carrier("Wk", "WkSrc", "WkTgt", "children", "children", "WkChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WkTgt",
         "package " + PACKAGE + ";\npublic record WkTgt(java.util.Map<Integer, WkChDto> children) {}\n"
@@ -110,7 +155,7 @@ class ViaMapperContainerShapeTest {
   }
 
   /** The child pair {@code %1$sCh} and {@code %1$sChDto}. */
-  private static List<javax.tools.JavaFileObject> childPair(final String prefix) {
+  private static List<JavaFileObject> childPair(final String prefix) {
     return List.of(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Ch",
@@ -136,7 +181,7 @@ class ViaMapperContainerShapeTest {
     final String srcComponents,
     final String tgtComponents
   ) {
-    final var sources = new java.util.ArrayList<>(childPair(prefix));
+    final var sources = new ArrayList<>(childPair(prefix));
     sources.add(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "ChMap",
@@ -146,18 +191,21 @@ class ViaMapperContainerShapeTest {
     sources.add(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Src",
-        (
-          "package " +
-          PACKAGE +
-          ";\n" +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = %1$sChMap.class))\n" +
-          "public record " +
-          srcHeader +
-          "(" +
-          srcComponents +
-          ") {}\n"
-        ).formatted(prefix)
+        ("package " + PACKAGE + ";\n" + "public record " + srcHeader + "(" + srcComponents + ") {}\n").formatted(prefix)
+      )
+    );
+    // A generic source is named in the row by its variable's bound.
+    final var variable = srcHeader.indexOf('<');
+    final var bound = variable < 0 ? "" : srcHeader.substring(variable + 1, srcHeader.length() - 1);
+    final var argument = bound.contains(" extends ") ? bound.substring(bound.indexOf(" extends ") + 9) : "Object";
+    sources.add(
+      carrier(
+        prefix,
+        variable < 0 ? prefix + "Src" : prefix + "Src<" + argument + ">",
+        prefix + "Tgt",
+        "children",
+        "children",
+        prefix + "ChMap"
       )
     );
     sources.add(
@@ -169,7 +217,7 @@ class ViaMapperContainerShapeTest {
     return ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
-      sources.toArray(javax.tools.JavaFileObject[]::new)
+      sources.toArray(JavaFileObject[]::new)
     );
   }
 
@@ -189,7 +237,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WvSrc");
     final var ch = classes.get(PACKAGE + ".WvCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WvSrcBridge")
+      .get(PACKAGE + ".WvSrcToWvTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch, ch)));
     assertEquals("2", forward.getClass().getMethod("children").invoke(forward));
@@ -212,7 +260,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WsSrc");
     final var ch = classes.get(PACKAGE + ".WsCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WsSrcBridge")
+      .get(PACKAGE + ".WsSrcToWsTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (java.util.Set<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -237,7 +285,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WoSrc");
     final var ch = classes.get(PACKAGE + ".WoCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WoSrcBridge")
+      .get(PACKAGE + ".WoSrcToWoTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -259,7 +307,7 @@ class ViaMapperContainerShapeTest {
     assertFalse(compilation.success());
     assertTrue(
       compilation.hasError(
-        "@ViaMapper field=\"children\": " +
+        "via(...) of 'children': " +
           PACKAGE +
           ".WtChMap's forward " +
           PairingMessages.viaSeveralElementOverloads("java.util.List<X>")
@@ -321,7 +369,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WjSrc");
     final var ch = classes.get(PACKAGE + ".WjCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WjSrcBridge")
+      .get(PACKAGE + ".WjSrcToWjTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -345,7 +393,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WfSrc");
     final var ch = classes.get(PACKAGE + ".WfCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WfSrcBridge")
+      .get(PACKAGE + ".WfSrcToWfTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -373,13 +421,9 @@ class ViaMapperContainerShapeTest {
       ),
       ProcessorHarness.source(
         PACKAGE + ".WrSrc",
-        "package " +
-          PACKAGE +
-          ";\n" +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = WrTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = WrChMap.class))\n" +
-          "public record WrSrc(java.util.List<WrCh> children) {}\n"
+        "package " + PACKAGE + ";\n" + "public record WrSrc(java.util.List<WrCh> children) {}\n"
       ),
+      carrier("Wr", "WrSrc", "WrTgt<Object>", "children", "children", "WrChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WrTgt",
         "package " + PACKAGE + ";\npublic record WrTgt<Y>(java.util.List<Y> children) {}\n"
@@ -388,7 +432,7 @@ class ViaMapperContainerShapeTest {
     assertFalse(compilation.success());
     assertTrue(
       compilation.hasError(
-        "@ViaMapper field=\"children\": " +
+        "via(...) of 'children': " +
           PACKAGE +
           ".WrChMap's backward " +
           PairingMessages.viaSeveralElementOverloads("java.util.List<Y>")
@@ -417,7 +461,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WiSrc");
     final var ch = classes.get(PACKAGE + ".WiCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WiSrcBridge")
+      .get(PACKAGE + ".WiSrcToWiTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -456,11 +500,9 @@ class ViaMapperContainerShapeTest {
       ),
       ProcessorHarness.source(
         PACKAGE + ".WhSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = WhTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"v\", using = WhChMap.class))\n" +
-          "public class WhSrc extends WhBase<WhCh> { public WhSrc() {} }\n"
+        head + "public class WhSrc extends WhBase<WhCh> { public WhSrc() {} }\n"
       ),
+      carrier("Wh", "WhSrc", "WhTgt", "getV", "getV", "WhChMap"),
       ProcessorHarness.source(
         PACKAGE + ".WhTgt",
         head + "public class WhTgt extends WhBase<WhChDto> { public WhTgt() {} }\n"
@@ -474,7 +516,7 @@ class ViaMapperContainerShapeTest {
     base
       .getMethod("setV", List.class)
       .invoke(source, List.of(classes.get(PACKAGE + ".WhCh").getDeclaredConstructor(String.class).newInstance("a")));
-    final var forward = classes.get(PACKAGE + ".WhSrcBridge").getMethod("forward", src).invoke(null, source);
+    final var forward = classes.get(PACKAGE + ".WhSrcToWhTgtBridge").getMethod("forward", src).invoke(null, source);
     final var children = (List<?>) base.getMethod("getV").invoke(forward);
     assertEquals("GW:a", children.getFirst().getClass().getMethod("name").invoke(children.getFirst()));
   }
@@ -499,7 +541,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WuSrc");
     final var ch = classes.get(PACKAGE + ".WuCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WuSrcBridge")
+      .get(PACKAGE + ".WuSrcToWuTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     assertNull(forward.getClass().getMethod("children").invoke(forward));
@@ -536,13 +578,8 @@ class ViaMapperContainerShapeTest {
           "    for (final var d : l) out.add(new WkCh(\"RKB:\" + d.name()));\n" +
           "    return (R) out;\n  }\n}\n"
       ),
-      ProcessorHarness.source(
-        PACKAGE + ".WkSrc",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(value = WkTgt.class, viaMappers =" +
-          " @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"children\", using = WkChMap.class))\n" +
-          "public record WkSrc(java.util.List<WkCh> children) {}\n"
-      ),
+      ProcessorHarness.source(PACKAGE + ".WkSrc", head + "public record WkSrc(java.util.List<WkCh> children) {}\n"),
+      carrier("Wk", "WkSrc", "WkTgt", "children", "children", "WkChMap"),
       ProcessorHarness.source(PACKAGE + ".WkTgt", head + "public record WkTgt(java.util.List<WkChDto> children) {}\n")
     );
     assertTrue(compilation.success(), compilation::errorMessages);
@@ -550,7 +587,7 @@ class ViaMapperContainerShapeTest {
     final var src = classes.get(PACKAGE + ".WkSrc");
     final var ch = classes.get(PACKAGE + ".WkCh").getDeclaredConstructor(String.class).newInstance("a");
     final var forward = classes
-      .get(PACKAGE + ".WkSrcBridge")
+      .get(PACKAGE + ".WkSrcToWkTgtBridge")
       .getMethod("forward", src)
       .invoke(null, src.getDeclaredConstructor(List.class).newInstance(List.of(ch)));
     final var children = (List<?>) forward.getClass().getMethod("children").invoke(forward);
@@ -580,7 +617,7 @@ class ViaMapperContainerShapeTest {
     assertFalse(compilation.success(), "a result bounded by String cannot be written into a list");
     assertTrue(
       compilation.hasError(
-        "@ViaMapper field=\"children\": " +
+        "via(...) of 'children': " +
           PACKAGE +
           ".WzChMap's forward returns R, which no instantiation of its type variables lets the member WzTgt" +
           " writes children through take"
@@ -590,7 +627,7 @@ class ViaMapperContainerShapeTest {
   }
 
   /**
-   * Compiles a @ViaMapper whose mapper class {@code %1$sChMap} declares {@code body}, on a source
+   * Compiles a via row naming the class {@code %1$sChMap}, which declares {@code body}, on a source
    * whose {@code children} is {@code srcType} and a target whose {@code children} is {@code
    * tgtType}, and returns the refusal the processor reports for a mapper no value fits, or null.
    */
@@ -599,8 +636,9 @@ class ViaMapperContainerShapeTest {
     return compilation
       .errors()
       .stream()
-      .map(d -> d.getMessage(java.util.Locale.ROOT))
+      .map(d -> d.getMessage(Locale.ROOT))
       .filter(m -> m.contains("never holds"))
+      .map(m -> m.replaceFirst("^In the rows of @Bridge field \\w+\\.\\w+: ", ""))
       .findFirst()
       .orElse(null);
   }
@@ -703,7 +741,7 @@ class ViaMapperContainerShapeTest {
     );
     assertFalse(compilation.success());
     assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WnfChMap declares no forward"),
+      compilation.hasError("via(...) of 'children': " + PACKAGE + ".WnfChMap declares no forward"),
       compilation::errorMessages
     );
   }
@@ -755,7 +793,7 @@ class ViaMapperContainerShapeTest {
     );
     assertFalse(compilation.success());
     assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WpChMap's forward has several overloads"),
+      compilation.hasError("via(...) of 'children': " + PACKAGE + ".WpChMap's forward has several overloads"),
       compilation::errorMessages
     );
   }
@@ -775,7 +813,7 @@ class ViaMapperContainerShapeTest {
     assertFalse(compilation.success());
     assertTrue(
       compilation.hasError(
-        "@ViaMapper field=\"children\": " + PACKAGE + ".Wo2ChMap's forward takes no value of java.lang.Object"
+        "via(...) of 'children': " + PACKAGE + ".Wo2ChMap's forward takes no value of java.lang.Object"
       ),
       compilation::errorMessages
     );
@@ -793,7 +831,7 @@ class ViaMapperContainerShapeTest {
     );
     assertFalse(compilation.success());
     assertTrue(
-      compilation.hasError("@ViaMapper field=\"children\": " + PACKAGE + ".WnbChMap declares no backward"),
+      compilation.hasError("via(...) of 'children': " + PACKAGE + ".WnbChMap declares no backward"),
       compilation::errorMessages
     );
   }

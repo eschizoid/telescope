@@ -157,6 +157,17 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   /** The {@code @Bridge} fields of the units entered, in the order entered. */
   private final List<FieldBridge> fieldBridges = new ArrayList<>();
 
+  /**
+   * What each {@code @Bridge} field declared in its source's package says of its pair, by pair,
+   * read from its rows during the processing rounds. The bridge processor refuses a pair declared
+   * twice, and a compilation with an error never reaches the analysis that reads these, so each
+   * pair here has the one declaration.
+   */
+  private final Map<String, OwnBridgeRule.Bridge> fieldSettings = new HashMap<>();
+
+  /** The {@code @Bridge} fields whose rows have been read, as {@code owner#field}. */
+  private final Set<String> fieldsRead = new HashSet<>();
+
   // The binary names of the classes a @Bridge in those units is on or names, read once they are all
   // entered; null until then.
   private Set<String> bridgeNamed;
@@ -260,9 +271,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
-    // All scanning happens in the post-ANALYZE task listener registered in init(); the rounds
-    // themselves are a no-op. One NOTE when the tree API isn't available (non-javac compiler) —
-    // verification is additive, the construction-time validation still applies.
+    // All scanning happens in the post-ANALYZE task listener registered in init(); the rounds only
+    // read the rows of each @Bridge field, while its trees are whole. One NOTE when the tree API
+    // isn't available (non-javac compiler) — verification is additive, the construction-time
+    // validation still applies.
+    if (!off && trees != null) readFieldSettings();
     if (!off && trees == null && !notedUnavailable) {
       notedUnavailable = true;
       processingEnv
@@ -298,121 +311,17 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   }
 
   /**
-   * What each {@code @Bridge} on a class in this compilation, naming its target as {@code value},
-   * says of the pair of that class and its target, as the bridge the processor generates for it
-   * reports it at run time: the properties of each side it does not walk ({@link
-   * BridgeProcessor.Unwalked}), and whether it takes the active path ({@link
-   * BridgeProcessor#takesActivePath}). A pair two bridges name is left out, as is a bridge on a
-   * carrier class, which construction finds through its registration.
+   * What each {@code @Bridge} field in this compilation says of its pair: the properties of each
+   * side its bridge does not walk ({@link BridgeProcessor.Unwalked}), and whether it takes the
+   * active path ({@link BridgeProcessor#takesActivePath}). A {@code @Bridge} on a class has no rows
+   * and walks every property of both sides, so it stands in only where nothing the mapper is given
+   * lies below the pair, and walking the pair instead finds nothing there to report; it is left
+   * out.
    */
   private Map<String, OwnBridgeRule.Bridge> bridgeSettings() {
     if (bridgeSettings != null) return bridgeSettings;
-    final var settings = new HashMap<String, OwnBridgeRule.Bridge>();
-    final var twice = new HashSet<String>();
-    for (final var unit : units.values()) {
-      for (final var declaration : unit.getTypeDecls()) {
-        if (trees.getElement(TreePath.getPath(unit, declaration)) instanceof TypeElement type) {
-          collectBridgeSettings(type, settings, twice);
-        }
-      }
-    }
-    for (final var key : twice) settings.remove(key);
-    bridgeSettings = settings;
-    return settings;
-  }
-
-  private void collectBridgeSettings(
-    final TypeElement type,
-    final Map<String, OwnBridgeRule.Bridge> settings,
-    final Set<String> twice
-  ) {
-    for (final var mirror : type.getAnnotationMirrors()) {
-      if (!(mirror.getAnnotationType().asElement() instanceof TypeElement annotation)) continue;
-      final var name = annotation.getQualifiedName().toString();
-      if (name.equals(BRIDGE_FQN)) collectBridgeSetting(type, mirror, settings, twice);
-      else if (name.equals(BRIDGES_FQN)) {
-        for (final var each : listValue(mirror, "value")) {
-          if (each.getValue() instanceof AnnotationMirror nested) collectBridgeSetting(type, nested, settings, twice);
-        }
-      }
-    }
-    for (final var member : type.getEnclosedElements()) {
-      if (member instanceof TypeElement nested) collectBridgeSettings(nested, settings, twice);
-    }
-  }
-
-  private void collectBridgeSetting(
-    final TypeElement source,
-    final AnnotationMirror bridge,
-    final Map<String, OwnBridgeRule.Bridge> settings,
-    final Set<String> twice
-  ) {
-    // A carrier names its pair with source and target, and is found through its registration.
-    if (annotationValue(bridge, "source") != null || annotationValue(bridge, "target") != null) return;
-    final var value = annotationValue(bridge, "value");
-    if (!(value != null && value.getValue() instanceof DeclaredType declared)) return;
-    if (!(declared.asElement() instanceof TypeElement target)) return;
-    final var drops = new ArrayList<String>();
-    for (final var drop : listValue(bridge, "drops")) {
-      if (drop.getValue() instanceof String field) drops.add(field);
-    }
-    final var renamedTo = new HashMap<String, List<String>>();
-    for (final var each : listValue(bridge, "renames")) {
-      if (!(each.getValue() instanceof AnnotationMirror rename)) continue;
-      final var from = stringValue(rename, "source");
-      final var to = stringValue(rename, "target");
-      if (from != null && to != null) renamedTo.computeIfAbsent(from, k -> new ArrayList<>()).add(to);
-    }
-    final var unwalked = BridgeProcessor.Unwalked.of(
-      drops,
-      fieldsNamed(bridge, "transforms"),
-      fieldsNamed(bridge, "viaMappers"),
-      fieldsNamed(bridge, "constants"),
-      fieldsNamed(bridge, "computes"),
-      renamedTo
-    );
-    final var key = pairKey(source, target);
-    final var takesPath = bridges.takesActivePath(source, target);
-    final var setting = new OwnBridgeRule.Bridge(true, unwalked.source(), unwalked.target(), takesPath);
-    if (settings.putIfAbsent(key, setting) != null) {
-      twice.add(key);
-    }
-  }
-
-  /**
-   * The {@code field} each annotation in the list {@code bridge} holds under {@code name} names.
-   */
-  private static List<String> fieldsNamed(final AnnotationMirror bridge, final String name) {
-    final var fields = new ArrayList<String>();
-    for (final var each : listValue(bridge, name)) {
-      if (each.getValue() instanceof AnnotationMirror mirror && stringValue(mirror, "field") != null) {
-        fields.add(stringValue(mirror, "field"));
-      }
-    }
-    return fields;
-  }
-
-  private static AnnotationValue annotationValue(final AnnotationMirror mirror, final String name) {
-    for (final var entry : mirror.getElementValues().entrySet()) {
-      if (entry.getKey().getSimpleName().contentEquals(name)) return entry.getValue();
-    }
-    return null;
-  }
-
-  private static List<? extends AnnotationValue> listValue(final AnnotationMirror mirror, final String name) {
-    final var value = annotationValue(mirror, name);
-    if (value == null) return List.of();
-    if (value.getValue() instanceof List<?> list) {
-      final var values = new ArrayList<AnnotationValue>();
-      for (final var each : list) if (each instanceof AnnotationValue element) values.add(element);
-      return values;
-    }
-    return List.of(value);
-  }
-
-  private static String stringValue(final AnnotationMirror mirror, final String name) {
-    final var value = annotationValue(mirror, name);
-    return value != null && value.getValue() instanceof String string ? string : null;
+    bridgeSettings = Map.copyOf(fieldSettings);
+    return bridgeSettings;
   }
 
   private void collectBridges(final TypeElement type, final Set<String> named) {
@@ -451,14 +360,80 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           .anyMatch(name -> name.equals("Bridge") || name.equals(BRIDGE_FQN));
         if (!annotated || call.getArguments().size() < 2) continue;
         fieldBridges.add(
-          new FieldBridge(unit, pkg + type.getSimpleName(), List.copyOf(call.getArguments().subList(0, 2)))
+          new FieldBridge(
+            unit,
+            pkg + type.getSimpleName(),
+            field.getName().toString(),
+            List.copyOf(call.getArguments().subList(0, 2))
+          )
         );
       }
     }
   }
 
-  /** A {@code @Bridge} field's class, by name, and the two class literals its mapper call names. */
-  private record FieldBridge(CompilationUnitTree unit, String owner, List<? extends ExpressionTree> sides) {}
+  /**
+   * A {@code @Bridge} field's class, by name, the field's name, and the two class literals its
+   * mapper call names.
+   */
+  private record FieldBridge(
+    CompilationUnitTree unit,
+    String owner,
+    String field,
+    List<? extends ExpressionTree> sides
+  ) {}
+
+  /**
+   * Reads the rows of each recorded {@code @Bridge} field declared in its source's package, as the
+   * bridge processor reads them, into what its bridge leaves unwalked: the properties it drops,
+   * converts or fills, and the target properties it writes them into. Construction finds such a
+   * bridge by the name of its pair, beside the source. A field in another package finds its bridge
+   * through its registration, as a {@code @Bridge} on a carrier class does, and is left out. A
+   * field whose rows the reader refuses, such as one naming a class a later round writes or a
+   * getter Lombok has yet to add, is read again in the next round.
+   */
+  private void readFieldSettings() {
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var bridge : fieldBridges) {
+      final var key = bridge.owner() + "#" + bridge.field();
+      if (fieldsRead.contains(key)) continue;
+      final var owner = elements.getTypeElement(bridge.owner());
+      if (owner == null) continue;
+      final var field = ElementFilter.fieldsIn(owner.getEnclosedElements())
+        .stream()
+        .filter(f -> f.getSimpleName().contentEquals(bridge.field()))
+        .findFirst()
+        .orElse(null);
+      if (field == null) continue;
+      final var read = rows.read(field);
+      if (read instanceof FieldRows.Refused) continue;
+      fieldsRead.add(key);
+      final var parsed = (FieldRows.Parsed) read;
+      if (!elements.getPackageOf(parsed.source()).equals(elements.getPackageOf(owner))) continue;
+      final var renamedTo = new HashMap<String, List<String>>();
+      for (final var rename : parsed.renames().entrySet()) {
+        final var filled = new ArrayList<String>();
+        filled.add(rename.getValue());
+        filled.addAll(parsed.fanouts().getOrDefault(rename.getKey(), List.of()));
+        renamedTo.put(rename.getKey(), filled);
+      }
+      final var unwalked = BridgeProcessor.Unwalked.of(
+        parsed.drops(),
+        parsed.transforms().keySet(),
+        parsed.viaMappers().keySet(),
+        parsed.computes().keySet(),
+        renamedTo
+      );
+      final var pair = pairKey(parsed.source(), parsed.target());
+      final var setting = new OwnBridgeRule.Bridge(
+        true,
+        unwalked.source(),
+        unwalked.target(),
+        bridges.takesActivePath(parsed.source(), parsed.target())
+      );
+      fieldSettings.put(pair, setting);
+      bridgeSettings = null;
+    }
+  }
 
   /** The classes the pair of each recorded {@code @Bridge} field names, resolved by name. */
   private void collectFieldBridges(final Set<String> named) {
@@ -1452,9 +1427,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
     /**
      * Whether construction certainly converts the pair of {@code source} and {@code target} through
-     * a bridge of its own rather than walking it: a {@code @Bridge} in this compilation names the
-     * pair, whose settings say which properties the bridge walks and whether it takes the active
-     * path ({@link #bridgeSettings}), and the shared decision lets it stand in.
+     * a bridge of its own rather than walking it: a {@code @Bridge} field in this compilation names
+     * the pair, whose settings say which properties the bridge walks and whether it takes the
+     * active path ({@link #bridgeSettings}), and the shared decision lets it stand in.
      */
     private boolean standsIn(
       final OwnBridgeRule<TypeMirror> rule,

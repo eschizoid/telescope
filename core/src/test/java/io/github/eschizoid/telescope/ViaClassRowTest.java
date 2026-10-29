@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A {@code via} row naming a class: the runtime path chooses the class's {@code forward} and {@code
- * backward} for the property's types, as the {@code @Bridge} processor chooses them for a
- * {@code @ViaMapper}, and refuses by name where it cannot choose.
+ * backward} for the property's types, as the {@code @Bridge} processor chooses them for the same
+ * row on a mapper field, and refuses by name where it cannot choose.
  */
 class ViaClassRowTest {
 

@@ -225,7 +225,8 @@ public final class DeepMap {
     if (NativeImage.IN_IMAGE) return null;
     final var accessors = new ArrayList<String>(steps.length);
     for (final var step : steps) {
-      if (!(step instanceof Mapping<?, ?> row)) return null;
+      // A write hint names a class rather than accessors; its kind is compared above.
+      if (!(step instanceof Mapping<?, ?> row)) continue;
       accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
     }
     if (accessors.equals(provider.rowAccessors())) return null;
@@ -313,7 +314,7 @@ public final class DeepMap {
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
     // trail rides along so explain() can surface the field decisions this resolution just made.
     if (r.cases != null) return Mapper.ofCases(r.iso, source, target, r.cases, trail);
-    return Mapper.ofIso(r.iso, source, target, r.patchTable, trail);
+    return Mapper.ofIso(r.iso, source, target, r.patchTable, trail, r.sourceRefl);
   }
 
   private static List<OpticNode> noted(final List<OpticNode> trail, final OpticNode note) {
@@ -472,7 +473,7 @@ public final class DeepMap {
           value -> inInvocation(FORWARD_SEEN, ownBridges, source, target, value, iso::to),
           value -> inInvocation(BACKWARD_SEEN, ownBridges, target, source, value, iso::from)
         );
-    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail));
+    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), pickReflective(source, beanRefl));
   }
 
   /**
@@ -557,9 +558,7 @@ public final class DeepMap {
     WriteHint.WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
       if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteHint.WriteStrategy strat))) continue;
-      if (defaultStrategy != null) throw new IllegalArgumentException(
-        "Duplicate writeBeans(...) default — at most one default write strategy per" + " Telescope.map(...) call."
-      );
+      if (defaultStrategy != null) throw new IllegalArgumentException(PairingMessages.duplicateWriteBeansDefault());
       defaultStrategy = strat;
     }
     return defaultStrategy;
@@ -1910,7 +1909,14 @@ public final class DeepMap {
         null
       );
       iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
-      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of());
+      mapper = Mapper.ofIso(
+        (Iso) cache.get(pair),
+        source,
+        target,
+        patchTableOf(steps, source),
+        List.of(),
+        pickReflective(source, beanRefl)
+      );
     } else {
       // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
       // decision says and has no fields to patch.
@@ -1934,7 +1940,7 @@ public final class DeepMap {
       final BiFunction<Object, Object, Object> rebuild = (base, partial) -> base;
       mapper = source.isEnum()
         ? Mapper.ofPatcher((Iso) iso, source, target, rebuild, List.of())
-        : Mapper.ofIso((Iso) iso, source, target, Map.of(), List.of());
+        : Mapper.ofIso((Iso) iso, source, target, Map.of(), List.of(), pickReflective(source, beanRefl));
     }
     return Map.entry(new Mapper.CaseEntry(source, target, mapper), iso);
   }
@@ -3431,14 +3437,16 @@ public final class DeepMap {
 
   /**
    * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso, the patch
-   * table, and, for a pair of two sealed interfaces, each source case's mapper; {@code cases} is
-   * null for any other pair.
+   * table, for a pair of two sealed interfaces each source case's mapper ({@code cases} is null for
+   * any other pair), and the reflective that rebuilds the source, which carries the call's write
+   * hints so a patch builds a bean the way backward does.
    */
   private record Resolution<A, B>(
     Iso<A, B> iso,
     Map<String, Mapper.PatchEntry> patchTable,
     List<Mapper.CaseEntry> cases,
-    List<OpticNode> trail
+    List<OpticNode> trail,
+    Reflective sourceRefl
   ) {}
 
   /**

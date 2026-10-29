@@ -1,17 +1,21 @@
 package io.github.eschizoid.telescope.codegen.lombok.fixtures;
 
+import static io.github.eschizoid.telescope.Telescope.mapperForward;
+import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
+
 import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Transform;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 
 /**
  * Fixture: the source of a bridge into {@link OrderedLombokTarget}, converting both of its
- * components through {@link OrderedLog}.
+ * components forward through {@link OrderedLog}.
  */
-@Bridge(
-  value = OrderedLombokTarget.class,
-  transforms = {
-    @Transform(field = "firstLo", using = OrderedLog.class, forwardOnly = true),
-    @Transform(field = "secondLo", using = OrderedLog.class, forwardOnly = true),
-  }
-)
-public record OrderedLombokSource(String firstLo, String secondLo) {}
+public record OrderedLombokSource(String firstLo, String secondLo) {
+  @Bridge
+  public static final ForwardMapper<OrderedLombokSource, OrderedLombokTarget> TARGET = mapperForward(
+    OrderedLombokSource.class,
+    OrderedLombokTarget.class,
+    toOneWay(OrderedLombokSource::firstLo, OrderedLombokTarget::getFirstLo, OrderedLog.INSTANCE::forward),
+    toOneWay(OrderedLombokSource::secondLo, OrderedLombokTarget::getSecondLo, OrderedLog.INSTANCE::forward)
+  );
+}

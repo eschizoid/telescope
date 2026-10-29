@@ -35,7 +35,7 @@ public class TransformResultWideBenchmark {
 
   @Benchmark
   public BenchTxTgt generated() {
-    return BenchTxWideSrcBridge.forward(source);
+    return BenchTxWideSrcToBenchTxTgtBridge.forward(source);
   }
 
   @Benchmark

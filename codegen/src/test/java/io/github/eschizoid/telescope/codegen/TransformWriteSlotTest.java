@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * A field is read through its getter and written through whichever member the rebuild picks, and
  * those are different types often enough to matter. A setter may be declared wider than its getter,
  * a builder method narrower, and a name-matched constructor parameter either — so judging a
- * transform against the declaration asks about a member the emission may never write through.
+ * converting row against the declaration asks about a member the emission may never write through.
  *
  * <p>Which member that is depends on the rung the rebuild stops at, and the rungs disagree: the
  * same target can carry a wide setter the emission ignores because a builder outranks it. So the
@@ -41,7 +41,15 @@ class TransformWriteSlotTest {
     return compile(targetBody, "AUTO");
   }
 
+  /**
+   * {@code demo.Src} converting {@code v} into the target {@code targetBody} declares through
+   * {@code Fn}, with a {@code writeBean} hint on the target when {@code writeStrategy} is not
+   * {@code AUTO}. The target's accessor for {@code v} is its getter, or its component where it is a
+   * record.
+   */
   private static ProcessorHarness.Compilation compile(final String targetBody, final String writeStrategy) {
+    final var accessor = targetBody.startsWith("public record") ? "Tgt::v" : "Tgt::getV";
+    final var hint = writeStrategy.equals("AUTO") ? "" : ", writeBean(Tgt.class, WriteStrategy." + writeStrategy + ")";
     return ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
@@ -51,14 +59,18 @@ class TransformWriteSlotTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.to;
+          import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          import io.github.eschizoid.telescope.annotations.WriteStrategy;
-          @Bridge(value = demo.Tgt.class, writeStrategy = WriteStrategy.%s, transforms = {
-            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
-          })
-          public record Src(String v) {}
-          """.formatted(writeStrategy)
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+          public record Src(String v) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,
+              to(Src::v, %s, Fn.class)%s);
+          }
+          """.formatted(accessor, hint)
         ),
         ProcessorHarness.source("demo.Tgt", "package demo;\n" + targetBody),
       }
@@ -72,7 +84,7 @@ class TransformWriteSlotTest {
   private static void assertRefusedByTheCheck(final ProcessorHarness.Compilation c) {
     assertFalse(c.success(), "this write cannot compile, so the row has to be refused");
     assertTrue(
-      c.hasError("@Transform field=\"v\""),
+      c.hasError("a converting row of 'v'"),
       () -> "and refused here, not by javac inside the generated file: " + c.errorMessages()
     );
   }
@@ -221,12 +233,15 @@ class TransformWriteSlotTest {
           "demo.Carrier",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.to;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(source = demo.Src.class, target = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class)
-          })
-          public final class Carrier {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public final class Carrier {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,
+              to(Src::getV, Tgt::v, Fn.class));
+          }
           """
         ),
         ProcessorHarness.source("demo.Src", "package demo;\n" + sourceBody),
@@ -238,12 +253,10 @@ class TransformWriteSlotTest {
   @Test
   @DisplayName("the source's own slot decides the backward direction, as the target's does the forward")
   void theSourceSlotDecidesBackward() {
-    // A forward-only row short-circuits `backwardFits`, so the source-side slot is never read --
-    // and while every row was one, reverting that half of the change left them all green. This row
-    // and its control below are two-way, so the backward store is the thing under test.
-    //
-    // Backward hands back a Number and stores it into the source. Its getter says String and its
-    // setter takes Object, and the setter is what the rebuild writes.
+    // The rows above pass a value backward that every source slot takes, so only this row and its
+    // control below put the backward store under test. Backward hands back a Number and stores it
+    // into the source. Its getter says String and its setter takes Object, and the setter is what
+    // the rebuild writes.
     final var compilation = compileTwoWay(
       """
       public class Src {
@@ -281,7 +294,7 @@ class TransformWriteSlotTest {
 
     assertFalse(compilation.success(), "this backward write cannot compile, so the row has to be refused");
     assertTrue(
-      compilation.hasError("@Transform field=\"v\""),
+      compilation.hasError("a converting row of 'v'"),
       () -> "and refused here, not by javac inside the generated file: " + compilation.errorMessages()
     );
   }
@@ -303,75 +316,6 @@ class TransformWriteSlotTest {
         }
         """
       )
-    );
-  }
-
-  @Test
-  @DisplayName("a direction nothing describes is not asked which slot it writes")
-  void anUndescribedDirectionIsNotAskedForASlot() {
-    // A forward-only row whose transform raw-implements the interface, with a backward that binds
-    // no single member -- two of its overloads are unordered for the target's type -- and no type
-    // arguments to fall back on. So nothing says what backward stores. The row is allowed through
-    // because the direction it is actually about does carry, and then asking a slot about a value
-    // that does not exist hands a null to the resolver: the processor dies inside javac rather
-    // than answering.
-    final var compilation = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
-      new JavaFileObject[] {
-        ProcessorHarness.source(
-          "demo.Fn",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.conversion.BridgeFn;
-          @SuppressWarnings({ "rawtypes", "unchecked" })
-          public final class Fn implements BridgeFn {
-            public Object forward(final Object o) { return o; }
-            public Object backward(final Object o) { return o; }
-            public Object backward(final CharSequence c) { return c; }
-            public Object backward(final Comparable<?> c) { return c; }
-          }
-          """
-        ),
-        ProcessorHarness.source(
-          "demo.Src",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
-          })
-          public class Src {
-            private String v;
-            public Src() {}
-            public String getV() { return v; }
-            public void setV(final String v) { this.v = v; }
-          }
-          """
-        ),
-        ProcessorHarness.source(
-          "demo.Tgt",
-          """
-          package demo;
-          public class Tgt {
-            private String v;
-            public Tgt() {}
-            public String getV() { return v; }
-            public void setV(final Object v) { this.v = String.valueOf(v); }
-          }
-          """
-        ),
-      }
-    );
-
-    assertTrue(
-      compilation.success(),
-      () -> "the forward direction carries, so the row stands: " + compilation.errorMessages()
-    );
-    assertFalse(
-      compilation.errorMessages().contains("NullPointerException"),
-      () -> "and the processor answers rather than dying: " + compilation.errorMessages()
     );
   }
 
@@ -401,12 +345,15 @@ class TransformWriteSlotTest {
           "demo.Src",
           """
           package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.to;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
-          })
-          public record Src(String v) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public record Src(String v) {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,
+              to(Src::v, Tgt::getV, Fn.class));
+          }
           """
         ),
         ProcessorHarness.source(
@@ -414,10 +361,10 @@ class TransformWriteSlotTest {
           """
           package demo;
           public class Tgt {
-            private Number v;
+            private Double v;
             public Tgt() {}
-            public Number getV() { return v; }
-            public void setV(final Integer v) { this.v = v; }
+            public Double getV() { return v; }
+            public void setV(final Integer v) { this.v = v == null ? null : v.doubleValue(); }
           }
           """
         ),
@@ -426,7 +373,7 @@ class TransformWriteSlotTest {
 
     assertFalse(compilation.success(), "a Double reaches no setter here, so the row has to be refused");
     assertTrue(
-      compilation.hasError("@Transform field=\"v\""),
+      compilation.hasError("a converting row of 'v'"),
       () -> "and refused here, not by javac inside the generated file: " + compilation.errorMessages()
     );
     assertFalse(
@@ -438,9 +385,11 @@ class TransformWriteSlotTest {
   @Test
   @DisplayName("a refusal names the member only when the member is what refused")
   void theRefusalNamesTheSlotOnlyWhenTheSlotRefused() {
-    // A row can fail on the read instead -- the transform will not take what the getter gives --
+    // A row can fail on the read instead -- the conversion will not take what the property holds --
     // and there a member that accepts the value perfectly well had no part in it. Naming it then
-    // points the reader at something that is not the problem.
+    // points the reader at something that is not the problem. The source's property is declared
+    // with a type variable, held as Object, and the conversion takes a List of String, which no
+    // check of the value's class can show it is.
     final var readRefused = ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
@@ -450,9 +399,9 @@ class TransformWriteSlotTest {
           """
           package demo;
           import io.github.eschizoid.telescope.conversion.BridgeFn;
-          public final class Fn implements BridgeFn<Integer, Object> {
-            @Override public Object forward(final Integer i) { return i; }
-            @Override public Integer backward(final Object o) { return 0; }
+          public final class Fn implements BridgeFn<java.util.List<String>, Object> {
+            @Override public Object forward(final java.util.List<String> l) { return l; }
+            @Override public java.util.List<String> backward(final Object o) { return java.util.List.of(); }
           }
           """
         ),
@@ -460,12 +409,17 @@ class TransformWriteSlotTest {
           "demo.Src",
           """
           package demo;
+          import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
-          })
-          public record Src(String v) {}
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          import io.github.eschizoid.telescope.mapping.Mapping;
+          import java.util.List;
+          public record Src<X>(X v) {
+            @Bridge
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,
+              Mapping.<Src<List<String>>, Tgt, List<String>, Object>to(Src<List<String>>::v, Tgt::getV, Fn.class));
+          }
           """
         ),
         ProcessorHarness.source(
@@ -483,14 +437,15 @@ class TransformWriteSlotTest {
       }
     );
 
-    assertFalse(readRefused.success(), "the transform will not take a String, so the row is refused");
+    assertFalse(readRefused.success(), "the conversion will not take what the property holds, so the row is refused");
+    assertTrue(readRefused.hasError("a converting row of 'v' does not fit forward"), readRefused::errorMessages);
     assertFalse(
       readRefused.errorMessages().contains("written through"),
       () -> "the setter takes the value and had no part in this: " + readRefused.errorMessages()
     );
 
     // And where the store is what refused, the member is named -- otherwise the message says a
-    // transform does not carry String to String while the type that refused appears nowhere. The
+    // conversion does not carry String to String while the type that refused appears nowhere. The
     // builder is forced: its member cannot take the property's own type, so the auto order passes
     // it over.
     final var storeRefused = compile(

@@ -1,11 +1,20 @@
 package io.github.eschizoid.telescope.benchmarks;
 
-import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.Transform;
+import static io.github.eschizoid.telescope.Telescope.mapperForward;
+import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
 
-/** A bean whose one value a transform typed as that value fills on the target. */
-@Bridge(value = BenchTxTgt.class, transforms = @Transform(field = "value", using = BenchTxFn.class, forwardOnly = true))
+import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
+
+/** A bean whose one value a forward-only conversion typed as that value fills on the target. */
 public class BenchTxSrc {
+
+  @Bridge
+  public static final ForwardMapper<BenchTxSrc, BenchTxTgt> TGT = mapperForward(
+    BenchTxSrc.class,
+    BenchTxTgt.class,
+    toOneWay(BenchTxSrc::getValue, BenchTxTgt::getValue, BenchTxFn.INSTANCE::forward)
+  );
 
   private String value;
 

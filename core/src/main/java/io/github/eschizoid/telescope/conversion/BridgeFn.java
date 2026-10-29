@@ -136,7 +136,7 @@ public interface BridgeFn<A, B> {
 
   /**
    * The properties of the source this bridge does not walk: those it drops, and those it converts
-   * by a conversion of its own through a {@code @Transform} or a {@code @ViaMapper}. A runtime
+   * by a conversion of its own, a {@code to} row with converters or a {@code via} row. A runtime
    * mapper deciding whether this bridge may convert a nested pair for it looks only below the
    * properties the bridge walks. Read only when {@link #declaresUnwalkedProperties()} is true.
    * Empty by default.
@@ -146,9 +146,9 @@ public interface BridgeFn<A, B> {
   }
 
   /**
-   * The properties of the target this bridge does not walk: those a {@code @Transform} or a
-   * {@code @ViaMapper} writes, and those a {@code @Constant} or a {@code @Compute} fills. See
-   * {@link #unwalkedSourceProperties()}.
+   * The properties of the target this bridge does not walk: those a converting {@code to} row or a
+   * {@code via} row writes, and those a {@code constant} or a {@code compute} row fills. See {@link
+   * #unwalkedSourceProperties()}.
    */
   default Set<String> unwalkedTargetProperties() {
     return Set.of();

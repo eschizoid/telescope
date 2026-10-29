@@ -19,9 +19,10 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 /**
- * A list converted element by element through a hand-written converter: by a {@code @ViaMapper} on
- * the source's class, by a via row of the converter's two methods on a {@code @Bridge} field, and
- * by the same rows on the runtime path. A loop written by hand is the control.
+ * A list converted element by element through a hand-written converter: by a via row naming the
+ * converter's class on a {@code @Bridge} field of the source itself and of a holder class, by a via
+ * row of the converter's two methods on a {@code @Bridge} field, and by the same rows on the
+ * runtime path. A loop written by hand is the control.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
@@ -44,7 +45,7 @@ public class ViaRowBenchmark {
     final var items = new ArrayList<VbItem>(size);
     for (var i = 0; i < size; i++) items.add(new VbItem("n" + i, i));
     src = new VbSrc(items);
-    target = VbSrcBridge.BRIDGE_FN.forward(src);
+    target = VbSrcToVbTgtBridge.BRIDGE_FN.forward(src);
     runtimeMapper = Telescope.mapper(
       VbSrc.class,
       VbTgt.class,
@@ -86,12 +87,12 @@ public class ViaRowBenchmark {
 
   @Benchmark
   public VbTgt classform_via_mapper_forward() {
-    return VbSrcBridge.BRIDGE_FN.forward(src);
+    return VbSrcToVbTgtBridge.BRIDGE_FN.forward(src);
   }
 
   @Benchmark
   public VbSrc classform_via_mapper_backward() {
-    return VbSrcBridge.BRIDGE_FN.backward(target);
+    return VbSrcToVbTgtBridge.BRIDGE_FN.backward(target);
   }
 
   @Benchmark
