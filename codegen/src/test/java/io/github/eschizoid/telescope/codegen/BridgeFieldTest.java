@@ -305,6 +305,10 @@ class BridgeFieldTest {
       new String[] { "to(User::name, UserDto::name, AbstractFn.class)", "AbstractFn is abstract or not a class" },
       new String[] { "to(User::toString, UserDto::kind)", "User::toString is not the accessor of a property of User" },
       new String[] {
+        "constant(UserDto::nick, 5)",
+        "the value 5 is int, which the java.lang.String property 'nick' does not hold; write it as a java.lang.String value",
+      },
+      new String[] {
         "constant(UserDto::userId, 5)",
         "the value 5 is int, which the long property 'userId' does not hold; write it as a long value",
       },

@@ -3920,7 +3920,9 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "non-parseable constant value should fail");
       assertTrue(
-        compilation.hasError("the value \"v2\" is java.lang.String, which the int property 'version' does not hold"),
+        compilation.hasError(
+          "the value \"v2\" is java.lang.String, which the int property 'version' does not hold; write it as an int value"
+        ),
         () -> "expected parse-fail diagnostic; saw " + compilation.errorMessages()
       );
     }

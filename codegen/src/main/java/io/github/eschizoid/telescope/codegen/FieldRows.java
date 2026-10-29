@@ -1506,12 +1506,18 @@ final class FieldRows {
             shown(into) +
             " property '" +
             into.property() +
-            "' does not hold; write it as a " +
-            shown(into) +
+            "' does not hold; write it as " +
+            withArticle(shown(into)) +
             " value"
         );
       }
       return text;
+    }
+
+    /** {@code type} as a refusal names it after "a", or "an" before a vowel: "an int", "a long". */
+    private static String withArticle(final TypeMirror type) {
+      final var name = type.toString();
+      return ("aeiouAEIOU".indexOf(name.charAt(0)) >= 0 ? "an " : "a ") + name;
     }
 
     /** The type a refusal names {@code into}'s property by: the primitive, where it holds one. */

@@ -92,6 +92,25 @@ class WriteHintRowTest {
     "package wh; public record Half(Src inner) {}",
     "wh.HalfDto",
     "package wh; public record HalfDto(Acct inner) {}",
+    "wh.Deep",
+    "package wh; public record Deep(Half inner) {}",
+    "wh.DeepDto",
+    "package wh; public record DeepDto(HalfDto inner) {}",
+    "wh.Sh",
+    "package wh; public sealed interface Sh permits ShA {}",
+    "wh.ShA",
+    bean("ShA").replace(
+      "public class ShA {",
+      "@io.github.eschizoid.telescope.annotations.Bridge(ShADto.class)\npublic final class ShA implements Sh {"
+    ),
+    "wh.ShDto",
+    "package wh; public sealed interface ShDto permits ShADto {}",
+    "wh.ShADto",
+    "package wh; public record ShADto(String name) implements ShDto {}",
+    "wh.OuterS",
+    "package wh; public record OuterS(Sh inner) {}",
+    "wh.OuterSDto",
+    "package wh; public record OuterSDto(ShDto inner) {}",
     "wh.Wrap",
     "package wh; public record Wrap(Src inner) {}",
     "wh.WrapDto",
@@ -337,13 +356,18 @@ class WriteHintRowTest {
       new String[] {
         "Telescope.mapper(Many.class, ManyDto.class, writeBeans(WriteStrategy.SETTERS))",
         "Acct -> Ledger",
+      },
+      new String[] { "Telescope.mapper(Deep.class, DeepDto.class, writeBeans(WriteStrategy.SETTERS))", "Src -> Acct" },
+      new String[] {
+        "Telescope.mapper(OuterS.class, OuterSDto.class, writeBeans(WriteStrategy.SETTERS))",
+        "ShA -> ShADto",
       }
     );
   }
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("defaultsReachingANestedBean")
-  @DisplayName("a writeBeans default on a pair whose bridge builds a nested pair with a bean side is refused by name")
+  @DisplayName("a writeBeans default reaching a bean below records or through sealed cases is refused by name")
   void aDefaultReachingANestedBeanIsRefused(final String mapper, final String nested) {
     final var generated = generated(withMapper(mapper));
     assertFalse(generated.success());

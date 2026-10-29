@@ -201,11 +201,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> multiTargetSources = new HashSet<>();
 
   /**
-   * The refusal of a nested pair {@code sub} that a pair declared with a {@code writeBeans} default
+   * The refusal of a nested pair {@code sub} that a pair carrying a {@code writeBeans} default
    * rebuilds through a bean: the runtime mapper builds that bean with the default, and the bridge
-   * would hand it to a bridge of its own. Null where the parent has no default or the nested pair
-   * rebuilds only records. A pair of sealed interfaces given a default is refused before its cases
-   * are planned, since a default is a write strategy its cases' bridges would not reach.
+   * would hand it to a bridge of its own. Null where the parent carries no default or the nested
+   * pair has no bean side. A pair carries the default its own field declares, or the one a parent
+   * hands down to a nested pair with no bean side ({@link #inheritWriteDefault}), so a bean reached
+   * below records or through the cases of a sealed interface is refused where it is met.
    */
   private String writeDefaultReaches(
     final TypeElement parentSource,
@@ -229,6 +230,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       " through its own bridge, which the hint does not reach; key the hint to this pair's source or target" +
       " with writeBean(Class, strategy), and give the nested pair its own @Bridge field with its own hint"
     );
+  }
+
+  /**
+   * Hands the {@code writeBeans} default the pair of {@code parentSource} and {@code parentTarget}
+   * carries down to {@code sub}, a nested pair of it with no bean side, so a bean the nested pair
+   * reaches in turn, below its properties or through its cases, is refused as one the parent
+   * reaches directly is.
+   */
+  private void inheritWriteDefault(final TypeElement parentSource, final TypeElement parentTarget, final TypePair sub) {
+    final var strategy = writeDefaults.get(
+      new TypePair(parentSource.getQualifiedName().toString(), parentTarget.getQualifiedName().toString())
+    );
+    if (strategy != null) writeDefaults.putIfAbsent(sub, strategy);
   }
 
   /**
@@ -2575,6 +2589,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // already in the queue; this is idempotent via `seen`. Route Lombok-touching sub-pairs to
       // deferredPairs so they wait for processingOver() like the top-level deferred pairs.
       final var casePair = new TypePair(sourceCaseEl.getQualifiedName().toString(), targetCaseFq);
+      final var writeDefault = writeDefaultReaches(source, target, sourceCaseEl, targetCaseEl);
+      if (writeDefault != null) {
+        error(reportOn, writeDefault);
+        return;
+      }
+      inheritWriteDefault(source, target, casePair);
       if (seen.add(casePair)) {
         if (shouldDeferSubPair(sourceCaseEl, targetCaseEl)) deferredPairs.add(casePair);
         else pending.add(casePair);
@@ -3679,6 +3699,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(source, writeDefault);
           return null;
         }
+        inheritWriteDefault(source, target, subPair);
         if (!lenient) recordStrictReference(subPair, source, target, sf.type(), tf.type(), sf.name());
         // Sub-pairs whose source or target carries a Lombok-synthesizing annotation must wait for
         // processingOver() — same rationale as the top-level deferral. shouldDeferSubPair returns
@@ -3839,6 +3860,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(parentSource, writeDefault);
         return null;
       }
+      inheritWriteDefault(parentSource, parentTarget, subPair);
       if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
