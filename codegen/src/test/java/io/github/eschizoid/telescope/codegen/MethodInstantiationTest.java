@@ -196,7 +196,49 @@ class MethodInstantiationTest {
     new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<? extends CharSequence>", OPEN),
     new Call("<T> T m(List<T> t)", "List<? extends String>", "CharSequence", OPEN),
     new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<CharSequence>", REFUSED),
-    new Call("<T> T m(List<T> t)", "List<? extends String>", "Integer", REFUSED)
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "Integer", REFUSED),
+    new Call("<T> T m(List<List<T>> t)", "List<Set<String>>", "Object", REFUSED),
+    new Call("<T> T m(T[] t)", "String[]", "CharSequence", OPEN),
+    new Call("<T> T m(T[] t)", "String[]", "Integer", REFUSED),
+    new Call("<T extends Comparable<List<T>>> List<T> m()", null, "List<? super String>", REFUSED),
+    new Call("<T> List<List<T>> m()", null, "List<List<? extends String>>", REFUSED),
+    new Call("<T> List<M.Outer<List<T>>.Inner> m()", null, "List<M.Outer<Set<String>>.Inner>", REFUSED),
+    new Call("<T> M.Outer<List<T>>.Inner m()", null, "M.Outer<Set<String>>.Inner", REFUSED),
+    new Call(
+      "<T> List<M.Outer<T>.Inner> m()",
+      null,
+      "List<? super M.Outer<String>.Inner>",
+      "java.util.List<demo.M.Outer<java.lang.String>.Inner>"
+    ),
+    new Call("<T> List<M.Outer<List<T>>.Inner> m()", null, "List<? super M.Outer<Set<String>>.Inner>", REFUSED),
+    new Call(
+      "<T> Map<T, ? extends Number> m()",
+      null,
+      "Map<String, ? super Integer>",
+      "java.util.Map<java.lang.String,? extends java.lang.Number>"
+    ),
+    new Call("<T> List<? extends T> m()", null, "List<?>", OPEN),
+    new Call("<T> List<? super T> m()", null, "List<?>", OPEN),
+    new Call(
+      "<T> Map<T, List<? extends Number>> m()",
+      null,
+      "Map<String, List<? extends Number>>",
+      "java.util.Map<java.lang.String,java.util.List<? extends java.lang.Number>>"
+    ),
+    new Call(
+      "<T> List<List<? super T>> m()",
+      null,
+      "List<List<? super String>>",
+      "java.util.List<java.util.List<? super java.lang.String>>"
+    ),
+    new Call("<T> List<List<? super T>> m()", null, "List<List<? extends String>>", REFUSED),
+    new Call("<T> List<List<? extends T>> m()", null, "List<List<? super String>>", REFUSED),
+    new Call(
+      "<T> List<List<? extends T>> m()",
+      null,
+      "List<List<?>>",
+      "java.util.List<java.util.List<? extends java.lang.Object>>"
+    )
   );
 
   /** Asks the instantiation about each call in the first round and keeps the answers. */

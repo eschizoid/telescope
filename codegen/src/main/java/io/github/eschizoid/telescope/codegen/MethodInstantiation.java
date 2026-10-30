@@ -198,11 +198,10 @@ final class MethodInstantiation {
    * instantiation lets the parameter take it.
    */
   private boolean argumentMeetsParameter(final ExecutableType member, final TypeMirror argument, final Gathered into) {
-    if (argument == null || member.getParameterTypes().size() != 1) return true;
+    if (argument == null) return true;
     final var parameter = member.getParameterTypes().getFirst();
     if (!names(parameter, into.variables)) return true;
     final var handed = types.capture(boxed(argument));
-    if (!(handed instanceof DeclaredType) && !(handed instanceof ArrayType)) return true;
     if (!types.isSubtype(types.erasure(handed), types.erasure(parameter))) return true;
     return gather(parameter, handed, Relation.SUPERTYPE, into);
   }
@@ -231,8 +230,7 @@ final class MethodInstantiation {
         for (final var lower : lowers) {
           if (!(lower instanceof DeclaredType given)) continue;
           if (!types.isSubtype(types.erasure(lower), types.erasure(bound))) return false;
-          final var view = viewAs(given, (TypeElement) declared.asElement());
-          if (view != null && !containing(declared, view, into)) return false;
+          if (!containing(declared, viewAs(given, (TypeElement) declared.asElement()), into)) return false;
         }
         for (final var upper : uppers) {
           if (!(upper instanceof DeclaredType wanted)) continue;
@@ -429,12 +427,12 @@ final class MethodInstantiation {
             yield true;
           }
           final var view = viewAs(declared, (TypeElement) wanted.asElement());
-          yield view == null || (arguments(view, wanted, into, false) && enclosing(view, wanted, relation, into));
+          yield arguments(view, wanted, into, false) && enclosing(view, wanted, relation, into);
         }
         case SUPERTYPE -> {
           if (!types.isSubtype(types.erasure(met), types.erasure(given))) yield false;
           final var view = viewAs(wanted, (TypeElement) declared.asElement());
-          yield view == null || (containing(declared, view, into) && enclosing(declared, view, relation, into));
+          yield containing(declared, view, into) && enclosing(declared, view, relation, into);
         }
       };
     }
@@ -533,9 +531,8 @@ final class MethodInstantiation {
         gather(given.getSuperBound(), met.getSuperBound(), Relation.EXACT, into)
       );
     }
-    final var givenBound = given.getExtendsBound() == null ? objectType() : given.getExtendsBound();
     final var metBound = met.getExtendsBound() == null ? objectType() : met.getExtendsBound();
-    return gather(givenBound, metBound, Relation.EXACT, into);
+    return gather(given.getExtendsBound(), metBound, Relation.EXACT, into);
   }
 
   /** Whether {@code type} is {@code Object}. */
@@ -593,7 +590,11 @@ final class MethodInstantiation {
     return true;
   }
 
-  /** {@code type} as its supertype of class {@code element}, or null where none is found. */
+  /**
+   * {@code type} as its supertype of class {@code element}, or null where none is found. A type
+   * whose erasure is a subtype of the class's erasure always finds one, since each step up that
+   * subtype chain is a direct supertype of the one below it.
+   */
   private DeclaredType viewAs(final DeclaredType type, final TypeElement element) {
     if (type.asElement().equals(element)) return type;
     for (final var parent : types.directSupertypes(type)) {
