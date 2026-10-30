@@ -11026,6 +11026,32 @@ class CrossPathCorpusTest {
       "#0(line=#1(count=5, sku=\"a\"), total=1)"
     ),
     new NestedSourcePath(
+      "a bean path of two steps through setters, building an object whose other primitive setter is left unwritten",
+      false,
+      List.of(
+        sampledBean("%1$sSrc", "return new %1$sSrc();", "%1$sLine line", "int total"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setSku(\"s\"); t.setTotal(1); return t;",
+          "String sku",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        )
+      ),
+      "#0(sku=null, total=0)",
+      "#0(line=#1(count=4, sku=\"s\"), total=1)",
+      "#0(line=#1(count=4, sku=\"s\"), total=1)"
+    ),
+    new NestedSourcePath(
       "a record path of two steps through a bean built by its builder",
       false,
       List.of(
