@@ -10779,8 +10779,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "a", "b"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "a", "b")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b"))
     ),
     new SourceClaimedTwice(
       "the same fan-out with the runtime rows given the other way round",
@@ -10799,8 +10799,30 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "a", "b"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "b", "a")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("b", "a"))
+    ),
+    new SourceClaimedTwice(
+      "a property written into three targets, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::c)"
+        ),
+        "public record %1$sTgt(String a, String b, String c) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::c)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b", "c")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("c", "b", "a"))
     ),
     new SourceClaimedTwice(
       "a property written into a renamed target and its namesake by a two-way mapper",
@@ -10819,8 +10841,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "label", "n"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "label", "n")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n"))
     ),
     new SourceClaimedTwice(
       "the same namesake fan-out with the runtime rows given the other way round",
@@ -10839,8 +10861,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "label", "n"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "n", "label")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("n", "label"))
     ),
     new SourceClaimedTwice(
       "a fan-out through one two-way conversion, with the runtime rows given the other way round",
@@ -10860,8 +10882,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, fn::forward, fn::backward)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "x", "y"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "y", "x")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("x", "y")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("y", "x"))
     ),
     new SourceClaimedTwice(
       "a fan-out whose rows convert the property differently, by a two-way mapper",
@@ -10881,8 +10903,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::b, fn::forward, fn::backward)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "a", "b"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", "a", "b")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b"))
     ),
     new SourceClaimedTwice(
       "a fan-out through via rows, with the runtime rows given the other way round",
@@ -10904,8 +10926,8 @@ class CrossPathCorpusTest {
           "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::x, via)"
         )
       ),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", "x", "y"),
-      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", "y", "x")
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", List.of("x", "y")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", List.of("y", "x"))
     ),
     new SourceClaimedTwice(
       "a property dropped and then written into its namesake",

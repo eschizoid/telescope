@@ -2358,7 +2358,7 @@ class BridgeFieldTest {
       new String[] {
         "  @Bridge static final Mapper<User, UserDto> USER = Telescope.mapper(User.class, UserDto.class," +
         " to(User::name, UserDto::name), to(User::name, UserDto::nick));",
-        PairingMessages.fanOutBothWays("User", "UserDto", "name", "name", "nick"),
+        PairingMessages.fanOutBothWays("User", "UserDto", "name", List.of("name", "nick")),
       },
       new String[] {
         "  static final class Inner {\n    @Bridge static final ForwardMapper<User, UserDto> USER =" +

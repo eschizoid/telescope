@@ -1341,9 +1341,13 @@ public final class DeepMap {
       // writes is not known.
       var unknownTgtWrite = false;
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
-      // Which source properties the rows drop and write, and into which targets, as the shared
-      // spec refuses a property claimed twice.
+      // Which source properties the pair drops and writes, and into which targets, as the shared
+      // spec refuses a property claimed twice. A write is a row backward reads the property back
+      // from: an accessor row, a target path fed by an accessor, and a source path one field hop
+      // long.
       final var sourceWrites = new SourceWrites(source.getSimpleName(), target.getSimpleName(), !forwardOnly);
+      // Target paths that name no property are told apart by the order they come in.
+      var unnamedPaths = 0;
 
       for (final var rawRow : rowsAt(overrides, key)) {
         // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
@@ -1373,6 +1377,16 @@ public final class DeepMap {
             final var firstTgtHop = tRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            // Backward reads the source property back from the path, at any depth, unless a
+            // `when` gates the row, which backward leaves out.
+            if (rawRow == row) {
+              final var named = tRow.targetTelescope().pathName();
+              final var claimed = sourceWrites.write(
+                srcField,
+                named != null ? named : "an unnamed path (" + ++unnamedPaths + ")"
+              );
+              if (claimed != null) throw new IllegalArgumentException(claimed);
+            }
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1385,7 +1399,14 @@ public final class DeepMap {
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
             final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
-            if (readsOne) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            if (readsOne) {
+              pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
+              final var claimed = sourceWrites.write(
+                srcRefl.normalize(firstSrcHop),
+                tgtRefl.normalize(row.targetField())
+              );
+              if (claimed != null) throw new IllegalArgumentException(claimed);
+            }
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1701,6 +1722,9 @@ public final class DeepMap {
           addDispatched(trailOut, name, autoSrcType, autoTgtType, sealedCases);
         }
       }
+
+      final var fannedOut = sourceWrites.fanOutRefusal();
+      if (fannedOut != null) throw new IllegalArgumentException(fannedOut);
 
       for (final var name : srcNames) {
         if (claimedSrc.contains(name)) continue;

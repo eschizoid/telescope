@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.mapping.Mapping;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -62,7 +64,12 @@ class SameSourceMultiTargetTest {
         )
       );
       assertEquals(
-        PairingMessages.fanOutBothWays("SourceRow", "TargetRow", "businessUnit", "cretnUserId", "lastUpdtdUserId"),
+        PairingMessages.fanOutBothWays(
+          "SourceRow",
+          "TargetRow",
+          "businessUnit",
+          List.of("cretnUserId", "lastUpdtdUserId")
+        ),
         refused.getMessage()
       );
     }
@@ -79,7 +86,12 @@ class SameSourceMultiTargetTest {
         )
       );
       assertEquals(
-        PairingMessages.fanOutBothWays("SourceRow", "TargetRow", "businessUnit", "lastUpdtdUserId", "cretnUserId"),
+        PairingMessages.fanOutBothWays(
+          "SourceRow",
+          "TargetRow",
+          "businessUnit",
+          List.of("lastUpdtdUserId", "cretnUserId")
+        ),
         refused.getMessage()
       );
     }
@@ -96,7 +108,12 @@ class SameSourceMultiTargetTest {
         )
       );
       assertEquals(
-        PairingMessages.fanOutBothWays("SourceRow", "TargetRow", "businessUnit", "cretnUserId", "lastUpdtdUserId"),
+        PairingMessages.fanOutBothWays(
+          "SourceRow",
+          "TargetRow",
+          "businessUnit",
+          List.of("cretnUserId", "lastUpdtdUserId")
+        ),
         refused.getMessage()
       );
     }
@@ -126,7 +143,7 @@ class SameSourceMultiTargetTest {
         )
       );
       assertEquals(
-        PairingMessages.fanOutBothWays("Inner", "InnerDto", "businessUnit", "cretnUserId", "lastUpdtdUserId"),
+        PairingMessages.fanOutBothWays("Inner", "InnerDto", "businessUnit", List.of("cretnUserId", "lastUpdtdUserId")),
         refused.getMessage()
       );
     }
@@ -177,6 +194,153 @@ class SameSourceMultiTargetTest {
         )
       );
       assertEquals(PairingMessages.droppedAndWritten("SourceRow", "TargetRow", "businessUnit"), refused.getMessage());
+    }
+  }
+
+  record Src(String n) {}
+
+  record Tgt(String a, String b) {}
+
+  record Three(String a, String b, String c) {}
+
+  record Ad(String a, String b) {}
+
+  record Deep(Ad addr) {}
+
+  record Single(String a) {}
+
+  private static final Telescope<Src, String> SRC_N = Telescope.of(Src.class).field(Src::n);
+
+  private static Telescope<Tgt, String> tgt(final Telescope.Accessor<Tgt, String> property) {
+    return Telescope.of(Tgt.class).field(property);
+  }
+
+  /** The message of the refusal building {@code mapper} throws. */
+  private static String refused(final Runnable mapper) {
+    return assertThrows(IllegalArgumentException.class, mapper::run).getMessage();
+  }
+
+  private static String fanOut(final String target, final String... targets) {
+    return PairingMessages.fanOutBothWays("Src", target, "n", List.of(targets));
+  }
+
+  @Nested
+  @DisplayName("a row with a path on one side writes the property as an accessor row does")
+  class PathRows {
+
+    @Test
+    @DisplayName("two source paths one field hop long are refused in the order given")
+    void twoSourcePaths() {
+      assertEquals(
+        fanOut("Tgt", "a", "b"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(SRC_N, Tgt::a), to(SRC_N, Tgt::b)))
+      );
+      assertEquals(
+        fanOut("Tgt", "b", "a"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(SRC_N, Tgt::b), to(SRC_N, Tgt::a)))
+      );
+    }
+
+    @Test
+    @DisplayName("two target paths fed by one accessor are refused in the order given")
+    void twoTargetPaths() {
+      assertEquals(
+        fanOut("Tgt", "a", "b"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(Src::n, tgt(Tgt::a)), to(Src::n, tgt(Tgt::b))))
+      );
+      assertEquals(
+        fanOut("Tgt", "b", "a"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(Src::n, tgt(Tgt::b)), to(Src::n, tgt(Tgt::a))))
+      );
+    }
+
+    @Test
+    @DisplayName("a path row beside an accessor row is refused, either side a path, either order")
+    void pathBesideAccessor() {
+      assertEquals(
+        fanOut("Tgt", "a", "b"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(Src::n, tgt(Tgt::a)), to(Src::n, Tgt::b)))
+      );
+      assertEquals(
+        fanOut("Tgt", "b", "a"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(Src::n, Tgt::b), to(Src::n, tgt(Tgt::a))))
+      );
+      assertEquals(
+        fanOut("Tgt", "a", "b"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(SRC_N, Tgt::a), to(Src::n, Tgt::b)))
+      );
+      assertEquals(
+        fanOut("Tgt", "b", "a"),
+        refused(() -> Telescope.mapper(Src.class, Tgt.class, to(Src::n, Tgt::b), to(SRC_N, Tgt::a)))
+      );
+    }
+
+    @Test
+    @DisplayName("target paths below a property are read back too, and named by the properties they step through")
+    void deepTargetPaths() {
+      final var a = Telescope.of(Deep.class).field(Deep::addr).field(Ad::a);
+      final var b = Telescope.of(Deep.class).field(Deep::addr).field(Ad::b);
+      assertEquals(
+        fanOut("Deep", "addr.a", "addr.b"),
+        refused(() -> Telescope.mapper(Src.class, Deep.class, to(Src::n, a), to(Src::n, b)))
+      );
+      assertEquals(
+        fanOut("Deep", "addr.b", "addr.a"),
+        refused(() -> Telescope.mapper(Src.class, Deep.class, to(Src::n, b), to(Src::n, a)))
+      );
+    }
+
+    @Test
+    @DisplayName("three targets are named once each, whichever kind of row writes them")
+    void threeTargets() {
+      assertEquals(
+        fanOut("Three", "a", "b", "c"),
+        refused(() ->
+          Telescope.mapper(
+            Src.class,
+            Three.class,
+            to(Src::n, Three::a),
+            to(Src::n, Telescope.of(Three.class).field(Three::b)),
+            to(Src::n, Three::c)
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a forward-only mapper broadcasts through path rows")
+    void forwardOnlyBroadcasts() {
+      final var mapper = Telescope.mapperForward(Src.class, Tgt.class, to(SRC_N, Tgt::a), to(Src::n, tgt(Tgt::b)));
+      assertEquals(new Tgt("v", "v"), mapper.forward(new Src("v")));
+    }
+
+    @Test
+    @DisplayName("a row a when(...) gates is not read back, so it writes no second target")
+    void gatedPathIsNoSecondTarget() {
+      final var mapper = Telescope.mapper(
+        Src.class,
+        Tgt.class,
+        to(Src::n, Tgt::a),
+        Mapping.<Src, Tgt>when(s -> true, to(Src::n, tgt(Tgt::b)))
+      );
+      assertEquals(new Src("A"), mapper.backward(new Tgt("A", "B")));
+    }
+
+    @Test
+    @DisplayName("a drop beside a path row writing the property is refused, either side a path, either order")
+    void dropBesidePath() {
+      final var dropped = PairingMessages.droppedAndWritten("Src", "Single", "n");
+      final var single = Telescope.of(Single.class).field(Single::a);
+      assertEquals(dropped, refused(() -> Telescope.mapper(Src.class, Single.class, drop(Src::n), to(Src::n, single))));
+      assertEquals(dropped, refused(() -> Telescope.mapper(Src.class, Single.class, to(Src::n, single), drop(Src::n))));
+      assertEquals(
+        dropped,
+        refused(() -> Telescope.mapperForward(Src.class, Single.class, drop(Src::n), to(SRC_N, Single::a)))
+      );
+      assertEquals(
+        dropped,
+        refused(() -> Telescope.mapperForward(Src.class, Single.class, to(SRC_N, Single::a), drop(Src::n)))
+      );
     }
   }
 }

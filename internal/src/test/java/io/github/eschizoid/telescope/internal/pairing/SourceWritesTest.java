@@ -1,19 +1,57 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class SourceWritesTest {
 
   @Test
-  @DisplayName("a mapper that converts both ways refuses a second target, naming both in row order")
+  @DisplayName("a mapper that converts both ways refuses a second target, naming both in the order written")
   void twoWayRefusesASecondTarget() {
     final var writes = new SourceWrites("Src", "Tgt", true);
     assertNull(writes.write("n", "b"));
-    assertEquals(PairingMessages.fanOutBothWays("Src", "Tgt", "n", "b", "a"), writes.write("n", "a"));
+    assertNull(writes.fanOutRefusal());
+    assertNull(writes.write("n", "a"));
+    assertTrue(writes.fannedOut("n"));
+    assertEquals(PairingMessages.fanOutBothWays("Src", "Tgt", "n", List.of("b", "a")), writes.fanOutRefusal());
+  }
+
+  @Test
+  @DisplayName("the refusal names every target the property is written into, each once")
+  void everyTargetNamedOnce() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    for (final var target : List.of("a", "b", "a", "addr.city")) assertNull(writes.write("n", target));
+    assertEquals(
+      PairingMessages.fanOutBothWays("Src", "Tgt", "n", List.of("a", "b", "addr.city")),
+      writes.fanOutRefusal()
+    );
+  }
+
+  @Test
+  @DisplayName("the refusal is of the property that reached a second target first")
+  void firstFanOutRefused() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    assertNull(writes.write("m", "x"));
+    assertNull(writes.write("n", "a"));
+    assertNull(writes.write("n", "b"));
+    assertNull(writes.write("m", "y"));
+    assertEquals(PairingMessages.fanOutBothWays("Src", "Tgt", "n", List.of("a", "b")), writes.fanOutRefusal());
+  }
+
+  @Test
+  @DisplayName("one target written twice is not a fan-out")
+  void oneTargetTwiceIsNoFanOut() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    assertNull(writes.write("n", "a"));
+    assertNull(writes.write("n", "a"));
+    assertFalse(writes.fannedOut("n"));
+    assertNull(writes.fanOutRefusal());
   }
 
   @Test
@@ -23,6 +61,8 @@ class SourceWritesTest {
     assertNull(writes.write("n", "a"));
     assertNull(writes.write("n", "b"));
     assertNull(writes.write("n", "n"));
+    assertFalse(writes.fannedOut("n"));
+    assertNull(writes.fanOutRefusal());
   }
 
   @Test
@@ -31,6 +71,7 @@ class SourceWritesTest {
     final var writes = new SourceWrites("Src", "Tgt", true);
     assertNull(writes.write("n", "a"));
     assertNull(writes.write("m", "b"));
+    assertNull(writes.fanOutRefusal());
   }
 
   @Test

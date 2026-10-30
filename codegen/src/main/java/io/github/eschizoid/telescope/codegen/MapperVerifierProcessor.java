@@ -704,7 +704,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var tgtSimple = tgtEl.getSimpleName().toString();
       final var claimedSrc = new LinkedHashSet<String>();
       final var claimedTgt = new LinkedHashSet<String>();
-      final var writes = new SourceWrites(srcSimple, tgtSimple, strict);
+      final var writes = new PairWrites(srcSimple, tgtSimple, strict);
       final var hintTargets = new HashSet<String>();
       var analyzable = true;
       var permissive = false;
@@ -737,7 +737,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           analyzable = false;
           continue;
         }
-        analyzable &= verifyRow(
+        final var read = verifyRow(
           row,
           rowExec,
           srcType,
@@ -749,6 +749,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           writes,
           !strict
         );
+        analyzable &= read;
+        if (!read) pathWrite(row, rowExec, srcEl, tgtEl, writes);
         permissive |= isPermissiveRow(row, rowExec);
       }
 
@@ -771,6 +773,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       // property of its own then.
       final var srcProps = propertiesOf(srcType, srcEl);
       final var tgtProps = propertiesOf(tgtType, tgtEl);
+      writes.reportFanOut();
       final var rootBridged = !strict && args.size() == 2 && bridgeVisible(srcEl, tgtEl);
       if (analyzable && !rootBridged) {
         final var match = PairingRules.matchFields(
@@ -1478,15 +1481,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         final var claimedTgt = new HashSet<String>();
         final var sourceName = sourceEl.getSimpleName().toString();
         final var targetName = targetEl.getSimpleName().toString();
-        final var writes = new SourceWrites(sourceName, targetName, strict);
+        final var writes = new PairWrites(sourceName, targetName, strict);
         for (final var row : applied) {
           final var reported = !(key.equals(root) && own.contains(row));
           if (row.kind() == PairWalk.RowKind.DROP) {
             final var dropped = propertyName(row.sourceAccessor(), sourceEl);
-            final var claimed = writes.drop(dropped);
-            if (claimed != null) {
-              if (reported) report(rowsAt.get(row), claimed);
-            } else if (!claimedSrc.add(dropped) && reported) {
+            if (!writes.drop(dropped, rowsAt.get(row), reported) && !claimedSrc.add(dropped) && reported) {
               report(rowsAt.get(row), PairingMessages.duplicateSourceRow(sourceName, targetName, dropped));
             }
           } else if (row.kind() == PairWalk.RowKind.PASS_THROUGH || row.kind() == PairWalk.RowKind.CONVERTING) {
@@ -1499,14 +1499,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               continue;
             }
             final var read = propertyName(row.sourceAccessor(), sourceEl);
-            final var claimed = writes.write(read, written);
-            if (claimed != null) {
-              if (reported) report(rowsAt.get(row), claimed);
-              continue;
-            }
+            if (writes.write(read, written, rowsAt.get(row), reported)) continue;
             claimedSrc.add(read);
           }
         }
+        writes.reportFanOut();
       }
     }
 
@@ -1578,6 +1575,52 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var bridge = bridgeSettings().get(pairKey(sourceEl, targetEl));
       if (bridge == null || rule.settingReason(source, target, around) != null) return false;
       return rule.reachReason(source, target, around, bridge) == null;
+    }
+
+    /**
+     * The shared spec's account of the writes of one pair ({@link SourceWrites}), reporting a drop
+     * beside a write at the second of the two rows, and a fan-out once every write is recorded, at
+     * the write that gave its property a second target.
+     */
+    private final class PairWrites {
+
+      private final SourceWrites writes;
+      private final Map<String, Tree> fannedOutAt = new LinkedHashMap<>();
+
+      PairWrites(final String source, final String target, final boolean backward) {
+        this.writes = new SourceWrites(source, target, backward);
+      }
+
+      /**
+       * Records a write at {@code at}, reported there when {@code reported}; whether the write was
+       * refused for a drop beside it.
+       */
+      boolean write(final String srcField, final String tgtField, final Tree at, final boolean reported) {
+        final var claimed = writes.write(srcField, tgtField);
+        if (claimed != null) {
+          if (reported) report(at, claimed);
+          return true;
+        }
+        if (writes.fannedOut(srcField) && !fannedOutAt.containsKey(srcField)) {
+          fannedOutAt.put(srcField, reported ? at : null);
+        }
+        return false;
+      }
+
+      /** Records a drop at {@code at}, as {@link #write} does; whether it was refused. */
+      boolean drop(final String srcField, final Tree at, final boolean reported) {
+        final var claimed = writes.drop(srcField);
+        if (claimed != null && reported) report(at, claimed);
+        return claimed != null;
+      }
+
+      /** Reports the first fan-out the writes recorded, at the write that made it one. */
+      void reportFanOut() {
+        final var refusal = writes.fanOutRefusal();
+        if (refusal == null) return;
+        final var at = fannedOutAt.values().iterator().next();
+        if (at != null) report(at, refusal);
+      }
     }
 
     /**
@@ -1935,6 +1978,72 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
+     * Records the write a {@code to} row with a path on one side makes, as construction counts it:
+     * an accessor of the call's source into a target path rooted at the call's target, which
+     * backward reads the property back from at any depth, or a source path one {@code field} hop
+     * long rooted at the call's source into an accessor of the call's target, which reads that one
+     * property. Any other row, and a path this does not read, is left to construction.
+     */
+    private void pathWrite(
+      final MethodInvocationTree row,
+      final ExecutableElement rowExec,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final PairWrites writes
+    ) {
+      if (!rowExec.getSimpleName().contentEquals("to") || row.getArguments().size() != 2) return;
+      final var args = row.getArguments();
+      final var src = accessorProp(args.get(0));
+      final var tgt = accessorProp(args.get(1));
+      if (src != null && tgt == null) {
+        final var named = fieldPath(args.get(1), tgtEl);
+        if (named != null && sameClass(src.owner(), srcEl)) writes.write(
+          src.name(),
+          String.join(".", named),
+          row,
+          true
+        );
+        return;
+      }
+      if (src == null && tgt != null) {
+        final var named = fieldPath(args.get(0), srcEl);
+        final var calls = telescopeCalls(args.get(0));
+        if (named != null && calls.size() == 2 && sameClass(tgt.owner(), tgtEl)) {
+          writes.write(named.getFirst(), tgt.name(), row, true);
+        }
+      }
+    }
+
+    /**
+     * The properties an inline path {@code Telescope.of(root.class)} or {@code ofBean} steps
+     * through, one per {@code field} hop, with {@code filter} and {@code observe} left out; or null
+     * for a path with any other step, or rooted at another class.
+     */
+    private List<String> fieldPath(final ExpressionTree arg, final TypeElement root) {
+      final var calls = telescopeCalls(arg);
+      if (calls == null || calls.getFirst().getArguments().size() != 1) return null;
+      final var rootName = factoryName(calls.getFirst());
+      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return null;
+      final var rooted = classLiteral(calls.getFirst().getArguments().getFirst());
+      if (rooted == null || !types.isSameType(types.erasure(rooted), types.erasure(root.asType()))) return null;
+      final var names = new ArrayList<String>();
+      for (final var call : calls.subList(1, calls.size())) {
+        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+        if ("filter".equals(name) || "observe".equals(name)) continue;
+        if (!"field".equals(name) || call.getArguments().size() != 1) return null;
+        final var hop = accessorProp(call.getArguments().getFirst());
+        if (hop == null) return null;
+        names.add(hop.name());
+      }
+      return names.isEmpty() ? null : names;
+    }
+
+    /** Whether {@code owner} and {@code side} are one class. */
+    private boolean sameClass(final TypeElement owner, final TypeElement side) {
+      return types.isSameType(types.erasure(owner.asType()), types.erasure(side.asType()));
+    }
+
+    /**
      * The method name the first step of the telescope path {@code arg} reads its root through, as
      * construction reads a path's first hop, or null where the path is not written inline as a
      * chain from {@code Telescope.of} or {@code ofBean} whose first step reads through an accessor.
@@ -1983,7 +2092,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String tgtSimple,
       final Set<String> claimedSrc,
       final Set<String> claimedTgt,
-      final SourceWrites writes,
+      final PairWrites writes,
       final boolean forwardOnly
     ) {
       final var rowName = rowExec.getSimpleName().toString();
@@ -2016,11 +2125,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               report(row, PairingMessages.duplicateTargetRow(srcSimple, tgtSimple, tgt.name()));
               return true;
             }
-            final var claimed = writes.write(src.name(), tgt.name());
-            if (claimed != null) {
-              report(row, claimed);
-              return true;
-            }
+            // Construction refuses a toOneWay row of a mapper that converts both ways for itself.
+            final var refusedRow = "toOneWay".equals(rowName) && !forwardOnly;
+            if (!refusedRow && writes.write(src.name(), tgt.name(), row, true)) return true;
           }
           // Only the 2-arg same-typed to(src, tgt) carries no conversion — the one row shape the
           // runtime itself routes through the pairing decision at construction. Every other form
@@ -2042,16 +2149,15 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           if (src == null) return false;
           if (!types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType))) return true;
-          final var claimed = writes.drop(src.name());
-          if (claimed != null) {
-            report(row, claimed);
-          } else if (!claimedSrc.add(src.name())) {
+          if (!writes.drop(src.name(), row, true) && !claimedSrc.add(src.name())) {
             report(row, PairingMessages.duplicateSourceRow(srcSimple, tgtSimple, src.name()));
           }
           return true;
         }
         case "when" -> {
-          // Conditional wrapper: the predicate is opaque; the inner row is the real claim.
+          // Conditional wrapper: the predicate is opaque; the inner row is the real claim. Its
+          // writes are its own: backward leaves a gated row out, and construction refuses a
+          // flat row under when(...) for itself.
           if (rowArgs.size() == 2 && rowArgs.get(1) instanceof MethodInvocationTree inner) {
             final var innerMethod = elementAt(inner.getMethodSelect());
             if (innerMethod instanceof ExecutableElement innerExec) {
@@ -2064,7 +2170,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
                 tgtSimple,
                 claimedSrc,
                 claimedTgt,
-                writes,
+                new PairWrites(srcSimple, tgtSimple, false),
                 forwardOnly
               );
             }

@@ -272,6 +272,28 @@ public sealed class Telescope<
     return hops != null && !hasPendingEdits() && hops.size() == 1 && hops.getFirst().kind() == Fusion.Hop.Kind.FIELD;
   }
 
+  /**
+   * The properties this path steps through from its root, joined with dots, as {@code addr.city}:
+   * one per field, traversal or by-name hop, with filters, observers and narrowings left out. Null
+   * when the path records no hops, or a hop that names no property.
+   */
+  String pathName() {
+    if (hops == null) return null;
+    final var names = new ArrayList<String>();
+    for (final var hop : hops) {
+      switch (hop.kind()) {
+        case FIELD, TRAVERSE -> names.add(hop.component());
+        case BY_NAME -> names.add(String.valueOf(((List<?>) hop.key()).get(1)));
+        case FILTER, OBSERVE, NARROW -> {
+        }
+        case OPAQUE -> {
+          return null;
+        }
+      }
+    }
+    return names.isEmpty() ? null : String.join(".", names);
+  }
+
   // The index of the first hop that moves the focus off the path's root value: the first hop after
   // any leading filters, observers and narrowings, which all keep the focus on the root value. -1
   // when the path records no hops or none moves the focus.
@@ -908,10 +930,13 @@ public sealed class Telescope<
    * dispatch to them the same way.
    *
    * <p><b>One target per source property.</b> A mapper that converts both ways rebuilds each source
-   * property from one target, so rows writing one source property into a second target are refused
-   * by name when the mapper is built, whichever order they come in. {@link #mapperForward
-   * mapperForward} converts one way and writes a property into every target its rows name. A
-   * property is dropped or written, never both, on every factory.
+   * property from one target, so it refuses by name, when it is built, a source property written
+   * into a second target, whichever order the rows come in. A write of a property is a row reading
+   * it through its accessor, a target path its accessor feeds, at any depth, a source path one
+   * {@code field} hop long through it, or its pairing with the target property of its name. A row
+   * {@code when} gates is not read back, and writes nothing in this sense. {@link #mapperForward
+   * mapperForward} converts one way and writes a property into every target its rows name. On every
+   * factory, a property one row drops is written by no other.
    *
    * <p><b>Row kinds accepted.</b>
    *

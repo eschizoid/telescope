@@ -72,15 +72,16 @@ class TelescopeMappingTest {
       record Src(String label, Recipient recipient) {}
       record Tgt(String label, Recipient recipient) {}
 
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Src.class,
         Tgt.class,
         // Auto-recursion handles Src::label → Tgt::label and Src::recipient → Tgt::recipient.
-        // Both telescope rows read from Src::label and overlay it at different nested leaves
-        // —
-        // closest analogue to MapStruct's:
+        // Both telescope rows read Src::label and overlay it at different nested leaves, the
+        // closest analogue to MapStruct's
         //   @Mapping(source = "label", target = "recipient.fullName")
         //   @Mapping(source = "label", target = "recipient.greetingName")
+        // A two-way mapper would read label back from more than one target, so the fan-out
+        // takes a forward-only mapper.
         to(Src::label, Telescope.of(Tgt.class).field(Tgt::recipient).field(Recipient::fullName)),
         to(Src::label, Telescope.of(Tgt.class).field(Tgt::recipient).field(Recipient::greetingName))
       );

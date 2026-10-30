@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -377,17 +378,18 @@ public final class PairingMessages {
   }
 
   /**
-   * A source property rows write into two targets of a mapper that converts backward, which reads
-   * each source property back from one target: {@code firstTarget} is the one the earlier row
-   * writes, {@code secondTarget} the one the later row does.
+   * A source property a mapper that converts backward writes into several targets, {@code targets}
+   * in the order its rows write them: backward reads each source property back from one target.
    */
   public static String fanOutBothWays(
     final String source,
     final String target,
     final String srcField,
-    final String firstTarget,
-    final String secondTarget
+    final List<String> targets
   ) {
+    final var named = new ArrayList<String>();
+    for (final var each : targets) named.add("'" + each + "'");
+    final var listed = String.join(", ", named.subList(0, named.size() - 1)) + " and " + named.getLast();
     return (
       "Deep map " +
       source +
@@ -395,14 +397,13 @@ public final class PairingMessages {
       target +
       ": source property '" +
       srcField +
-      "' is written into both '" +
-      firstTarget +
-      "' and '" +
-      secondTarget +
-      "', and a mapper that converts both ways has no one target to read it back from. Fan it out one" +
-      " way with Telescope.mapperForward(...), give the extra targets one-way rows there, or write '" +
+      "' is written into " +
+      listed +
+      ", and a mapper that converts both ways has no one target to read it back from. Fan it out" +
+      " with Telescope.mapperForward(...), one row per target, or write '" +
       srcField +
-      "' with one two-way row."
+      "' into one target with a single two-way row and fill the others another way, such as a" +
+      " constant or compute row."
     );
   }
 

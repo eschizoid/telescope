@@ -4120,7 +4120,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "duplicate rename source should fail");
       assertTrue(
-        compilation.hasError(PairingMessages.fanOutBothWays("A", "B", "name", "a", "b")),
+        compilation.hasError(PairingMessages.fanOutBothWays("A", "B", "name", List.of("a", "b"))),
         () -> "expected duplicate-source diagnostic; saw " + compilation.errorMessages()
       );
     }

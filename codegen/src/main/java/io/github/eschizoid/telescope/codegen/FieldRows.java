@@ -488,6 +488,8 @@ final class FieldRows {
       final var refused = rows.read(args.get(i));
       if (refused != null) return refused;
     }
+    final var fannedOut = rows.fanOut();
+    if (fannedOut != null) return fannedOut;
     return rows.parsed();
   }
 
@@ -1294,6 +1296,10 @@ final class FieldRows {
       }
       final var claimed = sourceWrites.write(src, tgt);
       if (claimed != null) return new Refused(row, claimed);
+      if (sourceWrites.fannedOut(src)) {
+        fannedOutAt.putIfAbsent(src, row);
+        return null;
+      }
       final var primary = written.get(src);
       if (primary == null) {
         written.put(src, tgt);
@@ -1321,6 +1327,19 @@ final class FieldRows {
 
     private final Map<String, String> written = new LinkedHashMap<>();
     private final Map<String, Object> conversions = new LinkedHashMap<>();
+
+    /** The row that wrote each refused fan-out's second target, in the order they were met. */
+    private final Map<String, Tree> fannedOutAt = new LinkedHashMap<>();
+
+    /**
+     * The refusal of a source property the rows wrote into more than one target of a mapper that
+     * converts both ways, reported at the row giving its second target, once every row is read; or
+     * null.
+     */
+    Refused fanOut() {
+      final var refusal = sourceWrites.fanOutRefusal();
+      return refusal == null ? null : new Refused(fannedOutAt.values().iterator().next(), refusal);
+    }
 
     private String qualified(final String simple) {
       return pkg.isEmpty() ? simple : pkg + "." + simple;
