@@ -14,10 +14,10 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
  * <p>The {@link DeepMap} engine recognises this row at the <em>outer</em> {@code (sourceClass,
  * targetClass)} pair only (the pair from the enclosing {@link Telescope#mapper(Class, Class,
  * MapStep...)} call). It does not participate in the per-field claim assembly the way {@link
- * SameTypedTo} does; instead, after the base auto-mapping produces a target value, this row's
- * {@code targetTelescope.set(b, value)} overlays the leaf at the location the telescope resolves
- * to. The backward direction is the mirror: read at the target telescope, write to the source via
- * the accessor's lens.
+ * SameTypedTo} does; instead, after the base auto-mapping produces a target value, this row writes
+ * the source value at the location the telescope resolves to. The backward direction is the mirror:
+ * read at the target telescope, write to the source via the accessor's lens. How a null object on
+ * the path is written and read is set out on {@link Mapping#to(Accessor, Telescope)}.
  *
  * <p><b>Source field claim.</b> {@link #sourceField()} returns the source accessor's method name —
  * the engine treats this exactly like {@link SameTypedTo} for the source-must-be-claimed check.

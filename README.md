@@ -608,20 +608,25 @@ every source constant to exist in the target. Any other enum pair is refused whe
 time for `@Bridge`, with a message that names the missing constants.
 
 A row can read a nested source property through a typed path, which MapStruct spells
-`@Mapping(source = "customer.address.city", target = "city")`.
+`@Mapping(source = "customer.address.city", target = "city")`, or write a flat one into a nested target property, which
+it spells `@Mapping(source = "city", target = "customer.address.city")`.
 
 ```java
 Telescope.mapper(Order.class, OrderDto.class,
   to(Telescope.of(Order.class).field(Order::customer).field(Customer::address).field(Address::city),
      OrderDto::city));
+
+Telescope.mapper(OrderDto.class, Order.class,
+  to(OrderDto::city,
+     Telescope.of(Order.class).field(Order::customer).field(Customer::address).field(Address::city)));
 ```
 
-Forward reads the city, or the property's null value when the customer or the address is null: `null` for a reference,
-and zero for a primitive record component or constructor or builder argument, while a primitive setter is not called.
-Backward writes the city back through the path, building a missing customer or address on the way unless the city is
-null, which leaves it missing. `patch` writes a partial's non-null city the same way. A `@Bridge` field compiles the
-same row into a null-safe chain of reads, one local per object, and direct calls to each class's accessors and
-constructor, builder or setters.
+A read through the path gives the property's null value when the customer or the address is null: `null` for a
+reference, and zero for a primitive record component or constructor or builder argument, while a primitive setter is not
+called. A write through the path builds a missing customer or address on the way, unless the city is null, which leaves
+it missing. Each mapper reads one way and writes the other, and `patch` writes a partial's non-null city the way
+`backward` does. A `@Bridge` field compiles either row into a null-safe chain of reads, one local per object, and direct
+calls to each class's accessors and constructor, builder or setters.
 
 An object graph can lead back to an object that is still being converted, as when an employee's manager lists the
 employee among their reports. Telescope maps such a back-reference to `null`, on the runtime and the generated path

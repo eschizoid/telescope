@@ -10753,12 +10753,12 @@ class CrossPathCorpusTest {
 
   /**
    * A row reading the source through a path that steps through properties into a flat target
-   * property: the declarations, each with {@code %1$s} as the row's prefix and the last of them the
-   * runtime row, and what both paths owe for {@code Src.sample()} forward, {@code Tgt.sample()}
-   * backward, and {@code Tgt.sample()} laid over {@code Src.sample()}. A forward-only row owes no
-   * backward or patch.
+   * property, or writing a flat source property into the target through one: the declarations, each
+   * with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both paths
+   * owe for {@code Src.sample()} forward, {@code Tgt.sample()} backward, and {@code Tgt.sample()}
+   * laid over {@code Src.sample()}. A forward-only row owes no backward or patch.
    */
-  private record NestedSourcePath(
+  private record NestedPath(
     String name,
     boolean forwardOnly,
     List<String> declarations,
@@ -10836,8 +10836,8 @@ class CrossPathCorpusTest {
     );
   }
 
-  private static final List<NestedSourcePath> NESTED_SOURCE_PATHS = List.of(
-    new NestedSourcePath(
+  private static final List<NestedPath> NESTED_SOURCE_PATHS = List.of(
+    new NestedPath(
       "a record path of two steps into renamed targets, both ways",
       false,
       List.of(
@@ -10856,7 +10856,7 @@ class CrossPathCorpusTest {
       "#0(customer=#1(name=\"m\", age=7), qty=1)",
       "#0(customer=#1(name=\"m\", age=7), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of two steps through a null object, written back as null",
       false,
       List.of(
@@ -10870,7 +10870,7 @@ class CrossPathCorpusTest {
       "#0(customer=null, qty=1)",
       "#0(customer=null, qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of two steps through a null object, built backward for a value",
       false,
       List.of(
@@ -10884,7 +10884,7 @@ class CrossPathCorpusTest {
       "#0(customer=#1(name=\"m\", age=0), qty=1)",
       "#0(customer=#1(name=\"m\", age=0), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of three steps",
       false,
       threeSteps("new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 75), \"L\"), 3)", "new %1$sTgt(\"R\", 5, 1)"),
@@ -10892,7 +10892,7 @@ class CrossPathCorpusTest {
       "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
       "#0(customer=#1(address=#2(city=\"R\", zip=5), label=\"L\"), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of three steps, null at its first object",
       false,
       threeSteps("new %1$sSrc(null, 3)", "new %1$sTgt(\"R\", 5, 1)"),
@@ -10900,7 +10900,7 @@ class CrossPathCorpusTest {
       "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
       "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of three steps, null at its second object",
       false,
       threeSteps("new %1$sSrc(new %1$sOuter(null, \"L\"), 3)", "new %1$sTgt(null, 5, 1)"),
@@ -10908,7 +10908,7 @@ class CrossPathCorpusTest {
       "#0(customer=#1(address=#2(city=null, zip=5), label=null), qty=1)",
       "#0(customer=#1(address=#2(city=null, zip=5), label=\"L\"), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of three steps to a reference, null at its second object and written back as null",
       false,
       List.of(
@@ -10923,7 +10923,7 @@ class CrossPathCorpusTest {
       "#0(customer=null, qty=1)",
       "#0(customer=#1(address=null, label=\"L\"), qty=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a wrapper leaf into a primitive target and a primitive leaf into a wrapper target",
       false,
       List.of(
@@ -10946,7 +10946,7 @@ class CrossPathCorpusTest {
       "#0(m=#1(a=5, b=0))",
       "#0(m=#1(a=5, b=0))"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a forward-only record path of three steps written into two targets",
       true,
       List.of(
@@ -10966,7 +10966,7 @@ class CrossPathCorpusTest {
       null,
       null
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a forward-only record path of three steps, null at its first object",
       true,
       List.of(
@@ -10981,7 +10981,7 @@ class CrossPathCorpusTest {
       null,
       null
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a bean path of two steps through setters, a null object leaving a primitive setter unwritten",
       false,
       List.of(
@@ -11010,7 +11010,7 @@ class CrossPathCorpusTest {
       "#0(line=#1(count=5, sku=\"s\"), total=1)",
       "#0(line=#1(count=5, sku=\"s\"), total=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a bean path of two steps through setters, every object present",
       false,
       List.of(
@@ -11042,7 +11042,7 @@ class CrossPathCorpusTest {
       "#0(line=#1(count=5, sku=null), total=1)",
       "#0(line=#1(count=5, sku=\"a\"), total=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a bean path of two steps through setters, building an object whose other primitive setter is left unwritten",
       false,
       List.of(
@@ -11068,7 +11068,7 @@ class CrossPathCorpusTest {
       "#0(line=#1(count=4, sku=\"s\"), total=1)",
       "#0(line=#1(count=4, sku=\"s\"), total=1)"
     ),
-    new NestedSourcePath(
+    new NestedPath(
       "a record path of two steps through a bean built by its builder",
       false,
       List.of(
@@ -11093,21 +11093,272 @@ class CrossPathCorpusTest {
     )
   );
 
+  private static final String TO_NAME = pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::name");
+  private static final String TO_AGE = pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::age");
+  private static final String TO_CITY = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::customer",
+    "%1$sOuter::address",
+    "%1$sInner::city"
+  );
+  private static final String TO_ZIP = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::customer",
+    "%1$sOuter::address",
+    "%1$sInner::zip"
+  );
+
+  /** The rows of a three-step pair writing the city and the zip, the field's and the runtime's. */
+  private static List<String> threeStepsDown(final String srcSample, final String tgtSample) {
+    final var city = "to(%1$sSrc::city, " + TO_CITY + ")";
+    final var zip = "to(%1$sSrc::zip, " + TO_ZIP + ")";
+    return List.of(
+      sampled("%1$sSrc", "String city, int zip, int qty", srcSample),
+      OUTER_INNER,
+      INNER,
+      typedField(false, city, zip),
+      sampled("%1$sTgt", "%1$sOuter customer, int qty", tgtSample),
+      runtimeMapper(false, "", city, zip)
+    );
+  }
+
+  private static final List<NestedPath> NESTED_TARGET_PATHS = List.of(
+    new NestedPath(
+      "a record path of two steps written from two source properties, both ways",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int age, int qty", "new %1$sSrc(\"n\", 4, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")", "to(%1$sSrc::age, " + TO_AGE + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(new %1$sMid(\"m\", 7), 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")", "to(%1$sSrc::age, " + TO_AGE + ")")
+      ),
+      "#0(customer=#1(name=\"n\", age=4), qty=3)",
+      "#0(name=\"m\", age=7, qty=1)",
+      "#0(name=\"m\", age=7, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps given a null value, which builds nothing",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(null, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")")
+      ),
+      "#0(customer=null, qty=3)",
+      "#0(name=null, qty=1)",
+      "#0(name=null, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps building its object for a value",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(\"n\", 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")")
+      ),
+      "#0(customer=#1(name=\"n\", age=0), qty=3)",
+      "#0(name=null, qty=1)",
+      "#0(name=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps",
+      false,
+      threeStepsDown("new %1$sSrc(\"P\", 75, 3)", "new %1$sTgt(new %1$sOuter(new %1$sInner(\"R\", 5), \"L\"), 1)"),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=\"R\", zip=5, qty=1)",
+      "#0(city=\"R\", zip=5, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps read back through a null first object",
+      false,
+      threeStepsDown("new %1$sSrc(\"P\", 75, 3)", "new %1$sTgt(null, 1)"),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=\"P\", zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps read back through a null second object",
+      false,
+      threeStepsDown("new %1$sSrc(null, 75, 3)", "new %1$sTgt(new %1$sOuter(null, \"L\"), 1)"),
+      "#0(customer=#1(address=#2(city=null, zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=null, zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a wrapper source into a primitive leaf and a primitive source into a wrapper leaf",
+      false,
+      List.of(
+        sampled("%1$sSrc", "Integer a, int b", "new %1$sSrc(null, 2)"),
+        "public record %1$sMid(int a, Integer b) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::a, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::a") + ")",
+          "to(%1$sSrc::b, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::b") + ")"
+        ),
+        sampled("%1$sTgt", "%1$sMid m", "new %1$sTgt(new %1$sMid(5, null))"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::a, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::a") + ")",
+          "to(%1$sSrc::b, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::b") + ")"
+        )
+      ),
+      "#0(m=#1(a=0, b=2))",
+      "#0(a=5, b=0)",
+      "#0(a=5, b=2)"
+    ),
+    new NestedPath(
+      "a forward-only path of three steps written from one source property into two targets",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          true,
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        ),
+        sampled("%1$sTgt", "%1$sMid a, %1$sMid b", "new %1$sTgt(null, null)"),
+        runtimeMapper(
+          true,
+          "",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        )
+      ),
+      "#0(a=#1(name=\"x\"), b=#2(name=\"x\"))",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a forward-only path of three steps given a null value",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String city, int qty", "new %1$sSrc(null, 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(%1$sSrc::city, " + TO_CITY + ")"),
+        sampled("%1$sTgt", "%1$sOuter customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(true, "", "to(%1$sSrc::city, " + TO_CITY + ")")
+      ),
+      "#0(customer=null, qty=3)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String sku, int count, int total", "new %1$sSrc(\"a\", 3, 2)"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(%1$sSrc::count, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        ),
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setTotal(1); return t;", "%1$sLine line", "int total"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(%1$sSrc::count, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        )
+      ),
+      "#0(line=#1(count=3, sku=\"a\"), total=2)",
+      "#0(sku=null, count=0, total=1)",
+      "#0(sku=\"a\", count=3, total=1)"
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters, building an object whose other primitive setter is left unwritten",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String sku, int total", "new %1$sSrc(\"a\", 2)"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var l = new %1$sLine(); l.setSku(\"s\"); final var t = new %1$sTgt(); t.setLine(l);" +
+            " t.setTotal(1); return t;",
+          "%1$sLine line",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")"
+        )
+      ),
+      "#0(line=#1(count=4, sku=\"a\"), total=2)",
+      "#0(sku=\"s\", total=1)",
+      "#0(sku=\"s\", total=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps through a bean built by its builder",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String s, int qty", "new %1$sSrc(\"x\", 3)"),
+        "public class %1$sBox {\n" +
+          "  private final String s;\n  private final int n;\n" +
+          "  private %1$sBox(final String s, final int n) { this.s = s; this.n = n; }\n" +
+          "  public String getS() { return s; }\n  public int getN() { return n; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n    private int n = 6;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public Builder n(final int v) { n = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s, n); }\n  }\n}\n",
+        typedField(false, "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::getS") + ")"),
+        sampled("%1$sTgt", "%1$sBox box, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::getS") + ")")
+      ),
+      "#0(box=#1(n=0, s=\"x\"), qty=3)",
+      "#0(s=null, qty=1)",
+      "#0(s=\"x\", qty=1)"
+    )
+  );
+
   @Test
   @DisplayName(
     "a row reading the source through a path converts the same way on both paths, a null object on the way included"
   )
   void aNestedSourcePathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NESTED_SOURCE_PATHS, "Ns");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a row writing a source property into the target through a path converts the same way on both paths, a null" +
+      " object on the way included"
+  )
+  void aNestedTargetPathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NESTED_TARGET_PATHS, "Nt");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
+  private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
+    throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var row : NESTED_SOURCE_PATHS) {
-      final var prefix = "Ns" + index++;
-      final var head = "package " + PACKAGE + ";\n";
+    for (final var row : rows) {
+      final var prefix = head + index++;
+      final var header = "package " + PACKAGE + ";\n";
       final var all = row
         .declarations()
         .stream()
         .map(declaration -> declaration.formatted(prefix))
-        .map(code -> source(declaredName(code), head + code))
+        .map(code -> source(declaredName(code), header + code))
         .toList();
       final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
       assertTrue(
@@ -11168,7 +11419,7 @@ class CrossPathCorpusTest {
         }
       }
     }
-    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+    return failures;
   }
 
   /**
@@ -11488,6 +11739,67 @@ class CrossPathCorpusTest {
           false,
           "",
           "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape")
+    ),
+    new SourceClaimedTwice(
+      "a source property written into two target paths by a two-way mapper",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        ),
+        "public record %1$sTgt(%1$sMid a, %1$sMid b) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a.name", "b.name")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a.name", "b.name"))
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and written into a target path of two steps",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          false,
+          "drop(%1$sSrc::n)",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::name") + ")"
+        ),
+        "public record %1$sTgt(%1$sMid m) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "drop(%1$sSrc::n)",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::name") + ")"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a forward-only target path through a class no write strategy builds",
+      List.of(
+        "public interface %1$sShape { String getLabel(); }\n",
+        "public record %1$sSrc(String label) {}\n",
+        typedField(
+          true,
+          "to(%1$sSrc::label, " + pathOf("of", "%1$sTgt", "%1$sTgt::shape", "%1$sShape::getLabel") + ")"
+        ),
+        "public record %1$sTgt(%1$sShape shape) {}\n",
+        runtimeMapper(
+          true,
+          "",
+          "to(%1$sSrc::label, " + pathOf("of", "%1$sTgt", "%1$sTgt::shape", "%1$sShape::getLabel") + ")"
         )
       ),
       PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),

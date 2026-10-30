@@ -276,6 +276,50 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName(
+    "a field writing into the target through a path runs its generated bridge, giving what the runtime mapper gives"
+  )
+  void aFieldWithATargetPathRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathFlat.class, PathNested.class,\n" +
+      "      to(PathFlat::city, Telescope.of(PathNested.class).field(PathNested::customer).field(PathPlace::city)));\n";
+    final var c = compile(
+      sources(
+        "fb.PathPlace",
+        "package fb; public record PathPlace(String city) {}",
+        "fb.PathFlat",
+        "package fb; public record PathFlat(String city, int qty) {}",
+        "fb.PathNested",
+        "package fb; public record PathNested(PathPlace customer, int qty) {}",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathFlat, PathNested> NESTED = " +
+          rows +
+          "  public static Mapper<PathFlat, PathNested> runtime() { return Built.NESTED; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER + "final class Built {\n" + "  static final Mapper<PathFlat, PathNested> NESTED = " + rows + "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.PathFlatToPathNestedBridge"), c.generated()::toString);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "NESTED");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var flat = loader.loadClass("fb.PathFlat").getConstructors()[0].newInstance("Paris", 3);
+      assertEquals(runtime.forward(flat), generated.forward(flat));
+      final var nested = generated.forward(flat);
+      assertEquals(runtime.backward(nested), generated.backward(nested));
+      assertEquals(runtime.patch(flat, nested), generated.patch(flat, nested));
+    }
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
@@ -340,8 +384,16 @@ class BridgeFieldTest {
         "this path starts at Address, which is not User or a class it extends",
       },
       new String[] {
-        "to(User::nick, Telescope.of(UserDto.class).field(UserDto::handle).field(Handle::value))",
-        "a row writing into a target path has no generated form yet",
+        "to(User::nick, Telescope.of(UserDto.class).field(UserDto::handle).field(h -> h.value()))",
+        "an inline lambda in a path can't be compiled into the generated bridge",
+      },
+      new String[] {
+        "to(User::nick, Telescope.of(Handle.class).field(Handle::value))",
+        "this path starts at Handle, which is not UserDto or a class it extends",
+      },
+      new String[] {
+        "to(User::nick, Telescope.of(UserDto.class).field(UserDto::handle).filter(h -> h != null).field(Handle::value))",
+        "filter(...) in a path has no generated form",
       },
       new String[] {
         "to(Telescope.of(User.class).field(User::address).field(Address::city)," +

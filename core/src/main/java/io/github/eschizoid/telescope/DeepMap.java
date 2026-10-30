@@ -233,7 +233,9 @@ public final class DeepMap {
       // another path into the same target property is passed over.
       final var read =
         row instanceof FromTelescopeTo<?, ?, ?> path ? path.sourceTelescope().pathName() : row.sourceField();
-      accessors.add(nullToEmpty(read) + ">" + nullToEmpty(row.targetField()));
+      final var written =
+        row instanceof TelescopeTo<?, ?, ?> path ? path.targetTelescope().pathName() : row.targetField();
+      accessors.add(nullToEmpty(read) + ">" + nullToEmpty(written));
     }
     if (accessors.equals(provider.rowAccessors())) return null;
     return (
@@ -510,7 +512,7 @@ public final class DeepMap {
       final var step = entry.getValue();
       patchTable.put(
         entry.getKey(),
-        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v), step.overlay)
+        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v), step.overlay, step.read)
       );
     }
     return patchTable;
@@ -1341,6 +1343,11 @@ public final class DeepMap {
       // OK.
       final var telescopeReadsSrc = new HashSet<String>();
       final var telescopeWritesTgt = new HashSet<String>();
+      // The target fields a row writes through a path of another shape than properties alone, or
+      // fills with a constant or a computed value through a path: each starts as a default-tree
+      // instance for the row to write into. A path through properties alone builds a null object
+      // itself, so a target field only such paths write starts at its null value.
+      final var defaultTreeTgt = new HashSet<String>();
       // The source fields rows read through a path one field hop long, outside a `when`. Such a
       // path reads that one field, as an accessor does, so the field does not pair by name.
       final var pathReadsSrc = new HashSet<String>();
@@ -1384,6 +1391,15 @@ public final class DeepMap {
             final var firstTgtHop = tRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            if (firstTgtHop != null && !tRow.targetTelescope().stepsThroughProperties()) {
+              defaultTreeTgt.add(tgtRefl.normalize(firstTgtHop));
+            }
+            // Forward writes through the path, building a null object on the way, so a path
+            // through a class no write strategy builds is refused.
+            final var written = PathWrites.plan(tRow.targetTelescope(), target);
+            final var unbuildable =
+              written == null ? null : PathWrites.unbuildable(written, source.getSimpleName(), target.getSimpleName());
+            if (unbuildable != null) throw new IllegalArgumentException(unbuildable);
             // Backward reads the source property back from the path, at any depth, unless a
             // `when` gates the row, which backward leaves out.
             if (rawRow == row) {
@@ -1446,6 +1462,12 @@ public final class DeepMap {
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            if (
+              firstTgtHop != null &&
+              (ttRow.kind() == TelescopeToTelescope.Kind.ZIP || !ttRow.targetTelescope().stepsThroughProperties())
+            ) {
+              defaultTreeTgt.add(tgtRefl.normalize(firstTgtHop));
+            }
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1464,6 +1486,7 @@ public final class DeepMap {
             final var firstTgtHop = cRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            if (firstTgtHop != null) defaultTreeTgt.add(tgtRefl.normalize(firstTgtHop));
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1471,6 +1494,7 @@ public final class DeepMap {
             final var firstTgtHop = cpRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            if (firstTgtHop != null) defaultTreeTgt.add(tgtRefl.normalize(firstTgtHop));
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1660,21 +1684,18 @@ public final class DeepMap {
           // and removes "13 drops + 2 constants for a 3-field rename" friction on small-DTO →
           // large-entity migration shapes.
           if (!unwrittenNamesake && (!telescopeFixups.isEmpty() || isNested || lenient)) {
-            // Telescope-row placeholder for a target field with no same-name source. Three cases,
-            // type-driven:
-            //   - field type is a record AND a telescope row claims it as a first hop: allocate a
-            //     recursive default-tree instance so the post-fixup overlay
-            //     (`tgtTelescope.set(t, value)`) can descend into a non-null intermediate. Records
-            //     only for v1.0; beans need a no-arg ctor or builder which isn't always present —
-            //     deferred to v1.1.
-            //   - field type is a primitive: return the JLS default (0 / false / etc.) so
-            // canonical-
-            //     ctor reflection doesn't NPE unboxing a null Object.
-            //   - everything else: NULLING_ISO (null reference, unchanged behavior).
+            // Telescope-row placeholder for a target field with no same-name source, type-driven:
+            //   - a record or allocatable bean that a constant, a computed value or a path of
+            //     another shape than properties alone writes through: a recursive default-tree
+            //     instance, so that row's set can descend into a non-null intermediate. A path
+            //     through properties alone builds a null intermediate itself.
+            //   - a primitive: its JLS default (0 / false / etc.), so canonical-constructor
+            //     reflection doesn't NPE unboxing a null Object.
+            //   - everything else: NULLING_ISO, a null reference.
             final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
             byTargetName.putIfAbsent(
               name,
-              new FieldStep(null, name, Placeholders.placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+              new FieldStep(null, name, Placeholders.placeholderIsoFor(fieldType, defaultTreeTgt.contains(name)))
             );
             // Only truly-unpopulated fields are MISSING_SOURCE. A field a fixup writes (constant /
             // compute / nested-telescope row) is registered in telescopeWritesTgt and gets a real
@@ -1795,11 +1816,24 @@ public final class DeepMap {
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
       cache.put(
         key,
-        telescopeFixups.isEmpty() ? baseIso : TelescopeFixups.wrap(baseIso, telescopeFixups, srcRefl, source)
+        telescopeFixups.isEmpty()
+          ? baseIso
+          : TelescopeFixups.wrap(baseIso, telescopeFixups, srcRefl, source, tgtRefl, target)
       );
       if (topStepsOut != null) {
         // Patch writes the partial's value of a target property a source path fills back through
         // the path, after the rest of the source is rebuilt, in the order the rows came.
+        // Patch reads a partial's value of a source property a target path fills through the path,
+        // and writes it into that property as a field of its own, after the field's own pairing.
+        var throughTargets = 0;
+        for (final var fixup : telescopeFixups) {
+          if (!(fixup instanceof TelescopeTo<?, ?, ?> tRow)) continue;
+          final var srcField = srcRefl.normalize(tRow.sourceField());
+          byTargetName.put(
+            "\u0000" + throughTargets++ + " " + srcField,
+            new FieldStep(srcField, null, Iso.identity(), null, TelescopeFixups.patchRead(tRow, target))
+          );
+        }
         for (final var fixup : telescopeFixups) {
           if (!(fixup instanceof FromTelescopeTo<?, ?, ?> fRow)) continue;
           final var tgtField = tgtRefl.normalize(fRow.targetField());
@@ -1810,7 +1844,8 @@ public final class DeepMap {
               step == null ? null : step.sourceName,
               tgtField,
               step == null ? Placeholders.NULLING_ISO : step.iso,
-              TelescopeFixups.patchOverlay(fRow, source, srcRefl)
+              TelescopeFixups.patchOverlay(fRow, source, srcRefl),
+              null
             )
           );
         }
@@ -3525,10 +3560,11 @@ public final class DeepMap {
     String sourceName,
     String targetName,
     Iso<?, ?> iso,
-    BiFunction<Object, Object, Object> overlay
+    BiFunction<Object, Object, Object> overlay,
+    Function<Object, Object> read
   ) {
     FieldStep(final String sourceName, final String targetName, final Iso<?, ?> iso) {
-      this(sourceName, targetName, iso, null);
+      this(sourceName, targetName, iso, null, null);
     }
   }
 

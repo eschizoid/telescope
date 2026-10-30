@@ -146,21 +146,21 @@ Mapper<Order, OrderDto> mapper = Telescope.mapper(
 to(OrderTelescope.of().customer().address().city(), OrderDto::city)
 ```
 
-All three shapes covered: nested source -> flat target, flat source -> nested target (with automatic intermediate
-allocation for record intermediates, described in the 'Intermediate allocation' paragraph of `to(Accessor, Telescope)`
-in Mapping.java), and nested -> nested. Paths are typed Telescope values instead of dotted strings, so javac checks
-every hop. A source path is started at the mapper's source; one whose first property is read through a class the source
-neither is nor extends is refused when the mapper is built, and by the compile-time verifier where it can tell. Rows
-using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's per-method @Mapping.
-Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for bean intermediates
-lacking a no-arg ctor/builder.
+All three shapes covered: nested source -> flat target, flat source -> nested target (building each null object on the
+way, described in the 'Null objects on the path' paragraph of `to(Accessor, Telescope)` in Mapping.java), and nested ->
+nested. Paths are typed Telescope values instead of dotted strings, so javac checks every hop. A source path is started
+at the mapper's source; one whose first property is read through a class the source neither is nor extends is refused
+when the mapper is built, and by the compile-time verifier where it can tell. Rows using Telescope paths apply at the
+outer (source, target) pair only — same scope as MapStruct's per-method @Mapping. A path through a class no write
+strategy builds is refused by name when the mapper is built.
 
-A nested source read through `field` steps alone reads a null object on the way as the leaf's null value, and backward
-and `patch` write the value back through the path, building a null object unless the value is null. Both paths do the
-same: on a `@Bridge` field, a source path written in place from `Telescope.of` or `Telescope.ofBean` compiles into a
-null-safe chain of reads and direct calls to each class's accessors and write strategy. A path held in a variable, a
-generated navigator, a step other than `field`, a lambda step and a nested target path are refused on the row by name. A
-two-way mapper refuses a path through a class no write strategy builds, on both paths in the same words.
+A path through `field` steps alone reads a null object on the way as the leaf's null value, and a write through it
+builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on
+`forward`. Both paths do the same: on a `@Bridge` field, a source or target path written in place from `Telescope.of` or
+`Telescope.ofBean` compiles into a null-safe chain of reads and direct calls to each class's accessors and write
+strategy. A path held in a variable, a generated navigator, a step other than `field`, a lambda step and a row with a
+path on both sides are refused on the row by name. A mapper that writes through a path refuses one through a class no
+write strategy builds, on both paths in the same words.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
@@ -168,9 +168,11 @@ and `to(Accessor, Telescope)` (the nested-target mirror);
 core/src/test/java/io/github/eschizoid/telescope/TelescopeMappingTest.java, the tests 'forward reads at the nested
 source path and writes to the flat target accessor', 'single-focus on both sides: read at src telescope, write at tgt
 telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Telescope, Telescope)';
-core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java;
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a row reading the source
-through a path converts the same way on both paths, a null object on the way included'</sub>
+core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java and NestedTargetPathTest.java;
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a row reading the
+source through a path converts the same way on both paths, a null object on the way included' and 'a row writing a
+source property into the target through a path converts the same way on both paths, a null object on the way
+included'</sub>
 
 ### Multiple source parameters
 
