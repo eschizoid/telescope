@@ -160,6 +160,33 @@ the existing emitter without a second one.
 > calls, with the result the annotation gave. The class form of `@Bridge` keeps `value`, `writeStrategy`, `lenient` and
 > the carrier's `source` and `target`.
 
+> **Amendment: a source path.** A `to(path, accessor)` row compiles when the path is written in place from
+> `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
+> to a property of the class the step before it reads. Any other path is refused on the row by name: one held in a
+> variable or built by a navigator, a step other than `field`, a lambda step, and a path rooted at a class the source
+> neither is nor extends. A row writing into a target path, or with a path on both sides, is refused too until writing
+> through a path is compiled.
+>
+> Both paths give such a row one meaning, decided in the shared spec. Forward reads the leaf, and a null object on the
+> way reads as the leaf's null value: null for a reference, the default for a primitive member of a record, a
+> constructor or a builder, and no call to a primitive setter, as a null source value is written anywhere else.
+> Backward writes the target's value back through the path and rebuilds every object the path steps through, each
+> through the write strategy `BeanWriteStrategy` picks for its class; an object that is null is built, with its other
+> properties at their null value, when the value is not null, and stays null when it is, so a null read forward is
+> written back as null. `patch` writes a partial's non-null value the same way, after the rest of the source is rebuilt,
+> in the order the rows came. A mapper that converts both ways refuses a path through a class no write strategy builds,
+> by name, when it is built and on the row. A forward-only mapper never writes through a source path, and its lenient
+> bridge's backward writes nothing through one.
+>
+> Rebuilding is chosen over refusing a path longer than one step in a two-way mapper: it keeps both directions of the
+> row, it needs no reflection, since every object on the path has a class the processor sees, and the null rule above
+> makes a round trip through a null object return the null it started from. The runtime mapper used to leave such an
+> object null on backward and lose the value, and ignored the row in `patch`; it now writes as described.
+>
+> `SourceWrites` names a path longer than one step by the properties it steps through, as `customer.city`, so a strict
+> mapper refuses one path written into two targets, and every factory refuses a drop of a property a path steps
+> through. The runtime mapper, the bridge processor and the compile-time verifier count it the same way.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the

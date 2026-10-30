@@ -156,7 +156,10 @@ The rows the processor compiles are `to` (with no converter, with a forward and 
 or a class's static `forward` and `backward`
 (`via(Order::lines, OrderDto::lines, LineMap::forward, LineMap::backward)`), or the class itself
 (`via(Order::lines, OrderDto::lines, LineMap.class)`, whose methods are chosen for the property's types), `drop`,
-`constant` and `compute`, with the write hints `writeBean` and `writeBeans`. A converter or supplier is a reference to a
+`constant` and `compute`, with the write hints `writeBean` and `writeBeans`. A `to` row may read its source through a
+path written in place, `to(Telescope.of(Order.class).field(Order::customer).field(Customer::city), OrderDto::city)`,
+which compiles into a null-safe chain of reads forward and, on a `Telescope.mapper` field, a write back through the path
+that builds a null object on the way unless the value is null. A converter or supplier is a reference to a
 static method, to an unbound instance method such as `String::trim`, or to a constructor; a constant or default is a
 literal or an enum constant. Any other row is a compile error on the row, naming what to write instead. `explain()` on
 the mapper says which path runs it and, when it is the runtime path although a field declares it, why.

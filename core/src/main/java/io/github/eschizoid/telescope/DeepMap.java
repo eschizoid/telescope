@@ -1350,8 +1350,8 @@ public final class DeepMap {
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
       // Which source properties the pair drops and writes, and into which targets, as the shared
       // spec refuses a property claimed twice. A write is a row backward reads the property back
-      // from: an accessor row, a target path fed by an accessor, and a source path one field hop
-      // long.
+      // from: an accessor row, a target path fed by an accessor, and a source path of field hops
+      // alone, which a longer path names by the properties it steps through.
       final var sourceWrites = new SourceWrites(source.getSimpleName(), target.getSimpleName(), !forwardOnly);
       // Target paths that name no property are told apart by the order they come in.
       var unnamedPaths = 0;

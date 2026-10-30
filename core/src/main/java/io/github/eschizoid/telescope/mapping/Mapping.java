@@ -411,9 +411,26 @@ public sealed interface Mapping<A, B>
    *        OrderDto::getRecipientEmail));
    * }</pre>
    *
-   * <p>Engine: applied at the outer {@code (source, target)} pair only. Forward: reads at {@code
-   * srcTelescope}, writes to {@code tgt} accessor on a rebuilt {@code b}. Backward: reads {@code
-   * tgt} on {@code b}, writes through {@code srcTelescope.set(a, value)} on a rebuilt {@code a}.
+   * <p>Engine: applied at the outer {@code (source, target)} pair only. Forward reads the path's
+   * value and writes it into {@code tgt}'s property. Backward reads {@code tgt}'s property and
+   * writes it back through the path, and {@code patch} writes a partial's non-null value of it the
+   * same way, after the rest of the source is rebuilt.
+   *
+   * <p><b>Null objects on the path.</b> For a path that steps through properties alone, with one
+   * {@code field} hop per property, a null object on the way reads as the leaf's null value: forward
+   * writes null into a reference, the default into a primitive member of a record, a constructor or
+   * a builder, and leaves a primitive setter unwritten. A write back through the path rebuilds each
+   * object it steps through, through the write strategy its class takes, and builds one that is
+   * null with its other properties at their null value; when the value written is null, an object
+   * that is null stays null. A mapper that converts both ways refuses, when it is built, a path
+   * through a class no write strategy builds. A path of any other shape is read and set through
+   * the lattice as it is.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
+   * Telescope.of(Source.class)} or {@code Telescope.ofBean(Source.class)} through {@code field}
+   * steps alone, each a method reference to a property: reads become a null-safe chain of locals,
+   * one per object, and writes call the accessors and the write strategy directly. Any other path,
+   * a lambda step among them, is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Accessor<B, X> tgt) {
     return new FromTelescopeTo<>(srcTelescope, tgt);
@@ -578,7 +595,8 @@ public sealed interface Mapping<A, B>
    *
    * <p>A dropped field is written by no other row of its pair: the mapper refuses, by name and in
    * either order, a drop beside a row reading the same field through its accessor, a target path
-   * its accessor feeds, or a source path one {@code field} hop long through it.
+   * its accessor feeds, or a source path of {@code field} hops alone that reads it or steps
+   * through it.
    */
   static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
     return new Drop<>(src, null);
