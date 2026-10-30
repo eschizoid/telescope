@@ -231,7 +231,9 @@ class BridgeFieldTest {
   }
 
   @Test
-  @DisplayName("a field reading the source through a path runs its generated bridge, giving what the runtime mapper gives")
+  @DisplayName(
+    "a field reading the source through a path runs its generated bridge, giving what the runtime mapper gives"
+  )
   void aFieldWithASourcePathRunsItsGeneratedBridge() throws Exception {
     final var rows =
       "Telescope.mapper(PathOrder.class, PathOrderDto.class,\n" +
@@ -252,11 +254,7 @@ class BridgeFieldTest {
           "  public static Mapper<PathOrder, PathOrderDto> runtime() { return Built.ORDER; }\n" +
           "}\n",
         "fb.Built",
-        HEADER +
-          "final class Built {\n" +
-          "  static final Mapper<PathOrder, PathOrderDto> ORDER = " +
-          rows +
-          "}\n"
+        HEADER + "final class Built {\n" + "  static final Mapper<PathOrder, PathOrderDto> ORDER = " + rows + "}\n"
       )
     );
     assertTrue(c.success(), c::errorMessages);

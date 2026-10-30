@@ -19,7 +19,13 @@ public record NpOrder(NpCustomer customer, int qty) {
   public static final Mapper<NpOrder, NpOrderDto> DTO = mapper(
     NpOrder.class,
     NpOrderDto.class,
-    to(Telescope.of(NpOrder.class).field(NpOrder::customer).field(NpCustomer::address).field(NpAddress::city), NpOrderDto::city),
-    to(Telescope.of(NpOrder.class).field(NpOrder::customer).field(NpCustomer::address).field(NpAddress::zip), NpOrderDto::zip)
+    to(
+      Telescope.of(NpOrder.class).field(NpOrder::customer).field(NpCustomer::address).field(NpAddress::city),
+      NpOrderDto::city
+    ),
+    to(
+      Telescope.of(NpOrder.class).field(NpOrder::customer).field(NpCustomer::address).field(NpAddress::zip),
+      NpOrderDto::zip
+    )
   );
 }

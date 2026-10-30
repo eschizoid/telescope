@@ -159,8 +159,8 @@ A nested source read through `field` steps alone reads a null object on the way 
 and `patch` write the value back through the path, building a null object unless the value is null. Both paths do the
 same: on a `@Bridge` field, a source path written in place from `Telescope.of` or `Telescope.ofBean` compiles into a
 null-safe chain of reads and direct calls to each class's accessors and write strategy. A path held in a variable, a
-generated navigator, a step other than `field`, a lambda step and a nested target path are refused on the row by name.
-A two-way mapper refuses a path through a class no write strategy builds, on both paths in the same words.
+generated navigator, a step other than `field`, a lambda step and a nested target path are refused on the row by name. A
+two-way mapper refuses a path through a class no write strategy builds, on both paths in the same words.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),

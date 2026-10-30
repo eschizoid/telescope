@@ -947,8 +947,8 @@ public sealed class Telescope<
    * it through its accessor, a target path its accessor feeds, at any depth, or a source path of
    * {@code field} hops alone through it. A source path longer than one hop is a write of the path,
    * named by the properties it steps through, as {@code customer.city}: two paths through one
-   * property each take a target of their own. The pairing of a property with the target property
-   * of its name is not counted, so a target path fed by a property beside its namesake builds, and
+   * property each take a target of their own. The pairing of a property with the target property of
+   * its name is not counted, so a target path fed by a property beside its namesake builds, and
    * backward reads the property from the path. A row {@code when} gates is not read back, and
    * writes nothing in this sense. {@link #mapperForward mapperForward} converts one way and writes
    * a property into every target its rows name. On every factory, a property one row drops is

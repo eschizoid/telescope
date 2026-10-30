@@ -11,10 +11,10 @@ import org.openjdk.jmh.annotations.State;
 
 /**
  * A mapper reading two objects down a path into a flat target, and writing the flat target back
- * through the path, against the same chain written by hand. The {@code hand*} rows never change,
- * so a run is normalised against them; the {@code mapper*} rows call the mapper {@link NpOrder}'s
- * {@code @Bridge} field holds, which is the generated bridge where the processor compiles the
- * path, and the runtime mapper where it does not.
+ * through the path, against the same chain written by hand. The {@code hand*} rows never change, so
+ * a run is normalised against them; the {@code mapper*} rows call the mapper {@link NpOrder}'s
+ * {@code @Bridge} field holds, which is the generated bridge where the processor compiles the path,
+ * and the runtime mapper where it does not.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=NestedPathBenchmark -Pjmh.profilers=gc
@@ -70,10 +70,6 @@ public class NestedPathBenchmark {
   private static NpOrderDto read(final NpOrder order) {
     final var customer = order.customer();
     final var address = customer == null ? null : customer.address();
-    return new NpOrderDto(
-      address == null ? null : address.city(),
-      address == null ? 0 : address.zip(),
-      order.qty()
-    );
+    return new NpOrderDto(address == null ? null : address.city(), address == null ? 0 : address.zip(), order.qty());
   }
 }

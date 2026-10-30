@@ -620,11 +620,12 @@ public class Mapper<A, B> {
       patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
     }
     final var overlay = patched;
-    Object rebuilt = overlay == null
-      ? sourceRefl.construct(sourceClass, name -> sourceRefl.read(base, name))
-      : sourceRefl.construct(sourceClass, name ->
-          overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
-        );
+    Object rebuilt =
+      overlay == null
+        ? sourceRefl.construct(sourceClass, name -> sourceRefl.read(base, name))
+        : sourceRefl.construct(sourceClass, name ->
+            overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
+          );
     if (throughPaths != null) for (final var path : throughPaths) {
       rebuilt = path.getKey().overlay().apply(rebuilt, path.getValue());
     }

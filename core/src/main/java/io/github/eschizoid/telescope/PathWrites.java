@@ -18,9 +18,9 @@ import java.util.List;
  * rebuilds each object the path steps through, root first, with the next one replaced, through the
  * class each property declares. An object that is null is built when the value written through it
  * is not null, and left null when it is, so a null read back writes nothing: every property the
- * path does not name takes its null value, which is null for a reference and the type's default
- * for a primitive member of a record, while a bean's write strategy passes the default to a
- * constructor or a builder and leaves a primitive setter unwritten.
+ * path does not name takes its null value, which is null for a reference and the type's default for
+ * a primitive member of a record, while a bean's write strategy passes the default to a constructor
+ * or a builder and leaves a primitive setter unwritten.
  *
  * <p>A null written into a primitive member follows the same rule: a record and a bean's
  * constructor or builder take the default, a setter is not called.
@@ -90,8 +90,8 @@ final class PathWrites {
   }
 
   /**
-   * {@code root}, rebuilt through {@code rootRefl}, with {@code value} written at the leaf of {@code
-   * plan}.
+   * {@code root}, rebuilt through {@code rootRefl}, with {@code value} written at the leaf of
+   * {@code plan}.
    */
   static Object write(final Plan plan, final Object root, final Object value, final Reflective rootRefl) {
     return writeAt(plan, 0, root, value, rootRefl);

@@ -545,10 +545,10 @@ class VerifierSilenceAgreementTest {
       final var outcome = verified(
         "VwX",
         """
-        record @@Mid(String n) {}
-        record @@Src(@@Mid m) {}
-        record @@Tgt(String a, String b) {}
-        """ +
+          record @@Mid(String n) {}
+          record @@Src(@@Mid m) {}
+          record @@Tgt(String a, String b) {}
+          """ +
           holder(
             "Telescope.mapper(@@Src.class, @@Tgt.class," +
               " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
@@ -556,7 +556,10 @@ class VerifierSilenceAgreementTest {
           )
       );
       assertBothRefuse(outcome);
-      assertEquals(PairingMessages.fanOutBothWays("VwXSrc", "VwXTgt", "m.n", List.of("a", "b")), outcome.construction());
+      assertEquals(
+        PairingMessages.fanOutBothWays("VwXSrc", "VwXTgt", "m.n", List.of("a", "b")),
+        outcome.construction()
+      );
     }
 
     @Test
@@ -566,10 +569,10 @@ class VerifierSilenceAgreementTest {
         verified(
           "VwY",
           """
-          record @@Mid(String n, String k) {}
-          record @@Src(@@Mid m) {}
-          record @@Tgt(String a, String b) {}
-          """ +
+            record @@Mid(String n, String k) {}
+            record @@Src(@@Mid m) {}
+            record @@Tgt(String a, String b) {}
+            """ +
             holder(
               "Telescope.mapper(@@Src.class, @@Tgt.class," +
                 " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
@@ -585,20 +588,17 @@ class VerifierSilenceAgreementTest {
       final var outcome = verified(
         "VwZ",
         """
-        record @@Mid(String n) {}
-        record @@Src(@@Mid m) {}
-        record @@Tgt(String a) {}
-        """ +
+          record @@Mid(String n) {}
+          record @@Src(@@Mid m) {}
+          record @@Tgt(String a) {}
+          """ +
           holder(
             "Telescope.mapperForward(@@Src.class, @@Tgt.class, drop(@@Src::m)," +
               " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a))"
           )
       );
       assertBothRefuse(outcome);
-      assertEquals(
-        PairingMessages.droppedAndReadThrough("VwZSrc", "VwZTgt", "m", "m.n"),
-        outcome.construction()
-      );
+      assertEquals(PairingMessages.droppedAndReadThrough("VwZSrc", "VwZTgt", "m", "m.n"), outcome.construction());
     }
 
     @Test

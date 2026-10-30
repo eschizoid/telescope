@@ -116,9 +116,7 @@ final class TelescopeFixups {
   ) {
     final var plan = PathWrites.plan(row.sourceTelescope(), source);
     final var path = (Telescope<Object, Object>) row.sourceTelescope();
-    return plan != null
-      ? (s, value) -> PathWrites.write(plan, s, value, srcRefl)
-      : (s, value) -> path.set(s, value);
+    return plan != null ? (s, value) -> PathWrites.write(plan, s, value, srcRefl) : (s, value) -> path.set(s, value);
   }
 
   @SuppressWarnings("unchecked")

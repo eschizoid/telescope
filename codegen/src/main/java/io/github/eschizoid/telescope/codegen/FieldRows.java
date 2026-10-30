@@ -131,8 +131,8 @@ final class FieldRows {
   }
 
   /**
-   * A row reading the source through a path into the target property {@code target}: the
-   * properties the path steps through from the source, in order, and the method each is read by.
+   * A row reading the source through a path into the target property {@code target}: the properties
+   * the path steps through from the source, in order, and the method each is read by.
    */
   record SourcePath(String target, List<String> properties, List<String> methods) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
@@ -731,14 +731,17 @@ final class FieldRows {
       final var written =
         "a @Bridge mapper compiles a path written in place as Telescope.of(Type.class) or" +
         " Telescope.ofBean(Type.class) followed by field(...) steps, each through a property";
-      if (calls.size() < 2 || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) {
+      if (
+        calls.size() < 2 || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)
+      ) {
         return new Refused(arg, written + "; this argument is not such a path");
       }
       final var rootOwner = (TypeElement) root.getEnclosingElement();
       final var rootName = root.getSimpleName().toString();
-      final var rooted = calls.getFirst().getArguments().size() == 1
-        ? classLiteral(unit, calls.getFirst().getArguments().getFirst())
-        : null;
+      final var rooted =
+        calls.getFirst().getArguments().size() == 1
+          ? classLiteral(unit, calls.getFirst().getArguments().getFirst())
+          : null;
       if (
         !rootOwner.getQualifiedName().contentEquals(TELESCOPE_FQN) ||
         !(rootName.equals("of") || rootName.equals("ofBean")) ||
@@ -787,9 +790,7 @@ final class FieldRows {
         final var read = (Accessor) hop;
         hops.add(read);
         on =
-          !read.primitive() && read.type() instanceof DeclaredType declared
-            ? (TypeElement) declared.asElement()
-            : null;
+          !read.primitive() && read.type() instanceof DeclaredType declared ? (TypeElement) declared.asElement() : null;
       }
       return hops;
     }
