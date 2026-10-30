@@ -14,6 +14,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.Locale;
+import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -67,8 +68,13 @@ class SealedInterfaceRowAgreementTest {
    * with, and every warning the verifier reported.
    */
   private static Outcome outcome(final String prefix, final String code) {
+    return outcome(prefix, code, List.of(new MapperVerifierProcessor()));
+  }
+
+  /** As {@link #outcome(String, String)}, with {@code processors} run on the sources. */
+  private static Outcome outcome(final String prefix, final String code, final List<Processor> processors) {
     final var compilation = compileFully(
-      List.of(new MapperVerifierProcessor()),
+      processors,
       List.of("-Atelescope.verify=warn"),
       source(PACKAGE + "." + prefix + "Holder", code.replace("@@", prefix))
     );
@@ -886,6 +892,115 @@ class SealedInterfaceRowAgreementTest {
       );
       assertBothRefuse(outcome);
       assertTrue(outcome.construction().contains("component 'a'"), outcome.construction());
+    }
+
+    /**
+     * Interfaces each declaring two accessors, so a rename onto one target property can sit beside
+     * a row reading the source property of that name through a path.
+     */
+    private static final String PATHED = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Cases.cases;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      sealed interface @@S permits @@SA, @@SB { String n(); String label(); }
+      record @@SA(String n, String label) implements @@S {}
+      record @@SB(String n, String label) implements @@S {}
+      sealed interface @@T permits @@TA, @@TB { String label(); String x(); }
+      record @@TA(String label, String x) implements @@T {}
+      record @@TB(String label, String x) implements @@T {}
+      """;
+
+    private static final String PATHED_CASES = "cases(@@SA.class, @@TA.class), cases(@@SB.class, @@TB.class)";
+
+    @Test
+    @DisplayName("a source property a row reads through its accessor into a target path is not kept, on both paths")
+    void accessorIntoAPathReadsTheProperty() {
+      assertBothApply(
+        outcome(
+          "SkK",
+          PATHED +
+            holder(
+              "Telescope.mapper(@@S.class, @@T.class, " +
+                PATHED_CASES +
+                ", to(@@S::n, @@T::label), to(@@S::label, Telescope.of(@@T.class).field(@@T::x)))" +
+                ".forward(new @@SA(\"a\", \"b\"))"
+            )
+        ),
+        "SkKTA[label=a, x=b]"
+      );
+    }
+
+    @Test
+    @DisplayName("a source property a row under when reads through its accessor into a target path is not kept")
+    void accessorIntoAPathUnderWhenReadsTheProperty() {
+      assertBothApply(
+        outcome(
+          "SkL",
+          PATHED +
+            holder(
+              "Telescope.mapper(@@S.class, @@T.class, " +
+                PATHED_CASES +
+                ", to(@@S::n, @@T::label), when(s -> true, to(@@S::label, Telescope.of(@@T.class).field(@@T::x))))" +
+                ".forward(new @@SA(\"a\", \"b\"))"
+            )
+        ),
+        "SkLTA[label=a, x=b]"
+      );
+    }
+
+    @Test
+    @DisplayName("a target property whose namesake a path one field hop long reads, on a mapper between the interfaces")
+    void namesakeReadThroughAOneHopPath() {
+      final var outcome = outcome(
+        "SkM",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          sealed interface @@S permits @@SA { String n(); String label(); }
+          record @@SA(String n, String label) implements @@S {}
+          sealed interface @@T permits @@TA { String x(); }
+          record @@TA(String n, String label, String x) implements @@T {}
+          """ +
+          holder(
+            "Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class)," +
+              " to(Telescope.of(@@S.class).field(@@S::label), @@T::x))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.sameNameSourceRead("SkMSA", "SkMTA", "field", "field", "label"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a pair of the mapper's own cases with a bridge of its own and a row of its own is walked")
+    void caseWithABridgeAndARow() {
+      final var outcome = outcome(
+        "SkN",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          sealed interface @@S permits @@SA {}
+          @Bridge(@@TA.class)
+          record @@SA(String n, String label) implements @@S {}
+          sealed interface @@T permits @@TA {}
+          record @@TA(String n, String label) implements @@T {}
+          """ +
+          holder("Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@SA::n, @@TA::label))"),
+        List.of(new BridgeProcessor(), new MapperVerifierProcessor())
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.noSameNameTarget("SkNSA", "SkNTA", "field", "field", "label"),
+        outcome.construction()
+      );
     }
   }
 

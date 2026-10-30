@@ -704,6 +704,22 @@ class NeverVisitedRowAgreementTest {
       assertNull(outcome.construction(), outcome::construction);
       assertEquals(List.of(), outcome.warnings());
     }
+
+    @Test
+    @DisplayName("under when, which its factory refuses, is left to that refusal")
+    void dropUnderWhenLeftToItsFactory() {
+      final var outcome = outcome(
+        "NxC",
+        RENAMED +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::name, @@InnerDto::label)," +
+              " when(o -> true, drop(@@Inner::label, @@InnerDto.class)))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("wraps only telescope-based rows"), outcome.construction());
+      assertEquals(List.of(), outcome.warnings());
+    }
   }
 
   @Nested

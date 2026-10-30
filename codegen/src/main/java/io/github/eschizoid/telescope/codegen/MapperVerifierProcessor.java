@@ -32,6 +32,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -599,8 +600,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     // or a hint, which apply to no property.
     private boolean callRowsComplete = true;
     // Whether every row of the call being verified with a side given as a path, a constant or a
-    // compute is a constant or compute writing one property of the call's own target.
-    private boolean callPathRowsWriteOwnTarget = true;
+    // compute writes one property of the pair it applies at and nothing below it.
+    private boolean callPathWritesKnown = true;
+    // The rows of callRows that read one source property through a path one field hop long,
+    // outside a when, by identity.
+    private Set<PairWalk.KeyedRow<TypeMirror>> callOneHopReads = Set.of();
     // The cases rows of the call being verified, each the two classes it pairs.
     private List<TypeElement[]> callCaseRows = List.of();
     // Whether every cases row of the call being verified was read into callCaseRows.
@@ -669,7 +673,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       nestedConsumed = Map.of();
       callRows = List.of();
       callRowsComplete = true;
-      callPathRowsWriteOwnTarget = true;
+      callPathWritesKnown = true;
+      callOneHopReads = Set.of();
       callCaseRows = List.of();
       callCaseRowsComplete = true;
       callTopLevelDrops = List.of();
@@ -1140,6 +1145,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       callCaseRows = caseRows;
       final var topLevelDrops = new ArrayList<KeyedRow>();
       callTopLevelDrops = topLevelDrops;
+      final var oneHopReads = Collections.<PairWalk.KeyedRow<TypeMirror>>newSetFromMap(new IdentityHashMap<>());
+      callOneHopReads = oneHopReads;
       for (var i = 2; i < args.size(); i++) {
         if (!(args.get(i) instanceof MethodInvocationTree row)) {
           callRowsComplete = false;
@@ -1170,9 +1177,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         if (keyed.kind() == PairWalk.RowKind.DROP && row.getArguments().size() == 1) topLevelDrops.add(keyed);
         final var key = pairKey(keyed.source(), keyed.target());
-        all.add(shared(keyed));
+        final var sharedRow = shared(keyed);
+        all.add(sharedRow);
+        final var oneHop = keyed.kind() == PairWalk.RowKind.PATH && readsOneSourceProperty(row, rowExec);
+        if (oneHop) oneHopReads.add(sharedRow);
         if (keyed.kind() == PairWalk.RowKind.PATH && !writesOneTargetProperty(row, tgtEl)) {
-          callPathRowsWriteOwnTarget = false;
+          callPathWritesKnown = false;
         }
         if (key.equals(pairKey(srcEl, tgtEl))) continue;
         final var names = claims.computeIfAbsent(key, __ -> new HashSet<>());
@@ -1181,7 +1191,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         final var read = readsAt(keyed.kind(), keyed.sourceMethod(), keyed.sourcePathStart(), keyed.source());
         if (read != null) sourceClaims.computeIfAbsent(key, __ -> new HashSet<>()).add(read);
-        if (read != null && keyed.kind() != PairWalk.RowKind.PATH) {
+        if (read != null && (keyed.kind() != PairWalk.RowKind.PATH || oneHop)) {
           consumed.computeIfAbsent(key, __ -> new HashSet<>()).add(read);
         }
       }
@@ -1223,14 +1233,15 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
     /**
      * The source properties the rows construction applies to the pair of {@code source} and {@code
-     * target} read through an accessor, a rename or a drop, which keep the target property of each
-     * one's name from pairing with it: those keyed to the pair, and those keyed to two sealed
-     * interfaces its classes implement.
+     * target} read through an accessor, a rename, a drop or a {@code to(path, accessor)} row whose
+     * path is one {@code field} hop long, which keep the target property of each one's name from
+     * pairing with it: those keyed to the pair, and those keyed to two sealed interfaces its
+     * classes implement.
      */
     private Set<String> consumedAt(final TypeElement source, final TypeElement target) {
       final var all = new HashSet<>(nestedConsumed.getOrDefault(pairKey(source, target), Set.of()));
       for (final var row : inheritedAt(source, target)) {
-        if (row.kind() == PairWalk.RowKind.PATH) continue;
+        if (row.kind() == PairWalk.RowKind.PATH && !callOneHopReads.contains(row)) continue;
         final var read = readsAt(row.kind(), row.sourceAccessor(), row.sourcePathStart(), source);
         if (read != null) all.add(read);
       }
@@ -1239,18 +1250,40 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
     /**
      * Whether every row of the call was read and each row with a side given as a path, a constant
-     * or a compute writes one property of the call's own target and nothing below it. Such a row
-     * writes no property of a nested pair, and which nested property any other path row writes is
-     * not read here.
+     * or a compute writes one property of the pair it applies at and nothing below it, which {@link
+     * #pathWritesAt} names. Which property any other such row writes below its pair is not read
+     * here.
      */
     private boolean nestedWritesKnown() {
-      return callRowsComplete && callPathRowsWriteOwnTarget;
+      return callRowsComplete && callPathWritesKnown;
     }
 
     /**
-     * Whether {@code row}, or the row a {@code when} wraps, is a {@code constant} or {@code
-     * compute} whose target is an accessor of {@code target} or a class it extends, or a path one
-     * {@code field} hop long.
+     * The target properties the rows with a side given as a path, a constant or a compute that
+     * construction applies to the pair of {@code source} and {@code target} write, each named by
+     * the row's target accessor or the first hop of its target path, or null when one of them names
+     * its target in a way this does not read.
+     */
+    private Set<String> pathWritesAt(final TypeElement source, final TypeElement target) {
+      final var written = new HashSet<String>();
+      final var applied = new ArrayList<>(
+        rowsKeyedTo(callRows, types.erasure(source.asType()), types.erasure(target.asType()))
+      );
+      applied.addAll(inheritedAt(source, target));
+      for (final var row : applied) {
+        if (row.kind() != PairWalk.RowKind.PATH) continue;
+        final var start = row.targetAccessor() != null ? row.targetAccessor() : row.targetPathStart();
+        if (start == null) return null;
+        written.add(propertyName(start, target));
+      }
+      return written;
+    }
+
+    /**
+     * Whether {@code row}, or the row a {@code when} wraps, writes one property of the pair it is
+     * keyed to and nothing below it: a {@code constant} or {@code compute} whose target is an
+     * accessor of {@code target} or a class it extends, or a path one {@code field} hop long, or a
+     * {@code to} row whose target is an accessor.
      */
     private boolean writesOneTargetProperty(final MethodInvocationTree row, final TypeElement target) {
       var call = row;
@@ -1262,14 +1295,45 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       ) {
         call = inner;
       }
-      if (!(elementAt(call.getMethodSelect()) instanceof ExecutableElement)) return false;
+      if (!(elementAt(call.getMethodSelect()) instanceof ExecutableElement exec)) return false;
       final var name = factoryName(call);
+      if (
+        "to".equals(name) &&
+        call.getArguments().size() == 2 &&
+        isTelescopeParameter(exec, 0) &&
+        !isTelescopeParameter(exec, 1)
+      ) {
+        return true;
+      }
       if ((!"constant".equals(name) && !"compute".equals(name)) || call.getArguments().isEmpty()) return false;
       final var arg = call.getArguments().getFirst();
       final var accessor = accessorProp(arg);
       if (accessor != null) {
         return types.isSubtype(types.erasure(target.asType()), types.erasure(accessor.owner().asType()));
       }
+      return oneFieldHop(arg);
+    }
+
+    /**
+     * Whether {@code row}, given outside a {@code when}, is a {@code to(path, accessor)} row whose
+     * source path is one {@code field} hop long, which reads that one property as its accessor
+     * does.
+     */
+    private boolean readsOneSourceProperty(final MethodInvocationTree row, final ExecutableElement rowExec) {
+      return (
+        rowExec.getSimpleName().contentEquals("to") &&
+        row.getArguments().size() == 2 &&
+        isTelescopeParameter(rowExec, 0) &&
+        !isTelescopeParameter(rowExec, 1) &&
+        oneFieldHop(row.getArguments().getFirst())
+      );
+    }
+
+    /**
+     * Whether {@code arg} is a telescope path written inline as {@code Telescope.of} or {@code
+     * ofBean} followed by one {@code field} hop and nothing else.
+     */
+    private boolean oneFieldHop(final ExpressionTree arg) {
       final var calls = telescopeCalls(arg);
       if (calls == null || calls.size() != 2) return false;
       final var root = factoryName(calls.getFirst());
@@ -2121,8 +2185,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         if (!seen.add(key)) return;
         final var sides = classSides(srcEl, tgtEl);
         // A strict mapper refuses, at any pair with rows of its own, a source property no row reads
-        // whose same-named target a row reading another property writes.
-        if (!forwardOnly && claimed != null) {
+        // whose same-named target a row reading another property writes. A call with a row this
+        // does not read may read the property, or be refused before the mapper is built.
+        if (!forwardOnly && claimed != null && callRowsComplete) {
           final var read = sourceClaimsAt(srcEl, tgtEl);
           final var kept = new ArrayList<String>();
           for (final var name : sides.source().keySet()) if (!read.contains(name)) kept.add(name);
@@ -2140,10 +2205,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         );
         // A strict mapper refuses, at any pair with rows of its own, a target property no row
         // writes whose same-named source a row reads. A call with a row this does not read, or a
-        // path row that may write below the call's own target, is left to construction.
-        if (!forwardOnly && claimed != null && nestedWritesKnown()) {
+        // path row that may write below the pair it applies at, is left to construction.
+        final var written = nestedWritesKnown() ? pathWritesAt(srcEl, tgtEl) : null;
+        if (!forwardOnly && claimed != null && written != null) {
           for (final var name : match.unmatchedTargets()) {
-            if (!sides.source().containsKey(name)) continue;
+            if (!sides.source().containsKey(name) || written.contains(name)) continue;
             report(
               at,
               PairingMessages.sameNameSourceRead(
@@ -2262,8 +2328,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * source a row reads and no row writes. A mapper that runs forward only refuses none of them.
      * Each property paired by name is checked as {@link #verifyProperty} checks it.
      *
-     * <p>A case pair that may convert through a bridge of its own, whose properties are not read
-     * here, or that refuses a row keyed to two sealed interfaces is left to construction.
+     * <p>A case pair no row applies to that may convert through a bridge of its own, whose
+     * properties are not read here, or that refuses a row keyed to two sealed interfaces is left to
+     * construction.
      */
     private void verifyOwnCase(
       final Tree at,
@@ -2274,27 +2341,21 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     ) {
       final var sourceType = types.erasure(srcEl.asType());
       final var targetType = types.erasure(tgtEl.asType());
-      if (bridgeVisible(srcEl, tgtEl) || !rules.reflectable(sourceType) || !rules.reflectable(targetType)) return;
+      final var claimedOrNull = claimsAt(srcEl, tgtEl);
+      // A case pair no row applies to converts through a bridge of its own where it has one.
+      if (claimedOrNull == null && bridgeVisible(srcEl, tgtEl)) return;
+      if (!rules.reflectable(sourceType) || !rules.reflectable(targetType)) return;
       if (!seen.add(pairKey(srcEl, tgtEl))) return;
       final var own = rowsKeyedTo(callRows, sourceType, targetType);
       final var inherited = walk.inherited(callRows, own, sourceType, targetType);
       if (!inherited.refused().isEmpty()) return;
-      final var applied = new ArrayList<>(own);
-      applied.addAll(inherited.applied());
       // A row given a path, a constant or a compute turns the pair lenient about the properties
-      // nothing pairs with, and writes the target property its target names first.
+      // nothing pairs with.
       var lenientRows = false;
-      var writesKnown = nestedWritesKnown();
-      final var written = new HashSet<String>();
-      for (final var row : applied) {
-        if (row.kind() != PairWalk.RowKind.PATH) continue;
-        lenientRows = true;
-        final var start = row.targetAccessor() != null ? row.targetAccessor() : row.targetPathStart();
-        if (start == null) writesKnown = false;
-        else written.add(propertyName(start, tgtEl));
-      }
+      for (final var row : own) lenientRows |= row.kind() == PairWalk.RowKind.PATH;
+      for (final var row : inherited.applied()) lenientRows |= row.kind() == PairWalk.RowKind.PATH;
+      final var written = nestedWritesKnown() ? pathWritesAt(srcEl, tgtEl) : null;
       final var sides = classSides(srcEl, tgtEl);
-      final var claimedOrNull = claimsAt(srcEl, tgtEl);
       final Set<String> claimed = claimedOrNull == null ? Set.of() : claimedOrNull;
       final var read = sourceClaimsAt(srcEl, tgtEl);
       final var srcSimple = srcEl.getSimpleName().toString();
@@ -2325,7 +2386,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         }
         if (forwardOnly) continue;
         final var namesake = sides.source().containsKey(name);
-        if (lenientRows && !(namesake && writesKnown && !written.contains(name))) continue;
+        if (lenientRows && !(namesake && written != null && !written.contains(name))) continue;
         report(
           at,
           namesake
