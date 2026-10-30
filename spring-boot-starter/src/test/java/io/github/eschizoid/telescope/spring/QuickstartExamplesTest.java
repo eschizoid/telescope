@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.spring.quickstart.Contact;
 import io.github.eschizoid.telescope.spring.quickstart.Customer;
 import io.github.eschizoid.telescope.spring.quickstart.CustomerDto;
@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.spring.quickstart.CustomerMapper;
 import io.github.eschizoid.telescope.spring.quickstart.CustomerProjection;
 import io.github.eschizoid.telescope.spring.quickstart.CustomerSummaryProjection;
 import io.github.eschizoid.telescope.spring.quickstart.NormalizedCustomerProjection;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.ComponentScan;
@@ -32,14 +33,17 @@ class QuickstartExamplesTest {
   }
 
   @Test
-  void projectionMapsBothWaysAndRefusesPatchOverTheBridge() {
+  @DisplayName("a projection over the bridge maps both ways and patches, as Mapper.patch does")
+  void projectionMapsBothWaysAndPatchesOverTheBridge() {
     runner.run(context -> {
       final var projection = context.getBean(CustomerProjection.class);
       final var customer = new Customer("Ada", new Contact("ada@example.com"));
       assertThat(projection.backward(projection.map(customer))).isEqualTo(customer);
-      assertThatThrownBy(() -> projection.patch(customer, new CustomerDto("Bea", null))).isInstanceOf(
-        UnsupportedOperationException.class
-      );
+      final var partial = new CustomerDto("Bea", null);
+      final var patched = projection.patch(customer, partial);
+      assertThat(patched).isEqualTo(new Customer("Bea", new Contact("ada@example.com")));
+      assertThat(patched).isEqualTo(Telescope.mapper(Customer.class, CustomerDto.class).patch(customer, partial));
+      assertThat(patched.contact()).isSameAs(customer.contact());
     });
   }
 
