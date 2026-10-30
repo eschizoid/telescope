@@ -373,7 +373,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // order, and the accessors each row names; its provider records both, so a mapper built from
     // other rows is not handed a bridge generated from these.
     List<String> rowKinds,
-    List<String> rowAccessors
+    List<String> rowAccessors,
+    // For a field's bridge, its rows reading the source through a path into a target property, in
+    // the order the rows came.
+    List<FieldRows.SourcePath> sourcePaths
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -389,6 +392,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       null,
       false,
       null,
+      List.of(),
       List.of(),
       List.of()
     );
@@ -413,6 +417,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         carrierEl.getQualifiedName().toString(),
         false,
         declaringField,
+        List.of(),
         List.of(),
         List.of()
       );
@@ -811,6 +816,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           lenient,
           null,
           List.of(),
+          List.of(),
           List.of()
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
@@ -1098,7 +1104,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       !parsed.strict(),
       fieldName,
       List.copyOf(parsed.rowKinds()),
-      List.copyOf(parsed.rowAccessors())
+      List.copyOf(parsed.rowAccessors()),
+      List.copyOf(parsed.sourcePaths())
     );
     if (
       !roundEnv.processingOver() && (carriesLombokTrigger(parsed.source()) || carriesLombokTrigger(parsed.target()))
@@ -1459,7 +1466,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Every target property a source property is written into: each rename on it, the first
     // declared first, or the property of its own name where it has none.
     final Function<String, List<String>> targetsOf = name -> renamedTo.getOrDefault(name, List.of(name));
-    final var unwalked = Unwalked.of(drops, transforms.keySet(), viaMappers.keySet(), computes.keySet(), renamedTo);
+    // A source path reads below its first property and fills its target property itself, so the
+    // bridge walks neither.
+    final var pathRoots = new LinkedHashSet<>(drops);
+    final var pathFilled = new LinkedHashSet<>(computes.keySet());
+    for (final var path : cfg.sourcePaths()) {
+      pathRoots.add(path.properties().getFirst());
+      pathFilled.add(path.target());
+    }
+    final var unwalked = Unwalked.of(pathRoots, transforms.keySet(), viaMappers.keySet(), pathFilled, renamedTo);
     final var unwalkedSource = unwalked.source();
     final var unwalkedTarget = unwalked.target();
     final var writeDefault = writeDefaults.get(thisPair);
@@ -1482,6 +1497,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
+    // What each source path reads at every level, and how a strict bridge rebuilds each object it
+    // writes back through.
+    final var sourcePaths = planSourcePaths(source, target, targetFields, cfg.sourcePaths(), lenient, bridgePackage);
+    if (sourcePaths == null) return;
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -1868,6 +1887,47 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       injectedTargetFields.add(fieldName);
     }
+    final var sourceNamesForPaths = sourceFields.stream().map(Field::name).collect(Collectors.toSet());
+    for (final var path : sourcePaths) {
+      final var filled = path.row().target();
+      if (!targetNames.contains(filled)) {
+        error(
+          source,
+          "a row writes the path '" +
+            path.row().name() +
+            "' into '" +
+            filled +
+            "', which is not a property the bridge writes on " +
+            target.getSimpleName() +
+            "; its properties are " +
+            targetNames
+        );
+        return;
+      }
+      if (!sourceNamesForPaths.contains(path.row().properties().getFirst())) {
+        error(
+          source,
+          "a row reads the path '" +
+            path.row().name() +
+            "', whose first property is not one the bridge reads on " +
+            source.getSimpleName() +
+            "; its properties are " +
+            sourceNamesForPaths
+        );
+        return;
+      }
+      injectedTargetFields.add(filled);
+    }
+    // The first property of a source path pairs with nothing else when the path is one step long,
+    // which reads it as its accessor does, or when the target has no property of its name and no
+    // other row reads it; the path then reads it, and a strict bridge rebuilds it backward from the
+    // paths through it alone.
+    final var pathConsumed = new LinkedHashSet<String>();
+    for (final var path : sourcePaths) {
+      final var root = path.row().properties().getFirst();
+      if (renames.containsKey(root) || transforms.containsKey(root) || viaMappers.containsKey(root)) continue;
+      if (path.row().properties().size() == 1 || !targetNames.contains(root)) pathConsumed.add(root);
+    }
 
     // @Bridge(lenient = true): auto-fill the mismatch on both sides so the bijection check below
     // passes naturally without forcing the user to declare a drop or constant for every unmatched
@@ -1883,7 +1943,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // mapper is lenient.
     final var kept = new ArrayList<String>();
     for (final var sf : sourceFields) {
-      if (!drops.contains(sf.name()) && !renames.containsKey(sf.name())) kept.add(sf.name());
+      if (!drops.contains(sf.name()) && !renames.containsKey(sf.name()) && !pathConsumed.contains(sf.name())) {
+        kept.add(sf.name());
+      }
     }
     final var taken = KeptNames.taken(kept, renameTargetNames);
     for (final var name : taken) {
@@ -1894,7 +1956,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       return;
     }
-    final var effectiveDrops = lenient ? new LinkedHashSet<>(drops) : drops;
+    final var effectiveDrops = new LinkedHashSet<>(drops);
+    effectiveDrops.addAll(pathConsumed);
     if (lenient) {
       final var targetFieldNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
       for (final var sf : sourceFields) {
@@ -2050,7 +2113,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // once into a local makes every downstream duplication a local reference. The patch emitter
     // established the idiom with its __pp_ prelude.
     final var forwardLocals = new LinkedHashMap<String, String>();
+    final var forwardPaths = new HashMap<String, SourcePathPlan>();
+    for (final var path : sourcePaths) forwardPaths.put(path.row().target(), path);
     final Function<String, String> readForward = targetName -> {
+      final var path = forwardPaths.get(targetName);
+      if (path != null) return pathRead(path, forwardLocals, paired, sourceFields, source);
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
@@ -2088,7 +2155,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // filled with something. Otherwise forward-rename the source name to find the matching target
     // field for the read.
     final var backwardLocals = new LinkedHashMap<String, String>();
-    final Function<String, String> readBackward = sourceName -> {
+    final Function<String, String> readBackwardPlain = sourceName -> {
       if (effectiveDrops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
       if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
         fieldByName(sourceFields, sourceName).type()
@@ -2116,6 +2183,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         sourceName,
         paired.checkedInto(paired.backwardChecks(), sourceName, applyBackward(sourceName, plan, local))
       );
+    };
+    // A strict bridge writes each source path's target value back through the path, over the first
+    // property's own value, in the order the rows came. A lenient bridge's backward is lossy and
+    // writes nothing through a path.
+    final var writtenPaths = new LinkedHashMap<String, List<SourcePathPlan>>();
+    if (!lenient) {
+      for (final var path : sourcePaths) {
+        writtenPaths.computeIfAbsent(path.row().properties().getFirst(), unused -> new ArrayList<>()).add(path);
+      }
+    }
+    final Function<String, String> readBackward = sourceName -> {
+      final var paths = writtenPaths.get(sourceName);
+      if (paths == null) return readBackwardPlain.apply(sourceName);
+      final var sf = fieldByName(sourceFields, sourceName);
+      var written = pathConsumed.contains(sourceName)
+        ? defaultLiteralFor(sf.type())
+        : readBackwardPlain.apply(sourceName);
+      for (final var path : paths) {
+        final var filled = fieldByName(targetFields, path.row().target());
+        final var local = "__bp_" + filled.name();
+        backwardLocals.putIfAbsent(
+          local,
+          declarable(filled.type()) + " " + local + " = " + readExpr(target, "t", filled) + ";"
+        );
+        written = path.row().properties().size() == 1 ? local : "__pw" + path.index() + "_1(" + written + ", " + local + ")";
+      }
+      return written;
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
@@ -2268,6 +2362,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     backwardWritten.addAll(gatedBackward.keySet());
     final var backwardResults = new HashMap<>(backwardGives);
     backwardResults.putAll(gatedBackward);
+    for (final var path : sourcePaths) {
+      final var filled = fieldByName(targetFields, path.row().target());
+      final var read = pathLeaf(path);
+      if (filled.type().getKind().isPrimitive() && !read.getKind().isPrimitive()) {
+        forwardWritten.add(filled.name());
+        forwardResults.put(filled.name(), read);
+      }
+    }
+    for (final var paths : writtenPaths.entrySet()) {
+      final var last = paths.getValue().getLast();
+      final var root = fieldByName(sourceFields, paths.getKey());
+      final var given = fieldByName(targetFields, last.row().target()).type();
+      if (last.row().properties().size() == 1 && root.type().getKind().isPrimitive() && !given.getKind().isPrimitive()) {
+        backwardWritten.add(root.name());
+        backwardResults.put(root.name(), given);
+      }
+    }
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -2308,7 +2419,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
-    final Function<String, String> readPatch = sourceName -> {
+    final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
       if (effectiveDrops.contains(sourceName)) return baseRead;
@@ -2365,6 +2476,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         sourceName,
         "(" + pLocal + " != null ? " + checkedPartial + " : " + baseRead + ")"
       );
+    };
+    // Patch writes each non-null value of a path's target property back through the path, over the
+    // first property as patch rebuilds it, in the order the rows came.
+    final Function<String, String> readPatch = sourceName -> {
+      final var paths = writtenPaths.get(sourceName);
+      if (paths == null) return readPatchPlain.apply(sourceName);
+      final var sf = fieldByName(sourceFields, sourceName);
+      var written = pathConsumed.contains(sourceName)
+        ? readExpr(source, "base", sf)
+        : readPatchPlain.apply(sourceName);
+      var step = 0;
+      for (final var path : paths) {
+        final var filled = fieldByName(targetFields, path.row().target());
+        final var local = "__ppt_" + filled.name();
+        patchLocals.putIfAbsent(
+          local,
+          declarable(boxedIfPrimitive(filled.type())) +
+            " " +
+            local +
+            " = partial == null ? null : " +
+            readExpr(target, "partial", filled) +
+            ";"
+        );
+        final var current = "__pc_" + sourceName + "_" + step++;
+        patchLocals.put(current, declarable(sf.type()) + " " + current + " = " + written + ";");
+        final var through = path.row().properties().size() == 1
+          ? local
+          : "__pw" + path.index() + "_1(" + current + ", " + local + ")";
+        written = "(" + local + " != null ? " + through + " : " + current + ")";
+      }
+      return written;
     };
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
@@ -2430,6 +2572,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       } else {
         sb.append("return ").append(patchInner).append("; }");
         patchBody = sb.toString();
+      }
+    }
+
+    final var pathWriters = new ArrayList<String>();
+    for (final var paths : writtenPaths.values()) {
+      for (final var path : paths) {
+        final var written = pathWriters(path, source, targetFields);
+        if (written == null) return;
+        pathWriters.addAll(written);
       }
     }
 
@@ -2575,10 +2726,268 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           unwalkedTarget,
           guarded
         );
+        for (final var writer : pathWriters) out.print(writer);
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
       }
     );
+  }
+
+  /**
+   * A row reading the source through a path, as the bridge reads and writes it: {@code levels} are
+   * the classes the path reads each property on, the source first; {@code reads} the type each
+   * property is read as there; and {@code rebuilds}, for a strict bridge, how each object below the
+   * source is rebuilt when a value is written back through the path, one per level after the
+   * first. {@code index} names the path's write helpers.
+   */
+  private record SourcePathPlan(
+    FieldRows.SourcePath row,
+    int index,
+    List<TypeElement> levels,
+    List<TypeMirror> reads,
+    List<Rebuild> rebuilds
+  ) {}
+
+  /**
+   * The source paths of a pair, each with the classes it steps through, or null once a path is
+   * refused: one whose properties cannot be read as the rows named them, or, for a strict bridge,
+   * one stepping through a class the bridge cannot build where it is null, which the runtime
+   * mapper refuses in the same words when it can build it neither.
+   */
+  private List<SourcePathPlan> planSourcePaths(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> targetFields,
+    final List<FieldRows.SourcePath> rows,
+    final boolean lenient,
+    final PackageElement bridgePackage
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    final var plans = new ArrayList<SourcePathPlan>();
+    for (var index = 0; index < rows.size(); index++) {
+      final var row = rows.get(index);
+      final var levels = new ArrayList<TypeElement>();
+      final var reads = new ArrayList<TypeMirror>();
+      var at = (DeclaredType) source.asType();
+      for (var step = 0; step < row.methods().size(); step++) {
+        final var level = (TypeElement) at.asElement();
+        levels.add(level);
+        final var method = accessorNamed(level, row.methods().get(step));
+        if (method == null) {
+          error(source, "the path '" + row.name() + "' reads no property " + row.methods().get(step) + "() on " + level);
+          return null;
+        }
+        final var read = ((ExecutableType) types.asMemberOf(at, method)).getReturnType();
+        reads.add(read);
+        if (step + 1 == row.methods().size()) continue;
+        if (!(read instanceof DeclaredType next) || !(next.asElement() instanceof TypeElement)) {
+          error(source, "the path '" + row.name() + "' steps through " + read + ", which has no properties to read");
+          return null;
+        }
+        at = next;
+      }
+      final var rebuilds = new ArrayList<Rebuild>();
+      if (!lenient) {
+        for (final var level : levels.subList(1, levels.size())) {
+          if (!level.getTypeParameters().isEmpty()) {
+            error(
+              source,
+              "the path '" +
+                row.name() +
+                "' steps through the generic class " +
+                level.getSimpleName() +
+                ", which the generated bridge has no write back through yet; convert the pair with" +
+                " Telescope.mapperForward(...), or build this mapper without @Bridge to run it on the runtime path"
+            );
+            return null;
+          }
+          final var rebuild = rebuildFor(level, fieldsOf(level), "AUTO", bridgePackage);
+          if (rebuild.kind() == Rebuild.Kind.NONE) {
+            error(
+              source,
+              PairingMessages.pathIntermediateUnbuildable(
+                source.getSimpleName().toString(),
+                target.getSimpleName().toString(),
+                row.name(),
+                level.getSimpleName().toString()
+              )
+            );
+            return null;
+          }
+          rebuilds.add(rebuild);
+        }
+      }
+      plans.add(new SourcePathPlan(row, index, List.copyOf(levels), List.copyOf(reads), List.copyOf(rebuilds)));
+    }
+    return plans;
+  }
+
+  /** The no-argument instance method {@code name} of {@code type}, inherited ones included. */
+  private ExecutableElement accessorNamed(final TypeElement type, final String name) {
+    for (final var method : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))) {
+      if (
+        method.getSimpleName().contentEquals(name) &&
+        method.getParameters().isEmpty() &&
+        !method.getModifiers().contains(Modifier.STATIC)
+      ) {
+        return method;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The type the value {@code path} reads is held as: the first property's own for a path of one
+   * step, and otherwise the leaf's, boxed, since a null object on the way reads as null.
+   */
+  private TypeMirror pathLeaf(final SourcePathPlan path) {
+    return path.reads().size() == 1 ? path.reads().getFirst() : boxedIfPrimitive(path.reads().getLast());
+  }
+
+  /** {@code type}'s wrapper where it is a primitive, and {@code type} otherwise. */
+  private TypeMirror boxedIfPrimitive(final TypeMirror type) {
+    return type.getKind().isPrimitive()
+      ? processingEnv.getTypeUtils().boxedClass((PrimitiveType) type).asType()
+      : type;
+  }
+
+  /**
+   * The local {@code forward} reads {@code path}'s value into, after declaring in {@code locals}
+   * one local per object the path steps through, each read once: the first property as every other
+   * read of it, and each one below it null where the one above is null.
+   */
+  private String pathRead(
+    final SourcePathPlan path,
+    final LinkedHashMap<String, String> locals,
+    final PairedFields paired,
+    final List<Field> sourceFields,
+    final TypeElement source
+  ) {
+    final var properties = path.row().properties();
+    final var root = properties.getFirst();
+    final var rootLocal = "__fs_" + root;
+    if (hasField(paired.source(), root)) {
+      final var sf = fieldByName(paired.source(), root);
+      locals.putIfAbsent(
+        rootLocal,
+        declarable(sf.type()) +
+          " " +
+          rootLocal +
+          " = " +
+          paired.castInto(paired.sourceReads(), root, readExpr(source, "s", sf)) +
+          ";"
+      );
+    } else {
+      final var sf = fieldByName(sourceFields, root);
+      locals.putIfAbsent(rootLocal, declarable(sf.type()) + " " + rootLocal + " = " + readExpr(source, "s", sf) + ";");
+    }
+    var previous = rootLocal;
+    for (var step = 1; step < properties.size(); step++) {
+      final var local = "__fs_" + String.join("__", properties.subList(0, step + 1));
+      locals.putIfAbsent(
+        local,
+        declarable(boxedIfPrimitive(path.reads().get(step))) +
+          " " +
+          local +
+          " = " +
+          previous +
+          " == null ? null : " +
+          previous +
+          "." +
+          path.row().methods().get(step) +
+          "();"
+      );
+      previous = local;
+    }
+    return previous;
+  }
+
+  /**
+   * The helpers a strict bridge writes {@code path}'s value back through, one per object below the
+   * source: each rebuilds its object through the strategy {@link #rebuildFor} chose, with the next
+   * one, or the value at the leaf, in place of the property the path steps through. An object that
+   * is null is built when the value is not null, with every other property at its null value, and
+   * left null when the value is null. Empty for a path of one step, which writes the property
+   * itself. Null once a rebuild is refused.
+   */
+  private List<String> pathWriters(
+    final SourcePathPlan path,
+    final TypeElement source,
+    final List<Field> targetFields
+  ) {
+    final var properties = path.row().properties();
+    final var depth = properties.size();
+    if (depth == 1) return List.of();
+    final var given = fieldByName(targetFields, path.row().target()).type();
+    final var writers = new ArrayList<String>();
+    for (var step = 1; step < depth; step++) {
+      final var level = path.levels().get(step);
+      final var levelFq = level.getQualifiedName().toString();
+      final var rebuild = path.rebuilds().get(step - 1);
+      final var levelFields = fieldsOf(level);
+      final var property = properties.get(step);
+      final var last = step == depth - 1;
+      // A setter takes no null for a primitive, so a property of an object built here is read as
+      // its wrapper and left unwritten where there is no object to read it from.
+      final var referenceValued = new HashSet<String>();
+      if (rebuild.kind() == Rebuild.Kind.SETTERS) {
+        for (final var f : levelFields) {
+          if (!f.name().equals(property) && f.type().getKind().isPrimitive()) referenceValued.add(f.name());
+        }
+      }
+      final var transformed = new HashSet<String>();
+      final var gives = new HashMap<String, TypeMirror>();
+      if (last && fieldByName(levelFields, property).type().getKind().isPrimitive() && !given.getKind().isPrimitive()) {
+        transformed.add(property);
+        gives.put(property, given);
+      }
+      final Function<String, String> read = name -> {
+        if (name.equals(property)) return last ? "v" : "__n";
+        final var f = fieldByName(levelFields, name);
+        final var value = readExpr(level, "cur", f);
+        if (!f.type().getKind().isPrimitive() || referenceValued.contains(name)) {
+          return "(cur == null ? null : " + value + ")";
+        }
+        return "(cur == null ? " + defaultLiteralFor(f.type()) + " : " + value + ")";
+      };
+      final var body = buildExpr(level, read, levelFields, "AUTO", source, rebuild, null, transformed, gives, referenceValued);
+      if (body == null) return null;
+      final var text = new StringWriter();
+      try (var out = new PrintWriter(text)) {
+        out.println(
+          "  private static " +
+            levelFq +
+            " __pw" +
+            path.index() +
+            "_" +
+            step +
+            "(final " +
+            levelFq +
+            " cur, final " +
+            declarable(given) +
+            " v) {"
+        );
+        if (!given.getKind().isPrimitive()) out.println("    if (cur == null && v == null) return null;");
+        if (!last) {
+          out.println(
+            "    final " +
+              path.levels().get(step + 1).getQualifiedName() +
+              " __n = __pw" +
+              path.index() +
+              "_" +
+              (step + 1) +
+              "(cur == null ? null : cur." +
+              path.row().methods().get(step) +
+              "(), v);"
+          );
+        }
+        emitMethodBody(out, body);
+        out.println("  }");
+        out.println();
+      }
+      writers.add(text.toString());
+    }
+    return writers;
   }
 
   /**

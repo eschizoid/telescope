@@ -215,7 +215,8 @@ public final class DeepMap {
 
   /**
    * How the rows a provider's bridge was generated from differ from {@code steps}, or null when
-   * they agree. The kinds of the rows are compared everywhere. The accessors each row names are
+   * they agree. The kinds of the rows are compared everywhere. The accessors each row names, and the
+   * properties a source path steps through, are
    * compared on the JVM, where reading them decodes each method reference; inside a native image,
    * which is built from one compilation and needs no such decoding, they are not.
    */
@@ -228,7 +229,11 @@ public final class DeepMap {
     for (final var step : steps) {
       // A write hint names a class rather than accessors; its kind is compared above.
       if (!(step instanceof Mapping<?, ?> row)) continue;
-      accessors.add(nullToEmpty(row.sourceField()) + ">" + nullToEmpty(row.targetField()));
+      // A source path is named by the properties it steps through, so a bridge generated from
+      // another path into the same target property is passed over.
+      final var read =
+        row instanceof FromTelescopeTo<?, ?, ?> path ? path.sourceTelescope().pathName() : row.sourceField();
+      accessors.add(nullToEmpty(read) + ">" + nullToEmpty(row.targetField()));
     }
     if (accessors.equals(provider.rowAccessors())) return null;
     return (

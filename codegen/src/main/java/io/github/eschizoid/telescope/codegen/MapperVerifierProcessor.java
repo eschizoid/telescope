@@ -1980,9 +1980,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     /**
      * Records the write a {@code to} row with a path on one side makes, as construction counts it:
      * an accessor of the call's source into a target path rooted at the call's target, which
-     * backward reads the property back from at any depth, or a source path one {@code field} hop
-     * long rooted at the call's source into an accessor of the call's target, which reads that one
-     * property. Any other row, and a path this does not read, is left to construction.
+     * backward reads the property back from at any depth, or a source path of {@code field} hops
+     * alone rooted at the call's source into an accessor of the call's target, which backward
+     * writes back through and which is named by the properties it steps through. Any other row,
+     * and a path this does not read, is left to construction.
      */
     private void pathWrite(
       final MethodInvocationTree row,
@@ -2008,8 +2009,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (src == null && tgt != null) {
         final var named = fieldPath(args.get(0), srcEl);
         final var calls = telescopeCalls(args.get(0));
-        if (named != null && calls.size() == 2 && sameClass(tgt.owner(), tgtEl)) {
-          writes.write(named.getFirst(), tgt.name(), row, true);
+        if (named != null && calls.size() == named.size() + 1 && sameClass(tgt.owner(), tgtEl)) {
+          writes.write(String.join(".", named), tgt.name(), row, true);
         }
       }
     }
