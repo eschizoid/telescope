@@ -45,6 +45,11 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
     this.elements = elements;
   }
 
+  /** The type {@code Object}. */
+  TypeMirror objectType() {
+    return elements.getTypeElement("java.lang.Object").asType();
+  }
+
   @Override
   public boolean sameType(final TypeMirror a, final TypeMirror b) {
     return sameType(types, a, b);

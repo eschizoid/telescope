@@ -173,7 +173,26 @@ class MethodInstantiationTest {
       "Map<? super java.sql.Date, ? super java.sql.Time>",
       "java.util.Map<java.util.Date,java.util.Date>"
     ),
-    new Call("<T extends Comparable<T>> List<T> m()", null, "List<? super Object>", REFUSED)
+    new Call("<T extends Comparable<T>> List<T> m()", null, "List<? super Object>", REFUSED),
+    new Call("<T> List<? super T> m()", null, "List<? extends Number>", REFUSED),
+    new Call("<T extends Number> List<? super T> m()", null, "List<? extends Number>", REFUSED),
+    new Call("<T> List<? super T> m()", null, "List<? extends Object>", OPEN),
+    new Call("<T extends Number> List<List<? extends T>> m()", null, "List<List<? extends CharSequence>>", REFUSED),
+    new Call(
+      "<T> List<List<? extends T>> m()",
+      null,
+      "List<List<? extends CharSequence>>",
+      "java.util.List<java.util.List<? extends java.lang.CharSequence>>"
+    ),
+    new Call("<T extends Comparable<? super T>> Map<T, T> m()", null, "Map<? super Integer, ? super Long>", REFUSED),
+    new Call(
+      "<T extends Comparable<? super T>> Map<T, T> m()",
+      null,
+      "Map<? super java.sql.Date, ? super java.sql.Timestamp>",
+      OPEN
+    ),
+    new Call("<T> T m(List<? extends T> t)", "List<String>", "Integer", REFUSED),
+    new Call("<T> T m(List<? extends T> t)", "List<String>", "CharSequence", OPEN)
   );
 
   /** Asks the instantiation about each call in the first round and keeps the answers. */
