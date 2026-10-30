@@ -231,6 +231,53 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName("a field reading the source through a path runs its generated bridge, giving what the runtime mapper gives")
+  void aFieldWithASourcePathRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathOrder.class, PathOrderDto.class,\n" +
+      "      to(Telescope.of(PathOrder.class).field(PathOrder::customer).field(PathCustomer::city), PathOrderDto::city));\n";
+    final var c = compile(
+      sources(
+        "fb.PathCustomer",
+        "package fb; public record PathCustomer(String city, String town) {}",
+        "fb.PathOrder",
+        "package fb; public record PathOrder(PathCustomer customer, int qty) {}",
+        "fb.PathOrderDto",
+        "package fb; public record PathOrderDto(String city, int qty) {}",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathOrder, PathOrderDto> ORDER = " +
+          rows +
+          "  public static Mapper<PathOrder, PathOrderDto> runtime() { return Built.ORDER; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER +
+          "final class Built {\n" +
+          "  static final Mapper<PathOrder, PathOrderDto> ORDER = " +
+          rows +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.PathOrderToPathOrderDtoBridge"), c.generated()::toString);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "ORDER");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var customer = loader.loadClass("fb.PathCustomer").getConstructors()[0].newInstance("Paris", "Rome");
+      final var order = loader.loadClass("fb.PathOrder").getConstructors()[0].newInstance(customer, 3);
+      assertEquals(runtime.forward(order), generated.forward(order));
+      final var dto = generated.forward(order);
+      assertEquals(runtime.backward(dto), generated.backward(dto));
+      assertEquals(runtime.patch(order, dto), generated.patch(order, dto));
+    }
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
