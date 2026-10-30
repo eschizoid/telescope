@@ -206,13 +206,13 @@ class MappingCodegenOneToOneTest {
     void allThreeFeaturesAtOnce() {
       record FlatSrc(String displayName, String displayCity) {}
 
-      // age has no Src counterpart → drop. address is allocated by intermediate-allocation. city
-      // routes from displayCity via the codegen navigator. zip is a constant. name is computed.
+      // displayName is dropped and age has no source counterpart. address is allocated by
+      // intermediate allocation, city routes from displayCity via the codegen navigator, zip is a
+      // constant and name is computed.
       final var mapper = Telescope.mapper(
         FlatSrc.class,
         Person.class,
         drop(FlatSrc::displayName),
-        drop(FlatSrc::displayCity),
         compute(PersonTelescope.of().name(), () -> "computed-name"),
         to(FlatSrc::displayCity, PersonTelescope.of().address().city()),
         constant(PersonTelescope.of().address().zip(), "11201")

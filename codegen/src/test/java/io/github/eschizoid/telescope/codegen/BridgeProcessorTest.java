@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.List;
@@ -4119,7 +4120,7 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "duplicate rename source should fail");
       assertTrue(
-        compilation.hasError("property 'name' can be written into only one target"),
+        compilation.hasError(PairingMessages.fanOutBothWays("A", "B", "name", List.of("a", "b"))),
         () -> "expected duplicate-source diagnostic; saw " + compilation.errorMessages()
       );
     }

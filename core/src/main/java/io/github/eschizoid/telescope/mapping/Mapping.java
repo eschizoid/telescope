@@ -575,6 +575,10 @@ public sealed interface Mapping<A, B>
    * the target, and {@code backward(label)} reconstructs the record with the field set to whatever
    * the source-side reflection chooses (typically {@code null} for nullable record components, or
    * the type's default value otherwise — see the source-class's component-default contract).
+   *
+   * <p>A dropped field is written by no other row of its pair: the mapper refuses, by name and in
+   * either order, a drop beside a row reading the same field through its accessor, a target path
+   * its accessor feeds, or a source path one {@code field} hop long through it.
    */
   static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
     return new Drop<>(src, null);

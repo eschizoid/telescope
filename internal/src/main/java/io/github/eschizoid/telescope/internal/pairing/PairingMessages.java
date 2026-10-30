@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -373,6 +374,49 @@ public final class PairingMessages {
       ": duplicate override row for source field '" +
       srcField +
       "'. Each (source, target) type pair may declare at most one row per source field."
+    );
+  }
+
+  /**
+   * A source property a mapper that converts backward writes into several targets, {@code targets}
+   * in the order its rows write them: backward reads each source property back from one target.
+   */
+  public static String fanOutBothWays(
+    final String source,
+    final String target,
+    final String srcField,
+    final List<String> targets
+  ) {
+    final var named = new ArrayList<String>();
+    for (final var each : targets) named.add("'" + each + "'");
+    final var listed = String.join(", ", named.subList(0, named.size() - 1)) + " and " + named.getLast();
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is written into " +
+      listed +
+      ", and a mapper that converts both ways has no one target to read it back from. Fan it out" +
+      " with Telescope.mapperForward(...), one row per target, or write '" +
+      srcField +
+      "' into one target with a single two-way row and fill the others another way, such as a" +
+      " constant or compute row."
+    );
+  }
+
+  /** A source property one row drops and another writes. */
+  public static String droppedAndWritten(final String source, final String target, final String srcField) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row and written by another. Drop it, or write it, not both."
     );
   }
 

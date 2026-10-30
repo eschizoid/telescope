@@ -29,14 +29,13 @@ class MapperPostHooksTest {
 
   record Dto(String id, String fullName, Long updatedAtMillis) {}
 
-  // DeepMap is strict on missing rows; drop firstName/lastName so the structural step doesn't
-  // reject the mismatch — the hooks supply fullName cross-cuttingly in these tests.
+  // A two-way mapper pairs every property: firstName is carried into fullName and lastName is
+  // dropped, and the hooks rewrite fullName in these tests.
   private static Mapper<Entity, Dto> baseMapper() {
     return Telescope.mapper(
       Entity.class,
       Dto.class,
       to(Entity::id, Dto::id),
-      drop(Entity::firstName),
       drop(Entity::lastName),
       to(Entity::updatedAtMillis, Dto::updatedAtMillis),
       to(Entity::firstName, Dto::fullName)
@@ -100,7 +99,7 @@ class MapperPostHooksTest {
         .afterForward(d -> new Dto(d.id(), d.fullName() + "-1", d.updatedAtMillis()))
         .afterForward(d -> new Dto(d.id(), d.fullName() + "-2", d.updatedAtMillis()));
 
-      // fullName is null initially (no row maps it); 1st hook turns "null-1", 2nd → "null-1-2"
+      // fullName carries the null firstName; 1st hook turns it "null-1", 2nd → "null-1-2"
       assertEquals("null-1-2", mapper.forward(new Entity("e-1", null, null, null)).fullName());
     }
 

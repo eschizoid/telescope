@@ -10604,6 +10604,72 @@ class CrossPathCorpusTest {
       "#0(in=#1(label=\"#7\"))",
       "#0(in=#1(n=5))",
       "#0(in=#1(n=5))"
+    ),
+    new VariableTransform(
+      "a forward-only fan-out into a renamed target and the property's namesake",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        ),
+        sampled("%1$sTgt", "String label, String n", "new %1$sTgt(\"q\", \"r\")"),
+        runtimeMapper(
+          true,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)"
+        )
+      ),
+      "#0(label=\"x\", n=\"x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "the same forward-only fan-out with its rows given the other way round",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)"
+        ),
+        sampled("%1$sTgt", "String label, String n", "new %1$sTgt(\"q\", \"r\")"),
+        runtimeMapper(
+          true,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        )
+      ),
+      "#0(label=\"x\", n=\"x\")",
+      null,
+      null
+    ),
+    new VariableTransform(
+      "a forward-only fan-out into two renamed targets",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        typedField(
+          true,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        ),
+        sampled("%1$sTgt", "String a, String b", "new %1$sTgt(\"q\", \"r\")"),
+        runtimeMapper(
+          true,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      "#0(a=\"x\", b=\"x\")",
+      null,
+      null
     )
   );
 
@@ -10680,6 +10746,316 @@ class CrossPathCorpusTest {
             );
           }
         }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * Rows of a {@code @Bridge} field and the runtime rows over the same pair that claim one source
+   * property twice: written into two targets of a mapper that converts both ways, or both dropped
+   * and written. The declarations each take {@code %1$s} as the row's prefix, the last of them the
+   * runtime row, which may give its rows in another order than the field does; {@code generated}
+   * and {@code runtime} are the refusals each path owes, the field's when the bridge is built and
+   * the runtime's when the mapper is.
+   */
+  private record SourceClaimedTwice(String name, List<String> declarations, String generated, String runtime) {}
+
+  private static final List<SourceClaimedTwice> SOURCES_CLAIMED_TWICE = List.of(
+    new SourceClaimedTwice(
+      "a property written into two renamed targets by a two-way mapper",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        ),
+        "public record %1$sTgt(String a, String b) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b"))
+    ),
+    new SourceClaimedTwice(
+      "the same fan-out with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        ),
+        "public record %1$sTgt(String a, String b) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("b", "a"))
+    ),
+    new SourceClaimedTwice(
+      "a property written into three targets, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::c)"
+        ),
+        "public record %1$sTgt(String a, String b, String c) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::c)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b", "c")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("c", "b", "a"))
+    ),
+    new SourceClaimedTwice(
+      "a fan-out beside a target property no row writes, which the fan-out is refused before",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        ),
+        "public record %1$sTgt(String a, String b, String c) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("b", "a"))
+    ),
+    new SourceClaimedTwice(
+      "a property written into a renamed target and its namesake by a two-way mapper",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        ),
+        "public record %1$sTgt(String label, String n) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n"))
+    ),
+    new SourceClaimedTwice(
+      "the same namesake fan-out with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        ),
+        "public record %1$sTgt(String label, String n) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("label", "n")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("n", "label"))
+    ),
+    new SourceClaimedTwice(
+      "a fan-out through one two-way conversion, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(Integer n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, %1$sFn.class)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::y, %1$sFn.class)"
+        ),
+        "public record %1$sTgt(String x, String y) {}\n",
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
+        runtimeMapper(
+          false,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::y, fn::forward, fn::backward)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::x, fn::forward, fn::backward)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("x", "y")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("y", "x"))
+    ),
+    new SourceClaimedTwice(
+      "a fan-out whose rows convert the property differently, by a two-way mapper",
+      List.of(
+        "public record %1$sSrc(Integer n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, Integer>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::b, %1$sFn.class)"
+        ),
+        "public record %1$sTgt(Integer a, String b) {}\n",
+        transformFn("Integer", "String", "\"#\" + a", "Integer.valueOf(b.substring(1))"),
+        runtimeMapper(
+          false,
+          "    final var fn = new %1$sFn();\n",
+          "<%1$sSrc, %1$sTgt, Integer>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, Integer, String>to(%1$sSrc::n, %1$sTgt::b, fn::forward, fn::backward)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b"))
+    ),
+    new SourceClaimedTwice(
+      "a fan-out through via rows, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sIn(String v) {}\n",
+        "public record %1$sOut(String v) {}\n",
+        VIA_IN_OUT,
+        "public record %1$sSrc(%1$sIn a) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::x, %1$sVia.class)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::y, %1$sVia.class)"
+        ),
+        "public record %1$sTgt(%1$sOut x, %1$sOut y) {}\n",
+        runtimeMapper(
+          false,
+          viaMapperOf("%1$sIn", "%1$sOut"),
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::y, via)",
+          "<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::x, via)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", List.of("x", "y")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "a", List.of("y", "x"))
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and then written into its namesake",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(false, "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"),
+        "public record %1$sTgt(String n) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a property written into its namesake and then dropped, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(false, "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)", "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)"),
+        "public record %1$sTgt(String n) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and renamed, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)"
+        ),
+        "public record %1$sTgt(String label) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and written by a forward-only mapper, with the runtime rows given the other way round",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(true, "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)", "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)"),
+        "public record %1$sTgt(String n) {}\n",
+        runtimeMapper(
+          true,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::n)",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::n)"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a property written into two targets of a two-way mapper, or both dropped and written, is refused by name on both paths"
+  )
+  void aSourcePropertyClaimedTwiceIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : SOURCES_CLAIMED_TWICE) {
+      final var prefix = "Wb" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var generated = row.generated().formatted(prefix);
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (processed.success() || !processed.hasError(generated)) {
+        failures.add(row.name() + ": the processor owed '" + generated + "', saw " + describe(processed));
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      String built;
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        built = "a mapper";
+      } catch (final InvocationTargetException e) {
+        built = String.valueOf(e.getCause());
+      }
+      final var runtime = "java.lang.IllegalArgumentException: " + row.runtime().formatted(prefix);
+      if (!runtime.equals(built)) {
+        failures.add(row.name() + ": the runtime owed '" + runtime + "', saw " + built);
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));

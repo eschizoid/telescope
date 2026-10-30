@@ -104,10 +104,12 @@ On a `@Bridge` field the same `to(Customer::email, CustomerDto::contactEmail)` r
 processor compiles it into the generated bridge. A converting `to` row, with a `BridgeFn` or a forward and a backward
 method reference, or a `via(...)` row renames and converts one property at once; the generated code is the same direct
 call it is for a property that is not renamed. A fan-out, one source property written into several targets by one `to`
-row each, takes a `mapperForward` field, and its rows convert the property the same way into every target. A rename onto
-the target of another source property left under its own name is refused by that property's name by a strict bridge and
-the strict `Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the property would
-have nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
+row each, takes a `mapperForward` field, and its rows convert the property the same way into every target. The strict
+`Telescope.mapper` refuses a fan-out by name on both paths, since `backward` would have no one target to read the
+property back from, and both paths refuse a property one row drops and another writes. A rename onto the target of
+another source property left under its own name is refused by that property's name by a strict bridge and the strict
+`Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the property would have
+nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
@@ -118,8 +120,11 @@ rename row applies wherever recursion lands on that type pair);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a property both renamed
 and converted by its own conversion converts the same way on both paths' and 'a property left under its own name whose
 target a rename of another property fills is refused by name, the same way on both paths';
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a fan-out refused on `Telescope.mapper`, and
-refused when its rows convert differently)</sub>
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/SourceWrites.java (a fan-out refused by a mapper
+that converts both ways, and a property both dropped and written refused, on both paths);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a fan-out refused when its rows convert
+differently); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a property
+written into two targets of a two-way mapper, or both dropped and written, is refused by name on both paths'</sub>
 
 ### Nested source path
 

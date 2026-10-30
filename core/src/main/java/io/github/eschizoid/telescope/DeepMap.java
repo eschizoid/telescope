@@ -27,6 +27,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -1340,6 +1341,13 @@ public final class DeepMap {
       // writes is not known.
       var unknownTgtWrite = false;
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
+      // Which source properties the pair drops and writes, and into which targets, as the shared
+      // spec refuses a property claimed twice. A write is a row backward reads the property back
+      // from: an accessor row, a target path fed by an accessor, and a source path one field hop
+      // long.
+      final var sourceWrites = new SourceWrites(source.getSimpleName(), target.getSimpleName(), !forwardOnly);
+      // Target paths that name no property are told apart by the order they come in.
+      var unnamedPaths = 0;
 
       for (final var rawRow : rowsAt(overrides, key)) {
         // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
@@ -1369,6 +1377,16 @@ public final class DeepMap {
             final var firstTgtHop = tRow.targetTelescope().firstHopName();
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            // Backward reads the source property back from the path, at any depth, unless a
+            // `when` gates the row, which backward leaves out.
+            if (rawRow == row) {
+              final var named = tRow.targetTelescope().pathName();
+              final var claimed = sourceWrites.write(
+                srcField,
+                named != null ? named : "an unnamed path (" + ++unnamedPaths + ")"
+              );
+              if (claimed != null) throw new IllegalArgumentException(claimed);
+            }
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1381,7 +1399,14 @@ public final class DeepMap {
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
             final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
-            if (readsOne) pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            if (readsOne) {
+              pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
+              final var claimed = sourceWrites.write(
+                srcRefl.normalize(firstSrcHop),
+                tgtRefl.normalize(row.targetField())
+              );
+              if (claimed != null) throw new IllegalArgumentException(claimed);
+            }
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -1429,6 +1454,8 @@ public final class DeepMap {
           // strict source-must-be-claimed pass below when one side carries fields the other
           // doesn't.
           case Drop<?, ?, ?> __ -> {
+            final var claimed = sourceWrites.drop(srcField);
+            if (claimed != null) throw new IllegalArgumentException(claimed);
             if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
               PairingMessages.duplicateSourceRow(source.getSimpleName(), target.getSimpleName(), srcField)
             );
@@ -1464,14 +1491,8 @@ public final class DeepMap {
         if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
           PairingMessages.duplicateTargetRow(source.getSimpleName(), target.getSimpleName(), tgtField)
         );
-        // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
-        // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
-        // audit-column rebuilds). Forward direction broadcasts the source value to every target row
-        // correctly. Backward direction is non-bijective for the fan-out source field — the last
-        // registered row wins the `bySourceName` slot, so backward reconstructs that source field
-        // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
-        // sync (typically same-typed copies of the same column), and the test pin makes the
-        // last-row-wins behaviour explicit so silent ambiguity is impossible.
+        final var written = sourceWrites.write(srcField, tgtField);
+        if (written != null) throw new IllegalArgumentException(written);
         claimedSrc.add(srcField);
         final var paired = Reflective.pairedTypes(srcRefl, source, srcField, tgtRefl, target, tgtField);
         final var srcType = paired.source();
@@ -1527,6 +1548,10 @@ public final class DeepMap {
             : new OpticNode.Transformed(srcField, tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
         );
       }
+      // Every write of the pair is recorded once its rows are read, so a fan-out is refused here,
+      // before any property the rows leave unpaired.
+      final var fannedOut = sourceWrites.fanOutRefusal();
+      if (fannedOut != null) throw new IllegalArgumentException(fannedOut);
 
       final var srcNames = srcRefl.names(source);
       final var srcNameSet = new HashSet<>(List.of(srcNames));

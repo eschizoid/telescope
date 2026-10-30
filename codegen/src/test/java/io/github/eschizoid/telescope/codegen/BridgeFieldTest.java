@@ -315,11 +315,11 @@ class BridgeFieldTest {
       new String[] { "drop(User::secret), drop(User::secret)", "a property is dropped once, by a row of its own" },
       new String[] {
         "to(User::name, UserDto::name), drop(User::name)",
-        "a property is dropped once, by a row of its own",
+        PairingMessages.droppedAndWritten("User", "UserDto", "name"),
       },
       new String[] {
         "drop(User::name), to(User::name, UserDto::name)",
-        "'name' is dropped by another row of this mapper",
+        PairingMessages.droppedAndWritten("User", "UserDto", "name"),
       },
       new String[] {
         "toOneWay(User::name, UserDto::name, Mappers::lower)",
@@ -2358,7 +2358,7 @@ class BridgeFieldTest {
       new String[] {
         "  @Bridge static final Mapper<User, UserDto> USER = Telescope.mapper(User.class, UserDto.class," +
         " to(User::name, UserDto::name), to(User::name, UserDto::nick));",
-        "can be written into only one target",
+        PairingMessages.fanOutBothWays("User", "UserDto", "name", List.of("name", "nick")),
       },
       new String[] {
         "  static final class Inner {\n    @Bridge static final ForwardMapper<User, UserDto> USER =" +

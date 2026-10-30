@@ -50,7 +50,7 @@ class SealedInterfaceRowTest {
   @Test
   @DisplayName("a mapper holding only a case, and never the interfaces, takes the row")
   void onlyACase() {
-    final var mapper = Telescope.mapper(
+    final var mapper = Telescope.mapperForward(
       SrOnly.class,
       SrOnlyDto.class,
       to(SrShape::name, SrShapeDto::title),

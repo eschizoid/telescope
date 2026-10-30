@@ -372,4 +372,309 @@ class VerifierSilenceAgreementTest {
     assertTrue(outcome.construction().contains("never visits"), outcome.construction());
     assertEquals(List.of(outcome.construction()), outcome.warnings());
   }
+
+  /** A pair with one source property and two targets, at the mapper's pair and nested below one. */
+  private static final String FANNED = """
+    record @@Src(String n) {}
+    record @@Tgt(String a, String n) {}
+    record @@Outer(@@Src in) {}
+    record @@OuterDto(@@Tgt in) {}
+    """;
+
+  /** A pair whose one source property has a namesake target, at the mapper's pair and nested. */
+  private static final String NAMESAKES = """
+    record @@Src(String n) {}
+    record @@Tgt(String n) {}
+    record @@Outer(@@Src in) {}
+    record @@OuterDto(@@Tgt in) {}
+    """;
+
+  @Nested
+  @DisplayName("A source property claimed twice by rows of its pair is refused by both")
+  class ClaimedTwice {
+
+    @Test
+    @DisplayName("written into two targets of a two-way mapper, on the mapper's own pair")
+    void fanOutOnTheOwnPair() {
+      final var outcome = verified(
+        "VwA",
+        FANNED + holder("Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::n), to(@@Src::n, @@Tgt::a))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwASrc", "VwATgt", "n", List.of("n", "a")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written into two targets of a two-way mapper, on a nested pair")
+    void fanOutOnANestedPair() {
+      final var outcome = verified(
+        "VwB",
+        FANNED +
+          holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::a), to(@@Src::n, @@Tgt::n))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwBSrc", "VwBTgt", "n", List.of("a", "n")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("not written into two targets of a mapperForward call, on the own pair or a nested one")
+    void fanOutForwardOnly() {
+      assertBothAccept(
+        verified(
+          "VwC",
+          FANNED +
+            holder("Telescope.mapperForward(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::n), to(@@Src::n, @@Tgt::a))")
+        )
+      );
+      assertBothAccept(
+        verified(
+          "VwD",
+          FANNED +
+            holder(
+              "Telescope.mapperForward(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::a), to(@@Src::n, @@Tgt::n))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("dropped and then written, on the mapper's own pair")
+    void dropThenWrite() {
+      final var outcome = verified(
+        "VwE",
+        NAMESAKES + holder("Telescope.mapper(@@Src.class, @@Tgt.class, drop(@@Src::n), to(@@Src::n, @@Tgt::n))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwESrc", "VwETgt", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written and then dropped by a mapperForward call, on the mapper's own pair")
+    void writeThenDropForwardOnly() {
+      final var outcome = verified(
+        "VwF",
+        FANNED + holder("Telescope.mapperForward(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::a), drop(@@Src::n))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwFSrc", "VwFTgt", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written and then dropped, on a nested pair")
+    void writeThenDropOnANestedPair() {
+      final var outcome = verified(
+        "VwG",
+        NAMESAKES +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::n), drop(@@Src::n, @@Tgt.class))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwGSrc", "VwGTgt", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written into three targets, each named once")
+    void threeTargets() {
+      final var outcome = verified(
+        "VwH",
+        """
+          record @@Src(String n) {}
+          record @@Tgt(String a, String b, String c) {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::a), to(@@Src::n, @@Tgt::b)," +
+              " to(@@Src::n, @@Tgt::c))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.fanOutBothWays("VwHSrc", "VwHTgt", "n", List.of("a", "b", "c")),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("written through two source paths one field hop long")
+    void twoSourcePaths() {
+      final var outcome = verified(
+        "VwI",
+        FANNED +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(Telescope.of(@@Src.class).field(@@Src::n), @@Tgt::n)," +
+              " to(Telescope.of(@@Src.class).field(@@Src::n), @@Tgt::a))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwISrc", "VwITgt", "n", List.of("n", "a")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written through two target paths")
+    void twoTargetPaths() {
+      final var outcome = verified(
+        "VwJ",
+        FANNED +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, Telescope.of(@@Tgt.class).field(@@Tgt::n))," +
+              " to(@@Src::n, Telescope.of(@@Tgt.class).field(@@Tgt::a)))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwJSrc", "VwJTgt", "n", List.of("n", "a")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written through an accessor row and a source path")
+    void accessorAndSourcePath() {
+      final var outcome = verified(
+        "VwK",
+        FANNED +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::a)," +
+              " to(Telescope.of(@@Src.class).field(@@Src::n), @@Tgt::n))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwKSrc", "VwKTgt", "n", List.of("a", "n")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("dropped and written through a target path")
+    void dropThenTargetPath() {
+      final var outcome = verified(
+        "VwM",
+        NAMESAKES +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, drop(@@Src::n), to(@@Src::n, Telescope.of(@@Tgt.class).field(@@Tgt::n)))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwMSrc", "VwMTgt", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written through a source path and then dropped")
+    void sourcePathThenDrop() {
+      final var outcome = verified(
+        "VwN",
+        NAMESAKES +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(Telescope.of(@@Src.class).field(@@Src::n), @@Tgt::n), drop(@@Src::n))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwNSrc", "VwNTgt", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written into two targets of a pair of sealed cases, by rows keyed to the interfaces")
+    void fanOutOnASealedCase() {
+      final var outcome = verified(
+        "VwO",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String a(); String b(); }
+          record @@SqD(String a, String b) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), to(@@Sh::n, @@ShD::a), to(@@Sh::n, @@ShD::b))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwOSq", "VwOSqD", "n", List.of("a", "b")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written into two targets of a pair met as the elements of a list")
+    void fanOutInAList() {
+      final var outcome = verified(
+        "VwP",
+        """
+          record @@Src(String n) {}
+          record @@Tgt(String a, String n) {}
+          record @@Outer(List<@@Src> in) {}
+          record @@OuterDto(List<@@Tgt> in) {}
+          """ +
+          holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Src::n, @@Tgt::a), to(@@Src::n, @@Tgt::n))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwPSrc", "VwPTgt", "n", List.of("a", "n")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("written into two targets of a pair of sealed cases, by rows keyed to the cases")
+    void fanOutKeyedToASealedCase() {
+      final var outcome = verified(
+        "VwS",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String a(); String b(); }
+          record @@SqD(String a, String b) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), to(@@Sq::n, @@SqD::b), to(@@Sq::n, @@SqD::a))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwSSq", "VwSSqD", "n", List.of("b", "a")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("dropped and written by rows keyed to a pair of sealed cases")
+    void dropAndWriteKeyedToASealedCase() {
+      final var outcome = verified(
+        "VwT",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String n(); }
+          record @@SqD(String n) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), drop(@@Sq::n, @@SqD.class), to(@@Sq::n, @@SqD::n))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwTSq", "VwTSqD", "n"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("not for a toOneWay row of a two-way mapper, which construction refuses for itself")
+    void toOneWayIsLeftToConstruction() {
+      final var outcome = verified(
+        "VwQ",
+        FANNED +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::n), toOneWay(@@Src::n, @@Tgt::a, String::trim))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("cannot accept a Mapping.toOneWay(...) row"), outcome.construction());
+      assertEquals(List.of(), outcome.warnings());
+    }
+
+    @Test
+    @DisplayName("not for an accessor row under when(...), which construction refuses for itself")
+    void gatedAccessorRowIsLeftToConstruction() {
+      final var outcome = verified(
+        "VwR",
+        FANNED +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::n), when(s -> true, to(@@Src::n, @@Tgt::a)))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(
+        outcome.construction().contains("Mapping.when(...) wraps only telescope-based rows"),
+        outcome.construction()
+      );
+      assertEquals(List.of(), outcome.warnings());
+    }
+  }
 }
