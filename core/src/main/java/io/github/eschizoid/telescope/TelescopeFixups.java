@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Compute;
+import io.github.eschizoid.telescope.mapping.ComputeFromSource;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
@@ -25,8 +26,8 @@ import java.util.function.Predicate;
 /**
  * Telescope-fixup subsystem for {@link DeepMap}: composes the telescope-based {@link Mapping} rows
  * ({@link TelescopeTo}, {@link FromTelescopeTo}, {@link TelescopeToTelescope}, {@link Constant},
- * {@link Compute}, optionally gated by {@link Conditional}) as post-fixup overlays on top of the
- * base structural {@link Iso} the resolver assembled.
+ * {@link Compute}, {@link ComputeFromSource}, optionally gated by {@link Conditional}) as
+ * post-fixup overlays on top of the base structural {@link Iso} the resolver assembled.
  *
  * <p>Two exhaustive per-row overlay switches drive the subsystem — one for the forward direction
  * ({@code applyForward}) and one for the backward direction ({@code applyBackward}) — so a new
@@ -188,6 +189,11 @@ final class TelescopeFixups {
           final var tgtT = (Telescope<T, Object>) r.targetTelescope();
           yield tgtT.set(t, r.supplier().get());
         }
+        case ComputeFromSource<?, ?, ?> r -> {
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+          final var function = (Function<Object, Object>) r.function();
+          yield tgtT.set(t, function.apply(s));
+        }
         case Conditional<?, ?> __ -> throw new IllegalStateException(
           "Conditional row survived peeling — routing regression in applyForward"
         );
@@ -249,6 +255,8 @@ final class TelescopeFixups {
         }
         case Compute<?, ?, ?> __ -> {
         }
+        case ComputeFromSource<?, ?, ?> __ -> {
+        }
         case SameTypedTo<?, ?, ?> __ -> throw structuralInFixups(__);
         case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
@@ -293,6 +301,7 @@ final class TelescopeFixups {
         case Conditional<?, ?> __ -> s;
         case Constant<?, ?, ?> __ -> s;
         case Compute<?, ?, ?> __ -> s;
+        case ComputeFromSource<?, ?, ?> __ -> s;
         case SameTypedTo<?, ?, ?> __ -> throw structuralInFixups(__);
         case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
         case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);

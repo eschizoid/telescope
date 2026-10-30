@@ -425,7 +425,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         parsed.drops(),
         parsed.transforms().keySet(),
         parsed.viaMappers().keySet(),
-        parsed.computes().keySet(),
+        parsed.computedTargets(),
         renamedTo
       );
       final var pair = pairKey(parsed.source(), parsed.target());
@@ -2186,6 +2186,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var tgt = accessorProp(arg);
           if (tgt != null) verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
           else verifyTargetPath(row, rowName, arg, tgtType, srcSimple, tgtSimple);
+          if ("compute".equals(rowName) && rowArgs.size() == 2) {
+            verifyComputeReference(rowExec, rowArgs.get(1), tgt, srcType, tgtType);
+          }
           return true;
         }
         case "zip" -> {
@@ -2596,6 +2599,38 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!(arg instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("class")) return null;
       final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), select.getExpression());
       return path == null ? null : trees.getTypeMirror(path);
+    }
+
+    /**
+     * Reports a {@code compute} row's method reference that construction or its first forward call
+     * would refuse, with the message the bridge processor and the runtime path give: a reference
+     * Java bound as a supplier whose name has a form taking the source too, and a function that
+     * does not take the source. A target or a reference this does not read is left alone.
+     */
+    private void verifyComputeReference(
+      final ExecutableElement rowExec,
+      final ExpressionTree arg,
+      final Prop tgt,
+      final TypeMirror srcType,
+      final TypeMirror tgtType
+    ) {
+      if (
+        tgt == null || !(arg instanceof MemberReferenceTree) || !(elementAt(arg) instanceof ExecutableElement method)
+      ) {
+        return;
+      }
+      if (!(types.asElement(srcType) instanceof TypeElement source)) return;
+      if (!(types.asElement(tgtType) instanceof TypeElement target)) return;
+      final var form = ComputeForms.parameterClass(rowExec, 1);
+      final String refusal;
+      if (ComputeForms.FRESH_FQN.equals(form)) {
+        refusal = ComputeForms.sourceFormRefusal(types, method, source, target, tgt.name());
+      } else if (ComputeForms.FUNCTION_FQN.equals(form)) {
+        refusal = ComputeForms.offSourceRefusal(types, method, source, target, tgt.name());
+      } else {
+        refusal = null;
+      }
+      if (refusal != null) report(arg, refusal);
     }
 
     /**

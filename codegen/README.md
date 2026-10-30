@@ -285,6 +285,7 @@ Records name a property by its component (`X::name`), and POJOs by its getter (`
 | `toOrElseGet(Src::a, Tgt::a, Defaults::region)`         | a supplier called when the source value is `null`                                                 |
 | `constant(Tgt::a, "API")`                               | a literal or enum constant written to a target property on forward                                |
 | `compute(Tgt::a, Clock::now)`                           | a supplier called on forward: a method reference, or a `static final` field holding a supplier    |
+| `compute(Tgt::a, Names::full)`                          | a method taking the source, or a method of the source, which the bridge calls directly on forward |
 | `drop(Src::a)`                                          | a source property the target lacks, which backward fills with `null`, zero or `false`             |
 | `writeBean(Side.class, SETTERS)`, `writeBeans(SETTERS)` | how a POJO side is rebuilt, as `writeStrategy` does on a class (static-imported from `WriteHint`) |
 

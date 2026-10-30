@@ -10676,10 +10676,21 @@ class CrossPathCorpusTest {
   @Test
   @DisplayName("a property both renamed and converted by its own conversion converts the same way on both paths")
   void aRenamedConversionConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = bothPathsOwe(RENAMED_CONVERSIONS, "Rc");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * Each of {@code rows} compiled with its runtime row, and again with the bridge processor, and
+   * held on both paths to what it owes forward, backward and in patch: the failures, one line each.
+   * Each row's classes take {@code prefixHead} and its index as their prefix.
+   */
+  private static List<String> bothPathsOwe(final List<VariableTransform> rows, final String prefixHead)
+    throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var row : RENAMED_CONVERSIONS) {
-      final var prefix = "Rc" + index++;
+    for (final var row : rows) {
+      final var prefix = prefixHead + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var all = row
         .declarations()
@@ -10748,6 +10759,108 @@ class CrossPathCorpusTest {
         }
       }
     }
+    return failures;
+  }
+
+  /**
+   * The source a {@code compute} row reading the source is handed: a record implementing {@code
+   * %1$sNamed}, with a method of its own and a primitive one, sampled as Ada Lovelace, aged 36.
+   */
+  private static final List<String> COMPUTED_SOURCE = List.of(
+    "public interface %1$sNamed {\n  String first();\n" +
+      "  default String shout() { return first().toUpperCase(); }\n}\n",
+    "public record %1$sSrc(String first, String last, int age) implements %1$sNamed {\n" +
+      "  public static %1$sSrc sample() { return new %1$sSrc(\"ada\", \"lovelace\", 36); }\n" +
+      "  public String display() { return first + \" \" + last; }\n" +
+      "  public int letters() { return first.length() + last.length(); }\n}\n",
+    "public class %1$sNames {\n" +
+      "  public static final %1$sNames INSTANCE = new %1$sNames();\n" +
+      "  public static final java.util.function.Function<%1$sSrc, String> HELD = s -> \"held \" + s.first();\n" +
+      "  public static String full(final %1$sSrc s) { return s.first() + \" \" + s.last(); }\n" +
+      "  public static int doubled(final %1$sSrc s) { return s.age() * 2; }\n" +
+      "  public static String none(final %1$sSrc s) { return null; }\n" +
+      "  public static Integer nothing(final %1$sSrc s) { return null; }\n" +
+      "  public String tag(final %1$sSrc s) { return \"#\" + s.age(); }\n}\n",
+    "public record %1$sWrap(String v) {\n  public %1$sWrap(final %1$sSrc s) { this(s.first()); }\n}\n"
+  );
+
+  /**
+   * A {@code compute} row reading the source into the target's {@code c}, of {@code type}, written
+   * as {@code function}, against the same row on the runtime path, with what both owe forward. The
+   * target's other properties pair by name with the source's, which the row also reads, and
+   * backward and patch skip {@code c}.
+   */
+  private static VariableTransform computedFromSource(
+    final String name,
+    final String type,
+    final String sample,
+    final String function,
+    final String forward
+  ) {
+    final var row = "<%1$sSrc, %1$sTgt, " + boxed(type) + ">compute(%1$sTgt::c, " + function + ")";
+    final var declarations = new ArrayList<>(COMPUTED_SOURCE);
+    declarations.add(
+      sampled(
+        "%1$sTgt",
+        "String first, String last, int age, " + type + " c",
+        "new %1$sTgt(\"tim\", \"lee\", 9, " + sample + ")"
+      )
+    );
+    declarations.add(typedField(false, row));
+    declarations.add(runtimeMapper(false, "", row));
+    return new VariableTransform(
+      name,
+      false,
+      declarations,
+      "#0(first=\"ada\", last=\"lovelace\", age=36, c=" + forward + ")",
+      "#0(first=\"tim\", last=\"lee\", age=9)",
+      "#0(first=\"tim\", last=\"lee\", age=9)"
+    );
+  }
+
+  /** The class a {@code compute} row's type argument names for a property of {@code type}. */
+  private static String boxed(final String type) {
+    return switch (type) {
+      case "int" -> "Integer";
+      default -> type;
+    };
+  }
+
+  private static final List<VariableTransform> COMPUTED_FROM_SOURCE = List.of(
+    computedFromSource("a static method taking the source", "String", "\"x\"", "%1$sNames::full", "\"ada lovelace\""),
+    computedFromSource(
+      "an unbound method of an interface the source implements",
+      "String",
+      "\"x\"",
+      "%1$sNamed::shout",
+      "\"ADA\""
+    ),
+    computedFromSource("an instance method of the source", "String", "\"x\"", "%1$sSrc::display", "\"ada lovelace\""),
+    computedFromSource("a method of a static final field", "String", "\"x\"", "%1$sNames.INSTANCE::tag", "\"#36\""),
+    computedFromSource(
+      "a static final field holding the function",
+      "String",
+      "\"x\"",
+      "%1$sNames.HELD",
+      "\"held ada\""
+    ),
+    computedFromSource(
+      "a constructor taking the source",
+      "%1$sWrap",
+      "new %1$sWrap(\"x\")",
+      "%1$sWrap::new",
+      "#1(v=\"ada\")"
+    ),
+    computedFromSource("a primitive result into a primitive property", "int", "0", "%1$sSrc::letters", "11"),
+    computedFromSource("a primitive result boxed into its wrapper", "Integer", "0", "%1$sNames::doubled", "72"),
+    computedFromSource("a null result", "String", "\"x\"", "%1$sNames::none", "null"),
+    computedFromSource("a null wrapper result into a primitive property", "int", "0", "%1$sNames::nothing", "0")
+  );
+
+  @Test
+  @DisplayName("a compute row reading the source fills its property the same way on both paths")
+  void aComputeRowReadingTheSourceFillsItsPropertyTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = bothPathsOwe(COMPUTED_FROM_SOURCE, "Cs");
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 

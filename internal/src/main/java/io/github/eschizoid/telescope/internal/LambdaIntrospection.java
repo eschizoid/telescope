@@ -4,9 +4,12 @@ import java.io.Serializable;
 import java.lang.invoke.MethodHandleInfo;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
+import java.lang.reflect.Executable;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.TypeVariable;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 
 /**
@@ -289,6 +292,66 @@ public final class LambdaIntrospection {
         e
       );
     }
+  }
+
+  /**
+   * The form taking one {@code argument} of the method or constructor a Serializable reference
+   * names, where the reference calls it with no argument: a method of the same name, static when
+   * the referenced one is and an instance method when it is, or a constructor of the same class,
+   * declared by the class declaring the referenced one or by a class or interface it extends, not
+   * private, whose one parameter {@code argument} is an instance of, a primitive parameter compared
+   * as its wrapper. Null when there is none, when the reference takes an argument, or when it is a
+   * lambda, which names no method a caller chose by name.
+   *
+   * <p>Java binds such a reference to the overload taking no argument whenever one overload takes a
+   * supplier and another a function, so the form returned here is the one the call did not reach.
+   */
+  public static Executable oneArgumentFormTaking(final Serializable reference, final Class<?> argument) {
+    final Metadata metadata;
+    try {
+      metadata = CACHE.get(reference.getClass()).get(reference);
+    } catch (final IllegalArgumentException notAMethodReference) {
+      return null;
+    }
+    final var kind = metadata.implKind();
+    final var bound = (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface);
+    final var given = MethodType.fromMethodDescriptorString(
+      metadata.implSignature(),
+      reference.getClass().getClassLoader()
+    ).parameterCount();
+    if (given != 0 || (bound && metadata.capturedArgs() != 1)) return null;
+    final Class<?> owner = implClassOf(reference);
+    if (kind == MethodHandleInfo.REF_newInvokeSpecial) {
+      for (final var constructor : owner.getDeclaredConstructors()) {
+        if (takesOne(constructor, argument)) return constructor;
+      }
+      return null;
+    }
+    final var wantStatic = kind == MethodHandleInfo.REF_invokeStatic;
+    final var pending = new ArrayDeque<Class<?>>();
+    pending.add(owner);
+    while (!pending.isEmpty()) {
+      final var type = pending.poll();
+      for (final var method : type.getDeclaredMethods()) {
+        if (
+          method.getName().equals(metadata.methodName()) &&
+          Modifier.isStatic(method.getModifiers()) == wantStatic &&
+          takesOne(method, argument)
+        ) {
+          return method;
+        }
+      }
+      if (type.getSuperclass() != null) pending.add(type.getSuperclass());
+      pending.addAll(Arrays.asList(type.getInterfaces()));
+    }
+    return null;
+  }
+
+  private static boolean takesOne(final Executable executable, final Class<?> argument) {
+    if (executable.getParameterCount() != 1 || Modifier.isPrivate(executable.getModifiers())) return false;
+    if (executable.isSynthetic()) return false;
+    final var parameter = MethodType.methodType(executable.getParameterTypes()[0]).wrap().returnType();
+    return parameter.isAssignableFrom(argument);
   }
 
   /**

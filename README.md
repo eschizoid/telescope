@@ -626,12 +626,16 @@ Telescope.mapper(Order.class, OrderDto.class,
   constant(OrderDto::tenant, "production"),   // an eager literal
   compute(OrderDto::createdAt, Instant::now), // fresh on every call
   compute(OrderDto::traceId, UUID::randomUUID),
-  compute(OrderDto::metadata, HashMap::new)); // a fresh container on every call
+  compute(OrderDto::metadata, HashMap::new), // a fresh container on every call
+  compute(OrderDto::summary, Orders::summary)); // static String summary(Order order)
 ```
 
 `constant` captures its value once when the row is built. `compute` calls the supplier on each forward call. Use
-`compute` whenever a literal would share one mutable reference, as `HashMap::new` would. On the backward direction,
-neither row writes the source field. A reference field comes back `null`, and a primitive comes back as zero or `false`.
+`compute` whenever a literal would share one mutable reference, as `HashMap::new` would. A `compute` row given a method
+taking the source, such as `Orders::summary` or `Order::summary`, fills the property from the whole source, so a value
+built from several source fields needs no hook. It names no source property, so every source field still maps by name.
+On the backward direction, none of these rows writes the source field. A reference field comes back `null`, and a
+primitive comes back as zero or `false`.
 
 Every mapper built this way can report what it does, with no generated source to read. `explain()` describes the top
 level of the pair.

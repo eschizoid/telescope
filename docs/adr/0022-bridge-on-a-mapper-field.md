@@ -160,6 +160,24 @@ the existing emitter without a second one.
 > calls, with the result the annotation gave. The class form of `@Bridge` keeps `value`, `writeStrategy`, `lenient` and
 > the carrier's `source` and `target`.
 
+> **Amendment: a `compute` row reading the source.** `compute(tgt, Names::full)` fills a target property with what a
+> function makes of the whole source, beside `compute(tgt, supplier)`. The two share the name, so a reference whose name
+> has a form taking no argument and a form taking one, such as `Instant::now` or `HashMap::new`, fits both a `Supplier`
+> and a `Function`, and Java picks between two such overloads only when one parameter type extends the other. A third
+> overload takes `Mapping.Fresh`, which extends both and which users never write, so Java binds such a reference to it,
+> as the supplier, and every `compute` written before keeps its meaning. A reference whose name also has a form taking
+> the source, which that binding never reaches, is refused by name: on the row at compile time, and when the runtime
+> path builds the mapper, except inside a native image, where the reference is not decoded and runs as the supplier. In
+> a `@Bridge` mapper the function is a reference to a static method taking the source, to an instance method of the
+> source or of a type it extends, to a constructor taking the source, or to a method of a `static final` field, or a
+> `static final` field holding the function, and the generated bridge calls it directly on the source. The row names no
+> source property, so it records no write of one and every source property pairs by name as it would without the row;
+> `backward` and `patch` skip the property it fills. A null source never reaches the function, since both paths hand a
+> null source back as null, and a null wrapper result written into a primitive property takes the primitive's default,
+> as a conversion's result does. A function taking a class the source is not is refused by name at compile time by the
+> processor and the verifier; the runtime path, which cannot read the class a `Function` takes, fails on the first
+> forward call.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the

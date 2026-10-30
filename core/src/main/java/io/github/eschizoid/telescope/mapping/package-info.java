@@ -63,9 +63,10 @@
  * io.github.eschizoid.telescope.mapping.Via}, {@link io.github.eschizoid.telescope.mapping.Drop},
  * {@code TelescopeTo}, {@code FromTelescopeTo}, {@code TelescopeToTelescope}, {@link
  * io.github.eschizoid.telescope.mapping.Constant}, {@link
- * io.github.eschizoid.telescope.mapping.Compute}, {@code Conditional}); {@code MapStep} also
- * permits {@code WriteHint}, {@code NullHint} and {@code Cases}. Users never name those directly —
- * the static factories above return the sealed interface type.
+ * io.github.eschizoid.telescope.mapping.Compute}, {@link
+ * io.github.eschizoid.telescope.mapping.ComputeFromSource}, {@code Conditional}); {@code MapStep}
+ * also permits {@code WriteHint}, {@code NullHint} and {@code Cases}. Users never name those
+ * directly — the static factories above return the sealed interface type.
  *
  * <p>For untyped sources, {@link io.github.eschizoid.telescope.mapping.MapExtractStep} is the
  * sibling sealed interface backing {@link io.github.eschizoid.telescope.Telescope#fromMap} — {@code
