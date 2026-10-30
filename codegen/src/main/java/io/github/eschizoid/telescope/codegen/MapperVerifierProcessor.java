@@ -1982,8 +1982,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * an accessor of the call's source into a target path rooted at the call's target, which
      * backward reads the property back from at any depth, or a source path of {@code field} hops
      * alone rooted at the call's source into an accessor of the call's target, which backward
-     * writes back through and which is named by the properties it steps through. Any other row,
-     * and a path this does not read, is left to construction.
+     * writes back through and which is named by the properties it steps through. Any other row, and
+     * a path this does not read, is left to construction.
      */
     private void pathWrite(
       final MethodInvocationTree row,

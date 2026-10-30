@@ -10767,7 +10767,9 @@ class CrossPathCorpusTest {
     String patch
   ) {}
 
-  /** An inline telescope path started by {@code factory} at {@code root}, one field step per hop. */
+  /**
+   * An inline telescope path started by {@code factory} at {@code root}, one field step per hop.
+   */
   private static String pathOf(final String factory, final String root, final String... hops) {
     final var path = new StringBuilder("io.github.eschizoid.telescope.Telescope." + factory + "(" + root + ".class)");
     for (final var hop : hops) path.append(".field(").append(hop).append(")");
@@ -10775,9 +10777,9 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * A public bean {@code name} with a private field, a getter and a setter per property, each
-   * given as its declaration ({@code "int count = 99"}), and a {@code sample()} whose body is
-   * {@code sample}.
+   * A public bean {@code name} with a private field, a getter and a setter per property, each given
+   * as its declaration ({@code "int count = 99"}), and a {@code sample()} whose body is {@code
+   * sample}.
    */
   private static String sampledBean(final String name, final String sample, final String... properties) {
     final var out = new StringBuilder("public class " + name + " {\n");
@@ -10792,7 +10794,13 @@ class CrossPathCorpusTest {
       out.append("  public void set").append(capital).append("(final ").append(type).append(" v) { ");
       out.append(field).append(" = v; }\n");
     }
-    return out.append("  public static ").append(name).append(" sample() { ").append(sample).append(" }\n}\n").toString();
+    return out
+      .append("  public static ")
+      .append(name)
+      .append(" sample() { ")
+      .append(sample)
+      .append(" }\n}\n")
+      .toString();
   }
 
   private static final String TWO_STEP_NAME = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::name");
@@ -10811,8 +10819,7 @@ class CrossPathCorpusTest {
     "%1$sOuter::address",
     "%1$sInner::zip"
   );
-  private static final String OUTER_INNER =
-    "public record %1$sOuter(%1$sInner address, String label) {}\n";
+  private static final String OUTER_INNER = "public record %1$sOuter(%1$sInner address, String label) {}\n";
   private static final String INNER = "public record %1$sInner(String city, int zip) {}\n";
 
   /** The rows of a three-step pair reading the city and the zip, the field's and the runtime's. */
@@ -10838,7 +10845,12 @@ class CrossPathCorpusTest {
         "public record %1$sMid(String name, int age) {}\n",
         typedField(false, "to(" + TWO_STEP_NAME + ", %1$sTgt::label)", "to(" + TWO_STEP_AGE + ", %1$sTgt::years)"),
         sampled("%1$sTgt", "String label, int years, int qty", "new %1$sTgt(\"m\", 7, 1)"),
-        runtimeMapper(false, "", "to(" + TWO_STEP_NAME + ", %1$sTgt::label)", "to(" + TWO_STEP_AGE + ", %1$sTgt::years)")
+        runtimeMapper(
+          false,
+          "",
+          "to(" + TWO_STEP_NAME + ", %1$sTgt::label)",
+          "to(" + TWO_STEP_AGE + ", %1$sTgt::years)"
+        )
       ),
       "#0(label=\"n\", years=4, qty=3)",
       "#0(customer=#1(name=\"m\", age=7), qty=1)",
@@ -10943,7 +10955,12 @@ class CrossPathCorpusTest {
         INNER,
         typedField(true, "to(" + THREE_STEP_CITY + ", %1$sTgt::city)", "to(" + THREE_STEP_CITY + ", %1$sTgt::town)"),
         sampled("%1$sTgt", "String city, String town", "new %1$sTgt(\"q\", \"r\")"),
-        runtimeMapper(true, "", "to(" + THREE_STEP_CITY + ", %1$sTgt::city)", "to(" + THREE_STEP_CITY + ", %1$sTgt::town)")
+        runtimeMapper(
+          true,
+          "",
+          "to(" + THREE_STEP_CITY + ", %1$sTgt::city)",
+          "to(" + THREE_STEP_CITY + ", %1$sTgt::town)"
+        )
       ),
       "#0(city=\"P\", town=\"P\")",
       null,
@@ -11000,7 +11017,7 @@ class CrossPathCorpusTest {
         sampledBean(
           "%1$sSrc",
           "final var l = new %1$sLine(); l.setSku(\"a\"); l.setCount(3); final var s = new %1$sSrc();" +
-          " s.setLine(l); s.setTotal(2); return s;",
+            " s.setLine(l); s.setTotal(2); return s;",
           "%1$sLine line",
           "int total"
         ),
@@ -11057,15 +11074,15 @@ class CrossPathCorpusTest {
       List.of(
         sampled("%1$sSrc", "%1$sBox box, int qty", "new %1$sSrc(null, 3)"),
         "public class %1$sBox {\n" +
-        "  private final String s;\n  private final int n;\n" +
-        "  private %1$sBox(final String s, final int n) { this.s = s; this.n = n; }\n" +
-        "  public String getS() { return s; }\n  public int getN() { return n; }\n" +
-        "  public static Builder builder() { return new Builder(); }\n" +
-        "  public static final class Builder {\n" +
-        "    private String s;\n    private int n = 6;\n" +
-        "    public Builder s(final String v) { s = v; return this; }\n" +
-        "    public Builder n(final int v) { n = v; return this; }\n" +
-        "    public %1$sBox build() { return new %1$sBox(s, n); }\n  }\n}\n",
+          "  private final String s;\n  private final int n;\n" +
+          "  private %1$sBox(final String s, final int n) { this.s = s; this.n = n; }\n" +
+          "  public String getS() { return s; }\n  public int getN() { return n; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n    private int n = 6;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public Builder n(final int v) { n = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s, n); }\n  }\n}\n",
         typedField(false, "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)"),
         sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
         runtimeMapper(false, "", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)")
@@ -11419,8 +11436,7 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
       PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
-    )
-    ,
+    ),
     new SourceClaimedTwice(
       "a source path written into two targets by a two-way mapper",
       List.of(
@@ -11463,9 +11479,16 @@ class CrossPathCorpusTest {
       List.of(
         "public interface %1$sShape { String getLabel(); }\n",
         sampled("%1$sSrc", "%1$sShape shape", "new %1$sSrc(null)"),
-        typedField(false, "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"),
+        typedField(
+          false,
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"
+        ),
         "public record %1$sTgt(String label) {}\n",
-        runtimeMapper(false, "", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)")
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"
+        )
       ),
       PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),
       PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape")

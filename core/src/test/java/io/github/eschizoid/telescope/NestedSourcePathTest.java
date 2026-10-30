@@ -49,13 +49,18 @@ class NestedSourcePathTest {
   @DisplayName("forward reads a null object on a path of three hops as the leaf's null value, a primitive's default")
   void forwardReadsANullObjectAsTheNullValue() {
     final var mapper = Telescope.mapper(Order.class, OrderDto.class, to(CITY, OrderDto::city), to(ZIP, OrderDto::zip));
-    assertEquals(new OrderDto("Paris", 75, 3), mapper.forward(new Order(new Customer(new Address("Paris", 75), "n"), 3)));
+    assertEquals(
+      new OrderDto("Paris", 75, 3),
+      mapper.forward(new Order(new Customer(new Address("Paris", 75), "n"), 3))
+    );
     assertEquals(new OrderDto(null, 0, 3), mapper.forward(new Order(null, 3)));
     assertEquals(new OrderDto(null, 0, 3), mapper.forward(new Order(new Customer(null, "n"), 3)));
   }
 
   @Test
-  @DisplayName("backward builds each null object on a path the value is written through, with its other members at their null value")
+  @DisplayName(
+    "backward builds each null object on a path the value is written through, with its other members at their null value"
+  )
   void backwardBuildsTheObjectsOnThePath() {
     final var mapper = Telescope.mapper(Order.class, OrderDto.class, to(CITY, OrderDto::city), to(ZIP, OrderDto::zip));
     assertEquals(
@@ -75,7 +80,9 @@ class NestedSourcePathTest {
   }
 
   @Test
-  @DisplayName("patch writes a partial's value through the path, building a null object, and leaves the path for a null value")
+  @DisplayName(
+    "patch writes a partial's value through the path, building a null object, and leaves the path for a null value"
+  )
   void patchWritesThroughThePath() {
     final var mapper = Telescope.mapper(Order.class, OrderDto.class, to(CITY, OrderDto::city), to(ZIP, OrderDto::zip));
     assertEquals(
@@ -157,7 +164,9 @@ class NestedSourcePathTest {
   }
 
   @Test
-  @DisplayName("a null object on a bean path leaves a primitive setter of the target unwritten, and backward builds the bean")
+  @DisplayName(
+    "a null object on a bean path leaves a primitive setter of the target unwritten, and backward builds the bean"
+  )
   void beanPathLeavesAPrimitiveSetterUnwritten() {
     final var mapper = Telescope.mapper(
       Cart.class,
@@ -182,7 +191,9 @@ class NestedSourcePathTest {
   public record FramedDto(String label, int qty) {}
 
   @Test
-  @DisplayName("a two-way mapper refuses a path through a class no write strategy builds, and a forward-only one reads it")
+  @DisplayName(
+    "a two-way mapper refuses a path through a class no write strategy builds, and a forward-only one reads it"
+  )
   void pathThroughAnUnbuildableClassIsRefusedBothWays() {
     final var path = Telescope.of(Framed.class).field(Framed::shape).field(Shape::label);
     final var refused = assertThrows(IllegalArgumentException.class, () ->
@@ -197,7 +208,9 @@ class NestedSourcePathTest {
   }
 
   @Test
-  @DisplayName("a path written into two targets of a two-way mapper, or read through a dropped property, is refused by name")
+  @DisplayName(
+    "a path written into two targets of a two-way mapper, or read through a dropped property, is refused by name"
+  )
   void pathFanOutAndDropAreRefused() {
     final var fannedOut = assertThrows(IllegalArgumentException.class, () ->
       Telescope.mapper(Holder.class, FanDto.class, to(name(), FanDto::name), to(name(), FanDto::alias))

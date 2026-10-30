@@ -12,9 +12,9 @@ import java.util.Set;
  * processor and the compile-time verifier. One instance follows the writes of one pair, in the
  * order its rows give them.
  *
- * <p>A write names the source property it reads back, or the properties a source path steps
- * through from the source, joined with dots, as {@code customer.city}. A path's write is a write of
- * that path: two paths through one property each take a target of their own, as two properties do.
+ * <p>A write names the source property it reads back, or the properties a source path steps through
+ * from the source, joined with dots, as {@code customer.city}. A path's write is a write of that
+ * path: two paths through one property each take a target of their own, as two properties do.
  *
  * <p>A mapper that converts backward rebuilds each source property, and each path, from one target,
  * so such a mapper writes a property or a path into one target at most: a second target leaves

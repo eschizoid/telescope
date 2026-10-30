@@ -215,10 +215,10 @@ public final class DeepMap {
 
   /**
    * How the rows a provider's bridge was generated from differ from {@code steps}, or null when
-   * they agree. The kinds of the rows are compared everywhere. The accessors each row names, and the
-   * properties a source path steps through, are
-   * compared on the JVM, where reading them decodes each method reference; inside a native image,
-   * which is built from one compilation and needs no such decoding, they are not.
+   * they agree. The kinds of the rows are compared everywhere. The accessors each row names, and
+   * the properties a source path steps through, are compared on the JVM, where reading them decodes
+   * each method reference; inside a native image, which is built from one compilation and needs no
+   * such decoding, they are not.
    */
   private static String staleness(final BridgeProvider provider, final MapStep[] steps, final List<String> kinds) {
     if (!kinds.equals(provider.rowKinds())) {
@@ -1414,7 +1414,8 @@ public final class DeepMap {
               );
               if (claimed != null) throw new IllegalArgumentException(claimed);
             } else if (rawRow == row && fRow.sourceTelescope().stepsThroughProperties()) {
-              // A longer path through properties alone is written back through, so it is a write
+              // A longer path through properties alone is written back through, so it is a
+              // write
               // of the path, and of every property it steps through for a drop.
               final var claimed = sourceWrites.write(
                 fRow.sourceTelescope().pathName(),
@@ -1422,7 +1423,8 @@ public final class DeepMap {
               );
               if (claimed != null) throw new IllegalArgumentException(claimed);
             }
-            // Backward writes through the path, building a null object on the way, so a mapper that
+            // Backward writes through the path, building a null object on the way, so a mapper
+            // that
             // converts backward refuses a path through a class no write strategy builds.
             if (!forwardOnly && rawRow == row) {
               final var plan = PathWrites.plan(fRow.sourceTelescope(), source);
@@ -1758,7 +1760,11 @@ public final class DeepMap {
         if (telescopeReadsSrc.contains(name)) {
           bySourceName.putIfAbsent(
             name,
-            new FieldStep(name, null, Placeholders.placeholderIsoFor(rawClassOf(srcRefl.genericType(source, name)), false))
+            new FieldStep(
+              name,
+              null,
+              Placeholders.placeholderIsoFor(rawClassOf(srcRefl.genericType(source, name)), false)
+            )
           );
           continue;
         }

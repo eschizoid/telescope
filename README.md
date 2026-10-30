@@ -616,12 +616,12 @@ Telescope.mapper(Order.class, OrderDto.class,
      OrderDto::city));
 ```
 
-Forward reads the city, or the property's null value when the customer or the address is null: `null` for a
-reference, and zero for a primitive record component or constructor or builder argument, while a primitive setter is
-not called. Backward writes the city back through the path, building a missing customer or address on the way unless
-the city is null, which leaves it missing. `patch` writes a partial's non-null city the same way. A `@Bridge` field
-compiles the same row into a null-safe chain of reads, one local per object, and direct calls to each class's accessors
-and constructor, builder or setters.
+Forward reads the city, or the property's null value when the customer or the address is null: `null` for a reference,
+and zero for a primitive record component or constructor or builder argument, while a primitive setter is not called.
+Backward writes the city back through the path, building a missing customer or address on the way unless the city is
+null, which leaves it missing. `patch` writes a partial's non-null city the same way. A `@Bridge` field compiles the
+same row into a null-safe chain of reads, one local per object, and direct calls to each class's accessors and
+constructor, builder or setters.
 
 An object graph can lead back to an object that is still being converted, as when an employee's manager lists the
 employee among their reports. Telescope maps such a back-reference to `null`, on the runtime and the generated path

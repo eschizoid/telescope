@@ -2207,7 +2207,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           local,
           declarable(filled.type()) + " " + local + " = " + readExpr(target, "t", filled) + ";"
         );
-        written = path.row().properties().size() == 1 ? local : "__pw" + path.index() + "_1(" + written + ", " + local + ")";
+        written =
+          path.row().properties().size() == 1 ? local : "__pw" + path.index() + "_1(" + written + ", " + local + ")";
       }
       return written;
     };
@@ -2374,7 +2375,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var last = paths.getValue().getLast();
       final var root = fieldByName(sourceFields, paths.getKey());
       final var given = fieldByName(targetFields, last.row().target()).type();
-      if (last.row().properties().size() == 1 && root.type().getKind().isPrimitive() && !given.getKind().isPrimitive()) {
+      if (
+        last.row().properties().size() == 1 && root.type().getKind().isPrimitive() && !given.getKind().isPrimitive()
+      ) {
         backwardWritten.add(root.name());
         backwardResults.put(root.name(), given);
       }
@@ -2483,9 +2486,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var paths = writtenPaths.get(sourceName);
       if (paths == null) return readPatchPlain.apply(sourceName);
       final var sf = fieldByName(sourceFields, sourceName);
-      var written = pathConsumed.contains(sourceName)
-        ? readExpr(source, "base", sf)
-        : readPatchPlain.apply(sourceName);
+      var written = pathConsumed.contains(sourceName) ? readExpr(source, "base", sf) : readPatchPlain.apply(sourceName);
       var step = 0;
       for (final var path : paths) {
         final var filled = fieldByName(targetFields, path.row().target());
@@ -2501,9 +2502,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         final var current = "__pc_" + sourceName + "_" + step++;
         patchLocals.put(current, declarable(sf.type()) + " " + current + " = " + written + ";");
-        final var through = path.row().properties().size() == 1
-          ? local
-          : "__pw" + path.index() + "_1(" + current + ", " + local + ")";
+        final var through =
+          path.row().properties().size() == 1 ? local : "__pw" + path.index() + "_1(" + current + ", " + local + ")";
         written = "(" + local + " != null ? " + through + " : " + current + ")";
       }
       return written;
@@ -2737,8 +2737,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * A row reading the source through a path, as the bridge reads and writes it: {@code levels} are
    * the classes the path reads each property on, the source first; {@code reads} the type each
    * property is read as there; and {@code rebuilds}, for a strict bridge, how each object below the
-   * source is rebuilt when a value is written back through the path, one per level after the
-   * first. {@code index} names the path's write helpers.
+   * source is rebuilt when a value is written back through the path, one per level after the first.
+   * {@code index} names the path's write helpers.
    */
   private record SourcePathPlan(
     FieldRows.SourcePath row,
@@ -2751,8 +2751,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The source paths of a pair, each with the classes it steps through, or null once a path is
    * refused: one whose properties cannot be read as the rows named them, or, for a strict bridge,
-   * one stepping through a class the bridge cannot build where it is null, which the runtime
-   * mapper refuses in the same words when it can build it neither.
+   * one stepping through a class the bridge cannot build where it is null, which the runtime mapper
+   * refuses in the same words when it can build it neither.
    */
   private List<SourcePathPlan> planSourcePaths(
     final TypeElement source,
@@ -2774,7 +2774,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         levels.add(level);
         final var method = accessorNamed(level, row.methods().get(step));
         if (method == null) {
-          error(source, "the path '" + row.name() + "' reads no property " + row.methods().get(step) + "() on " + level);
+          error(
+            source,
+            "the path '" + row.name() + "' reads no property " + row.methods().get(step) + "() on " + level
+          );
           return null;
         }
         final var read = ((ExecutableType) types.asMemberOf(at, method)).getReturnType();
@@ -2846,9 +2849,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /** {@code type}'s wrapper where it is a primitive, and {@code type} otherwise. */
   private TypeMirror boxedIfPrimitive(final TypeMirror type) {
-    return type.getKind().isPrimitive()
-      ? processingEnv.getTypeUtils().boxedClass((PrimitiveType) type).asType()
-      : type;
+    return type.getKind().isPrimitive() ? processingEnv.getTypeUtils().boxedClass((PrimitiveType) type).asType() : type;
   }
 
   /**
@@ -2950,7 +2951,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         return "(cur == null ? " + defaultLiteralFor(f.type()) + " : " + value + ")";
       };
-      final var body = buildExpr(level, read, levelFields, "AUTO", source, rebuild, null, transformed, gives, referenceValued);
+      final var body = buildExpr(
+        level,
+        read,
+        levelFields,
+        "AUTO",
+        source,
+        rebuild,
+        null,
+        transformed,
+        gives,
+        referenceValued
+      );
       if (body == null) return null;
       final var text = new StringWriter();
       try (var out = new PrintWriter(text)) {
