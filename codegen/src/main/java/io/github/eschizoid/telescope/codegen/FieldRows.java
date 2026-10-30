@@ -20,6 +20,7 @@ import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -508,6 +509,7 @@ final class FieldRows {
     private final Map<String, String> viaMappers = new LinkedHashMap<>();
     private final Map<String, String> computes = new LinkedHashMap<>();
     private final Set<String> targetsWritten = new LinkedHashSet<>();
+    private final SourceWrites sourceWrites;
     private final List<String> rowKinds = new ArrayList<>();
     private final List<String> rowAccessors = new ArrayList<>();
     private final List<GeneratedClass> classes = new ArrayList<>();
@@ -534,6 +536,7 @@ final class FieldRows {
       this.pkg = pkg;
       this.bridgeName = bridgeName;
       this.fieldName = fieldName;
+      this.sourceWrites = new SourceWrites(simple(source), simple(target), strict);
     }
 
     Parsed parsed() {
@@ -1093,7 +1096,9 @@ final class FieldRows {
       final var src = accessor(args.get(0), source);
       if (src instanceof Refused refused) return refused;
       final var property = ((Accessor) src).property();
-      if (written.containsKey(property) || !drops.add(property)) {
+      final var claimed = sourceWrites.drop(property);
+      if (claimed != null) return new Refused(row, claimed);
+      if (!drops.add(property)) {
         return new Refused(
           row,
           "drop(...) of '" +
@@ -1279,16 +1284,16 @@ final class FieldRows {
     }
 
     /**
-     * Records that {@code src} is written into {@code tgt}, refusing a second write into one target
-     * and a source written into two targets through different conversions.
+     * Records that {@code src} is written into {@code tgt}, refusing a second write into one
+     * target, a source property the shared spec refuses to claim twice, and a source written into
+     * two targets through different conversions.
      */
     private Refused write(final Tree row, final String src, final String tgt, final Object conversion) {
       if (!targetsWritten.add(tgt)) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), tgt));
       }
-      if (drops.contains(src)) {
-        return new Refused(row, "'" + src + "' is dropped by another row of this mapper, so no row can write it");
-      }
+      final var claimed = sourceWrites.write(src, tgt);
+      if (claimed != null) return new Refused(row, claimed);
       final var primary = written.get(src);
       if (primary == null) {
         written.put(src, tgt);
@@ -1305,14 +1310,6 @@ final class FieldRows {
             "' is converted differently for '" +
             tgt +
             "', which the generated bridge has no form for yet"
-        );
-      }
-      if (strict) {
-        return new Refused(
-          row,
-          "Telescope.mapper(...) converts both ways, so property '" +
-            src +
-            "' can be written into only one target; write it into several with Telescope.mapperForward(...)"
         );
       }
       // The first target written is the rename the fan-out extends, the property's own name

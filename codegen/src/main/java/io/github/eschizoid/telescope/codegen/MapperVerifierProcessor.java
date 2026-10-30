@@ -27,6 +27,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairWalk;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -703,6 +704,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var tgtSimple = tgtEl.getSimpleName().toString();
       final var claimedSrc = new LinkedHashSet<String>();
       final var claimedTgt = new LinkedHashSet<String>();
+      final var writes = new SourceWrites(srcSimple, tgtSimple, strict);
       final var hintTargets = new HashSet<String>();
       var analyzable = true;
       var permissive = false;
@@ -735,7 +737,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           analyzable = false;
           continue;
         }
-        analyzable &= verifyRow(row, rowExec, srcType, tgtType, srcSimple, tgtSimple, claimedSrc, claimedTgt, !strict);
+        analyzable &= verifyRow(
+          row,
+          rowExec,
+          srcType,
+          tgtType,
+          srcSimple,
+          tgtSimple,
+          claimedSrc,
+          claimedTgt,
+          writes,
+          !strict
+        );
         permissive |= isPermissiveRow(row, rowExec);
       }
 
@@ -1041,7 +1054,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       verifyRowsReadProperties(keyed, walked);
       for (final var refused : walked.offCase()) report(rowsAt.get(refused.row()), refused.message());
       verifyInheritedRows(walked, rows, rowsAt, forwardOnly);
-      verifyRowsClaimOnce(walked, rows, rowsAt, srcEl, tgtEl);
+      verifyRowsClaimOnce(walked, rows, rowsAt, srcEl, tgtEl, strict);
       if (walked.open()) return;
       // A write hint picks the writer a bean is built with and keeps its pairs from their own
       // bridges, so the setters such a call writes through are left to construction, as are those
@@ -1433,17 +1446,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     /**
      * Reports two rows construction applies to one pair the walk visited that claim one property of
      * it, with the message construction refuses the later with: two converting the same target
-     * property, or a {@code drop} of a source property a row before it reads, among the rows keyed
-     * to the pair followed by those keyed to two sealed interfaces it applies ({@link
-     * PairWalk#inherited}). On the call's own pair, two of its own rows are reported where they are
-     * read.
+     * property, a {@code drop} of a source property another row writes or drops, or, in a mapper
+     * that converts both ways ({@code strict}), a source property written into a second target. The
+     * rows are those keyed to the pair followed by those keyed to two sealed interfaces it applies
+     * ({@link PairWalk#inherited}). On the call's own pair, two of its own rows are reported where
+     * they are read.
      */
     private void verifyRowsClaimOnce(
       final PairWalk.Walk<TypeMirror> walked,
       final List<PairWalk.KeyedRow<TypeMirror>> rows,
       final Map<PairWalk.KeyedRow<TypeMirror>, Tree> rowsAt,
       final TypeElement srcEl,
-      final TypeElement tgtEl
+      final TypeElement tgtEl,
+      final boolean strict
     ) {
       final var dispatched = new HashSet<String>();
       for (final var pair : walked.dispatched()) {
@@ -1463,11 +1478,15 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         final var claimedTgt = new HashSet<String>();
         final var sourceName = sourceEl.getSimpleName().toString();
         final var targetName = targetEl.getSimpleName().toString();
+        final var writes = new SourceWrites(sourceName, targetName, strict);
         for (final var row : applied) {
           final var reported = !(key.equals(root) && own.contains(row));
           if (row.kind() == PairWalk.RowKind.DROP) {
             final var dropped = propertyName(row.sourceAccessor(), sourceEl);
-            if (!claimedSrc.add(dropped) && reported) {
+            final var claimed = writes.drop(dropped);
+            if (claimed != null) {
+              if (reported) report(rowsAt.get(row), claimed);
+            } else if (!claimedSrc.add(dropped) && reported) {
               report(rowsAt.get(row), PairingMessages.duplicateSourceRow(sourceName, targetName, dropped));
             }
           } else if (row.kind() == PairWalk.RowKind.PASS_THROUGH || row.kind() == PairWalk.RowKind.CONVERTING) {
@@ -1479,7 +1498,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               );
               continue;
             }
-            claimedSrc.add(propertyName(row.sourceAccessor(), sourceEl));
+            final var read = propertyName(row.sourceAccessor(), sourceEl);
+            final var claimed = writes.write(read, written);
+            if (claimed != null) {
+              if (reported) report(rowsAt.get(row), claimed);
+              continue;
+            }
+            claimedSrc.add(read);
           }
         }
       }
@@ -1958,6 +1983,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String tgtSimple,
       final Set<String> claimedSrc,
       final Set<String> claimedTgt,
+      final SourceWrites writes,
       final boolean forwardOnly
     ) {
       final var rowName = rowExec.getSimpleName().toString();
@@ -1990,6 +2016,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               report(row, PairingMessages.duplicateTargetRow(srcSimple, tgtSimple, tgt.name()));
               return true;
             }
+            final var claimed = writes.write(src.name(), tgt.name());
+            if (claimed != null) {
+              report(row, claimed);
+              return true;
+            }
           }
           // Only the 2-arg same-typed to(src, tgt) carries no conversion — the one row shape the
           // runtime itself routes through the pairing decision at construction. Every other form
@@ -2010,9 +2041,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "drop" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           if (src == null) return false;
-          if (
-            types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType)) && !claimedSrc.add(src.name())
-          ) {
+          if (!types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType))) return true;
+          final var claimed = writes.drop(src.name());
+          if (claimed != null) {
+            report(row, claimed);
+          } else if (!claimedSrc.add(src.name())) {
             report(row, PairingMessages.duplicateSourceRow(srcSimple, tgtSimple, src.name()));
           }
           return true;
@@ -2031,6 +2064,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
                 tgtSimple,
                 claimedSrc,
                 claimedTgt,
+                writes,
                 forwardOnly
               );
             }

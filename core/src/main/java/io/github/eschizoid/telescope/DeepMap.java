@@ -27,6 +27,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -1340,6 +1341,9 @@ public final class DeepMap {
       // writes is not known.
       var unknownTgtWrite = false;
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
+      // Which source properties the rows drop and write, and into which targets, as the shared
+      // spec refuses a property claimed twice.
+      final var sourceWrites = new SourceWrites(source.getSimpleName(), target.getSimpleName(), !forwardOnly);
 
       for (final var rawRow : rowsAt(overrides, key)) {
         // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
@@ -1429,6 +1433,8 @@ public final class DeepMap {
           // strict source-must-be-claimed pass below when one side carries fields the other
           // doesn't.
           case Drop<?, ?, ?> __ -> {
+            final var claimed = sourceWrites.drop(srcField);
+            if (claimed != null) throw new IllegalArgumentException(claimed);
             if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
               PairingMessages.duplicateSourceRow(source.getSimpleName(), target.getSimpleName(), srcField)
             );
@@ -1464,14 +1470,8 @@ public final class DeepMap {
         if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
           PairingMessages.duplicateTargetRow(source.getSimpleName(), target.getSimpleName(), tgtField)
         );
-        // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
-        // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
-        // audit-column rebuilds). Forward direction broadcasts the source value to every target row
-        // correctly. Backward direction is non-bijective for the fan-out source field — the last
-        // registered row wins the `bySourceName` slot, so backward reconstructs that source field
-        // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
-        // sync (typically same-typed copies of the same column), and the test pin makes the
-        // last-row-wins behaviour explicit so silent ambiguity is impossible.
+        final var written = sourceWrites.write(srcField, tgtField);
+        if (written != null) throw new IllegalArgumentException(written);
         claimedSrc.add(srcField);
         final var paired = Reflective.pairedTypes(srcRefl, source, srcField, tgtRefl, target, tgtField);
         final var srcType = paired.source();

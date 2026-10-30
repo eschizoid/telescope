@@ -907,6 +907,12 @@ public sealed class Telescope<
    * walked strictly, as the pair a mapper is built for is, and {@code patch} and {@code into}
    * dispatch to them the same way.
    *
+   * <p><b>One target per source property.</b> A mapper that converts both ways rebuilds each source
+   * property from one target, so rows writing one source property into a second target are refused
+   * by name when the mapper is built, whichever order they come in. {@link #mapperForward
+   * mapperForward} converts one way and writes a property into every target its rows name. A
+   * property is dropped or written, never both, on every factory.
+   *
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>

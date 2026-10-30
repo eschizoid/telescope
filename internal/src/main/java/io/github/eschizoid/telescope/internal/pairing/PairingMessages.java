@@ -376,6 +376,49 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A source property rows write into two targets of a mapper that converts backward, which reads
+   * each source property back from one target: {@code firstTarget} is the one the earlier row
+   * writes, {@code secondTarget} the one the later row does.
+   */
+  public static String fanOutBothWays(
+    final String source,
+    final String target,
+    final String srcField,
+    final String firstTarget,
+    final String secondTarget
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is written into both '" +
+      firstTarget +
+      "' and '" +
+      secondTarget +
+      "', and a mapper that converts both ways has no one target to read it back from. Fan it out one" +
+      " way with Telescope.mapperForward(...), give the extra targets one-way rows there, or write '" +
+      srcField +
+      "' with one two-way row."
+    );
+  }
+
+  /** A source property one row drops and another writes. */
+  public static String droppedAndWritten(final String source, final String target, final String srcField) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row and written by another. Drop it, or write it, not both."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (
