@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -46,7 +47,16 @@ public class Mapper<A, B> {
    * part of that internal contract; external code must not depend on this record's shape. Treat as
    * private to the module — it may change or disappear without a deprecation cycle.
    */
-  public record PatchEntry(String sourceField, Function<Object, Object> backward) {}
+  public record PatchEntry(
+    String sourceField,
+    Function<Object, Object> backward,
+    BiFunction<Object, Object, Object> overlay
+  ) {
+    /** An entry whose value only ever converts into {@code sourceField}. */
+    public PatchEntry(final String sourceField, final Function<Object, Object> backward) {
+      this(sourceField, backward, null);
+    }
+  }
 
   /**
    * <b>Module-internal seam — NOT public API.</b> One case of a mapper between two sealed
@@ -595,17 +605,30 @@ public class Mapper<A, B> {
     // The overlay map exists only once the partial supplies a value, so a partial that overlays
     // nothing rebuilds base without allocating it.
     HashMap<String, Object> patched = null;
+    // A value a source path fills is written back through the path once the rest is rebuilt, in
+    // the table's order.
+    List<Map.Entry<PatchEntry, Object>> throughPaths = null;
     if (partial != null) for (final var entry : patchByTargetField.entrySet()) {
       final var partialValue = targetRefl.read(partial, entry.getKey());
       if (partialValue == null) continue;
+      if (entry.getValue().overlay() != null) {
+        if (throughPaths == null) throughPaths = new ArrayList<>();
+        throughPaths.add(Map.entry(entry.getValue(), partialValue));
+      }
+      if (entry.getValue().sourceField() == null) continue;
       if (patched == null) patched = new HashMap<>();
       patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
     }
-    if (patched == null) return (A) sourceRefl.construct(sourceClass, name -> sourceRefl.read(base, name));
     final var overlay = patched;
-    return (A) sourceRefl.construct(sourceClass, name ->
-      overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
-    );
+    Object rebuilt = overlay == null
+      ? sourceRefl.construct(sourceClass, name -> sourceRefl.read(base, name))
+      : sourceRefl.construct(sourceClass, name ->
+          overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
+        );
+    if (throughPaths != null) for (final var path : throughPaths) {
+      rebuilt = path.getKey().overlay().apply(rebuilt, path.getValue());
+    }
+    return (A) rebuilt;
   }
 
   /**

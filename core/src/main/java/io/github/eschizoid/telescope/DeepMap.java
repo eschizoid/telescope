@@ -482,7 +482,8 @@ public final class DeepMap {
    * order {@code source} declares the fields they write. Patch converts the entries in table order,
    * so a row's field and a walked one convert in the source's own order, as forward and backward
    * convert them, rather than in the order the steps were resolved. A step writing no source field,
-   * a constant or a computed value, comes after the rest, in the order it was resolved.
+   * a constant or a computed value, comes after the rest, in the order it was resolved, and a step
+   * writing its value back through a source path comes last, in the order its rows came.
    */
   @SuppressWarnings("unchecked")
   private static Map<String, Mapper.PatchEntry> patchTableOf(
@@ -493,9 +494,10 @@ public final class DeepMap {
     final var entries = new ArrayList<>(steps.entrySet());
     entries.sort(
       Comparator.comparingInt(entry -> {
-        final var sourceName = entry.getValue().sourceName;
-        final var index = sourceName == null ? -1 : order.indexOf(sourceName);
-        return index < 0 ? Integer.MAX_VALUE : index;
+        final var step = entry.getValue();
+        if (step.overlay != null) return Integer.MAX_VALUE;
+        final var index = step.sourceName == null ? -1 : order.indexOf(step.sourceName);
+        return index < 0 ? Integer.MAX_VALUE - 1 : index;
       })
     );
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
@@ -503,7 +505,7 @@ public final class DeepMap {
       final var step = entry.getValue();
       patchTable.put(
         entry.getKey(),
-        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v))
+        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v), step.overlay)
       );
     }
     return patchTable;
@@ -1406,6 +1408,22 @@ public final class DeepMap {
                 tgtRefl.normalize(row.targetField())
               );
               if (claimed != null) throw new IllegalArgumentException(claimed);
+            } else if (rawRow == row && fRow.sourceTelescope().stepsThroughProperties()) {
+              // A longer path through properties alone is written back through, so it is a write
+              // of the path, and of every property it steps through for a drop.
+              final var claimed = sourceWrites.write(
+                fRow.sourceTelescope().pathName(),
+                tgtRefl.normalize(row.targetField())
+              );
+              if (claimed != null) throw new IllegalArgumentException(claimed);
+            }
+            // Backward writes through the path, building a null object on the way, so a mapper that
+            // converts backward refuses a path through a class no write strategy builds.
+            if (!forwardOnly && rawRow == row) {
+              final var plan = PathWrites.plan(fRow.sourceTelescope(), source);
+              final var unbuildable =
+                plan == null ? null : PathWrites.unbuildable(plan, source.getSimpleName(), target.getSimpleName());
+              if (unbuildable != null) throw new IllegalArgumentException(unbuildable);
             }
             telescopeFixups.add(rawRow);
             yield false;
@@ -1733,7 +1751,10 @@ public final class DeepMap {
         // backward-only placeholder so the source rebuilder produces null for this field; the
         // backward post-fixup will fill the real value from the target telescope.
         if (telescopeReadsSrc.contains(name)) {
-          bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
+          bySourceName.putIfAbsent(
+            name,
+            new FieldStep(name, null, Placeholders.placeholderIsoFor(rawClassOf(srcRefl.genericType(source, name)), false))
+          );
           continue;
         }
         // Same permissive mode as the target side: when telescope rows are present, this is a
@@ -1765,7 +1786,25 @@ public final class DeepMap {
         key,
         telescopeFixups.isEmpty() ? baseIso : TelescopeFixups.wrap(baseIso, telescopeFixups, srcRefl, source)
       );
-      if (topStepsOut != null) topStepsOut.putAll(byTargetName);
+      if (topStepsOut != null) {
+        // Patch writes the partial's value of a target property a source path fills back through
+        // the path, after the rest of the source is rebuilt, in the order the rows came.
+        for (final var fixup : telescopeFixups) {
+          if (!(fixup instanceof FromTelescopeTo<?, ?, ?> fRow)) continue;
+          final var tgtField = tgtRefl.normalize(fRow.targetField());
+          final var step = byTargetName.remove(tgtField);
+          byTargetName.put(
+            tgtField,
+            new FieldStep(
+              step == null ? null : step.sourceName,
+              tgtField,
+              step == null ? Placeholders.NULLING_ISO : step.iso,
+              TelescopeFixups.patchOverlay(fRow, source, srcRefl)
+            )
+          );
+        }
+        topStepsOut.putAll(byTargetName);
+      }
     } finally {
       inProgress.pop();
     }
@@ -3471,7 +3510,16 @@ public final class DeepMap {
   /**
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
-  private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
+  private record FieldStep(
+    String sourceName,
+    String targetName,
+    Iso<?, ?> iso,
+    BiFunction<Object, Object, Object> overlay
+  ) {
+    FieldStep(final String sourceName, final String targetName, final Iso<?, ?> iso) {
+      this(sourceName, targetName, iso, null);
+    }
+  }
 
   /**
    * Refuses a bean side whose setter cannot take a value of the property's own type, for every

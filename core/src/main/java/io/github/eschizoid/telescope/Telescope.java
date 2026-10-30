@@ -273,6 +273,18 @@ public sealed class Telescope<
   }
 
   /**
+   * Whether this path steps from its root through properties alone: one or more {@code field} hops
+   * through accessors whose class is known, and no filter, narrowing, traversal, observer or
+   * pending edit. Such a path reads one value, and a write through it rebuilds each object it steps
+   * through.
+   */
+  boolean stepsThroughProperties() {
+    if (hops == null || hops.isEmpty() || hasPendingEdits()) return false;
+    for (final var hop : hops) if (hop.kind() != Fusion.Hop.Kind.FIELD || hop.owner() == null) return false;
+    return true;
+  }
+
+  /**
    * The properties this path steps through from its root, joined with dots, as {@code addr.city}:
    * one per field, traversal or by-name hop, with filters, observers and narrowings left out. Null
    * when the path records no hops, or a hop that names no property.
