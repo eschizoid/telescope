@@ -116,7 +116,8 @@ final class FieldRows {
     List<GeneratedClass> classes,
     Set<String> awaits,
     Map<String, String> beanStrategies,
-    String defaultStrategy
+    String defaultStrategy,
+    List<SourcePath> sourcePaths
   ) implements Result {
     /**
      * How {@code side} is rebuilt: the strategy a {@code writeBean} row keyed to it names, else the
@@ -126,6 +127,17 @@ final class FieldRows {
       final var keyed = beanStrategies.get(side.getQualifiedName().toString());
       if (keyed != null) return keyed;
       return defaultStrategy != null ? defaultStrategy : "AUTO";
+    }
+  }
+
+  /**
+   * A row reading the source through a path into the target property {@code target}: the
+   * properties the path steps through from the source, in order, and the method each is read by.
+   */
+  record SourcePath(String target, List<String> properties, List<String> methods) {
+    /** The properties the path steps through, joined with dots, as the shared spec names it. */
+    String name() {
+      return String.join(".", properties);
     }
   }
 
@@ -518,6 +530,7 @@ final class FieldRows {
     private final Set<String> awaits = new LinkedHashSet<>();
     private final Map<String, String> beanStrategies = new LinkedHashMap<>();
     private String defaultStrategy;
+    private final List<SourcePath> sourcePaths = new ArrayList<>();
 
     /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
     private final String fieldName;
@@ -559,7 +572,8 @@ final class FieldRows {
         classes,
         awaits,
         beanStrategies,
-        defaultStrategy
+        defaultStrategy,
+        sourcePaths
       );
     }
 
@@ -612,7 +626,21 @@ final class FieldRows {
       final var kind = rowExec.getSimpleName().toString();
       return switch (kind) {
         case "to" -> switch (rowArgs.size()) {
-          case 2 -> passThrough(row);
+          case 2 -> pathParameter(rowExec, 0)
+            ? pathParameter(rowExec, 1)
+              ? new Refused(
+                  row,
+                  "a row whose source and target are both telescope paths has no generated form yet; write the" +
+                    " source as a path into a target property, or a source property into a target path"
+                )
+              : sourcePath(row)
+            : pathParameter(rowExec, 1)
+              ? new Refused(
+                  rowArgs.get(1),
+                  "a row writing into a target path has no generated form yet; build this mapper without" +
+                    " @Bridge to run it on the runtime path"
+                )
+              : passThrough(row);
           case 3 -> twoWay(row);
           default -> converting(row, true);
         };
@@ -641,6 +669,138 @@ final class FieldRows {
       rowKinds.add("SameTypedTo");
       rowAccessors.add(((Accessor) src).method() + ">" + ((Accessor) tgt).method());
       return null;
+    }
+
+    /**
+     * A {@code to(path, accessor)} row: the target property the path's value is written into, and
+     * the properties the path steps through from the source.
+     */
+    private Refused sourcePath(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var path = steps(args.get(0), source);
+      if (path instanceof Refused refused) return refused;
+      final var hops = (List<?>) path;
+      final var tgt = accessor(args.get(1), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var t = (Accessor) tgt;
+      final var leaf = (Accessor) hops.getLast();
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(leaf.type(), t.type())) {
+        return new Refused(
+          args.get(0),
+          "the path reads " +
+            shown(leaf) +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold; end the path at a property of that type"
+        );
+      }
+      final var properties = new ArrayList<String>();
+      final var methods = new ArrayList<String>();
+      for (final var hop : hops) {
+        properties.add(((Accessor) hop).property());
+        methods.add(((Accessor) hop).method());
+      }
+      final var named = String.join(".", properties);
+      if (!targetsWritten.add(t.property())) {
+        return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
+      }
+      final var claimed = sourceWrites.write(named, t.property());
+      if (claimed != null) return new Refused(row, claimed);
+      if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
+      sourcePaths.add(new SourcePath(t.property(), List.copyOf(properties), List.copyOf(methods)));
+      rowKinds.add("FromTelescopeTo");
+      rowAccessors.add(named + ">" + t.method());
+      return null;
+    }
+
+    /**
+     * The properties {@code arg}, a telescope path written in place from {@code Telescope.of} or
+     * {@code Telescope.ofBean}, steps through from {@code side}, each the accessor a {@code field}
+     * step reads it by; or the refusal of any other expression or step.
+     */
+    private Object steps(final ExpressionTree arg, final TypeElement side) {
+      final var calls = new ArrayList<MethodInvocationTree>();
+      ExpressionTree at = arg;
+      while (at instanceof MethodInvocationTree call) {
+        calls.addFirst(call);
+        at = call.getMethodSelect() instanceof MemberSelectTree select ? select.getExpression() : null;
+      }
+      final var written =
+        "a @Bridge mapper compiles a path written in place as Telescope.of(Type.class) or" +
+        " Telescope.ofBean(Type.class) followed by field(...) steps, each through a property";
+      if (calls.size() < 2 || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) {
+        return new Refused(arg, written + "; this argument is not such a path");
+      }
+      final var rootOwner = (TypeElement) root.getEnclosingElement();
+      final var rootName = root.getSimpleName().toString();
+      final var rooted = calls.getFirst().getArguments().size() == 1
+        ? classLiteral(unit, calls.getFirst().getArguments().getFirst())
+        : null;
+      if (
+        !rootOwner.getQualifiedName().contentEquals(TELESCOPE_FQN) ||
+        !(rootName.equals("of") || rootName.equals("ofBean")) ||
+        rooted == null
+      ) {
+        return new Refused(arg, written + "; this path starts at " + calls.getFirst().getMethodSelect() + "(...)");
+      }
+      final var types = env.getTypeUtils();
+      if (!types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) {
+        return new Refused(
+          calls.getFirst(),
+          "this path starts at " +
+            rooted.getSimpleName() +
+            ", which is not " +
+            side.getSimpleName() +
+            " or a class it extends; start it at " +
+            side.getSimpleName()
+        );
+      }
+      final var hops = new ArrayList<Accessor>();
+      var on = side;
+      for (final var step : calls.subList(1, calls.size())) {
+        final var name = selectedName(step);
+        if (!name.equals("field") || step.getArguments().size() != 1) {
+          return new Refused(
+            step,
+            name +
+              "(...) in a path has no generated form; " +
+              written +
+              ", so build this mapper without @Bridge to run it on the runtime path"
+          );
+        }
+        final var reference = step.getArguments().getFirst();
+        if (reference instanceof LambdaExpressionTree) {
+          return new Refused(
+            reference,
+            "an inline lambda in a path can't be compiled into the generated bridge; name the property with a" +
+              " method reference, such as Customer::city, so both paths read the same accessor"
+          );
+        }
+        if (on == null) {
+          return new Refused(step, "this step reads a property of a value that is not a class with properties");
+        }
+        final var hop = accessor(reference, on);
+        if (hop instanceof Refused refused) return refused;
+        final var read = (Accessor) hop;
+        hops.add(read);
+        on =
+          !read.primitive() && read.type() instanceof DeclaredType declared
+            ? (TypeElement) declared.asElement()
+            : null;
+      }
+      return hops;
+    }
+
+    /** Whether the factory's parameter at {@code index} is a telescope path. */
+    private boolean pathParameter(final ExecutableElement factory, final int index) {
+      final var parameter = env.getTypeUtils().erasure(factory.getParameters().get(index).asType());
+      return (
+        env.getTypeUtils().asElement(parameter) instanceof TypeElement type &&
+        type.getQualifiedName().contentEquals(TELESCOPE_FQN)
+      );
     }
 
     private Refused converting(final MethodInvocationTree row, final boolean twoWay) {
