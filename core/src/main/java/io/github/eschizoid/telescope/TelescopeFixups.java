@@ -18,7 +18,10 @@ import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.ViaClass;
 import io.github.eschizoid.telescope.mapping.ViaMethods;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -63,38 +66,107 @@ final class TelescopeFixups {
    * TelescopeToTelescope.Kind#ZIP} case).
    *
    * <ul>
-   *   <li>{@link TelescopeTo} (flat src → nested tgt): forward {@code tgtT.set(t,
-   *       srcAcc.apply(s))}; backward rebuilds {@code s} with {@code sourceField} = {@code
-   *       tgtT.read(t)}.
+   *   <li>{@link TelescopeTo} (flat src → nested tgt): forward writes {@code srcAcc.apply(s)}
+   *       through the target path; backward rebuilds {@code s} with {@code sourceField} read
+   *       through it.
    *   <li>{@link FromTelescopeTo} (nested src → flat tgt): forward rebuilds {@code t} with {@code
-   *       targetField} = {@code srcT.read(s)}; backward rebuilds {@code s} via {@code srcT.set(s,
-   *       tgtAcc.apply(t))}.
+   *       targetField} read through the source path; backward writes {@code tgtAcc.apply(t)}
+   *       through it.
    *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#BROADCAST} (nested ↔
-   *       nested, broadcast): forward {@code tgtT.set(t, srcT.read(s))}; backward {@code
-   *       srcT.set(s, tgtT.read(t))}. When either side is many-focus the lattice's intrinsic
-   *       broadcast / first-focus semantics apply — no extra machinery here.
+   *       nested, broadcast): forward writes the source path's value through the target path;
+   *       backward the mirror. When either side is many-focus the lattice's intrinsic broadcast /
+   *       first-focus semantics apply — no extra machinery here.
    *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#ZIP} (nested ↔ nested,
    *       positional N:N): forward reads {@code srcT.toList(s)} and writes positionally via {@code
    *       tgtT.updateIndexed(t, ...)} with cardinality enforcement; backward mirrors.
    * </ul>
    *
-   * <p>All reads / writes go through the lattice's public {@link Telescope} surface — no new optic
-   * primitives, no Iso composition beyond the base.
+   * <p>A path that steps through properties alone is read and written through {@link PathWrites},
+   * which reads a null object on the way as null and builds one to write a value that is not null
+   * through, as the generated bridge does. Every other path goes through the lattice's public
+   * {@link Telescope} surface.
    */
   static <S, T> Iso<S, T> wrap(
     final Iso<S, T> base,
     final List<Mapping<?, ?>> fixups,
     final Reflective srcRefl,
-    final Class<S> source
+    final Class<S> source,
+    final Reflective tgtRefl,
+    final Class<T> target
   ) {
+    final var plans = new Plans(new IdentityHashMap<>(), new IdentityHashMap<>(), tgtRefl);
+    for (final var raw : fixups) {
+      final Mapping<?, ?> fx = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
+      final Telescope<?, ?> read = switch (fx) {
+        case FromTelescopeTo<?, ?, ?> r -> r.sourceTelescope();
+        case TelescopeToTelescope<?, ?, ?> r -> r.kind() == TelescopeToTelescope.Kind.BROADCAST
+          ? r.sourceTelescope()
+          : null;
+        default -> null;
+      };
+      final Telescope<?, ?> written = switch (fx) {
+        case TelescopeTo<?, ?, ?> r -> r.targetTelescope();
+        case TelescopeToTelescope<?, ?, ?> r -> r.kind() == TelescopeToTelescope.Kind.BROADCAST
+          ? r.targetTelescope()
+          : null;
+        default -> null;
+      };
+      final var sourcePlan = read == null ? null : PathWrites.plan(read, source);
+      if (sourcePlan != null) plans.source().put(fx, sourcePlan);
+      final var targetPlan = written == null ? null : PathWrites.plan(written, target);
+      if (targetPlan != null) plans.target().put(fx, targetPlan);
+    }
     return Iso.of(
-      s -> applyForward(base.to(s), s, fixups),
-      t -> applyBackward(base.from(t), t, fixups, srcRefl, source)
+      s -> applyForward(base.to(s), s, fixups, plans),
+      t -> applyBackward(base.from(t), t, fixups, srcRefl, source, plans)
     );
   }
 
+  /**
+   * The plans of the rows whose paths step through properties alone, by row, for the path each
+   * reads or writes on the source and on the target, and the reflective the target is rebuilt
+   * through.
+   */
+  private record Plans(
+    Map<Mapping<?, ?>, PathWrites.Plan> source,
+    Map<Mapping<?, ?>, PathWrites.Plan> target,
+    Reflective tgtRefl
+  ) {}
+
+  /**
+   * How patch reads a partial's value for a {@link TelescopeTo} row: through the target path, a
+   * null object on the way read as null, which patch takes as no value to lay over the source.
+   */
   @SuppressWarnings("unchecked")
-  private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
+  static Function<Object, Object> patchRead(final TelescopeTo<?, ?, ?> row, final Class<?> target) {
+    final var plan = PathWrites.plan(row.targetTelescope(), target);
+    final var path = (Telescope<Object, Object>) row.targetTelescope();
+    return plan != null ? partial -> PathWrites.read(plan, partial) : partial -> path.find(partial).orElse(null);
+  }
+
+  /**
+   * What patch lays over a source rebuilt from {@code base} for a {@link FromTelescopeTo} row whose
+   * source path steps through properties alone: the partial's value written through the path, as
+   * backward writes it. A path of any other shape is set through the lattice, as backward sets it.
+   */
+  @SuppressWarnings("unchecked")
+  static BiFunction<Object, Object, Object> patchOverlay(
+    final FromTelescopeTo<?, ?, ?> row,
+    final Class<?> source,
+    final Reflective srcRefl
+  ) {
+    final var plan = PathWrites.plan(row.sourceTelescope(), source);
+    final var path = (Telescope<Object, Object>) row.sourceTelescope();
+    return plan != null ? (s, value) -> PathWrites.write(plan, s, value, srcRefl) : (s, value) -> path.set(s, value);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <S, T> T applyForward(
+    final T initial,
+    final S s,
+    final List<Mapping<?, ?>> fixups,
+    final Plans plans
+  ) {
     T t = initial;
     for (final var rawFx : fixups) {
       // Conditional<A, B>(predicate, inner) gates the inner row's forward effect by the source
@@ -147,6 +219,8 @@ final class TelescopeFixups {
       t = switch (fx) {
         case TelescopeTo<?, ?, ?> r -> {
           final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
+          final var plan = plans.target().get(r);
+          if (plan != null) yield (T) PathWrites.write(plan, t, srcAcc.apply(s), plans.tgtRefl());
           final var tgtT = (Telescope<T, Object>) r.targetTelescope();
           yield tgtT.set(t, srcAcc.apply(s));
         }
@@ -156,7 +230,7 @@ final class TelescopeFixups {
           // field
           // overridden by srcT.read(s). Delegate to overrideTargetField, which uses the target
           // Reflective.construct the same way the source-side path does in applyBackward.
-          yield overrideTargetField(t, r, srcT, s);
+          yield overrideTargetField(t, r, srcT, s, plans.source().get(r));
         }
         case TelescopeToTelescope<?, ?, ?> r -> {
           final var srcT = (Telescope<S, Object>) r.sourceTelescope();
@@ -173,12 +247,13 @@ final class TelescopeFixups {
             );
             yield tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
           }
-          // Lenient: when the source path resolves to an empty focus (null intermediate in a
-          // chained bean read, or an Affine miss further down the path), write null to the
-          // target
-          // field rather than throwing. Downstream type-default handling — where configured —
-          // takes over from there.
-          yield tgtT.set(t, srcT.find(s).orElse(null));
+          // A source path that resolves to no value, through a null object on the way or an
+          // Affine miss, writes null rather than throwing.
+          final var sourcePlan = plans.source().get(r);
+          final var value = sourcePlan != null ? PathWrites.read(sourcePlan, s) : srcT.find(s).orElse(null);
+          final var targetPlan = plans.target().get(r);
+          if (targetPlan != null) yield (T) PathWrites.write(targetPlan, t, value, plans.tgtRefl());
+          yield tgtT.set(t, value);
         }
         case Constant<?, ?, ?> r -> {
           final var tgtT = (Telescope<T, Object>) r.targetTelescope();
@@ -219,7 +294,8 @@ final class TelescopeFixups {
     final T t,
     final List<Mapping<?, ?>> fixups,
     final Reflective srcRefl,
-    final Class<S> source
+    final Class<S> source,
+    final Plans plans
   ) {
     // Collect per-field override values keyed by normalized source field name; the rebuild reads
     // through srcRefl.construct and substitutes our overrides per name. Telescope-source fixups
@@ -231,8 +307,13 @@ final class TelescopeFixups {
       // explicitly — an override contribution, a documented skip, or a fail-fast routing guard.
       switch (fx) {
         case TelescopeTo<?, ?, ?> r -> {
+          // A target path that resolves to no value reads as null, which a primitive record
+          // component takes as its default.
+          final var plan = plans.target().get(r);
           final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          fieldOverrides.put(srcRefl.normalize(r.sourceField()), tgtT.read(t));
+          final var value = plan != null ? PathWrites.read(plan, t) : tgtT.find(t).orElse(null);
+          final var field = srcRefl.normalize(r.sourceField());
+          fieldOverrides.put(field, value != null ? value : PathWrites.nullValue(source, field));
         }
         // Conditional rows are forward-only by design — same retraction semantics as Constant /
         // Compute. The source rebuild leaves the corresponding source field at the baseS value;
@@ -266,8 +347,10 @@ final class TelescopeFixups {
       // Same exhaustive discipline as the override pass above.
       s = switch (fx) {
         case FromTelescopeTo<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
           final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
+          final var plan = plans.source().get(r);
+          if (plan != null) yield (S) PathWrites.write(plan, s, tgtAcc.apply(t), srcRefl);
+          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
           yield srcT.set(s, tgtAcc.apply(t));
         }
         case TelescopeToTelescope<?, ?, ?> r -> {
@@ -285,7 +368,11 @@ final class TelescopeFixups {
             );
             yield srcT.updateIndexed(s, (i, _ignored) -> values.get(i));
           }
-          yield srcT.set(s, tgtT.read(t));
+          final var targetPlan = plans.target().get(r);
+          final var value = targetPlan != null ? PathWrites.read(targetPlan, t) : tgtT.find(t).orElse(null);
+          final var sourcePlan = plans.source().get(r);
+          if (sourcePlan != null) yield (S) PathWrites.write(sourcePlan, s, value, srcRefl);
+          yield srcT.set(s, value);
         }
         // TelescopeTo already applied through fieldOverrides in the rebuild above.
         case TelescopeTo<?, ?, ?> __ -> s;
@@ -316,16 +403,17 @@ final class TelescopeFixups {
     final T t,
     final FromTelescopeTo<?, ?, ?> r,
     final Telescope<S, Object> srcT,
-    final S s
+    final S s,
+    final PathWrites.Plan plan
   ) {
     final var tgtClass = (Class<T>) t.getClass();
     final var tgtRefl = Reflective.of(tgtClass);
     final var tgtField = tgtRefl.normalize(r.targetField());
-    // Lenient: when the source path resolves to an empty focus (null intermediate in a chained
-    // bean read, or an Affine miss further down the path), rebuild proceeds with null in the
-    // target field rather than aborting the mapper with NoSuchElementException. Downstream type-
-    // default handling — where configured — takes over from there.
-    final var newValue = srcT.find(s).orElse(null);
-    return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
+    // A path that resolves to no value, through a null object on the way or an Affine miss, writes
+    // the target property's null value, as a null source value does: the default of a primitive
+    // record component, and null otherwise, which a bean's write strategy takes as it takes a null.
+    final var newValue = plan != null ? PathWrites.read(plan, s) : srcT.find(s).orElse(null);
+    final var written = newValue != null ? newValue : PathWrites.nullValue(tgtClass, tgtField);
+    return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? written : tgtRefl.read(t, name));
   }
 }

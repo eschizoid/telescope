@@ -80,21 +80,19 @@ class PlaceholderIsolationTest {
   }
 
   @Test
-  @DisplayName("a self-referential record has no default, rather than no bound")
-  void selfReferentialRecordYieldsNoDefault() {
-    // No instance of Node can be built without an instance of Node, so it has no default tree.
-    // Resolving its component plans re-enters the same type, which without a guard descends until
-    // the stack ends. It yields the null a type with no construction strategy yields instead.
+  @DisplayName("a path through a self-referential record builds one object, with its own field null")
+  void selfReferentialRecordIsBuiltOnThePath() {
+    // A write through a path builds the null object it steps through with every other property at
+    // its null value, so building a Node takes no Node: its next field is null.
     final var mapper = Telescope.mapper(
       Slim.class,
       NodeHolder.class,
       Mapping.to(Slim::value, Telescope.of(NodeHolder.class).field(NodeHolder::node).field(Node::value))
     );
 
-    // The write lands on nothing because there is nothing to land on: Node has no default tree, so
-    // the placeholder is null and the row's set has no instance to rebuild. Terminating with that
-    // null is the property — the alternative is descending until the stack ends.
-    assertNull(mapper.forward(new Slim("x")).node(), "a record that cannot be defaulted stays null");
+    final var node = mapper.forward(new Slim("x")).node();
+    assertEquals("x", node.value());
+    assertNull(node.next(), "the object built on the path leaves its other properties null");
   }
 
   @Test

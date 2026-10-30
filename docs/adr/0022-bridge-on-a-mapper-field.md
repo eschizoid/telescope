@@ -33,16 +33,18 @@ the existing emitter without a second one.
    - `via` naming another `@Bridge` field, whose generated bridge converts the property, or (amended below) the static
      `forward` and `backward` of a class written by hand;
    - `drop` of a source property, `constant` of a literal, `toOrElse` with a literal default, and `compute` with a
-     supplier.
+     supplier;
+   - `to` whose source or target is a telescope path written in place through `field` steps (ADR-0018 step 5), as the
+     amendment on source and target paths below sets out.
 
    Accessors are method references (`User::id`). Converters and suppliers are references to a static method
    (`Conversions::lower`), to an unbound instance method (`String::toLowerCase`) or to a constructor (`UserId::new`);
    the processor writes a small generated class that calls the reference, and the bridge converts through it as it does
    through a `@Transform` class today, so every type check the emitter makes applies unchanged.
 
-   Rows whose meaning the emitter does not have yet are refused by name until it does: a source or target written as a
-   telescope path (ADR-0018 step 5), `drop` keyed to a nested pair, `enumTo`, `cases`, and the mapper-wide hint
-   `nullSourceValues`. Each one that ADR-0018 brings to the generated path is added to this list then.
+   Rows whose meaning the emitter does not have yet are refused by name until it does: `drop` keyed to a nested pair,
+   `enumTo`, `cases`, and the mapper-wide hint `nullSourceValues`. Each one that ADR-0018 brings to the generated path
+   is added to the list above then.
 
 3. **Everything else is refused by name at compile time, on the row.** An inline lambda, a row built by a helper method,
    a loop or a variable, a row keyed to a nested pair, a non-literal constant, an initializer that is not the factory
@@ -160,14 +162,50 @@ the existing emitter without a second one.
 > calls, with the result the annotation gave. The class form of `@Bridge` keeps `value`, `writeStrategy`, `lenient` and
 > the carrier's `source` and `target`.
 
+> **Amendment: source and target paths.** A `to(path, accessor)` row compiles when the path is written in place from
+> `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
+> to a property of the class the step before it reads, and so does a `to(accessor, path)` row whose path is written the
+> same way from the target. Any other path is refused on the row by name: one held in a variable or built by a
+> navigator, a step other than `field`, a lambda step, and a path rooted at a class its side neither is nor extends. A
+> row with a path on both sides is refused too.
+>
+> Both paths give such a row one meaning, decided in the shared spec. Forward reads the leaf, and a null object on the
+> way reads as the leaf's null value: null for a reference, the default for a primitive member of a record, a
+> constructor or a builder, and no call to a primitive setter, as a null source value is written anywhere else. Backward
+> writes the target's value back through the path and rebuilds every object the path steps through, each through the
+> write strategy `BeanWriteStrategy` picks for its class; an object that is null is built, with its other properties at
+> their null value, when the value is not null, and stays null when it is, so a null read forward is written back as
+> null. `patch` writes a partial's non-null value the same way, after the rest of the source is rebuilt, in the order
+> the rows came. A mapper that converts both ways refuses a path through a class no write strategy builds, by name, when
+> it is built and on the row. A forward-only mapper never writes through a source path, and its lenient bridge's
+> backward writes nothing through one.
+>
+> Rebuilding is chosen over refusing a path longer than one step in a two-way mapper: it keeps both directions of the
+> row, it needs no reflection, since every object on the path has a class the processor sees, and the null rule above
+> makes a round trip through a null object return the null it started from. The runtime mapper used to leave such an
+> object null on backward and lose the value, and ignored the row in `patch`; it now writes as described.
+>
+> A target path follows the same rule the other way. Forward writes the source property through the path, building a
+> null object on the way unless the value is null, over whatever the target property the path starts at holds; backward
+> reads the source property back through the path, a null object read as the leaf's null value; and `patch` takes a
+> partial's non-null value read the same way. Since forward writes through a target path on every factory, every mapper
+> refuses one through a class no write strategy builds. The runtime mapper used to start such a target property as a
+> default tree of every record below it, and now starts it at its null value, building only what a value is written
+> through; a constant or a computed value written through a path, and a path of another shape, still start from the
+> default tree.
+>
+> `SourceWrites` names a path longer than one step by the properties it steps through, as `customer.city`, so a strict
+> mapper refuses one path written into two targets, and every factory refuses a drop of a property a path steps through.
+> The runtime mapper, the bridge processor and the compile-time verifier count it the same way.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the
   converter, so no `target` attribute is added to `@Transform` or `@ViaMapper`.
 - **Step 4** (values computed from the source) becomes a `compute` row that takes a function of the source, added to
   both paths together.
-- **Step 5** (nested paths) is a row whose source is a telescope path written inline. Reading through a path is compiled
-  first; writing through one follows.
+- **Step 5** (nested paths) is a row whose source or target is a telescope path written inline, compiled as the
+  amendment on source and target paths above sets out.
 - **Step 6** (update in place) is `Mapper.into` on the mapper a field declares, generated rather than written through
   reflection when that step lands.
 

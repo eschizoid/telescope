@@ -273,6 +273,18 @@ public sealed class Telescope<
   }
 
   /**
+   * Whether this path steps from its root through properties alone: one or more {@code field} hops
+   * through accessors whose class is known, and no filter, narrowing, traversal, observer or
+   * pending edit. Such a path reads one value, and a write through it rebuilds each object it steps
+   * through.
+   */
+  boolean stepsThroughProperties() {
+    if (hops == null || hops.isEmpty() || hasPendingEdits()) return false;
+    for (final var hop : hops) if (hop.kind() != Fusion.Hop.Kind.FIELD || hop.owner() == null) return false;
+    return true;
+  }
+
+  /**
    * The properties this path steps through from its root, joined with dots, as {@code addr.city}:
    * one per field, traversal or by-name hop, with filters, observers and narrowings left out. Null
    * when the path records no hops, or a hop that names no property.
@@ -932,13 +944,15 @@ public sealed class Telescope<
    * <p><b>One target per source property.</b> A mapper that converts both ways rebuilds each source
    * property from one target, so it refuses by name, when it is built, a source property written
    * into a second target, whichever order the rows come in. A write of a property is a row reading
-   * it through its accessor, a target path its accessor feeds, at any depth, or a source path one
-   * {@code field} hop long through it. The pairing of a property with the target property of its
-   * name is not counted, so a target path fed by a property beside its namesake builds, and
+   * it through its accessor, a target path its accessor feeds, at any depth, or a source path of
+   * {@code field} hops alone through it. A source path longer than one hop is a write of the path,
+   * named by the properties it steps through, as {@code customer.city}: two paths through one
+   * property each take a target of their own. The pairing of a property with the target property of
+   * its name is not counted, so a target path fed by a property beside its namesake builds, and
    * backward reads the property from the path. A row {@code when} gates is not read back, and
    * writes nothing in this sense. {@link #mapperForward mapperForward} converts one way and writes
    * a property into every target its rows name. On every factory, a property one row drops is
-   * written by no other.
+   * written by no other, and no source path steps through it.
    *
    * <p><b>Row kinds accepted.</b>
    *
