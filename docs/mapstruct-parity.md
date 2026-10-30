@@ -155,12 +155,22 @@ using Telescope paths apply at the outer (source, target) pair only — same sco
 Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for bean intermediates
 lacking a no-arg ctor/builder.
 
+A nested source read through `field` steps alone reads a null object on the way as the leaf's null value, and backward
+and `patch` write the value back through the path, building a null object unless the value is null. Both paths do the
+same: on a `@Bridge` field, a source path written in place from `Telescope.of` or `Telescope.ofBean` compiles into a
+null-safe chain of reads and direct calls to each class's accessors and write strategy. A path held in a variable, a
+generated navigator, a step other than `field`, a lambda step and a nested target path are refused on the row by name.
+A two-way mapper refuses a path through a class no write strategy builds, on both paths in the same words.
+
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
 and `to(Accessor, Telescope)` (the nested-target mirror);
 core/src/test/java/io/github/eschizoid/telescope/TelescopeMappingTest.java, the tests 'forward reads at the nested
 source path and writes to the flat target accessor', 'single-focus on both sides: read at src telescope, write at tgt
-telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Telescope, Telescope)'</sub>
+telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Telescope, Telescope)';
+core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java;
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a row reading the source
+through a path converts the same way on both paths, a null object on the way included'</sub>
 
 ### Multiple source parameters
 
