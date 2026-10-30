@@ -277,8 +277,35 @@ class BridgeFieldTest {
       },
       new String[] { "when(User::isAdmin, drop(User::secret))", "when(...) has no generated form yet" },
       new String[] {
-        "to(Telescope.of(User.class).field(User::address).field(Address::city), UserDto::kind)",
-        "a telescope path or another expression has no generated form yet",
+        "to(Telescope.of(User.class).field(User::address).field(a -> a.city()), UserDto::kind)",
+        "an inline lambda in a path can't be compiled into the generated bridge",
+      },
+      new String[] {
+        "to(Telescope.of(User.class).field(User::address).fieldByName(\"city\", String.class), UserDto::kind)",
+        "fieldByName(...) in a path has no generated form",
+      },
+      new String[] {
+        "to(Telescope.of(User.class).field(User::address).then(Telescope.of(Address.class).field(Address::city))," +
+        " UserDto::kind)",
+        "then(...) in a path has no generated form",
+      },
+      new String[] { "to(Rows.CITY, UserDto::kind)", "this argument is not such a path" },
+      new String[] {
+        "to(Telescope.of(Address.class).field(Address::city), UserDto::kind)",
+        "this path starts at Address, which is not User or a class it extends",
+      },
+      new String[] {
+        "to(User::nick, Telescope.of(UserDto.class).field(UserDto::handle).field(Handle::value))",
+        "a row writing into a target path has no generated form yet",
+      },
+      new String[] {
+        "to(Telescope.of(User.class).field(User::address).field(Address::city)," +
+        " Telescope.of(UserDto.class).field(UserDto::address).field(Address::city))",
+        "a row whose source and target are both telescope paths has no generated form yet",
+      },
+      new String[] {
+        "to(User::email, UserDto::contact), to(Telescope.of(User.class).field(User::email), UserDto::contact)",
+        "duplicate override row for target field 'contact'",
       },
       new String[] { "to(Address::city, AddressDto::city)", "a row keyed to a nested pair has no generated form yet" },
       new String[] {
@@ -374,6 +401,8 @@ class BridgeFieldTest {
         HEADER +
           "final class Rows {\n" +
           "  static final Mapping<User, UserDto> ID = to(User::id, UserDto::userId);\n" +
+          "  static final Telescope<User, String> CITY =" +
+          " Telescope.of(User.class).field(User::address).field(Address::city);\n" +
           "  static final Mapper<Address, AddressDto> RUNTIME =" +
           " Telescope.mapper(Address.class, AddressDto.class);\n" +
           "  static java.util.function.Supplier<String> MUTABLE = () -> \"m\";\n" +
