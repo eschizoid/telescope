@@ -1,8 +1,10 @@
 package io.github.eschizoid.telescope.spring;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.toOrElse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.inject.TelescopeCustomizer;
 import io.github.eschizoid.telescope.inject.TelescopePath;
 import io.github.eschizoid.telescope.spring.blueprint.ContactBean;
@@ -27,6 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.stream.IntStream;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -330,16 +333,24 @@ class TelescopeBlueprintSpringTest {
   }
 
   @Test
-  void bridgeBackedPatchRefusesInsteadOfDroppingFields() {
+  @DisplayName("a projection over a bridge patches through it, giving what Mapper.patch gives on the same rows")
+  void bridgeBackedPatchKeepsTheBaseFieldsThePartialLeavesNull() {
     new ApplicationContextRunner()
       .withUserConfiguration(ScanBlueprints.class)
       .run(context -> {
         final var projection = context.getBean(UserProjection.class);
         final var base = new User("Alice", new User.Address("Boston"));
-        assertThatThrownBy(() -> projection.patch(base, new UserDto(null, new User.Address("Paris"))))
-          .isInstanceOf(UnsupportedOperationException.class)
-          .hasMessageContaining("UserProjection")
-          .hasMessageContaining("translate");
+        final var partial = new UserDto(null, new User.Address("Paris"));
+        final var patched = projection.patch(base, partial);
+        assertThat(patched).isEqualTo(new User("Alice", new User.Address("Paris")));
+        assertThat(patched).isEqualTo(
+          Telescope.mapper(User.class, UserDto.class, toOrElse(User::name, UserDto::name, "(unnamed)")).patch(
+            base,
+            partial
+          )
+        );
+        assertThat(patched).isEqualTo(context.getBean(UserTranslatedProjection.class).patch(base, partial));
+        assertThat(base).isEqualTo(new User("Alice", new User.Address("Boston")));
       });
   }
 
