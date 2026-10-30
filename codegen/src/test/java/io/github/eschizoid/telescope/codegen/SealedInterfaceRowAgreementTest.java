@@ -771,18 +771,36 @@ class SealedInterfaceRowAgreementTest {
     }
 
     @Test
-    @DisplayName("a row writing the namesake lets the case pair build on both paths")
-    void namesakeWritten() {
+    @DisplayName("a row writing the namesake from the renamed property is a fan-out both paths refuse")
+    void namesakeWrittenFromTheRenamedProperty() {
+      final var outcome = outcome(
+        "SkE",
+        RENAMED +
+          holder(
+            "Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@SA::n, @@TA::label)," +
+              " to(@@SA::n, @@TA::n))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.fanOutBothWays("SkESA", "SkETA", "n", List.of("label", "n")),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a forward-only mapper writing the namesake from the renamed property builds on both paths")
+    void namesakeWrittenForwardOnly() {
       assertBothApply(
         outcome(
-          "SkE",
+          "SkW",
           RENAMED +
             holder(
-              "Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@SA::n, @@TA::label)," +
+              "Telescope.mapperForward(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@SA::n, @@TA::label)," +
                 " to(@@SA::n, @@TA::n)).forward(new @@SA(\"x\"))"
             )
         ),
-        "SkETA[label=x, n=x]"
+        "SkWTA[label=x, n=x]"
       );
     }
 

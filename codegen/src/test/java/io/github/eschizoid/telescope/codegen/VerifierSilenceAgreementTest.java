@@ -605,6 +605,46 @@ class VerifierSilenceAgreementTest {
     }
 
     @Test
+    @DisplayName("written into two targets of a pair of sealed cases, by rows keyed to the cases")
+    void fanOutKeyedToASealedCase() {
+      final var outcome = verified(
+        "VwS",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String a(); String b(); }
+          record @@SqD(String a, String b) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), to(@@Sq::n, @@SqD::b), to(@@Sq::n, @@SqD::a))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwSSq", "VwSSqD", "n", List.of("b", "a")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("dropped and written by rows keyed to a pair of sealed cases")
+    void dropAndWriteKeyedToASealedCase() {
+      final var outcome = verified(
+        "VwT",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String n(); }
+          record @@SqD(String n) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), drop(@@Sq::n, @@SqD.class), to(@@Sq::n, @@SqD::n))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndWritten("VwTSq", "VwTSqD", "n"), outcome.construction());
+    }
+
+    @Test
     @DisplayName("not for a toOneWay row of a two-way mapper, which construction refuses for itself")
     void toOneWayIsLeftToConstruction() {
       final var outcome = verified(

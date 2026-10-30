@@ -1548,6 +1548,10 @@ public final class DeepMap {
             : new OpticNode.Transformed(srcField, tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
         );
       }
+      // Every write of the pair is recorded once its rows are read, so a fan-out is refused here,
+      // before any property the rows leave unpaired.
+      final var fannedOut = sourceWrites.fanOutRefusal();
+      if (fannedOut != null) throw new IllegalArgumentException(fannedOut);
 
       final var srcNames = srcRefl.names(source);
       final var srcNameSet = new HashSet<>(List.of(srcNames));
@@ -1722,9 +1726,6 @@ public final class DeepMap {
           addDispatched(trailOut, name, autoSrcType, autoTgtType, sealedCases);
         }
       }
-
-      final var fannedOut = sourceWrites.fanOutRefusal();
-      if (fannedOut != null) throw new IllegalArgumentException(fannedOut);
 
       for (final var name : srcNames) {
         if (claimedSrc.contains(name)) continue;

@@ -10825,6 +10825,26 @@ class CrossPathCorpusTest {
       PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("c", "b", "a"))
     ),
     new SourceClaimedTwice(
+      "a fan-out beside a target property no row writes, which the fan-out is refused before",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)"
+        ),
+        "public record %1$sTgt(String a, String b, String c) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::b)",
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::a)"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("b", "a"))
+    ),
+    new SourceClaimedTwice(
       "a property written into a renamed target and its namesake by a two-way mapper",
       List.of(
         "public record %1$sSrc(String n) {}\n",

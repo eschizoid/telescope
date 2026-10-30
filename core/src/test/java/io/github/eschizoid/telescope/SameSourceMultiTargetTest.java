@@ -308,6 +308,15 @@ class SameSourceMultiTargetTest {
     }
 
     @Test
+    @DisplayName("a fan-out is refused before a target property the rows leave unwritten")
+    void fanOutBeforeAnUnwrittenTarget() {
+      assertEquals(
+        fanOut("Three", "a", "b"),
+        refused(() -> Telescope.mapper(Src.class, Three.class, to(Src::n, Three::a), to(Src::n, Three::b)))
+      );
+    }
+
+    @Test
     @DisplayName("a forward-only mapper broadcasts through path rows")
     void forwardOnlyBroadcasts() {
       final var mapper = Telescope.mapperForward(Src.class, Tgt.class, to(SRC_N, Tgt::a), to(Src::n, tgt(Tgt::b)));
