@@ -733,6 +733,32 @@ public final class DeepMap {
     return false;
   }
 
+  /**
+   * A {@code drop} given no target class whose accessor is applied to {@code source} and reads its
+   * field {@code name}, or null. Such a drop is keyed to the mapper's own target class, so it drops
+   * nothing at a pair of {@code source} and another target.
+   */
+  private static Drop<?, ?, ?> topLevelDrop(
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Class<?> source,
+    final Reflective srcRefl,
+    final String name
+  ) {
+    for (final var rows : overrides.values()) {
+      for (final var row : rows) {
+        if (
+          row instanceof Drop<?, ?, ?> drop &&
+          drop.targetClass() == null &&
+          drop.sourceClass() == source &&
+          name.equals(srcRefl.normalize(drop.sourceField()))
+        ) {
+          return drop;
+        }
+      }
+    }
+    return null;
+  }
+
   /** Whether a row keyed to two sealed interfaces the pair's classes implement applies to it. */
   private static boolean inheritsRows(final Map<TypePair, List<Mapping<?, ?>>> overrides, final TypePair pair) {
     for (final var keyed : overrides.keySet()) {
@@ -1515,15 +1541,28 @@ public final class DeepMap {
           if (!claimedSrc.contains(name) && !telescopeReadsSrc.contains(name)) kept.add(name);
         }
         final var taken = KeptNames.taken(kept, claimedTgt);
-        if (!taken.isEmpty()) throw new IllegalStateException(
-          PairingMessages.noSameNameTarget(
-            source.getSimpleName(),
-            target.getSimpleName(),
-            slot(srcRefl),
-            slot(tgtRefl),
-            taken.getFirst()
-          )
-        );
+        if (!taken.isEmpty()) {
+          final var dropped = topLevelDrop(overrides, source, srcRefl, taken.getFirst());
+          throw new IllegalStateException(
+            dropped == null
+              ? PairingMessages.noSameNameTarget(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(srcRefl),
+                  slot(tgtRefl),
+                  taken.getFirst()
+                )
+              : PairingMessages.keptFieldDroppedAtTop(
+                  source.getSimpleName(),
+                  target.getSimpleName(),
+                  slot(srcRefl),
+                  slot(tgtRefl),
+                  taken.getFirst(),
+                  source.getSimpleName(),
+                  dropped.sourceField()
+                )
+          );
+        }
       }
       // A target field no row writes pairs with the source field of its name only when no row
       // reads that source field. The rows that read one are those with a source accessor, a

@@ -646,6 +646,83 @@ class NeverVisitedRowAgreementTest {
   }
 
   @Nested
+  @DisplayName("A kept property at a nested pair that a drop given no target class names")
+  class DroppedAtTheMappersTarget {
+
+    /** A nested pair a rename fills the target of a source property of the same name in. */
+    private static final String RENAMED = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      record @@Inner(String name, String label) {}
+      record @@InnerDto(String label) {}
+      record @@Outer(@@Inner in) {}
+      record @@OuterDto(@@InnerDto in) {}
+      """;
+
+    @Test
+    @DisplayName("is refused on both paths with the drop that applies at the nested pair")
+    void refusedNamingTheScopedDrop() {
+      final var outcome = outcome(
+        "NxA",
+        RENAMED +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::name, @@InnerDto::label), drop(@@Inner::label))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertEquals(
+        PairingMessages.keptFieldDroppedAtTop(
+          "NxAInner",
+          "NxAInnerDto",
+          "field",
+          "field",
+          "label",
+          "NxAInner",
+          "label"
+        ),
+        outcome.construction()
+      );
+      assertTrue(
+        outcome.construction().contains("use drop(NxAInner::label, NxAInnerDto.class)"),
+        outcome.construction()
+      );
+      assertTrue(outcome.warnings().contains(outcome.construction()), () -> String.join("\n", outcome.warnings()));
+    }
+
+    @Test
+    @DisplayName("builds on both paths once the drop names the nested pair's target")
+    void scopedDropBuilds() {
+      final var outcome = outcome(
+        "NxB",
+        RENAMED +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::name, @@InnerDto::label)," +
+              " drop(@@Inner::label, @@InnerDto.class))"
+          )
+      );
+      assertNull(outcome.construction(), outcome::construction);
+      assertEquals(List.of(), outcome.warnings());
+    }
+
+    @Test
+    @DisplayName("under when, which its factory refuses, is left to that refusal")
+    void dropUnderWhenLeftToItsFactory() {
+      final var outcome = outcome(
+        "NxC",
+        RENAMED +
+          holder(
+            "Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Inner::name, @@InnerDto::label)," +
+              " when(o -> true, drop(@@Inner::label, @@InnerDto.class)))"
+          )
+      );
+      assertNotNull(outcome.construction(), "construction built the mapper");
+      assertTrue(outcome.construction().contains("wraps only telescope-based rows"), outcome.construction());
+      assertEquals(List.of(), outcome.warnings());
+    }
+  }
+
+  @Nested
   @DisplayName("The pairs reached through generics, sealed cases and refused properties are one answer on both")
   class WalkedAlike {
 
