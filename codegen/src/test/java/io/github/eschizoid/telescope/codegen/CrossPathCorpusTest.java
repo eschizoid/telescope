@@ -7129,25 +7129,43 @@ class CrossPathCorpusTest {
     "a generic via method whose parameter names its variable is read with the value the bridge hands it, on both paths"
   )
   void aGenericViaParameterIsReadWithTheValueHandedToIt() throws ReflectiveOperationException {
-    // Each row: the prefix, the target's property type, and the refusal the processor owes, or
-    // empty where both paths convert alike. The method's parameter, List<? extends T>, is handed a
-    // List<String>, so T is a supertype of String: no Integer is one, and a CharSequence is.
+    // Each row: the prefix, the mapper's forward, the source's and the target's property types,
+    // and the refusal the processor owes, or what both paths owe where they convert alike. A
+    // List<? extends T> handed a List<String> makes T a supertype of String: no Integer is one, and
+    // a CharSequence is. A List<T> handed a List<? extends String> makes T the fresh variable its
+    // capture gives, a subtype of String, which a CharSequence or a List<? extends CharSequence>
+    // takes and an Integer or a List<CharSequence> does not.
+    final var extending = "<T> T forward(final java.util.List<? extends T> a) { return a.get(0); }";
+    final var element = "<T> T forward(final java.util.List<T> a) { return a.get(0); }";
+    final var whole = "<T> java.util.List<T> forward(final java.util.List<T> a) { return a; }";
+    final var strings = "java.util.List<String>";
+    final var captured = "java.util.List<? extends String>";
+    final var refused = "which no instantiation of its type variables";
     final var rows = List.of(
-      List.of("Vpi", "Integer", "which no instantiation of its type variables"),
-      List.of("Vpc", "CharSequence", "")
+      List.of("Vpi", extending, strings, "Integer", refused),
+      List.of("Vpc", extending, strings, "CharSequence", "#0(child=\"x\")"),
+      List.of("Vqe", element, captured, "CharSequence", "#0(child=\"x\")"),
+      List.of("Vqi", element, captured, "Integer", refused),
+      List.of("Vqw", whole, captured, "java.util.List<? extends CharSequence>", "#0(child=[\"x\"])"),
+      List.of("Vqr", whole, captured, "java.util.List<CharSequence>", refused)
     );
     final var failures = new ArrayList<String>();
     final var head = "package " + PACKAGE + ";\n";
     for (final var row : rows) {
       final var prefix = row.get(0);
-      final var property = row.get(1);
+      final var property = row.get(3);
+      final var owed = row.get(4);
       final var all = List.of(
         "public class %1$sChMap {\n" +
-          "  public static <T> T forward(final java.util.List<? extends T> a) { return a.get(0); }\n" +
-          "  public static java.util.List<String> backward(final " +
+          "  public static " +
+          row.get(1) +
+          "\n" +
+          "  public static " +
+          row.get(2) +
+          " backward(final " +
           property +
           " b) { return java.util.List.of(String.valueOf(b)); }\n}\n",
-        sampled("%1$sSrc", "java.util.List<String> child", "new %1$sSrc(java.util.List.of(\"x\"))"),
+        sampled("%1$sSrc", row.get(2) + " child", "new %1$sSrc(java.util.List.of(\"x\"))"),
         forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::child, %1$sChMap.class)"),
         sampled("%1$sTgt", property + " child", "new %1$sTgt(null)"),
         "public class %1$sRuntime {\n" +
@@ -7166,9 +7184,9 @@ class CrossPathCorpusTest {
         continue;
       }
       final var pair = Arrays.copyOf(all, all.length - 1);
-      if (!row.get(2).isEmpty()) {
+      if (owed.equals(refused)) {
         final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), pair);
-        if (processed.success() || !processed.hasError("via(...) of 'child'") || !processed.hasError(row.get(2))) {
+        if (processed.success() || !processed.hasError("via(...) of 'child'") || !processed.hasError(refused)) {
           failures.add(prefix + ": the processor owed a refusal naming the mapper, saw " + describe(processed));
         }
         if (!errorsInGenerated(processed).isEmpty()) {
@@ -7192,10 +7210,8 @@ class CrossPathCorpusTest {
       final Attempt sample = () -> src.getMethod("sample").invoke(null);
       final var generated = shapeOf(() -> bridge.getMethod("forward", src).invoke(null, sample.get()));
       final var reflective = shapeOf(() -> mapper.forward(sample.get()));
-      if (!generated.equals("#0(child=\"x\")") || !reflective.equals(generated)) {
-        failures.add(
-          prefix + ": both paths owed #0(child=\"x\"), generated " + generated + ", reflective " + reflective
-        );
+      if (!generated.equals(owed) || !reflective.equals(owed)) {
+        failures.add(prefix + ": both paths owed " + owed + ", generated " + generated + ", reflective " + reflective);
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));

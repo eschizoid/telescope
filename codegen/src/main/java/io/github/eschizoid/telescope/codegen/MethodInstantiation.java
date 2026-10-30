@@ -150,6 +150,12 @@ final class MethodInstantiation {
         }
         if (fact.upper.stream().anyMatch(upper -> !types.isAssignable(value, upper))) return null;
         if (fact.lower.stream().anyMatch(lower -> !types.isAssignable(lower, value))) return null;
+        // A variable fixed to the fresh variable an argument's capture gives leaves the result to
+        // javac, which writes it as it is: no check of its class reaches the taken type, so the
+        // result as a whole has to fit it.
+        if (props.mentionsTypeVariable(value) && fact.top.stream().anyMatch(top -> !types.isAssignable(value, top))) {
+          return null;
+        }
         continue;
       }
       final var uppers = new ArrayList<TypeMirror>(bounds);
@@ -184,15 +190,18 @@ final class MethodInstantiation {
   /**
    * Records what {@code argument}, the value handed to {@code member}'s one parameter, asks of the
    * variables the parameter names where it is not a variable on its own: the parameter is a
-   * supertype of the argument's type. A value whose class is no subtype of the parameter's erasure
-   * is handed over after a cast to that erasure, which gives the variables nothing. False where the
-   * argument shows no instantiation lets the parameter take it.
+   * supertype of the argument's type. The argument's type is read after capture conversion, as
+   * javac reads it, so a wildcard argument stands for a fresh type variable: a variable the
+   * parameter gives in its place is that fresh variable exactly, and a result naming it is left to
+   * javac. A value whose class is no subtype of the parameter's erasure is handed over after a cast
+   * to that erasure, which gives the variables nothing. False where the argument shows no
+   * instantiation lets the parameter take it.
    */
   private boolean argumentMeetsParameter(final ExecutableType member, final TypeMirror argument, final Gathered into) {
     if (argument == null || member.getParameterTypes().size() != 1) return true;
     final var parameter = member.getParameterTypes().getFirst();
     if (!names(parameter, into.variables)) return true;
-    final var handed = boxed(argument);
+    final var handed = types.capture(boxed(argument));
     if (!(handed instanceof DeclaredType) && !(handed instanceof ArrayType)) return true;
     if (!types.isSubtype(types.erasure(handed), types.erasure(parameter))) return true;
     return gather(parameter, handed, Relation.SUPERTYPE, into);

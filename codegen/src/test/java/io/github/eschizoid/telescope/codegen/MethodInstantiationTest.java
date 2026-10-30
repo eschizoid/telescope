@@ -192,7 +192,11 @@ class MethodInstantiationTest {
       OPEN
     ),
     new Call("<T> T m(List<? extends T> t)", "List<String>", "Integer", REFUSED),
-    new Call("<T> T m(List<? extends T> t)", "List<String>", "CharSequence", OPEN)
+    new Call("<T> T m(List<? extends T> t)", "List<String>", "CharSequence", OPEN),
+    new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<? extends CharSequence>", OPEN),
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "CharSequence", OPEN),
+    new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<CharSequence>", REFUSED),
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "Integer", REFUSED)
   );
 
   /** Asks the instantiation about each call in the first round and keeps the answers. */
