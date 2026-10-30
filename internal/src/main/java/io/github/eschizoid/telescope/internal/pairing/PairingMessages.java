@@ -420,6 +420,53 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A source property one row drops while another reads the source path {@code path} through it,
+   * which backward writes back.
+   */
+  public static String droppedAndReadThrough(
+    final String source,
+    final String target,
+    final String srcField,
+    final String path
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row, and another reads the path '" +
+      path +
+      "' through it. Drop it, or read through it, not both."
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class no write strategy builds, so a null
+   * object of that class on the path cannot be built to take the value.
+   */
+  public static String pathIntermediateUnbuildable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and no write strategy builds it. Give it" +
+      " a public no-argument constructor, a public constructor taking its properties or a static builder()."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

@@ -88,6 +88,58 @@ class SourceWritesTest {
   }
 
   @Test
+  @DisplayName("a path written into two targets of a two-way mapper is refused by its dotted name")
+  void twoWayRefusesAPathInTwoTargets() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    assertNull(writes.write("customer.city", "city"));
+    assertNull(writes.write("customer.city", "town"));
+    assertEquals(
+      PairingMessages.fanOutBothWays("Src", "Tgt", "customer.city", List.of("city", "town")),
+      writes.fanOutRefusal()
+    );
+  }
+
+  @Test
+  @DisplayName("two paths through one property, and the property itself, each take a target of their own")
+  void pathsThroughOnePropertyAreIndependent() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    assertNull(writes.write("customer.city", "city"));
+    assertNull(writes.write("customer.zip", "zip"));
+    assertNull(writes.write("customer", "customer"));
+    assertNull(writes.fanOutRefusal());
+  }
+
+  @Test
+  @DisplayName("a drop and a path through the dropped property are refused in either order, on either factory")
+  void dropAndPathThroughItRefusedInEitherOrder() {
+    for (final var backward : new boolean[] { true, false }) {
+      final var dropFirst = new SourceWrites("Src", "Tgt", backward);
+      assertNull(dropFirst.drop("customer"));
+      assertEquals(
+        PairingMessages.droppedAndReadThrough("Src", "Tgt", "customer", "customer.address.city"),
+        dropFirst.write("customer.address.city", "city")
+      );
+      final var writeFirst = new SourceWrites("Src", "Tgt", backward);
+      assertNull(writeFirst.write("customer.address.city", "city"));
+      assertEquals(
+        PairingMessages.droppedAndReadThrough("Src", "Tgt", "customer", "customer.address.city"),
+        writeFirst.drop("customer")
+      );
+    }
+  }
+
+  @Test
+  @DisplayName("a drop of a property whose name starts another's leaves a path through the other free")
+  void dropOfAPrefixNamedPropertyLeavesOthersFree() {
+    final var writes = new SourceWrites("Src", "Tgt", true);
+    assertNull(writes.drop("cust"));
+    assertNull(writes.write("customer.city", "city"));
+    final var pathFirst = new SourceWrites("Src", "Tgt", true);
+    assertNull(pathFirst.write("customer.city", "city"));
+    assertNull(pathFirst.drop("cust"));
+  }
+
+  @Test
   @DisplayName("a drop of one property leaves another free to be written")
   void dropLeavesOthersFree() {
     final var writes = new SourceWrites("Src", "Tgt", true);
