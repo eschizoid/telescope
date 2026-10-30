@@ -26,8 +26,7 @@ import org.junit.jupiter.api.Test;
  * the call too; a result fixed to a type the taken type takes is one javac accepts the call for;
  * and a call left to javac is one javac accepts. A variable a final class bounds is the one place a
  * refusal and javac part: javac accepts an intersection of the class and an interface it does not
- * implement, which holds no value but null. The shapes the instantiation leaves to javac although
- * javac rejects them are marked, so each stays visible.
+ * implement, which holds no value but null. A call left to javac that javac rejects fails the test.
  */
 class MethodInstantiationTest {
 
@@ -37,8 +36,6 @@ class MethodInstantiationTest {
     AGREES,
     /** Refused where javac accepts, for a variable a final class bounds. */
     STRICTER,
-    /** Left to javac, which rejects the call: a shape the instantiation does not decide. */
-    KNOWN_GAP,
   }
 
   /**
@@ -88,7 +85,10 @@ class MethodInstantiationTest {
     new Call("<T> T[] m()", null, "List<String>", REFUSED),
     new Call("<T> T[] m()", null, "Object", OPEN),
     new Call("<T> List<? extends T> m()", null, "List<String>", REFUSED),
-    new Call("<T> List<? extends T> m()", null, "List<? extends String>", OPEN),
+    new Call("<T> List<? extends T> m()", null, "List<? extends String>", "java.util.List<? extends java.lang.String>"),
+    new Call("<T> List<? super T> m()", null, "List<? super String>", OPEN),
+    new Call("<T extends Number> List<? super T> m()", null, "List<? super String>", REFUSED),
+    new Call("<T> List<? extends T> m()", null, "List<? super String>", REFUSED),
     new Call("<T> List<T> m()", null, "List", OPEN),
     new Call("<T> Map<T, T> m()", null, "Map<String, Integer>", REFUSED),
     new Call("<T> List<List<T>> m()", null, "List<List<String>>", "java.util.List<java.util.List<java.lang.String>>"),
@@ -140,7 +140,7 @@ class MethodInstantiationTest {
     ),
     new Call("<T extends Comparable<T>> T m(T t)", "java.sql.Timestamp", "java.util.Date", "java.util.Date"),
     new Call("<T extends Comparable<? super T>> T m(T t)", "java.sql.Timestamp", "java.util.Date", OPEN),
-    new Call("<T extends Comparable<T>> T m(T t)", "String", "CharSequence", OPEN),
+    new Call("<T extends Comparable<T>> T m(T t)", "String", "CharSequence", "java.lang.String"),
     new Call("<T extends Number, U extends Comparable<? extends T>> U m()", null, "String", REFUSED),
     new Call("<T extends Number, U extends Comparable<? super T>> U m()", null, "String", REFUSED),
     new Call("<T, U extends Comparable<? extends T>> U m()", null, "String", "java.lang.String"),
@@ -162,20 +162,82 @@ class MethodInstantiationTest {
     new Call("<T extends M.IA> T m()", null, "M.IB", REFUSED),
     new Call("<T extends List<String>> T m()", null, "Set<Integer>", REFUSED),
     new Call("<T extends List<String>> T m()", null, "Set<String>", OPEN),
-    new Call(
-      "<T extends String> List<? extends T> m()",
-      null,
-      "List<? extends Integer>",
-      "java.util.List<? extends java.lang.String>"
-    ),
-    new Call("<T extends Number> List<? extends T> m()", null, "List<? extends String>", OPEN, Mark.KNOWN_GAP),
-    new Call("<T extends Number> M.Outer<T>.Inner m()", null, "M.Outer<String>.Inner", OPEN, Mark.KNOWN_GAP),
+    new Call("<T extends String> List<? extends T> m()", null, "List<? extends Integer>", REFUSED),
+    new Call("<T extends Number> List<? extends T> m()", null, "List<? extends String>", REFUSED),
+    new Call("<T extends Number> M.Outer<T>.Inner m()", null, "M.Outer<String>.Inner", REFUSED),
+    new Call("<T> M.Outer<T>.Inner m()", null, "M.Outer<String>.Inner", "demo.M.Outer<java.lang.String>.Inner"),
+    new Call("<T extends Comparable<T>> Map<T, T> m()", null, "Map<? super Integer, ? super Long>", REFUSED),
     new Call(
       "<T extends Comparable<T>> Map<T, T> m()",
       null,
-      "Map<? super Integer, ? super Long>",
-      OPEN,
-      Mark.KNOWN_GAP
+      "Map<? super java.sql.Date, ? super java.sql.Time>",
+      "java.util.Map<java.util.Date,java.util.Date>"
+    ),
+    new Call("<T extends Comparable<T>> List<T> m()", null, "List<? super Object>", REFUSED),
+    new Call("<T> List<? super T> m()", null, "List<? extends Number>", REFUSED),
+    new Call("<T extends Number> List<? super T> m()", null, "List<? extends Number>", REFUSED),
+    new Call("<T> List<? super T> m()", null, "List<? extends Object>", OPEN),
+    new Call("<T extends Number> List<List<? extends T>> m()", null, "List<List<? extends CharSequence>>", REFUSED),
+    new Call(
+      "<T> List<List<? extends T>> m()",
+      null,
+      "List<List<? extends CharSequence>>",
+      "java.util.List<java.util.List<? extends java.lang.CharSequence>>"
+    ),
+    new Call("<T extends Comparable<? super T>> Map<T, T> m()", null, "Map<? super Integer, ? super Long>", REFUSED),
+    new Call(
+      "<T extends Comparable<? super T>> Map<T, T> m()",
+      null,
+      "Map<? super java.sql.Date, ? super java.sql.Timestamp>",
+      OPEN
+    ),
+    new Call("<T> T m(List<? extends T> t)", "List<String>", "Integer", REFUSED),
+    new Call("<T> T m(List<? extends T> t)", "List<String>", "CharSequence", OPEN),
+    new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<? extends CharSequence>", OPEN),
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "CharSequence", OPEN),
+    new Call("<T> List<T> m(List<T> t)", "List<? extends String>", "List<CharSequence>", REFUSED),
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "Integer", REFUSED),
+    new Call("<T> T m(List<List<T>> t)", "List<Set<String>>", "Object", REFUSED),
+    new Call("<T> T m(T[] t)", "String[]", "CharSequence", OPEN),
+    new Call("<T> T m(T[] t)", "String[]", "Integer", REFUSED),
+    new Call("<T extends Comparable<List<T>>> List<T> m()", null, "List<? super String>", REFUSED),
+    new Call("<T> List<List<T>> m()", null, "List<List<? extends String>>", REFUSED),
+    new Call("<T> List<M.Outer<List<T>>.Inner> m()", null, "List<M.Outer<Set<String>>.Inner>", REFUSED),
+    new Call("<T> M.Outer<List<T>>.Inner m()", null, "M.Outer<Set<String>>.Inner", REFUSED),
+    new Call(
+      "<T> List<M.Outer<T>.Inner> m()",
+      null,
+      "List<? super M.Outer<String>.Inner>",
+      "java.util.List<demo.M.Outer<java.lang.String>.Inner>"
+    ),
+    new Call("<T> List<M.Outer<List<T>>.Inner> m()", null, "List<? super M.Outer<Set<String>>.Inner>", REFUSED),
+    new Call(
+      "<T> Map<T, ? extends Number> m()",
+      null,
+      "Map<String, ? super Integer>",
+      "java.util.Map<java.lang.String,? extends java.lang.Number>"
+    ),
+    new Call("<T> List<? extends T> m()", null, "List<?>", OPEN),
+    new Call("<T> List<? super T> m()", null, "List<?>", OPEN),
+    new Call(
+      "<T> Map<T, List<? extends Number>> m()",
+      null,
+      "Map<String, List<? extends Number>>",
+      "java.util.Map<java.lang.String,java.util.List<? extends java.lang.Number>>"
+    ),
+    new Call(
+      "<T> List<List<? super T>> m()",
+      null,
+      "List<List<? super String>>",
+      "java.util.List<java.util.List<? super java.lang.String>>"
+    ),
+    new Call("<T> List<List<? super T>> m()", null, "List<List<? extends String>>", REFUSED),
+    new Call("<T> List<List<? extends T>> m()", null, "List<List<? super String>>", REFUSED),
+    new Call(
+      "<T> List<List<? extends T>> m()",
+      null,
+      "List<List<?>>",
+      "java.util.List<java.util.List<? extends java.lang.Object>>"
     )
   );
 
@@ -317,12 +379,7 @@ class MethodInstantiationTest {
       if ("true".equals(asking.answers.get(name + " takes")) && javacRejects) {
         failures.add(what + ": fits, but javac rejects the call");
       }
-      if (OPEN.equals(answer) && javacRejects && call.mark() != Mark.KNOWN_GAP) {
-        failures.add(what + ": left to javac, which rejects the call");
-      }
-      if (call.mark() == Mark.KNOWN_GAP && !(OPEN.equals(answer) && javacRejects)) {
-        failures.add(what + ": marked a known gap, which it no longer is");
-      }
+      if (OPEN.equals(answer) && javacRejects) failures.add(what + ": left to javac, which rejects the call");
     }
     assertTrue(rejected.stream().noneMatch(name -> name.equals("M")), "the methods should compile");
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));

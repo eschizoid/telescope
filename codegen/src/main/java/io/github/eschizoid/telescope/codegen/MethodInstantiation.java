@@ -24,12 +24,22 @@ import javax.lang.model.util.Types;
  * <ul>
  *   <li>A variable that is a type argument of the result where the taken type has a type, not a
  *       wildcard, is that type exactly, since a generic class's arguments are invariant. Where the
- *       taken type has a wildcard, the variable is bounded by it, from above or below.
- *   <li>A variable's bound and a type the variable has to be a subtype of that reach one generic
- *       class give it the same type for each argument both give a type, since a class has one
- *       supertype of each generic class.
+ *       taken type has a wildcard, the variable is bounded by it, from above or below. A variable
+ *       that bounds a wildcard of the result where the taken type has a wildcard bounded the same
+ *       way is bounded by that wildcard's bound, the same way; a wildcard bounded from below is
+ *       contained in one bounded from above only by {@code Object}. Inside a type argument met
+ *       exactly, a wildcard is met by the same wildcard, so the variable bounding it is that
+ *       wildcard's bound exactly.
+ *   <li>An inner class's enclosing type is met as the inner class is, so the variables of {@code
+ *       Outer<T>.Inner} are fixed by the {@code Outer} the taken type encloses its class in.
+ *   <li>A variable's bound and a type the variable has to be a subtype of, or a supertype of, that
+ *       reach one generic class give it the same type for each argument both give a type, since a
+ *       class has one supertype of each generic class.
  *   <li>A variable that is the method's one parameter is a supertype of the argument's type. It is
- *       the argument's type only where no bound names it, since a bound naming it can raise it.
+ *       the argument's type only where no bound names it, since a bound naming it can raise it. A
+ *       parameter that names a variable inside it is a supertype of the argument's type, read as
+ *       the result is read against the taken type, so {@code List<? extends T>} handed a {@code
+ *       List<String>} makes {@code T} a supertype of {@code String}.
  *   <li>A variable bounded by a final class, or that has to be a subtype of one, is that class, the
  *       only class whose instances it can hold.
  * </ul>
@@ -89,7 +99,11 @@ final class MethodInstantiation {
     final var gathered = new Gathered(variables, facts);
     if (!gather(declared, taken, Relation.TOP, gathered)) return null;
     final var parameter = parameterVariable(member);
-    if (parameter >= 0) facts.get(parameter).lower.add(boxed(argument));
+    if (parameter >= 0) {
+      facts.get(parameter).lower.add(boxed(argument));
+    } else if (!argumentMeetsParameter(member, argument, gathered)) {
+      return null;
+    }
     if (!sharedSupertypes(gathered)) return null;
     final var solved = new TypeMirror[variables.size()];
     for (int i = 0; i < variables.size(); i++) {
@@ -136,6 +150,12 @@ final class MethodInstantiation {
         }
         if (fact.upper.stream().anyMatch(upper -> !types.isAssignable(value, upper))) return null;
         if (fact.lower.stream().anyMatch(lower -> !types.isAssignable(lower, value))) return null;
+        // A variable fixed to the fresh variable an argument's capture gives leaves the result to
+        // javac, which writes it as it is: no check of its class reaches the taken type, so the
+        // result as a whole has to fit it.
+        if (props.mentionsTypeVariable(value) && fact.top.stream().anyMatch(top -> !types.isAssignable(value, top))) {
+          return null;
+        }
         continue;
       }
       final var uppers = new ArrayList<TypeMirror>(bounds);
@@ -168,18 +188,50 @@ final class MethodInstantiation {
   }
 
   /**
+   * Records what {@code argument}, the value handed to {@code member}'s one parameter, asks of the
+   * variables the parameter names where it is not a variable on its own: the parameter is a
+   * supertype of the argument's type. The argument's type is read after capture conversion, as
+   * javac reads it, so a wildcard argument stands for a fresh type variable: a variable the
+   * parameter gives in its place is that fresh variable exactly, and a result naming it is left to
+   * javac. A value whose class is no subtype of the parameter's erasure is handed over after a cast
+   * to that erasure, which gives the variables nothing. False where the argument shows no
+   * instantiation lets the parameter take it.
+   */
+  private boolean argumentMeetsParameter(final ExecutableType member, final TypeMirror argument, final Gathered into) {
+    if (argument == null) return true;
+    final var parameter = member.getParameterTypes().getFirst();
+    if (!names(parameter, into.variables)) return true;
+    final var handed = types.capture(boxed(argument));
+    if (!types.isSubtype(types.erasure(handed), types.erasure(parameter))) return true;
+    return gather(parameter, handed, Relation.SUPERTYPE, into);
+  }
+
+  /**
    * Records what a variable's bound and a type the variable has to be a subtype of ask of the
    * variables the bound names, where both reach one generic class or interface: a class has one
    * supertype of each, so where both give it a type for an argument, the two are the same type, as
    * javac reads them. False where they cannot be. Where either gives a wildcard, javac draws no
    * bound from the pair, so the pair is kept to be checked once each variable has the instantiation
    * javac gives it.
+   *
+   * <p>A type the variable has to be a supertype of is a subtype of each of its bounds: it reaches
+   * each bound's class, and each argument its supertype of that class gives is contained in the
+   * bound's argument there. A bound's type argument is that type exactly, and a bound's wildcard
+   * bounds the variables it names, as {@code ? super T} containing {@code Integer} makes {@code T}
+   * a subtype of {@code Integer}. So two such types that give the bound's class different types for
+   * one argument admit no instantiation, whatever single type javac would join them into.
    */
   private boolean sharedSupertypes(final Gathered into) {
     for (int i = 0; i < into.variables.size(); i++) {
       final var uppers = List.copyOf(into.facts.get(i).uppers());
+      final var lowers = List.copyOf(into.facts.get(i).lower);
       for (final var bound : boundsOf(into.variables.get(i))) {
         if (!(bound instanceof DeclaredType declared) || !names(bound, into.variables)) continue;
+        for (final var lower : lowers) {
+          if (!(lower instanceof DeclaredType given)) continue;
+          if (!types.isSubtype(types.erasure(lower), types.erasure(bound))) return false;
+          if (!containing(declared, viewAs(given, (TypeElement) declared.asElement()), into)) return false;
+        }
         for (final var upper : uppers) {
           if (!(upper instanceof DeclaredType wanted)) continue;
           final DeclaredType boundView;
@@ -365,7 +417,9 @@ final class MethodInstantiation {
         };
       }
       return switch (relation) {
-        case EXACT -> types.isSameType(types.erasure(given), types.erasure(met)) && arguments(declared, wanted, into);
+        case EXACT -> types.isSameType(types.erasure(given), types.erasure(met)) &&
+        arguments(declared, wanted, into, true) &&
+        enclosing(declared, wanted, relation, into);
         case SUBTYPE, TOP -> {
           if (!types.isSubtype(types.erasure(given), types.erasure(met))) {
             if (relation == Relation.SUBTYPE) yield false;
@@ -373,12 +427,12 @@ final class MethodInstantiation {
             yield true;
           }
           final var view = viewAs(declared, (TypeElement) wanted.asElement());
-          yield view == null || arguments(view, wanted, into);
+          yield arguments(view, wanted, into, false) && enclosing(view, wanted, relation, into);
         }
         case SUPERTYPE -> {
           if (!types.isSubtype(types.erasure(met), types.erasure(given))) yield false;
           final var view = viewAs(wanted, (TypeElement) declared.asElement());
-          yield view == null || containing(declared, view, into);
+          yield containing(declared, view, into) && enclosing(declared, view, relation, into);
         }
       };
     }
@@ -403,8 +457,16 @@ final class MethodInstantiation {
   /**
    * Records what {@code wanted}'s type arguments ask of those of {@code given}, one class's
    * parameterizations: a type argument is met exactly, and a wildcard bounds the argument it meets.
+   * Where the two types are to be the same type, {@code exact}, each argument is too: a type is
+   * never a wildcard, and two wildcards are one only where they are bounded the same way by the
+   * same type.
    */
-  private boolean arguments(final DeclaredType given, final DeclaredType wanted, final Gathered into) {
+  private boolean arguments(
+    final DeclaredType given,
+    final DeclaredType wanted,
+    final Gathered into,
+    final boolean exact
+  ) {
     final var givenArguments = given.getTypeArguments();
     final var wantedArguments = wanted.getTypeArguments();
     if (givenArguments.size() != wantedArguments.size()) return true;
@@ -412,7 +474,15 @@ final class MethodInstantiation {
       final var argument = givenArguments.get(i);
       final var met = wantedArguments.get(i);
       if (met instanceof WildcardType wildcard) {
-        if (argument instanceof WildcardType) continue;
+        if (argument instanceof WildcardType inResult) {
+          final var fits = exact ? sameWildcard(inResult, wildcard, into) : wildcardContained(inResult, wildcard, into);
+          if (!fits) return false;
+          continue;
+        }
+        if (exact) {
+          if (names(argument, into.variables)) return false;
+          continue;
+        }
         if (wildcard.getExtendsBound() != null) {
           if (!gather(argument, wildcard.getExtendsBound(), Relation.SUBTYPE, into)) return false;
         } else if (wildcard.getSuperBound() != null) {
@@ -423,6 +493,72 @@ final class MethodInstantiation {
       }
     }
     return true;
+  }
+
+  /**
+   * Records what {@code met}, a wildcard argument of the taken type, asks of the variables {@code
+   * given}, the wildcard in its place in the result, names, for {@code given} to be contained in
+   * it: a wildcard bounded from above is contained in one bounded from above by a supertype of its
+   * bound, and one bounded from below in one bounded from below by a subtype of its bound. A
+   * wildcard bounded from above is contained in none bounded from below, and one bounded from below
+   * in one bounded from above only where that bound is {@code Object}; false where such a {@code
+   * given} names a variable.
+   */
+  private boolean wildcardContained(final WildcardType given, final WildcardType met, final Gathered into) {
+    if (given.getExtendsBound() != null && met.getExtendsBound() != null) {
+      return gather(given.getExtendsBound(), met.getExtendsBound(), Relation.SUBTYPE, into);
+    }
+    if (given.getSuperBound() != null && met.getSuperBound() != null) {
+      return gather(given.getSuperBound(), met.getSuperBound(), Relation.SUPERTYPE, into);
+    }
+    if (!names(given, into.variables)) return true;
+    if (given.getExtendsBound() != null) return met.getSuperBound() == null;
+    return met.getExtendsBound() == null || isObject(met.getExtendsBound());
+  }
+
+  /**
+   * Records what {@code met}, a wildcard argument of the taken type, asks of the variables {@code
+   * given}, the wildcard in its place in the result, names, for the two to be one wildcard: bounded
+   * the same way, by the same type. An unbounded wildcard is bounded from above by {@code Object}.
+   * False where {@code given} names a variable and the two are bounded different ways.
+   */
+  private boolean sameWildcard(final WildcardType given, final WildcardType met, final Gathered into) {
+    if (!names(given, into.variables)) return true;
+    if (given.getSuperBound() != null || met.getSuperBound() != null) {
+      return (
+        given.getSuperBound() != null &&
+        met.getSuperBound() != null &&
+        gather(given.getSuperBound(), met.getSuperBound(), Relation.EXACT, into)
+      );
+    }
+    final var metBound = met.getExtendsBound() == null ? objectType() : met.getExtendsBound();
+    return gather(given.getExtendsBound(), metBound, Relation.EXACT, into);
+  }
+
+  /** Whether {@code type} is {@code Object}. */
+  private boolean isObject(final TypeMirror type) {
+    return types.isSameType(type, objectType());
+  }
+
+  /** The type {@code Object}. */
+  private TypeMirror objectType() {
+    return props.objectType();
+  }
+
+  /**
+   * Records what {@code wanted}'s enclosing type asks of the variables {@code given}'s names, the
+   * two being one inner class's parameterizations: the enclosing type of a subtype is a subtype of
+   * its supertype's, as {@code relation} relates the two inner types.
+   */
+  private boolean enclosing(
+    final DeclaredType given,
+    final DeclaredType wanted,
+    final Relation relation,
+    final Gathered into
+  ) {
+    if (!(given.getEnclosingType() instanceof DeclaredType outer)) return true;
+    if (!(wanted.getEnclosingType() instanceof DeclaredType wantedOuter)) return true;
+    return gather(outer, wantedOuter, relation == Relation.TOP ? Relation.SUBTYPE : relation, into);
   }
 
   /**
@@ -454,7 +590,11 @@ final class MethodInstantiation {
     return true;
   }
 
-  /** {@code type} as its supertype of class {@code element}, or null where none is found. */
+  /**
+   * {@code type} as its supertype of class {@code element}, or null where none is found. A type
+   * whose erasure is a subtype of the class's erasure always finds one, since each step up that
+   * subtype chain is a direct supertype of the one below it.
+   */
   private DeclaredType viewAs(final DeclaredType type, final TypeElement element) {
     if (type.asElement().equals(element)) return type;
     for (final var parent : types.directSupertypes(type)) {

@@ -2199,10 +2199,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var handed = heldAs(fieldByName(sourceFields, v).type());
       // The resolver binds no method whose one parameter is its own type variable, which javac
       // infers from the value handed to it; such a method is held to the same rule, as inferred.
+      // A method javac binds to the value only through a cast is the one the call reaches.
       final var forward =
         resolvedFn(mapper, "forward", handed, bridgePackage) instanceof Resolution.Bound bound
           ? bound
-          : inferringFn(mapper, "forward", handed, bridgePackage);
+          : viaCasts.forwardReached().containsKey(v)
+            ? new Resolution.Bound(viaCasts.forwardReached().get(v))
+            : inferringFn(mapper, "forward", handed, bridgePackage);
       if (forward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
         for (final var written : targetsOf.apply(v)) {
           final var result = viaResult(
@@ -2232,7 +2235,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var backward =
         resolvedFn(mapper, "backward", given, bridgePackage) instanceof Resolution.Bound bound
           ? bound
-          : inferringFn(mapper, "backward", given, bridgePackage);
+          : viaCasts.backwardReached().containsKey(v)
+            ? new Resolution.Bound(viaCasts.backwardReached().get(v))
+            : inferringFn(mapper, "backward", given, bridgePackage);
       if (backward instanceof Resolution.Bound bound && !bound.member().getReturnType().getKind().isPrimitive()) {
         final var result = viaResult(
           viaSite(v, source, target),
@@ -2367,7 +2372,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Patch writes a conditional between the backward result and the base's own value, whose type
     // is the backward result's where the property's type widens to it. Where that result is wider
     // than the setter chosen from the property's type, patch casts to that setter as backward
-    // does; every other value is written as it is.
+    // does. A result that reaches the member only through a check is checked as backward checks
+    // it, whatever the two join into: the join is a supertype of the property's own type, which a
+    // cast to the member's class can always narrow. Every other value is written as it is.
     final var patchCasts = new HashMap<String, TypeMirror>();
     for (final var entry : backwardGives.entrySet()) {
       if (!transformedSources.contains(entry.getKey()) || !hasField(sourceFields, entry.getKey())) continue;
@@ -2377,8 +2384,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var assignable = processingEnv.getTypeUtils().isAssignable(heldAs(property), entry.getValue());
       final var setters = sourceRebuild.kind() == Rebuild.Kind.SETTERS;
       if (
-        assignable &&
-        ((setters && castsToChosen(entry.getValue(), parameter)) || reachesByCheck(entry.getValue(), parameter))
+        (assignable && setters && castsToChosen(entry.getValue(), parameter)) ||
+        reachesByCheck(entry.getValue(), parameter)
       ) {
         patchCasts.put(entry.getKey(), entry.getValue());
       }
@@ -2532,17 +2539,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             : rawFields
               ? RAW_TYPES_SUPPRESSION + "\n"
               : namesRaw;
+        // A transform handed a property's value after a check of its class alone takes the type
+        // arguments of the class it is cast to unchecked, in the direction that reads the value:
+        // forward for the source's, and backward and patch for the target's.
+        final var forwardSuppression = uncheckedIn(forwardArguments, suppressRaw);
+        final var backwardSuppression = uncheckedIn(backwardArguments, suppressRaw);
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
-        emitDirection(out, suppressRaw, pathAccess, "forward", sourceFq, targetFq, "s", forwardBody);
-        emitDirection(out, suppressRaw, pathAccess, "backward", targetFq, sourceFq, "t", backwardBody);
+        emitDirection(out, forwardSuppression, pathAccess, "forward", sourceFq, targetFq, "s", forwardBody);
+        emitDirection(out, backwardSuppression, pathAccess, "backward", targetFq, sourceFq, "t", backwardBody);
         // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
         // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
         // Reference target components null-gate to base; primitive components autobox to non-null
         // and are always overlaid; nested components are written whole through the sub-bridge's
         // backward when the partial slot is non-null.
-        out.print(suppressRaw);
+        out.print(backwardSuppression);
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );
@@ -3281,6 +3293,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * unchecked.
    */
   private static final String RAW_TYPES_SUPPRESSION = "  @SuppressWarnings(\"rawtypes\")";
+
+  /**
+   * {@code suppression}, the line a bridge's method carries, widened to {@code unchecked} where one
+   * of {@code checks} casts to a class given type arguments. A line that suppresses anything
+   * already suppresses {@code rawtypes}, so a widened one suppresses both.
+   */
+  private static String uncheckedIn(final Map<String, ArgumentCheck> checks, final String suppression) {
+    if (checks.values().stream().noneMatch(ArgumentCheck::unchecked)) return suppression;
+    return suppression.isEmpty() ? "  @SuppressWarnings(\"unchecked\")\n" : RAW_SUPPRESSION + "\n";
+  }
 
   /**
    * Whether a type is, or has among its type arguments at any depth, a sealed interface or a record
@@ -4636,9 +4658,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Per source property a {@code via} row converts, the class its {@code forward} and its {@code
-   * backward} call cast their argument to, where the call takes the value only through a cast.
+   * backward} call cast their argument to, where the call takes the value only through a cast, and
+   * the method each calls, where javac binds none to the value as the bridge holds it.
    */
-  private record ViaCasts(Map<String, String> forwardCasts, Map<String, String> backwardCasts) {}
+  private record ViaCasts(
+    Map<String, String> forwardCasts,
+    Map<String, String> backwardCasts,
+    Map<String, ExecutableType> forwardReached,
+    Map<String, ExecutableType> backwardReached
+  ) {}
 
   /**
    * A {@code via} row whose mapper converts the elements of a container property rather than the
@@ -4673,6 +4701,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
+    final var forwardReached = new HashMap<String, ExecutableType>();
+    final var backwardReached = new HashMap<String, ExecutableType>();
     for (final var entry : viaMappers.entrySet()) {
       final var field = entry.getKey();
       if (viaLifts.containsKey(field)) continue;
@@ -4722,8 +4752,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (forward.cast() != null) forwardCasts.put(field, forward.cast());
       if (backward.cast() != null) backwardCasts.put(field, backward.cast());
+      if (forward.reached() != null) forwardReached.put(field, forward.reached());
+      if (backward.reached() != null) backwardReached.put(field, backward.reached());
     }
-    return new ViaCasts(forwardCasts, backwardCasts);
+    return new ViaCasts(forwardCasts, backwardCasts, forwardReached, backwardReached);
   }
 
   /**
@@ -5012,10 +5044,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A {@code via} row's call: the class its argument is cast to, or null for none, and its result,
-   * or null where the call infers it.
+   * A {@code via} row's call: the class its argument is cast to, or null for none, its result, or
+   * null where the call infers it, and the method it calls where javac binds none to the value as
+   * the bridge holds it, or null where javac binds that method itself.
    */
-  private record ViaCall(String cast, TypeMirror result) {}
+  private record ViaCall(String cast, TypeMirror result, ExecutableType reached) {}
 
   /**
    * How a call to {@code mapper}'s static {@code name} binds a value of {@code own} type the bridge
@@ -5041,10 +5074,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // where the result is written, so no result is given here for one. A method whose one
       // parameter is its own type variable takes the value as it is.
       if (resolvedFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound bound) {
-        return new ViaCall(null, bound.member().getTypeVariables().isEmpty() ? bound.member().getReturnType() : null);
+        return new ViaCall(
+          null,
+          bound.member().getTypeVariables().isEmpty() ? bound.member().getReturnType() : null,
+          null
+        );
       }
       if (inferringFn(mapper, name, held, bridgePackage) instanceof Resolution.Bound) {
-        return new ViaCall(null, null);
+        return new ViaCall(null, null, null);
       }
     }
     final var reached = candidates
@@ -5057,7 +5094,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // one
     // javac reports as redundant.
     final var cast = types.isAssignable(types.erasure(held), parameter) ? null : parameter.toString();
-    return new ViaCall(cast, types.erasure(reached.getFirst().getReturnType()));
+    return new ViaCall(
+      cast,
+      types.erasure(reached.getFirst().getReturnType()),
+      (ExecutableType) reached.getFirst().asType()
+    );
   }
 
   /**
@@ -5124,8 +5165,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * Why a {@code via} row's call result cannot be written through the member that writes {@code
    * property} of the side {@code name} writes, the target for {@code forward} and the source for
-   * {@code backward}, or null when it can. A result no value of which can be an instance of the
-   * class the member takes is refused as the reflective path refuses a {@code via} row whose mapper
+   * {@code backward}, or null when it can. A result a value of which can be an instance of the
+   * class the member takes can be written, after a check of its class ({@link #reachesByCheck}). A
+   * generic method's result is its erasure here; the row is held to the instantiation its call
+   * gives where the result is written ({@link #viaResult}). A result no value of which can be an
+   * instance of that class is refused as the reflective path refuses a {@code via} row whose mapper
    * returns that class, with the same message.
    */
   private String viaResultRefusal(
@@ -5143,8 +5187,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var forward = name.equals("forward");
     final var owner = forward ? target : source;
     final var stores = heldAs(writeSlotType(owner, rebuild, property, call.result(), bridgePackage));
-    if (processingEnv.getTypeUtils().isAssignable(call.result(), stores)) return null;
-    final var returned = boxedErasure(call.result());
+    final var gives = call.result();
+    if (processingEnv.getTypeUtils().isAssignable(gives, stores)) return null;
+    // A result a cast can turn into the class the member takes is written after a check of its
+    // class, as the runtime writes it.
+    if (reachesByCheck(gives, stores)) return null;
+    final var returned = boxedErasure(gives);
     final var taken = boxedErasure(stores);
     if (!mayShareInstance(returned, taken)) {
       return PairingMessages.viaResultNeverFits(
@@ -5160,7 +5208,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       mapper,
       name,
       "returns " +
-        call.result() +
+        gives +
         ", which the member " +
         owner.getSimpleName() +
         " writes " +
@@ -7896,9 +7944,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * Whether a conversion result of type {@code gives} reaches the member parameter {@code
    * parameter} only through a check of its class: both name no type variable, the result is a
-   * reference the parameter does not take as it is, and the parameter's class, its wrapper where it
-   * is primitive, is a subtype of the result's erasure, and the result's type arguments, where it
-   * and the parameter are one class given arguments, fit the parameter's ({@link
+   * reference the parameter does not take as it is, and an instance of the result's erasure can be
+   * one of the parameter's class, its wrapper where it is primitive, which makes a cast between the
+   * two legal: the parameter's class is a subtype of the result's erasure, or one of the two is an
+   * interface and the other an interface or a class that is not final. The result's type arguments,
+   * where it and the parameter are one class given arguments, fit the parameter's ({@link
    * PairingRules#argumentsFit}), since the check sees only the value's class. The result is then
    * written after {@code FixedClass.result} checks it, as the runtime checks it, and refused by
    * name otherwise.
@@ -7908,21 +7958,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (mirrorProps().mentionsTypeVariable(gives) || mirrorProps().mentionsTypeVariable(parameter)) return false;
     final var types = processingEnv.getTypeUtils();
     if (types.isAssignable(gives, parameter)) return false;
-    return types.isSubtype(boxedErasure(parameter), types.erasure(gives)) && rules.argumentsFit(gives, parameter);
+    return mayShareInstance(boxedErasure(parameter), types.erasure(gives)) && rules.argumentsFit(gives, parameter);
   }
 
   /**
    * The check of a value read for a transform: the class the transform takes, as the cast after the
-   * check names it, and what a call to {@code FixedClass.argument} takes after the value.
+   * check names it, what a call to {@code FixedClass.argument} takes after the value, and whether
+   * the cast is unchecked, which it is where that class is given type arguments.
    */
-  private record ArgumentCheck(String type, String arguments) {}
+  private record ArgumentCheck(String type, String arguments, boolean unchecked) {}
 
   /**
    * Whether a value of a property declared as {@code declared}, held as {@code held}, reaches a
    * transform taking {@code accepts} only through a check of its class: the property is declared
    * with a type variable, which the bridge holds as its erasure, and {@code accepts} is a class
-   * naming no type variable and given no type arguments, a subtype of that erasure the value is not
-   * shown to be. The check sees the value's class, which is all of such a type. The value is then
+   * naming no type variable that the value is not shown to be and that an instance of that erasure
+   * can be: a subtype of it, or an interface where the other is an interface or a class that is not
+   * final, as a cast between them is legal. The check sees the value's class alone, so the type
+   * arguments a class is given are taken as the runtime takes them, unchecked. The value is then
    * handed over after {@code FixedClass.argument} checks it, as the runtime checks it, and refused
    * by name otherwise.
    */
@@ -7931,9 +7984,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (declared.getKind() != TypeKind.TYPEVAR || accepts.getKind().isPrimitive()) return false;
     if (mirrorProps().mentionsTypeVariable(accepts)) return false;
     final var types = processingEnv.getTypeUtils();
-    final var erased = types.erasure(accepts);
-    if (!types.isSameType(accepts, erased) || types.isAssignable(held, accepts)) return false;
-    return types.isSubtype(erased, types.erasure(held));
+    if (types.isAssignable(held, accepts)) return false;
+    return mayShareInstance(types.erasure(accepts), types.erasure(held));
   }
 
   /**
@@ -7942,9 +7994,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private ArgumentCheck argumentCheck(final TypeMirror accepts, final TypeElement owner, final String property) {
     final var types = processingEnv.getTypeUtils();
+    final var erased = types.erasure(accepts);
     return new ArgumentCheck(
       accepts.toString(),
-      types.erasure(accepts) + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(property)
+      erased + ".class, " + types.erasure(owner.asType()) + ".class, " + literal(property),
+      !types.isSameType(accepts, erased)
     );
   }
 
