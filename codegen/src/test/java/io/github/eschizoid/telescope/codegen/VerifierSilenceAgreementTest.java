@@ -677,4 +677,77 @@ class VerifierSilenceAgreementTest {
       assertEquals(List.of(), outcome.warnings());
     }
   }
+
+  /**
+   * A pair whose source has a name split in two, against a target holding the same two and the
+   * whole name, which a {@code compute} row reading the source fills. {@code Names} has a {@code
+   * full} taking the source and a {@code label} with a form taking nothing as well.
+   */
+  private static final String SPLIT = """
+    record @@Src(String first, String last) {}
+    record @@Tgt(String first, String last, String full) {}
+    class @@Names {
+      static String full(final @@Src s) { return s.first() + " " + s.last(); }
+      static String label() { return "plain"; }
+      static String label(final @@Src s) { return s.first(); }
+    }
+    """;
+
+  @Nested
+  @DisplayName("A compute row reading the source names no source property, for both")
+  class ComputedFromTheSource {
+
+    @Test
+    @DisplayName("so every source property still pairs with its namesake, on a strict mapper")
+    void namesakesStillPair() {
+      assertBothAccept(
+        verified(
+          "VcA",
+          SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Src::first))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("so it is no second write of a property another row writes, on a strict mapper")
+    void noFanOut() {
+      assertBothAccept(
+        verified(
+          "VcB",
+          SPLIT +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::first, @@Tgt::first), compute(@@Tgt::full, @@Src::first))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("so a kept source property a rename takes the target of is still refused beside it")
+    void aKeptNameIsStillRefused() {
+      assertBothRefuse(
+        verified(
+          "VcC",
+          KEPT +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::label), compute(@@Tgt::z, @@Src::label))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("and a reference whose name has a form taking the source too is refused by both, in one message")
+    void aReferenceWithASourceFormIsRefused() {
+      final var outcome = verified(
+        "VcD",
+        SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Names::label))")
+      );
+      assertBothRefuse(outcome);
+      assertTrue(
+        outcome.construction().contains("from VcDNames::label, which Java binds as a supplier"),
+        outcome::construction
+      );
+    }
+  }
 }

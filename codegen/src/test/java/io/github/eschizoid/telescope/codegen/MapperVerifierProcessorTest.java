@@ -59,6 +59,35 @@ class MapperVerifierProcessorTest {
     assertTrue(compilation.hasError("key types"), compilation::errorMessages);
   }
 
+  @Test
+  @DisplayName("a compute row's function taking another class than the source is reported in the processor's words")
+  void aComputeFunctionOffTheSourceIsReported() {
+    final var compilation = verify(
+      """
+      package demo;
+      import static io.github.eschizoid.telescope.mapping.Mapping.compute;
+      import io.github.eschizoid.telescope.Telescope;
+      record Plain(String first) {}
+      record Src(String first) {}
+      record Tgt(String first, String full) {}
+      class Names { static String foreign(Plain p) { return p.first(); } static String full(Src s) { return s.first(); } }
+      class Holder {
+        static final Object OFF = Telescope.mapper(Src.class, Tgt.class, compute(Tgt::full, Names::foreign));
+        static final Object ON = Telescope.mapper(Src.class, Tgt.class, compute(Tgt::full, Names::full));
+      }
+      """
+    );
+    assertFalse(compilation.success());
+    assertEquals(1, compilation.errorMessages().split("ERROR", -1).length - 1, compilation::errorMessages);
+    assertTrue(
+      compilation.hasError(
+        "Deep map Src → Tgt: compute(...) fills 'full' from Names::foreign, which takes Plain, and the source Src" +
+          " is not one. Name a method taking Src, or a method of Src."
+      ),
+      compilation::errorMessages
+    );
+  }
+
   @Nested
   @DisplayName("Rows through a getter inherited from an abstract base")
   class InheritedAccessorRows {

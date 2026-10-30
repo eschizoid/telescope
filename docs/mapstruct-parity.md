@@ -293,24 +293,26 @@ Telescope.mapper(Order.class, OrderDto.class,
     to(Order::id, OrderDto::id),
     compute(OrderDto::createdAt, Instant::now),          // expression: fresh per forward call
     compute(OrderDto::traceId, () -> UUID.randomUUID().toString()),
-    compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now)) // nested target
+    compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now), // nested target
+    // source-referencing expression (MapStruct: expression = "java(Names.display(o))"):
+    compute(OrderDto::displayName, Names::display)) // static String display(Order o)
   // ...or, as the defaultExpression analog (instead of compute on the same field):
   //   toOrElseGet(Order::createdAt, OrderDto::createdAt, Instant::now)
-  // source-referencing expression (MapStruct: expression = "java(s.first() + \" \" + s.last())"):
-  .afterForward((src, dto) -> dto.withDisplayName(src.firstName() + " " + src.lastName()));
 // or per-field: toOneWay(Order::total, OrderDto::totalText, t -> "$" + t)
 ```
 
 A better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no expression
-parser. compute() takes a Supplier (no source arg) — source-dependent expressions route through toOneWay(src, tgt, fn)
-for one source field or the typed afterForward((src, dto) -> ...) hook for multi-field derivation. compute/constant rows
-are forward-only by design (backward drops the slot). On a `@Bridge` field the same `compute` row compiles when its
-supplier is a method reference (`Instant::now`) or a `static final` field holding one; an inline lambda, as in the
-`traceId` row above, and a nested target written as a telescope path are refused on the row.
+parser. compute() takes a Supplier, or a Function of the whole source for a value derived from several source fields;
+toOneWay(src, tgt, fn) converts one source field. compute/constant rows are forward-only by design (backward drops the
+slot). On a `@Bridge` field the same `compute` row compiles when its supplier is a method reference (`Instant::now`) or
+a `static final` field holding one, and when its function is a method reference taking the source (`Names::display`), a
+method of the source, or a `static final` field holding one, which the generated bridge calls directly; an inline
+lambda, as in the `traceId` row above, and a nested target written as a telescope path are refused on the row.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `compute(Accessor, Supplier)`
-(javadoc names the expression=java(Instant.now()) gap), `compute(Telescope, Supplier)` (nested target), both
-`toOrElseGet` overloads (defaultExpression, plus the predicate-gated form), and `toOneWay` (per-field function);
+(javadoc names the expression=java(Instant.now()) gap), `compute(Accessor, Function)` (a value read from the whole
+source), `compute(Telescope, Supplier)` (nested target), both `toOrElseGet` overloads (defaultExpression, plus the
+predicate-gated form), and `toOneWay` (per-field function);
 core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `afterForward(BiFunction)` (source-aware hook,
 typed @AfterMapping analog); core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java, the
 nested class 'Mapping.compute(Tgt::field, Supplier) — lazy, fresh per call' (fresh-per-call and forward-only semantics
