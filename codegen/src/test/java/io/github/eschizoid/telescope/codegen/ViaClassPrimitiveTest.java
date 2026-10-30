@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -414,32 +415,32 @@ class ViaClassPrimitiveTest {
   }
 
   /**
-   * How a source holding a primitive {@code qty} is built, which decides how its bridge writes it.
-   * {@code %1$s} is the prefix and {@code %2$s} the primitive.
+   * How a class holding a primitive {@code qty} is built, which decides how a bridge writes it.
+   * {@code %1$s} is the class's simple name and {@code %2$s} the primitive.
    */
   enum Member {
-    RECORD("public record %1$sSrc(%2$s qty) {}\n"),
+    RECORD("public record %1$s(%2$s qty) {}\n"),
     CONSTRUCTOR(
-      "public class %1$sSrc {\n" +
+      "public class %1$s {\n" +
         "  private final %2$s qty;\n" +
-        "  public %1$sSrc(final %2$s qty) { this.qty = qty; }\n" +
+        "  public %1$s(final %2$s qty) { this.qty = qty; }\n" +
         "  public %2$s getQty() { return qty; }\n}\n"
     ),
     BUILDER(
-      "public class %1$sSrc {\n" +
+      "public class %1$s {\n" +
         "  private final %2$s qty;\n" +
-        "  private %1$sSrc(final %2$s qty) { this.qty = qty; }\n" +
+        "  private %1$s(final %2$s qty) { this.qty = qty; }\n" +
         "  public %2$s getQty() { return qty; }\n" +
         "  public static Builder builder() { return new Builder(); }\n" +
         "  public static final class Builder {\n" +
         "    private %2$s qty = -1;\n" +
         "    public Builder qty(final %2$s qty) { this.qty = qty; return this; }\n" +
-        "    public %1$sSrc build() { return new %1$sSrc(qty); }\n  }\n}\n"
+        "    public %1$s build() { return new %1$s(qty); }\n  }\n}\n"
     ),
     SETTER(
-      "public class %1$sSrc {\n" +
+      "public class %1$s {\n" +
         "  private %2$s qty = -1;\n" +
-        "  public %1$sSrc() {}\n" +
+        "  public %1$s() {}\n" +
         "  public %2$s getQty() { return qty; }\n" +
         "  public void setQty(final %2$s qty) { this.qty = qty; }\n}\n"
     );
@@ -484,7 +485,7 @@ class ViaClassPrimitiveTest {
     final var compilation = compile(
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Src",
-        head + member.declaration.formatted(prefix, wrapping.primitive())
+        head + member.declaration.formatted(prefix + "Src", wrapping.primitive())
       ),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Dst",
@@ -622,5 +623,156 @@ class ViaClassPrimitiveTest {
     final var beanClasses = bean.define(MethodHandles.lookup());
     assertEquals(4, forwardQty(beanClasses, "VmpWg", 4));
     assertEquals(-1, forwardQty(beanClasses, "VmpWg", null));
+  }
+
+  /**
+   * The two {@code via} rows naming a class's methods: the class, or its {@code forward} and {@code
+   * backward}. {@code %1$s} is the prefix, {@code %2$s} the source's accessor and {@code %3$s} the
+   * target's.
+   */
+  enum Row {
+    CLASS("via(%1$sSrc::%2$s, %1$sDst::%3$s, %1$sMap.class)"),
+    METHODS("via(%1$sSrc::%2$s, %1$sDst::%3$s, %1$sMap::forward, %1$sMap::backward)");
+
+    private final String call;
+
+    Row(final String call) {
+      this.call = call;
+    }
+  }
+
+  /**
+   * Every member kind with every row, written forward into the target and backward into the source.
+   */
+  static List<Arguments> memberDirections() {
+    final var all = new ArrayList<Arguments>();
+    for (final var member : Member.values()) {
+      for (final var row : Row.values()) {
+        all.add(Arguments.of(member, row, true));
+        all.add(Arguments.of(member, row, false));
+      }
+    }
+    return all;
+  }
+
+  /**
+   * The classes of a {@code via} row's pair whose side of {@code member} kind holds an {@code int},
+   * the target where {@code forward} and the source otherwise, and whose other side is a record
+   * holding a {@code String}, converted by {@code row} on the field of a carrier class. The
+   * mapper's method into the {@code int} side returns an {@code int}, the length of the string it
+   * is handed; the one out of it returns the value as a string. The classes are compiled with their
+   * parameter names, which the runtime matches a constructor by.
+   */
+  private static Map<String, Class<?>> primitiveResultPair(
+    final String prefix,
+    final Member member,
+    final Row row,
+    final boolean forward
+  ) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var stringSide = "public record %1$s(String qty) {}\n";
+    final var accessor = member == Member.RECORD ? "qty" : "getQty";
+    final var into = "  public static int %1$s(final String s) { return s.length(); }\n";
+    final var outOf = "  public static String %1$s(final int q) { return String.valueOf(q); }\n";
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of("-parameters"),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Src",
+        head + (forward ? stringSide : member.declaration).formatted(prefix + "Src", "int")
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Dst",
+        head + (forward ? member.declaration : stringSide).formatted(prefix + "Dst", "int")
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Carrier",
+        head +
+          (
+            "public final class %1$sCarrier {\n" +
+            "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+            "  public static final io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sDst> MAPPER =" +
+            " io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sDst.class," +
+            " io.github.eschizoid.telescope.mapping.Mapping." +
+            row.call +
+            ");\n}\n"
+          ).formatted(prefix, forward ? "qty" : accessor, forward ? accessor : "qty")
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Map",
+        head +
+          "public class " +
+          prefix +
+          "Map {\n" +
+          (forward
+            ? into.formatted("forward") + outOf.formatted("backward")
+            : outOf.formatted("forward") + into.formatted("backward")) +
+          "}\n"
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    return compilation.define(MethodHandles.lookup());
+  }
+
+  /**
+   * What the generated bridge among {@code classes}, when {@code generated}, or otherwise the
+   * runtime mapper its {@code @Bridge} field holds, writes into the primitive side's {@code qty}
+   * from the string side holding {@code value}: the number, or the class of what was thrown.
+   */
+  @SuppressWarnings("unchecked")
+  private static String primitiveResult(
+    final Map<String, Class<?>> classes,
+    final String prefix,
+    final Member member,
+    final boolean forward,
+    final boolean generated,
+    final String value
+  ) throws ReflectiveOperationException {
+    final var from = classes.get(PACKAGE + "." + prefix + (forward ? "Src" : "Dst"));
+    final var held = from.getConstructor(String.class).newInstance(value);
+    final Object written;
+    try {
+      if (generated) {
+        written = classes
+          .get(PACKAGE + "." + prefix + "SrcTo" + prefix + "DstBridge")
+          .getMethod(forward ? "forward" : "backward", from)
+          .invoke(null, held);
+      } else {
+        final var mapper = (Mapper<Object, Object>) classes
+          .get(PACKAGE + "." + prefix + "Carrier")
+          .getField("MAPPER")
+          .get(null);
+        written = forward ? mapper.forward(held) : mapper.backward(held);
+      }
+    } catch (final InvocationTargetException thrown) {
+      return "throws " + thrown.getCause().getClass().getSimpleName();
+    } catch (final RuntimeException thrown) {
+      return "throws " + thrown.getClass().getSimpleName();
+    }
+    final var read = written.getClass().getMethod(member == Member.RECORD ? "qty" : "getQty").invoke(written);
+    return String.valueOf(read);
+  }
+
+  @ParameterizedTest(name = "{0}, {1}, forward {2}")
+  @MethodSource("memberDirections")
+  @DisplayName(
+    "a via row's primitive result for a null source is the member's default, or skips a setter, on both paths"
+  )
+  void primitiveResultOfANullSource(final Member member, final Row row, final boolean forward)
+    throws ReflectiveOperationException {
+    final var prefix = "VmpPr" + member.ordinal() + row.ordinal() + (forward ? "f" : "b");
+    final var classes = primitiveResultPair(prefix, member, row, forward);
+    // A setter the null source skips leaves the value the bean starts with.
+    final var skipped = member == Member.SETTER ? "-1" : "0";
+    final var outcomes = new ArrayList<String>();
+    for (final var generated : List.of(true, false)) {
+      final var path = generated ? "generated" : "runtime";
+      outcomes.add(path + " abcd: " + primitiveResult(classes, prefix, member, forward, generated, "abcd"));
+      outcomes.add(path + " null: " + primitiveResult(classes, prefix, member, forward, generated, null));
+    }
+    assertEquals(
+      List.of("generated abcd: 4", "generated null: " + skipped, "runtime abcd: 4", "runtime null: " + skipped),
+      outcomes
+    );
   }
 }

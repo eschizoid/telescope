@@ -2178,6 +2178,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // chooses, after a check of its class where the mapper's method returns a wider type, and only
     // where its type arguments can be shown to fit that member's; any other result is refused by
     // the mapper's name. One whose mapper converts each element of a container is left as it is.
+    //
+    // A method returning a primitive is called behind the null gate of a property of a reference
+    // type, so the value the bridge writes is that primitive's wrapper, null for a null property,
+    // and it is written as a wrapper result is: the member's default for a record component, a
+    // constructor or a builder, and no write through a setter. Patch calls the method only on a
+    // value it has tested for null, so what it writes stays the primitive.
+    final var gatedForward = new HashMap<String, TypeMirror>();
+    final var gatedBackward = new HashMap<String, TypeMirror>();
     for (final var v : viaMappers.keySet()) {
       if (viaLifts.containsKey(v) || !hasField(sourceFields, v)) continue;
       final var mapper = processingEnv.getElementUtils().getTypeElement(viaMappers.get(v));
@@ -2215,6 +2223,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           forwardGives.put(written, result.gives());
           transformedTargets.add(written);
         }
+      } else if (forward instanceof Resolution.Bound bound && !handed.getKind().isPrimitive()) {
+        final var wrapper = boxedResult(bound.member().getReturnType());
+        for (final var written : targetsOf.apply(v)) gatedForward.put(written, wrapper);
       }
       if (tf == null) continue;
       final var given = heldAs(tf.type());
@@ -2240,8 +2251,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         backwardGives.put(v, result.gives());
         transformedSources.add(v);
+      } else if (backward instanceof Resolution.Bound bound && !given.getKind().isPrimitive()) {
+        gatedBackward.put(v, boxedResult(bound.member().getReturnType()));
       }
     }
+    final var forwardWritten = new HashSet<>(transformedTargets);
+    forwardWritten.addAll(gatedForward.keySet());
+    final var forwardResults = new HashMap<>(forwardGives);
+    forwardResults.putAll(gatedForward);
+    final var backwardWritten = new HashSet<>(transformedSources);
+    backwardWritten.addAll(gatedBackward.keySet());
+    final var backwardResults = new HashMap<>(backwardGives);
+    backwardResults.putAll(gatedBackward);
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -2250,8 +2271,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       targetRebuild,
       pkg,
-      transformedTargets,
-      forwardGives,
+      forwardWritten,
+      forwardResults,
       referenceTargets
     );
     if (builtForward == null) return;
@@ -2263,8 +2284,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       sourceRebuild,
       pkg,
-      transformedSources,
-      backwardGives,
+      backwardWritten,
+      backwardResults,
       referenceSources
     );
     if (builtBackward == null) return;
@@ -7737,6 +7758,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return false;
     }
     return types.isAssignable(unboxed, parameter);
+  }
+
+  /** The wrapper class of {@code primitive}, the type a null-gated call returning it gives. */
+  private TypeMirror boxedResult(final TypeMirror primitive) {
+    return processingEnv.getTypeUtils().boxedClass((PrimitiveType) primitive).asType();
   }
 
   /**
