@@ -50,11 +50,12 @@ public class Mapper<A, B> {
   public record PatchEntry(
     String sourceField,
     Function<Object, Object> backward,
-    BiFunction<Object, Object, Object> overlay
+    BiFunction<Object, Object, Object> overlay,
+    Function<Object, Object> read
   ) {
     /** An entry whose value only ever converts into {@code sourceField}. */
     public PatchEntry(final String sourceField, final Function<Object, Object> backward) {
-      this(sourceField, backward, null);
+      this(sourceField, backward, null, null);
     }
   }
 
@@ -609,7 +610,10 @@ public class Mapper<A, B> {
     // the table's order.
     List<Map.Entry<PatchEntry, Object>> throughPaths = null;
     if (partial != null) for (final var entry : patchByTargetField.entrySet()) {
-      final var partialValue = targetRefl.read(partial, entry.getKey());
+      final var partialValue =
+        entry.getValue().read() != null
+          ? entry.getValue().read().apply(partial)
+          : targetRefl.read(partial, entry.getKey());
       if (partialValue == null) continue;
       if (entry.getValue().overlay() != null) {
         if (throughPaths == null) throughPaths = new ArrayList<>();
@@ -778,7 +782,7 @@ public class Mapper<A, B> {
       // preForward and postForward may map to null by contract, and a null product wrote null to
       // every mapped property rather than failing. Readers are never bound here: there is nothing
       // to read from.
-      for (final var name : patchByTargetField.keySet()) Beans.capturedWriter(writeClass, name).accept(target, null);
+      for (final var name : intoNames()) Beans.capturedWriter(writeClass, name).accept(target, null);
       return target;
     }
     final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
@@ -811,6 +815,17 @@ public class Mapper<A, B> {
   private record IntoPlan(Class<?> readClass, Class<?> writeClass, IntoSlot[] slots) {}
 
   /**
+   * The target properties {@code into} writes: every key of the patch table but those of entries
+   * that read the partial through a target path, which name no property of the target.
+   */
+  private List<String> intoNames() {
+    final var names = new ArrayList<String>(patchByTargetField.size());
+    for (final var entry : patchByTargetField.entrySet())
+      if (entry.getValue().read() == null) names.add(entry.getKey());
+    return names;
+  }
+
+  /**
    * The bound accessor pair for every property {@link #into} writes. The patch table's keys are
    * fixed for the life of the mapper, so the only thing that can vary between calls is the pair of
    * runtime classes — and in the overwhelming case it does not vary at all. One memoised plan
@@ -834,7 +849,7 @@ public class Mapper<A, B> {
   private IntoSlot[] intoSlots(final Class<?> readClass, final Class<?> writeClass) {
     final var cached = intoPlan;
     if (cached != null && cached.readClass() == readClass && cached.writeClass() == writeClass) return cached.slots();
-    final var names = patchByTargetField.keySet();
+    final var names = intoNames();
     final var built = new IntoSlot[names.size()];
     var i = 0;
     for (final var name : names) {

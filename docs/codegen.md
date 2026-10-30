@@ -157,12 +157,14 @@ or a class's static `forward` and `backward`
 (`via(Order::lines, OrderDto::lines, LineMap::forward, LineMap::backward)`), or the class itself
 (`via(Order::lines, OrderDto::lines, LineMap.class)`, whose methods are chosen for the property's types), `drop`,
 `constant` and `compute`, with the write hints `writeBean` and `writeBeans`. A `to` row may read its source through a
-path written in place, `to(Telescope.of(Order.class).field(Order::customer).field(Customer::city), OrderDto::city)`,
-which compiles into a null-safe chain of reads forward and, on a `Telescope.mapper` field, a write back through the path
-that builds a null object on the way unless the value is null. A converter or supplier is a reference to a static
-method, to an unbound instance method such as `String::trim`, or to a constructor; a constant or default is a literal or
-an enum constant. Any other row is a compile error on the row, naming what to write instead. `explain()` on the mapper
-says which path runs it and, when it is the runtime path although a field declares it, why.
+path written in place, `to(Telescope.of(Order.class).field(Order::customer).field(Customer::city), OrderDto::city)`, or
+write its source property into the target through one,
+`to(OrderDto::city, Telescope.of(Order.class).field(Order::customer).field(Customer::city))`. A read through the path
+compiles into a null-safe chain of locals, and a write into direct calls that build a null object on the way unless the
+value is null; a source path is written back on a `Telescope.mapper` field only. A converter or supplier is a reference
+to a static method, to an unbound instance method such as `String::trim`, or to a constructor; a constant or default is
+a literal or an enum constant. Any other row is a compile error on the row, naming what to write instead. `explain()` on
+the mapper says which path runs it and, when it is the runtime path although a field declares it, why.
 
 A field's bridge is its pair's own bridge, so a pair is declared once in a compilation, a navigator of the source hops
 through it, and a Spring `@TelescopeMapper` for the pair calls it. The factory finds the bridge by the static

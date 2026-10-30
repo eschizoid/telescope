@@ -117,7 +117,8 @@ final class FieldRows {
     Set<String> awaits,
     Map<String, String> beanStrategies,
     String defaultStrategy,
-    List<SourcePath> sourcePaths
+    List<SourcePath> sourcePaths,
+    List<TargetPath> targetPaths
   ) implements Result {
     /**
      * How {@code side} is rebuilt: the strategy a {@code writeBean} row keyed to it names, else the
@@ -135,6 +136,17 @@ final class FieldRows {
    * the path steps through from the source, in order, and the method each is read by.
    */
   record SourcePath(String target, List<String> properties, List<String> methods) {
+    /** The properties the path steps through, joined with dots, as the shared spec names it. */
+    String name() {
+      return String.join(".", properties);
+    }
+  }
+
+  /**
+   * A row writing the source property {@code source} into the target through a path: the properties
+   * the path steps through from the target, in order, and the method each is read by.
+   */
+  record TargetPath(String source, List<String> properties, List<String> methods) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
     String name() {
       return String.join(".", properties);
@@ -531,6 +543,7 @@ final class FieldRows {
     private final Map<String, String> beanStrategies = new LinkedHashMap<>();
     private String defaultStrategy;
     private final List<SourcePath> sourcePaths = new ArrayList<>();
+    private final List<TargetPath> targetPaths = new ArrayList<>();
 
     /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
     private final String fieldName;
@@ -573,7 +586,8 @@ final class FieldRows {
         awaits,
         beanStrategies,
         defaultStrategy,
-        sourcePaths
+        sourcePaths,
+        targetPaths
       );
     }
 
@@ -635,11 +649,7 @@ final class FieldRows {
                 )
               : sourcePath(row)
             : pathParameter(rowExec, 1)
-              ? new Refused(
-                  rowArgs.get(1),
-                  "a row writing into a target path has no generated form yet; build this mapper without" +
-                    " @Bridge to run it on the runtime path"
-                )
+              ? targetPath(row)
               : passThrough(row);
           case 3 -> twoWay(row);
           default -> converting(row, true);
@@ -713,6 +723,48 @@ final class FieldRows {
       sourcePaths.add(new SourcePath(t.property(), List.copyOf(properties), List.copyOf(methods)));
       rowKinds.add("FromTelescopeTo");
       rowAccessors.add(named + ">" + t.method());
+      return null;
+    }
+
+    /**
+     * A {@code to(accessor, path)} row: the source property written through the path, and the
+     * properties the path steps through from the target.
+     */
+    private Refused targetPath(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var src = accessor(args.get(0), source);
+      if (src instanceof Refused refused) return refused;
+      final var s = (Accessor) src;
+      final var path = steps(args.get(1), target);
+      if (path instanceof Refused refused) return refused;
+      final var hops = (List<?>) path;
+      final var leaf = (Accessor) hops.getLast();
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(s.type(), leaf.type()) || !types.isAssignable(leaf.type(), s.type())) {
+        return new Refused(
+          args.get(1),
+          "the path writes " +
+            shown(leaf) +
+            ", which is not the " +
+            shown(s) +
+            " the property '" +
+            s.property() +
+            "' holds; end the path at a property of that type, which backward reads back into it"
+        );
+      }
+      final var properties = new ArrayList<String>();
+      final var methods = new ArrayList<String>();
+      for (final var hop : hops) {
+        properties.add(((Accessor) hop).property());
+        methods.add(((Accessor) hop).method());
+      }
+      final var named = String.join(".", properties);
+      final var claimed = sourceWrites.write(s.property(), named);
+      if (claimed != null) return new Refused(row, claimed);
+      if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
+      targetPaths.add(new TargetPath(s.property(), List.copyOf(properties), List.copyOf(methods)));
+      rowKinds.add("TelescopeTo");
+      rowAccessors.add(s.method() + ">" + named);
       return null;
     }
 

@@ -387,13 +387,22 @@ public sealed interface Mapping<A, B>
    * srcAcc.apply(a))} overlays the leaf. Backward direction is the mirror: read at the target
    * telescope, write to the source via the accessor's lens.
    *
-   * <p><b>Intermediate allocation.</b> When the source is genuinely flat (no same-name field on the
-   * source matching the telescope's top-level target hop), the engine synthesizes a recursive
-   * default-tree instance of the intermediate's type so the overlay can descend without NPEing on a
-   * null hop. Works for record intermediates at arbitrary depth (the type system drives the
-   * recursion); bean intermediates without a no-arg ctor or builder still need a {@link
-   * #via(Accessor, Accessor, Mapper)} workaround. Primitive defaults follow JLS rules ({@code 0} /
-   * {@code false} / {@code 0.0}).
+   * <p><b>Null objects on the path.</b> For a path that steps through properties alone, with one
+   * {@code field} hop per property, forward rebuilds each object the path steps through, through
+   * the write strategy its class takes, and builds one that is null, with its other properties at
+   * their null value, when the value written is not null; when the value is null, an object that is
+   * null stays null. Backward reads a null object on the way as the leaf's null value: null for a
+   * reference, and the default for a primitive member of a record, a constructor or a builder,
+   * while a primitive setter is not called. {@code patch} takes a partial's non-null value read
+   * through the path. Every mapper refuses, when it is built, a path through a class no write
+   * strategy builds. A path of any other shape is written into a default-tree instance of the
+   * target property it starts at, and set and read through the lattice as it is.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
+   * Telescope.of(Target.class)} or {@code Telescope.ofBean(Target.class)} through {@code field}
+   * steps alone, each a method reference to a property: writes call each class's accessors and
+   * write strategy directly, and reads back become a null-safe chain of locals. Any other path, a
+   * lambda step among them, is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
     return new TelescopeTo<>(src, targetTelescope);
@@ -711,8 +720,7 @@ public sealed interface Mapping<A, B>
    * }</pre>
    *
    * <p>Forward-only. Intermediate hops without a same-name source counterpart are allocated as a
-   * recursive default-tree (records only); see {@link #to(Accessor, Telescope)} for the same
-   * allocation behavior on the {@code to(srcAcc, tgtTelescope)} family.
+   * recursive default-tree (records only), into which the value is set.
    */
   static <A, B, X> Mapping<A, B> constant(final Telescope<B, X> targetTelescope, final X value) {
     return new Constant<>(targetTelescope, value);
