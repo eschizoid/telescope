@@ -19,8 +19,8 @@ module io.github.eschizoid.telescope.codegen {
 
   exports io.github.eschizoid.telescope.codegen;
 
-  // TelescopeMapperProcessor reads @Bridge without claiming it, and BridgeProcessor claims it; javac
-  // hands a processor only the annotations no processor ahead of it has claimed.
+  // javac hands a processor only the annotations no processor ahead of it has claimed.
+  // BridgeProcessor claims @Bridge, which TelescopeMapperProcessor reads without claiming.
   provides javax.annotation.processing.Processor
     with
       io.github.eschizoid.telescope.codegen.FocusProcessor,

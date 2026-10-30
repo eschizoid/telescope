@@ -87,7 +87,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment round) {
     final var elements = processingEnv.getElementUtils();
-    // A mapper is generated only where Spring is, so without it there is no mapper to find a bridge for.
+    // A mapper is generated only where Spring is, and only a mapper looks a bridge up.
     if (elements.getTypeElement(SPRING_COMPONENT) != null) recordCarried(round);
     final var mapper = elements.getTypeElement(MAPPER);
     if (mapper != null) for (final var element : round.getElementsAnnotatedWith(mapper)) generateMapper(element);
@@ -365,10 +365,16 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       }
       out.println("  }");
       if (projection != null) {
-        // A generated bridge's patch is the sparse overlay a core Mapper's is: it keeps every base
-        // field the partial leaves null.
+        // A generated bridge's patch is the sparse overlay a core Mapper's is: it keeps
+        // every base field the partial leaves null.
         out.println(
-          "  @Override public " + model + " backward(final " + target + " input) { return " + mapped + ".backward(input); }"
+          "  @Override public " +
+            model +
+            " backward(final " +
+            target +
+            " input) { return " +
+            mapped +
+            ".backward(input); }"
         );
         out.println(
           "  @Override public " +
@@ -402,12 +408,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       }
       if (projection != null) {
         out.println(
-          "  @Override public " +
-            names.ref(PROJECTION) +
-            pair +
-            " addTransformer(final " +
-            focus +
-            " transformer) {"
+          "  @Override public " + names.ref(PROJECTION) + pair + " addTransformer(final " + focus + " transformer) {"
         );
         out.println("    " + names.ref(OBJECTS) + ".requireNonNull(transformer, \"transformer must not be null\");");
         out.println(
@@ -773,7 +774,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
     /** The imports, sorted; a type of the default package has no name to import by. */
     List<String> imports() {
-      return imported.stream().filter(qualified -> qualified.indexOf('.') >= 0).toList();
+      return imported
+        .stream()
+        .filter(qualified -> qualified.indexOf('.') >= 0)
+        .toList();
     }
 
     /** {@code qualified} as the class writes it. */
@@ -786,7 +790,8 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       if (type instanceof DeclaredType declared) {
         final var element = (TypeElement) declared.asElement();
         final var name =
-          declared.getEnclosingType() instanceof DeclaredType enclosing && !element.getModifiers().contains(Modifier.STATIC)
+          declared.getEnclosingType() instanceof DeclaredType enclosing &&
+          !element.getModifiers().contains(Modifier.STATIC)
             ? of(enclosing) + "." + element.getSimpleName()
             : ref(element.getQualifiedName().toString());
         return declared.getTypeArguments().isEmpty()

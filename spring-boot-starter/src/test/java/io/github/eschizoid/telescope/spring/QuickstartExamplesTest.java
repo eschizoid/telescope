@@ -44,6 +44,8 @@ class QuickstartExamplesTest {
       assertThat(patched).isEqualTo(new Customer("Bea", new Contact("ada@example.com")));
       assertThat(patched).isEqualTo(Telescope.mapper(Customer.class, CustomerDto.class).patch(customer, partial));
       assertThat(patched.contact()).isSameAs(customer.contact());
+      assertThat(projection.patch(customer, null)).isEqualTo(customer).isNotSameAs(customer);
+      assertThat(projection.patch(null, partial)).isNull();
     });
   }
 
