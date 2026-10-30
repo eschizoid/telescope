@@ -540,6 +540,68 @@ class VerifierSilenceAgreementTest {
     }
 
     @Test
+    @DisplayName("one source path of two steps written into two targets")
+    void pathOfTwoStepsInTwoTargets() {
+      final var outcome = verified(
+        "VwX",
+        """
+        record @@Mid(String n) {}
+        record @@Src(@@Mid m) {}
+        record @@Tgt(String a, String b) {}
+        """ +
+          holder(
+            "Telescope.mapper(@@Src.class, @@Tgt.class," +
+              " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
+              " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::b))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.fanOutBothWays("VwXSrc", "VwXTgt", "m.n", List.of("a", "b")), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("two source paths through one property, each into a target of its own")
+    void twoPathsThroughOneProperty() {
+      assertBothAccept(
+        verified(
+          "VwY",
+          """
+          record @@Mid(String n, String k) {}
+          record @@Src(@@Mid m) {}
+          record @@Tgt(String a, String b) {}
+          """ +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class," +
+                " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
+                " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::k), @@Tgt::b))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("dropped and read through by a source path of two steps")
+    void dropThenPathThroughIt() {
+      final var outcome = verified(
+        "VwZ",
+        """
+        record @@Mid(String n) {}
+        record @@Src(@@Mid m) {}
+        record @@Tgt(String a) {}
+        """ +
+          holder(
+            "Telescope.mapperForward(@@Src.class, @@Tgt.class, drop(@@Src::m)," +
+              " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.droppedAndReadThrough("VwZSrc", "VwZTgt", "m", "m.n"),
+        outcome.construction()
+      );
+    }
+
+    @Test
     @DisplayName("dropped and written through a target path")
     void dropThenTargetPath() {
       final var outcome = verified(
