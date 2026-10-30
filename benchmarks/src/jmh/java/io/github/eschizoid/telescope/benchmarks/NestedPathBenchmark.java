@@ -10,11 +10,13 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 /**
- * A mapper reading two objects down a path into a flat target, and writing the flat target back
- * through the path, against the same chain written by hand. The {@code hand*} rows never change, so
- * a run is normalised against them; the {@code mapper*} rows call the mapper {@link NpOrder}'s
- * {@code @Bridge} field holds, which is the generated bridge where the processor compiles the path,
- * and the runtime mapper where it does not.
+ * Mappers reading two objects down a path and writing through it, against the same chain written
+ * by hand. The {@code hand*} rows never change, so a run is normalised against them. The {@code
+ * mapper*} rows call the mapper {@link NpOrder}'s {@code @Bridge} field holds, which reads through
+ * a source path forward and writes back through it backward; the {@code target*} rows call the one
+ * {@link NpOrderDto}'s field holds, which writes through a target path forward and reads back
+ * through it backward. Each is the generated bridge where the processor compiles the path, and the
+ * runtime mapper where it does not.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=NestedPathBenchmark -Pjmh.profilers=gc
@@ -49,6 +51,21 @@ public class NestedPathBenchmark {
   @Benchmark
   public NpOrder mapperWrite() {
     return NpOrder.DTO.backward(flat);
+  }
+
+  @Benchmark
+  public NpOrder targetWrite() {
+    return NpOrderDto.ORDER.forward(flat);
+  }
+
+  @Benchmark
+  public NpOrderDto targetRead() {
+    return NpOrderDto.ORDER.backward(full);
+  }
+
+  @Benchmark
+  public NpOrderDto targetReadNull() {
+    return NpOrderDto.ORDER.backward(missing);
   }
 
   @Benchmark
