@@ -28,9 +28,8 @@ public interface TelescopeProjection<S, T> {
   /**
    * Overlays the non-null fields of {@code partial} onto {@code source} and keeps every other field
    * of {@code source}. Transformers do not run. A projection that maps through a generated
-   * {@code @Bridge} throws {@link UnsupportedOperationException}, because a bridge rebuilds the
-   * whole source from {@code partial}; override {@link #translate} to map through a core {@code
-   * Mapper}, which supports it.
+   * {@code @Bridge} patches through the bridge's own {@code patch}, and one that maps through a
+   * core {@code Mapper} through {@code Mapper.patch}; both are the same sparse overlay.
    */
   S patch(S source, T partial);
 
