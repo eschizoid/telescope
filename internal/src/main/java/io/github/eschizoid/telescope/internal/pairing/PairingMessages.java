@@ -779,6 +779,48 @@ public final class PairingMessages {
   }
 
   /**
+   * Strict-bijection failure: a source field no row at its pair reads, whose same-name target a row
+   * reading another field writes, named by a {@code drop} given no target class. Such a drop is
+   * keyed to the mapper's own target class, so it applies at no pair whose target is another class;
+   * the drop naming the pair's target class applies at the pair.
+   *
+   * @param dropOwner the simple name of the class the drop's accessor is applied to
+   * @param dropMethod the name of the method the drop's accessor reads
+   */
+  public static String keptFieldDroppedAtTop(
+    final String source,
+    final String target,
+    final String srcSlot,
+    final String tgtSlot,
+    final String name,
+    final String dropOwner,
+    final String dropMethod
+  ) {
+    final var accessor = dropOwner + "::" + dropMethod;
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source " +
+      srcSlot +
+      " '" +
+      name +
+      "' has no same-name target " +
+      tgtSlot +
+      ". drop(" +
+      accessor +
+      ") applies only where the mapper's own target is written; use drop(" +
+      accessor +
+      ", " +
+      target +
+      ".class) to drop '" +
+      name +
+      "' here."
+    );
+  }
+
+  /**
    * Map-valued pair whose key types differ — auto-lifting preserves source keys, so keys must
    * match.
    */

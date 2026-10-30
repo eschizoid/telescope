@@ -704,6 +704,191 @@ class SealedInterfaceRowAgreementTest {
     }
   }
 
+  @Nested
+  @DisplayName("A pair of cases decides its properties by name as any pair with rows does, on both paths")
+  class CasePairProperties {
+
+    /**
+     * A case pair whose target has a property named as the source property a rename reads, each
+     * accessor declared on the interfaces too, on a mapper between the interfaces and below a field
+     * typed by them.
+     */
+    private static final String RENAMED = """
+      package io.github.eschizoid.telescope.codegen;
+      import static io.github.eschizoid.telescope.mapping.Cases.cases;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      sealed interface @@S permits @@SA { String n(); }
+      record @@SA(String n) implements @@S {}
+      sealed interface @@T permits @@TA { String label(); }
+      record @@TA(String label, String n) implements @@T {}
+      record @@Frame(@@S s) {}
+      record @@FrameDto(@@T s) {}
+      """;
+
+    private static void assertNamesakeRefused(final String prefix, final String pair, final String rename) {
+      final var outcome = outcome(
+        prefix,
+        RENAMED + holder("Telescope.mapper(" + pair + ", cases(@@SA.class, @@TA.class), " + rename + ")")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.sameNameSourceRead(prefix + "SA", prefix + "TA", "field", "field", "n"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a target property whose namesake a row keyed to the cases reads, on a mapper between the interfaces")
+    void caseRowOnTheInterfaces() {
+      assertNamesakeRefused("SkA", "@@S.class, @@T.class", "to(@@SA::n, @@TA::label)");
+    }
+
+    @Test
+    @DisplayName("a target property whose namesake a row keyed to the interfaces reads, on a mapper between them")
+    void interfaceRowOnTheInterfaces() {
+      assertNamesakeRefused("SkB", "@@S.class, @@T.class", "to(@@S::n, @@T::label)");
+    }
+
+    @Test
+    @DisplayName(
+      "a target property whose namesake a row keyed to the cases reads, below a field typed by the interfaces"
+    )
+    void caseRowBelowASealedField() {
+      assertNamesakeRefused("SkC", "@@Frame.class, @@FrameDto.class", "to(@@SA::n, @@TA::label)");
+    }
+
+    @Test
+    @DisplayName("a target property whose namesake a row keyed to the interfaces reads, below a field typed by them")
+    void interfaceRowBelowASealedField() {
+      assertNamesakeRefused("SkD", "@@Frame.class, @@FrameDto.class", "to(@@S::n, @@T::label)");
+    }
+
+    @Test
+    @DisplayName("a row writing the namesake lets the case pair build on both paths")
+    void namesakeWritten() {
+      assertBothApply(
+        outcome(
+          "SkE",
+          RENAMED +
+            holder(
+              "Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@SA::n, @@TA::label)," +
+                " to(@@SA::n, @@TA::n)).forward(new @@SA(\"x\"))"
+            )
+        ),
+        "SkETA[label=x, n=x]"
+      );
+    }
+
+    @Test
+    @DisplayName("a mapper that runs forward only leaves the namesake unwritten on both paths")
+    void forwardOnlyLeavesTheNamesake() {
+      assertBothApply(
+        outcome(
+          "SkF",
+          RENAMED +
+            holder(
+              "Telescope.mapperForward(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@S::n, @@T::label))" +
+                ".forward(new @@SA(\"x\"))"
+            )
+        ),
+        "SkFTA[label=x, n=null]"
+      );
+    }
+
+    @Test
+    @DisplayName("a kept source property whose namesake a rename of another property writes")
+    void keptPropertyAtACasePair() {
+      final var outcome = outcome(
+        "SkG",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          sealed interface @@S permits @@SA { String n(); }
+          record @@SA(String n, String label) implements @@S {}
+          sealed interface @@T permits @@TA { String label(); }
+          record @@TA(String label) implements @@T {}
+          """ +
+          holder("Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class), to(@@S::n, @@T::label))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.noSameNameTarget("SkGSA", "SkGTA", "field", "field", "label"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a target property with no namesake on a pair of the mapper's own cases")
+    void targetWithNoNamesake() {
+      final var outcome = outcome(
+        "SkH",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          sealed interface @@S permits @@SA {}
+          record @@SA(String a) implements @@S {}
+          sealed interface @@T permits @@TA {}
+          record @@TA(String a, String b) implements @@T {}
+          """ +
+          holder("Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.noSameNameSource("SkHSA", "SkHTA", "field", "field", "b"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("a source property with no namesake on a pair of the mapper's own cases")
+    void sourceWithNoNamesake() {
+      final var outcome = outcome(
+        "SkI",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          sealed interface @@S permits @@SA {}
+          record @@SA(String a, String x) implements @@S {}
+          sealed interface @@T permits @@TA {}
+          record @@TA(String a) implements @@T {}
+          """ +
+          holder("Telescope.mapper(@@S.class, @@T.class, cases(@@SA.class, @@TA.class))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.noSameNameTarget("SkISA", "SkITA", "field", "field", "x"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName(
+      "two same-named properties of a pair of cases whose types do not pair, below a field typed by the interfaces"
+    )
+    void propertiesThatDoNotPair() {
+      final var outcome = outcome(
+        "SkJ",
+        """
+          package io.github.eschizoid.telescope.codegen;
+          import static io.github.eschizoid.telescope.mapping.Cases.cases;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import java.util.List;
+          sealed interface @@S permits @@SA {}
+          record @@SA(Integer a) implements @@S {}
+          sealed interface @@T permits @@TA {}
+          record @@TA(List<String> a) implements @@T {}
+          record @@Frame(@@S s) {}
+          record @@FrameDto(@@T s) {}
+          """ +
+          holder("Telescope.mapper(@@Frame.class, @@FrameDto.class, cases(@@SA.class, @@TA.class))")
+      );
+      assertBothRefuse(outcome);
+      assertTrue(outcome.construction().contains("component 'a'"), outcome.construction());
+    }
+  }
+
   static List<String[]> sealedFieldSettings() {
     return List.of(
       new String[] { "drop(Shape::getLabel)", "drop rows" },
