@@ -1,10 +1,12 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.internal.Reflective;
+import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,7 +34,7 @@ final class PathWrites {
    * the {@code i}-th property is read on, the root class first, and each later one the class the
    * property before it declares.
    */
-  record Plan(String[] names, Class<?>[] levels) {}
+  record Plan(String[] names, Class<?>[] levels, List<Lens<Object, Object>> reads) {}
 
   /**
    * The plan of {@code path} started at {@code root}, or null when the path does not step through
@@ -43,13 +45,18 @@ final class PathWrites {
     final List<Fusion.Hop> hops = path.hops;
     final var names = new String[hops.size()];
     final var levels = new Class<?>[hops.size()];
+    final var reads = new ArrayList<Lens<Object, Object>>(hops.size());
     var at = root;
     for (var i = 0; i < hops.size(); i++) {
       names[i] = hops.get(i).component();
       levels[i] = at;
+      // A field hop reads through the lens its accessor built, which reads a method that names no
+      // bean property, such as an interface's label(), as the accessor does.
+      if (!(hops.get(i).segment() instanceof Lens<Object, Object> lens)) return null;
+      reads.add(lens);
       if (i + 1 < hops.size()) at = declaredClass(Reflective.of(at).genericType(at, names[i]));
     }
-    return new Plan(names, levels);
+    return new Plan(names, levels, List.copyOf(reads));
   }
 
   /**
@@ -75,9 +82,9 @@ final class PathWrites {
   /** The leaf {@code plan} reads on {@code root}, or null when an object on the way is null. */
   static Object read(final Plan plan, final Object root) {
     var at = root;
-    for (var i = 0; i < plan.names.length; i++) {
+    for (final var read : plan.reads) {
       if (at == null) return null;
-      at = Reflective.of(plan.levels[i]).read(at, plan.names[i]);
+      at = read.get(at);
     }
     return at;
   }
@@ -104,7 +111,7 @@ final class PathWrites {
     if (level == plan.names.length - 1) {
       next = value;
     } else {
-      final var child = current == null ? null : refl.read(current, name);
+      final var child = current == null ? null : plan.reads.get(level).get(current);
       next = writeAt(plan, level + 1, child, value, Reflective.of(plan.levels[level + 1]));
     }
     return refl.construct(cls, property -> {
