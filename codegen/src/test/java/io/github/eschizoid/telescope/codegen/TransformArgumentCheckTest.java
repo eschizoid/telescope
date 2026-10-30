@@ -13,8 +13,9 @@ import org.junit.jupiter.api.Test;
 /**
  * A converting {@code to} row on a property declared with a type variable, which the bridge holds
  * as the variable's erasure, through a {@code BridgeFn} taking a class narrower than that erasure.
- * A class given no type arguments is handed the value after {@code FixedClass.argument} checks its
- * class, in each direction the row emits; any other is refused by the property's name.
+ * The class is handed the value after {@code FixedClass.argument} checks its class, in each
+ * direction the row emits, and a class given type arguments takes them unchecked, as the runtime
+ * takes them; a property declared as a class rather than a variable takes no such row.
  */
 class TransformArgumentCheckTest {
 
@@ -166,12 +167,26 @@ class TransformArgumentCheckTest {
   }
 
   @Test
-  @DisplayName("a conversion taking a class given type arguments is refused by name, since a check sees only the class")
-  void aClassGivenArgumentsIsRefused() {
+  @DisplayName(
+    "a conversion taking a class given type arguments is handed the value after a check of its class, unchecked"
+  )
+  void aClassGivenArgumentsIsCheckedByItsClass() {
     final var sources = pair("<X>", "X", "java.util.List<String>", false);
     final var compilation = compile(fn("java.util.List<String>"), sources[0], sources[1]);
-    assertFalse(compilation.success());
-    assertTrue(compilation.hasError("a converting row of 'value' does not fit forward"), compilation::errorMessages);
+    assertTrue(compilation.success(), compilation::errorMessages);
+    assertTrue(
+      method(compilation, "forward").contains(
+        "((java.util.List<java.lang.String>) " + CHECK + "__fs_value, java.util.List.class, demo.Src.class, \"value\"))"
+      ),
+      () -> method(compilation, "forward")
+    );
+    assertTrue(
+      compilation
+        .generated()
+        .get("demo.SrcToTgtBridge")
+        .contains("@SuppressWarnings({\"unchecked\", \"rawtypes\"})\n  public static demo.Tgt forward("),
+      () -> compilation.generated().get("demo.SrcToTgtBridge")
+    );
   }
 
   @Test

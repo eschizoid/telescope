@@ -2083,8 +2083,10 @@ public final class DeepMap {
   ) {
     final var targetWriter = tgtRefl.writerFor(sides.target());
     final var sourceWriter = srcRefl.writerFor(sides.source());
-    final var fixedTarget = fixedBy(paired.target(), paired.targetMember());
-    final var fixedSource = forwardOnly ? null : fixedBy(paired.source(), paired.sourceMember());
+    final var targetDeclared = tgtRefl.genericType(sides.target(), sides.tgtField());
+    final var sourceDeclared = srcRefl.genericType(sides.source(), sides.srcField());
+    final var fixedTarget = fixedBy(paired.target(), targetDeclared, paired.targetMember());
+    final var fixedSource = forwardOnly ? null : fixedBy(paired.source(), sourceDeclared, paired.sourceMember());
     final var nested = switch (row) {
       case Via<?, ?> via -> via.nested();
       // A via row of two methods reads them only while the runtime path builds a mapper.
@@ -2099,16 +2101,13 @@ public final class DeepMap {
     final var intoSource = forwardOnly
       ? null
       : narrower(Beans.writtenClass(sourceWriter, sides.source(), sides.srcField()), fixedSource);
-    final var sourceDeclared = srcRefl.genericType(sides.source(), sides.srcField());
     final var fromSource = switch (row) {
       case TypedTransformTo<?, ?, ?, ?> r -> narrowedRead(r.src(), sourceDeclared);
       case ForwardOnlyTransformTo<?, ?, ?, ?> r -> narrowedRead(r.src(), sourceDeclared);
       default -> null;
     };
     final var fromTarget =
-      !forwardOnly && row instanceof TypedTransformTo<?, ?, ?, ?> r
-        ? narrowedRead(r.tgt(), tgtRefl.genericType(sides.target(), sides.tgtField()))
-        : null;
+      !forwardOnly && row instanceof TypedTransformTo<?, ?, ?, ?> r ? narrowedRead(r.tgt(), targetDeclared) : null;
     if (intoTarget == null && intoSource == null && fromSource == null && fromTarget == null) return iso;
     return new ResultCheck(
       (Iso<Object, Object>) iso,
@@ -2139,14 +2138,20 @@ public final class DeepMap {
 
   /**
    * The class a side fixes a property's type variable to, where a pairing reads the property as
-   * {@code read} and the side's class gives it {@code member}, a narrower class: a property a
-   * generic superclass declares with a variable the side's class fixes, in a pair read as declared.
-   * Null where the two are one class, or the member's class is no narrower.
+   * {@code read}, its accessor declares it as {@code declared}, and the side's class gives it
+   * {@code member}, a class narrower than either: a property a generic superclass declares with a
+   * variable the side's class fixes. A pair read as declared reads it wider than the member; a pair
+   * read as members reads it as the member, and the accessor still declares it with the variable,
+   * whose erasure is what the member writing it takes. Null where the member's class is no narrower
+   * than either.
    */
-  private static Class<?> fixedBy(final Type read, final Type member) {
-    final var readClass = (Class<?>) PROPS.erasure(read);
+  private static Class<?> fixedBy(final Type read, final Type declared, final Type member) {
     final var memberClass = (Class<?>) PROPS.erasure(member);
-    return readClass != memberClass && readClass.isAssignableFrom(memberClass) ? boxed(memberClass) : null;
+    for (final var wider : List.of(read, declared)) {
+      final var widerClass = (Class<?>) PROPS.erasure(wider);
+      if (widerClass != memberClass && widerClass.isAssignableFrom(memberClass)) return boxed(memberClass);
+    }
+    return null;
   }
 
   /** The narrower of two classes a value is checked against, either of which may be null. */

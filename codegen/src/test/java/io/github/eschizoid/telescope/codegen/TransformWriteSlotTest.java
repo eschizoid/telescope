@@ -383,68 +383,9 @@ class TransformWriteSlotTest {
   }
 
   @Test
-  @DisplayName("a refusal names the member only when the member is what refused")
-  void theRefusalNamesTheSlotOnlyWhenTheSlotRefused() {
-    // A row can fail on the read instead -- the conversion will not take what the property holds --
-    // and there a member that accepts the value perfectly well had no part in it. Naming it then
-    // points the reader at something that is not the problem. The source's property is declared
-    // with a type variable, held as Object, and the conversion takes a List of String, which no
-    // check of the value's class can show it is.
-    final var readRefused = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
-      new JavaFileObject[] {
-        ProcessorHarness.source(
-          "demo.Fn",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.conversion.BridgeFn;
-          public final class Fn implements BridgeFn<java.util.List<String>, Object> {
-            @Override public Object forward(final java.util.List<String> l) { return l; }
-            @Override public java.util.List<String> backward(final Object o) { return java.util.List.of(); }
-          }
-          """
-        ),
-        ProcessorHarness.source(
-          "demo.Src",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.Telescope;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.conversion.Mapper;
-          import io.github.eschizoid.telescope.mapping.Mapping;
-          import java.util.List;
-          public record Src<X>(X v) {
-            @Bridge
-            @SuppressWarnings({"rawtypes", "unchecked"})
-            public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,
-              Mapping.<Src<List<String>>, Tgt, List<String>, Object>to(Src<List<String>>::v, Tgt::getV, Fn.class));
-          }
-          """
-        ),
-        ProcessorHarness.source(
-          "demo.Tgt",
-          """
-          package demo;
-          public class Tgt {
-            private String v;
-            public Tgt() {}
-            public String getV() { return v; }
-            public void setV(final Object v) { this.v = String.valueOf(v); }
-          }
-          """
-        ),
-      }
-    );
-
-    assertFalse(readRefused.success(), "the conversion will not take what the property holds, so the row is refused");
-    assertTrue(readRefused.hasError("a converting row of 'v' does not fit forward"), readRefused::errorMessages);
-    assertFalse(
-      readRefused.errorMessages().contains("written through"),
-      () -> "the setter takes the value and had no part in this: " + readRefused.errorMessages()
-    );
-
-    // And where the store is what refused, the member is named -- otherwise the message says a
+  @DisplayName("a refusal the member makes names the member")
+  void theRefusalNamesTheSlotWhenTheSlotRefused() {
+    // Where the store is what refused, the member is named: otherwise the message says a
     // conversion does not carry String to String while the type that refused appears nowhere. The
     // builder is forced: its member cannot take the property's own type, so the auto order passes
     // it over.

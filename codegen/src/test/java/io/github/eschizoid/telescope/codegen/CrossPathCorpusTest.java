@@ -6902,9 +6902,13 @@ class CrossPathCorpusTest {
     // type are two unrelated classes, or two parameterizations of one interface; one a wildcard
     // bounds from below; a result whose class the property's class does not extend; a variable
     // bounded by a class and taken as an array; an enum's variable, whose Comparable is of itself;
-    // a variable taken as a final class its bound is no supertype of; and two whose bound gives the
+    // a variable taken as a final class its bound is no supertype of; two whose bound gives the
     // property's class a wildcard or a variable where it has a type or a wildcard, which javac
-    // reads with the variable as its declared bound, Object, which the other does not contain.
+    // reads with the variable as its declared bound, Object, which the other does not contain; a
+    // variable bounding a wildcard of the result, which the property's wildcard bounds by a class
+    // its bound is unrelated to; a variable that appears only in an inner class's enclosing type;
+    // and a variable two lower bounds give its own bound's class two different arguments for. A
+    // row that needs a declaration of its own carries it as a sixth entry.
     final var rows = List.of(
       List.of(
         "Uej",
@@ -7023,6 +7027,28 @@ class CrossPathCorpusTest {
         "null",
         "'s forward returns U, which no instantiation of its type variables",
         "java.util.List<? extends CharSequence>"
+      ),
+      List.of(
+        "Vwx",
+        "<T extends Number> java.util.List<? extends T> forward(final %1$sCh c)",
+        "new java.util.ArrayList<T>()",
+        "which no instantiation of its type variables",
+        "java.util.List<? extends String>"
+      ),
+      List.of(
+        "Vnc",
+        "<T extends Number> %1$sOuter<T>.Inner forward(final %1$sCh c)",
+        "null",
+        "which no instantiation of its type variables",
+        "%1$sOuter<String>.Inner",
+        "public class %1$sOuter<T> { public class Inner {} }\n"
+      ),
+      List.of(
+        "Vlb",
+        "<T extends Comparable<T>> java.util.Map<T, T> forward(final %1$sCh c)",
+        "new java.util.HashMap<T, T>()",
+        "which no instantiation of its type variables",
+        "java.util.Map<? super Integer, ? super Long>"
       )
     );
     final var failures = new ArrayList<String>();
@@ -7030,8 +7056,9 @@ class CrossPathCorpusTest {
     for (final var row : rows) {
       final var prefix = row.get(0);
       final var property = row.size() > 4 ? row.get(4) : "java.util.List<String>";
-      final var all = viaListRow("java.util.List<String>", row.get(2))
-        .subList(0, 5)
+      final var declarations = new ArrayList<>(viaListRow("java.util.List<String>", row.get(2)).subList(0, 5));
+      if (row.size() > 5) declarations.add(row.get(5));
+      final var all = declarations
         .stream()
         .map(declaration ->
           declaration
@@ -9651,6 +9678,62 @@ class CrossPathCorpusTest {
       "#0(value=\"<7>\")",
       "#0(value=\"q!\")",
       "#0(value=\"q!\")"
+    ),
+    new VariableTransform(
+      "a source property typed by the source's variable, into a conversion taking a parameterized class",
+      false,
+      List.of(
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(java.util.List.of(\"a\", \"b\"))"),
+        transformedField(false, "value", "%1$sSrc<java.util.List<String>>, %1$sTgt, java.util.List<String>, Integer"),
+        sampled("%1$sTgt", "Integer value", "new %1$sTgt(3)"),
+        transformFn("java.util.List<String>", "Integer", "a.size()", "java.util.Collections.nCopies(b, \"q\")"),
+        witnessedRow(false, "value", "%1$sSrc<java.util.List<String>>, %1$sTgt, java.util.List<String>, Integer")
+      ),
+      "#0(value=2)",
+      "#0(value=[\"q\", \"q\", \"q\"])",
+      "#0(value=[\"q\", \"q\", \"q\"])"
+    ),
+    new VariableTransform(
+      "a source property typed by the source's variable holding no instance of the parameterized class taken",
+      false,
+      List.of(
+        sampledGeneric("%1$sSrc<X>", "X value", "new %1$sSrc<>(7)"),
+        transformedField(false, "value", "%1$sSrc<java.util.List<String>>, %1$sTgt, java.util.List<String>, Integer"),
+        sampled("%1$sTgt", "Integer value", "new %1$sTgt(3)"),
+        transformFn("java.util.List<String>", "Integer", "a.size()", "java.util.Collections.nCopies(b, \"q\")"),
+        witnessedRow(false, "value", "%1$sSrc<java.util.List<String>>, %1$sTgt, java.util.List<String>, Integer")
+      ),
+      "refused: ClassCastException",
+      "#0(value=[\"q\", \"q\", \"q\"])",
+      "#0(value=[\"q\", \"q\", \"q\"])"
+    ),
+    new VariableTransform(
+      "a bean property read through a generic method, into a conversion taking a parameterized class",
+      false,
+      List.of(
+        genericAccessorBean("", "%1$sSrc", "value", "java.util.List.of(\"a\", \"b\")"),
+        transformedField(false, "getValue", "%1$sSrc, %1$sTgt, java.util.List<String>, Integer"),
+        valueBean("%1$sTgt", "Integer", "3"),
+        transformFn("java.util.List<String>", "Integer", "a.size()", "java.util.Collections.nCopies(b, \"q\")"),
+        witnessedRow(false, "getValue", "%1$sSrc, %1$sTgt, java.util.List<String>, Integer")
+      ),
+      "#0(value=2)",
+      "#0(value=[\"q\", \"q\", \"q\"])",
+      "#0(value=[\"q\", \"q\", \"q\"])"
+    ),
+    new VariableTransform(
+      "a target property typed by the target's variable, into a backward taking a parameterized class",
+      false,
+      List.of(
+        sampled("%1$sSrc", "Integer value", "new %1$sSrc(3)"),
+        transformedField(false, "value", "%1$sSrc, %1$sTgt<java.util.List<String>>, Integer, java.util.List<String>"),
+        sampledGeneric("%1$sTgt<Y>", "Y value", "new %1$sTgt<>(java.util.List.of(\"x\"))"),
+        transformFn("Integer", "java.util.List<String>", "java.util.Collections.nCopies(a, \"q\")", "b.size()"),
+        witnessedRow(false, "value", "%1$sSrc, %1$sTgt<java.util.List<String>>, Integer, java.util.List<String>")
+      ),
+      "#0(value=[\"q\", \"q\", \"q\"])",
+      "#0(value=1)",
+      "#0(value=1)"
     )
   );
 
@@ -11414,8 +11497,132 @@ class CrossPathCorpusTest {
       "child=ChDto:A",
       "child=Ch:q",
       "child=Ch:q"
+    ),
+    // A method returning an interface the class a side fixes the property to implements gives
+    // a
+    // value that may be an instance of that class, which each path checks before it writes
+    // the
+    // value, whether the other side fixes the property too or passes its own variable
+    // through.
+    new ViaVariable(
+      "a property both sides fix, to a mapper returning an interface the target's class implements",
+      widerViaResult(false, "new %1$sLabel(c.name().toUpperCase())"),
+      "child=Label:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property both sides fix, to a mapper returning another class of the interface",
+      widerViaResult(false, "new %1$sOther(c.name().toUpperCase())"),
+      REFUSED + "ClassCastException",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property the target fixes and the source passes through, to a mapper returning an interface",
+      widerViaResult(true, "new %1$sLabel(c.name().toUpperCase())"),
+      "child=Label:A",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property the target fixes and the source passes through, to a mapper returning another class",
+      widerViaResult(true, "new %1$sOther(c.name().toUpperCase())"),
+      REFUSED + "ClassCastException",
+      "child=Ch:q",
+      "child=Ch:q"
+    ),
+    new ViaVariable(
+      "a property both sides fix, to a backward returning an interface the source's class implements",
+      widerViaBackward(false, "new %1$sLabel(d.name().toLowerCase())"),
+      "child=ChDto:A",
+      "child=Label:q",
+      "child=Label:q"
+    ),
+    new ViaVariable(
+      "a property both sides fix, to a backward returning another class of the interface",
+      widerViaBackward(false, "new %1$sOther(d.name().toLowerCase())"),
+      "child=ChDto:A",
+      REFUSED + "ClassCastException",
+      REFUSED + "ClassCastException"
+    ),
+    new ViaVariable(
+      "a property the source fixes and the target passes through, to a backward returning an interface",
+      widerViaBackward(true, "new %1$sLabel(d.name().toLowerCase())"),
+      "child=ChDto:A",
+      "child=Label:q",
+      "child=Label:q"
+    ),
+    new ViaVariable(
+      "a property the source fixes and the target passes through, to a backward returning another class",
+      widerViaBackward(true, "new %1$sOther(d.name().toLowerCase())"),
+      "child=ChDto:A",
+      REFUSED + "ClassCastException",
+      REFUSED + "ClassCastException"
     )
   );
+
+  /**
+   * The declarations of a {@code via} row naming {@code %1$sChMap}, whose {@code backward} returns
+   * {@code returned} as {@code %1$sNamed}, into a source that fixes {@code %1$sBase}'s variable to
+   * {@code %1$sLabel}, one of the interface's two records, from a target that fixes it to the
+   * child's other class or, {@code passedThrough}, passes its own variable through; and the runtime
+   * row naming the same class.
+   */
+  private static List<String> widerViaBackward(final boolean passedThrough, final String returned) {
+    return List.of(
+      "public interface %1$sNamed { String name(); }\n",
+      "public record %1$sLabel(String name) implements %1$sNamed {}\n",
+      "public record %1$sOther(String name) implements %1$sNamed {}\n",
+      "public class %1$sChMap {\n" +
+        "  public static %1$sChDto forward(final %1$sLabel c) { return new %1$sChDto(c.name().toUpperCase()); }\n" +
+        "  public static %1$sNamed backward(final %1$sChDto d) { return " +
+        returned +
+        "; }\n}\n",
+      CHILD_BASE,
+      childBean("%1$sSrc", "%1$sLabel", "%1$sSrc", "new %1$sLabel(\"a\")"),
+      viaChild("getChild"),
+      passedThrough
+        ? childBean("%1$sTgt<Y>", "Y", "%1$sTgt<%1$sChDto>", "new %1$sChDto(\"Q\")")
+        : childBean("%1$sTgt", "%1$sChDto", "%1$sTgt", "new %1$sChDto(\"Q\")"),
+      "public class %1$sRuntime {\n" +
+        "  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild," +
+        " %1$sTgt::getChild, %1$sChMap.class));\n  }\n}\n"
+    );
+  }
+
+  /**
+   * The declarations of a {@code via} row naming {@code %1$sChMap}, whose {@code forward} returns
+   * {@code returned} as {@code %1$sNamed}, into a target that fixes {@code %1$sBase}'s variable to
+   * {@code %1$sLabel}, one of the interface's two records, from a source that fixes it to the child
+   * or, {@code passedThrough}, passes its own variable through; and the runtime row naming the same
+   * class.
+   */
+  private static List<String> widerViaResult(final boolean passedThrough, final String returned) {
+    return List.of(
+      "public interface %1$sNamed { String name(); }\n",
+      "public record %1$sLabel(String name) implements %1$sNamed {}\n",
+      "public record %1$sOther(String name) implements %1$sNamed {}\n",
+      "public class %1$sChMap {\n" +
+        "  public static %1$sNamed forward(final %1$sCh c) { return " +
+        returned +
+        "; }\n" +
+        "  public static %1$sCh backward(final %1$sLabel d) { return new %1$sCh(d.name().toLowerCase()); }\n}\n",
+      CHILD_BASE,
+      passedThrough
+        ? childBean("%1$sSrc<X>", "X", "%1$sSrc<%1$sCh>", "new %1$sCh(\"a\")")
+        : childBean("%1$sSrc", "%1$sCh", "%1$sSrc", "new %1$sCh(\"a\")"),
+      viaChild("getChild"),
+      childBean("%1$sTgt", "%1$sLabel", "%1$sTgt", "new %1$sLabel(\"Q\")"),
+      "public class %1$sRuntime {\n" +
+        "  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::getChild," +
+        " %1$sTgt::getChild, %1$sChMap.class));\n  }\n}\n"
+    );
+  }
 
   /**
    * A {@code via} row naming a class whose method takes a class narrower than the property's own
