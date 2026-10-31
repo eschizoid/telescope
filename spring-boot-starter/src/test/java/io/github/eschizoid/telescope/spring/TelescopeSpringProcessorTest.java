@@ -1228,13 +1228,16 @@ class TelescopeSpringProcessorTest {
         )
       )
     );
-    // The codegen processors in the order the processor path lists them, which decides which of
-    // them javac hands a round holding only a carrier.
+    // Every codegen processor, with TelescopeMapperProcessor last: a processor ahead of it that
+    // claimed @Bridge would keep a round holding only a carrier from reaching it.
+    Processor mapperProcessor = null;
     for (final var processor : ServiceLoader.load(Processor.class, TelescopeMapperProcessor.class.getClassLoader())) {
-      if (processor.getClass().getPackageName().equals(TelescopeMapperProcessor.class.getPackageName())) {
+      if (processor instanceof TelescopeMapperProcessor) mapperProcessor = processor;
+      else if (processor.getClass().getPackageName().equals(TelescopeMapperProcessor.class.getPackageName())) {
         processors.add(processor);
       }
     }
+    processors.add(mapperProcessor);
     final var result = ProcessorHarness.compileFully(
       processors,
       List.of(),

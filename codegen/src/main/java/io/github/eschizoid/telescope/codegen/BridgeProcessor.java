@@ -878,7 +878,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       bridgeNameOwner.clear();
       reachable.clear();
     }
-    return true;
+    // @Bridge stays unclaimed: TelescopeMapperProcessor reads it too, and javac withholds a claimed
+    // annotation from every processor that runs later, whatever order the build lists them in.
+    return false;
   }
 
   /**
