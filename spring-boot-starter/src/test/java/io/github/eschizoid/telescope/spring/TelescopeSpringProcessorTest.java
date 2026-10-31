@@ -6,7 +6,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.eschizoid.telescope.codegen.BridgeProcessor;
 import io.github.eschizoid.telescope.codegen.ProcessorHarness;
 import io.github.eschizoid.telescope.codegen.TelescopeMapperProcessor;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.TypeElement;
+import javax.tools.Diagnostic;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class TelescopeSpringProcessorTest {
@@ -866,6 +881,7 @@ class TelescopeSpringProcessorTest {
     assertThat(result.generated().get("demo.CarMapperImpl")).contains("CarCarrierBridge.forward(input)");
     assertThat(result.generated().get("demo.CarProjectionImpl"))
       .contains("CarCarrierBridge.forward(input)")
+      .contains("return carriers.CarCarrierBridge.patch(source, partial);")
       .doesNotContain("mapperBuilder");
   }
 
@@ -1089,5 +1105,259 @@ class TelescopeSpringProcessorTest {
     assertThat(result.generated().get("mapping.EntityMapperImpl"))
       .contains("return domain.EntityBridge.forward(input);")
       .doesNotContain("import domain.EntityBridge;");
+  }
+
+  @Test
+  @DisplayName("an entity and a DTO sharing a simple name are written in full, and every other type is still imported")
+  void modelsSharingASimpleNameAreWrittenInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("api.Item", "package api; public record Item(String name) {}"),
+      source(
+        "domain.Item",
+        """
+        package domain;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(api.Item.class)
+        public record Item(String name) {}
+        """
+      ),
+      source(
+        "demo.ItemMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = domain.Item.class, to = api.Item.class)
+        public interface ItemMapper { api.Item map(domain.Item s); }
+        """
+      ),
+      source(
+        "demo.ItemProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ItemProjection extends TelescopeProjection<domain.Item, api.Item> {}
+        """
+      ),
+      source(
+        "demo.ItemRowsProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.conversion.MapperBuilder;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ItemRowsProjection extends TelescopeProjection<domain.Item, api.Item> {
+          @Override default void translate(final MapperBuilder<domain.Item, api.Item> mapping) {}
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.ItemMapperImpl"))
+      .contains("public api.Item map(final domain.Item input)")
+      .doesNotContain("import api.Item;")
+      .doesNotContain("import domain.Item;");
+    assertThat(result.generated().get("demo.ItemProjectionImpl"))
+      .contains("public domain.Item patch(final domain.Item source, final api.Item partial)")
+      .contains("import io.github.eschizoid.telescope.inject.TelescopeTransformation;")
+      .contains("List<TelescopeTransformation<domain.Item, ?>>")
+      .doesNotContain("import api.Item;")
+      .doesNotContain("import domain.Item;");
+    assertThat(result.generated().get("demo.ItemRowsProjectionImpl"))
+      .contains("Telescope.mapperBuilder(domain.Item.class, api.Item.class)")
+      .contains("import io.github.eschizoid.telescope.conversion.Mapper;");
+  }
+
+  @Test
+  @DisplayName("a model named like a type the implementation names itself is written in full, and so is that type")
+  void modelsNamedLikeTheImplementationsOwnTypesAreWrittenInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source("shop.Override", "package shop; public record Override(String name) {}"),
+      source("shop.Mapper", "package shop; public record Mapper(String name) {}"),
+      source(
+        "demo.ShopProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ShopProjection extends TelescopeProjection<shop.Override, shop.Mapper> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.ShopProjectionImpl"))
+      .contains("private final io.github.eschizoid.telescope.conversion.Mapper<shop.Override, shop.Mapper> mapping")
+      .contains("@Override public shop.Mapper map(final shop.Override input)")
+      .doesNotContain("import io.github.eschizoid.telescope.conversion.Mapper;")
+      .doesNotContain("import shop.");
+  }
+
+  @Test
+  @DisplayName("a mapper and a projection written a round after a carrier find the carrier's bridge")
+  void mapperAndProjectionWrittenInALaterRoundFindTheCarrierBridge() {
+    final var processors = new ArrayList<Processor>();
+    processors.add(
+      new LaterRoundSources(
+        Map.of(
+          "demo.CarMapper",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+          import model.Car;
+          import model.CarDto;
+          @TelescopeMapper(from = Car.class, to = CarDto.class)
+          public interface CarMapper { CarDto map(Car source); }
+          """,
+          "demo.CarProjection",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+          import io.github.eschizoid.telescope.inject.TelescopeProjection;
+          import model.Car;
+          import model.CarDto;
+          @TelescopeMapper
+          public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+          """
+        )
+      )
+    );
+    // The codegen processors in the order the processor path lists them, which decides which of
+    // them javac hands a round holding only a carrier.
+    for (final var processor : ServiceLoader.load(Processor.class, TelescopeMapperProcessor.class.getClassLoader())) {
+      if (processor.getClass().getPackageName().equals(TelescopeMapperProcessor.class.getPackageName())) {
+        processors.add(processor);
+      }
+    }
+    final var result = ProcessorHarness.compileFully(
+      processors,
+      List.of(),
+      source("gen.Generate", "package gen; public @interface Generate {}"),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "carriers.CarCarrier",
+        """
+        package carriers;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import model.Car;
+        import model.CarDto;
+        @gen.Generate
+        @Bridge(source = Car.class, target = CarDto.class)
+        public final class CarCarrier {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.CarMapperImpl")).contains("carriers.CarCarrierBridge.forward(input)");
+    assertThat(result.generated().get("demo.CarProjectionImpl"))
+      .contains("carriers.CarCarrierBridge.forward(input)")
+      .doesNotContain("mapperBuilder");
+  }
+
+  @Test
+  @DisplayName("a projection over a pair with no bridge in sight says it maps through a runtime Mapper")
+  void projectionWithNoBridgeInSightReportsTheRuntimeMapper() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "model.Boat",
+        """
+        package model;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(BoatDto.class)
+        public record Boat(String name) {}
+        """
+      ),
+      source("model.BoatDto", "package model; public record BoatDto(String name) {}"),
+      source(
+        "demo.CarProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+        """
+      ),
+      source(
+        "demo.CarRowsProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.conversion.MapperBuilder;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarRowsProjection extends TelescopeProjection<Car, CarDto> {
+          @Override default void translate(final MapperBuilder<Car, CarDto> mapping) {}
+        }
+        """
+      ),
+      source(
+        "demo.BoatProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
+        import model.Boat;
+        import model.BoatDto;
+        @TelescopeMapper
+        public interface BoatProjection extends TelescopeProjection<Boat, BoatDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    final var notes = result
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.NOTE)
+      .map(d -> d.getMessage(Locale.ROOT))
+      .filter(m -> m.contains("Projection"))
+      .toList();
+    assertThat(notes).singleElement().asString().contains("CarProjection").contains("runtime Mapper");
+  }
+
+  /** Writes the given sources in its first round, so they are compiled a round after the inputs. */
+  @SupportedAnnotationTypes("gen.Generate")
+  private static final class LaterRoundSources extends AbstractProcessor {
+
+    private final Map<String, String> sources;
+    private boolean written;
+
+    LaterRoundSources(final Map<String, String> sources) {
+      this.sources = sources;
+    }
+
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+      return SourceVersion.latestSupported();
+    }
+
+    @Override
+    public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment round) {
+      if (written) return false;
+      written = true;
+      for (final var entry : sources.entrySet()) {
+        try (final var out = processingEnv.getFiler().createSourceFile(entry.getKey()).openWriter()) {
+          out.write(entry.getValue());
+        } catch (final IOException e) {
+          throw new UncheckedIOException(e);
+        }
+      }
+      return false;
+    }
   }
 }

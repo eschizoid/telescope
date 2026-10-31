@@ -202,11 +202,12 @@ public interface CustomerProjection extends TelescopeProjection<Customer, Custom
 CustomerDto dto = projection.map(customer);
 
 Customer back = projection.backward(dto); // equal to customer
+
+Customer patched = projection.patch(customer, new CustomerDto("Bea", null));
+// patched is Customer("Bea", customer.contact()): the field the partial leaves null keeps its value
 ```
 
-A projection that maps through a bridge throws `UnsupportedOperationException` from `patch`. A bridge rebuilds the whole
-source from the partial, so it cannot keep the base fields that the partial leaves null. Step 4 shows a projection that
-patches.
+`patch` calls the bridge's own `patch`, which keeps every field of the base that the partial leaves null.
 
 **3. Clean up the source before mapping with `@TelescopeTransformer`.** A transformer is a typed path into the source
 plus what to do at that path. The `Transformation` holds a default for a null value and an operation for a non-null
@@ -255,8 +256,9 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
 ```
 
 `constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection that
-overrides `translate` maps through a core `Mapper` instead of the bridge, so it also supports `patch`. On a `@Bridge`
-field the same rows declare the pair's generated bridge, which a projection with no `translate` override calls.
+overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and in `patch`. On a
+`@Bridge` field the same rows declare the pair's generated bridge, which a projection with no `translate` override
+calls.
 
 ### Bridge or core mapper
 
@@ -271,8 +273,15 @@ The processor picks what the generated bean maps through when it compiles the in
 - An interface that declares only `map` always calls the bridge, and compilation fails with
   `@TelescopeMapper requires a generated @Bridge for <Source> -> <Target>` when there is none.
 
-The processor finds a bridge declared on the source class, a bridge declared on a separate carrier class in the same
-compilation, or a bridge class compiled into a dependency.
+The processor finds a bridge declared on the source class, a bridge that a carrier class or a `@Bridge` field declares
+anywhere in the same compilation, or a bridge compiled into a dependency under one of the source's own names
+(`<Source>Bridge` or `<Source>To<Target>Bridge`, in the source's package). It cannot find the bridge of a carrier class
+or a `@Bridge` field compiled into another module, because `@Bridge` is not kept in class files. For such a pair an
+interface that declares only `map` fails to compile, and a projection maps through a core `Mapper` and says so in a
+compiler note. Overriding `translate` makes that choice explicit and silences the note.
+
+The source and target may share a simple name, as an entity `domain.Item` and a DTO `api.Item` do. The generated bean
+then writes those two types by their qualified names.
 
 ### What a projection does
 
@@ -281,35 +290,30 @@ A `TelescopeProjection<S, T>` bean offers the operations of a core `Mapper<S, T>
 - `map` and `forward` run the transformers in order and then map. A null source maps to null.
 - `backward` maps the target back to the source. Transformers do not run in that direction.
 - `patch(base, partial)` copies `base` and writes over it every reference field that `partial` sets to a non-null value,
-  and every primitive field of `partial`, even one that holds 0 or `false`. Transformers do not run. It works only on a
-  projection that maps through a core `Mapper`, as described under [Patching](#patching).
+  and every primitive field of `partial`, even one that holds 0 or `false`. Transformers do not run. A projection over a
+  bridge calls the bridge's `patch`, and one over a core `Mapper` calls `Mapper.patch`, as described under
+  [Patching](#patching).
 - `translate(MapperBuilder<S, T>)` accepts the same rows as `Telescope.mapperBuilder(...)`. `from(...).to(...)` pairs
   two accessors, and `add(...)` takes any `MapStep`, such as `constant` and `compute` from `Mapping`, `nullSourceValues`
   from `NullHint`, or `writeBeans` from `WriteHint`.
 
 ### Patching
 
-`patch` on a projection backed by a core `Mapper` returns a new object every time, even when the partial is null or sets
-no field. Only a null `base` returns null. The copy is shallow. A field the partial leaves null keeps the object that
-`base` holds, so changing a nested mutable object or list in the result also changes it in `base`. A source type that no
-write strategy can build, such as an enum or a sealed interface, makes `patch` throw `UnsupportedOperationException`. A
-projection that maps through a bridge always throws `UnsupportedOperationException` from `patch`, and the message tells
-you to override `translate`.
+A projection that maps through a bridge patches through the bridge's `patch`, and one that maps through a core `Mapper`
+through `Mapper.patch`. Either returns a new object every time, even when the partial is null or sets no field. Only a
+null `base` returns null. The copy is shallow. A field the partial leaves null keeps the object that `base` holds, so
+changing a nested mutable object or list in the result also changes it in `base`. On a core `Mapper`, a source type that
+no write strategy can build, such as an enum or a sealed interface, makes `patch` throw `UnsupportedOperationException`.
 
 ```java
 @TelescopeMapper
-public interface PatchableCustomerProjection extends TelescopeProjection<Customer, CustomerDto> {
-  @Override
-  default void translate(MapperBuilder<Customer, CustomerDto> mapping) {}
-}
+public interface CustomerProjection extends TelescopeProjection<Customer, CustomerDto> {}
 
 Customer base = new Customer("Ada", new Contact("ada@example.com"));
 
 Customer patched = projection.patch(base, new CustomerDto("Bea", null));
 // patched is Customer("Bea", Contact("ada@example.com")), and patched.contact() is base.contact()
 ```
-
-An empty `translate` override is enough to move off the bridge.
 
 ### A mapper with only `map`
 
