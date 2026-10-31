@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.spring.quickstart;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 
 import io.github.eschizoid.telescope.annotations.TelescopeMapper;
 import io.github.eschizoid.telescope.conversion.MapperBuilder;
@@ -15,6 +16,10 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
     mapping
       .from(Customer::name)
       .to(CustomerSummary::displayName)
-      .add(constant(CustomerSummary::source, "crm"), compute(CustomerSummary::generatedAt, Instant::now));
+      .add(
+        drop(Customer::contact),
+        constant(CustomerSummary::source, "crm"),
+        compute(CustomerSummary::generatedAt, Instant::now)
+      );
   }
 }

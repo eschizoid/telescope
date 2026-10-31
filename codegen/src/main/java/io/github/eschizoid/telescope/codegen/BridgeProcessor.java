@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -1972,6 +1973,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     if (
+      !paired(
+        source,
+        sourceFields,
+        effectiveDrops,
+        target,
+        targetFields,
+        renames,
+        renameFanouts,
+        injectedTargetFields
+      ) ||
       !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
     ) return;
     if (
@@ -8737,6 +8748,50 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private static String packagePhrase(final String pkg) {
     return pkg.isEmpty() ? "the unnamed package" : "package " + pkg;
+  }
+
+  /**
+   * Whether every property of the pair has something to pair it with, as the shared spec decides
+   * for a strict mapper, refusing the first that has not by name: a target property no row writes,
+   * no {@code constant} or {@code compute} fills and no source property of its name pairs with, or
+   * a source property no row reads or drops and no target property of its name pairs with.
+   */
+  private boolean paired(
+    final TypeElement source,
+    final List<Field> sourceFields,
+    final Set<String> drops,
+    final TypeElement target,
+    final List<Field> targetFields,
+    final Map<String, String> renames,
+    final Map<String, List<String>> renameFanouts,
+    final Set<String> injectedTargetFields
+  ) {
+    final var read = new HashSet<String>(drops);
+    read.addAll(renames.keySet());
+    final var written = new HashSet<String>(renames.values());
+    for (final var extras : renameFanouts.values()) written.addAll(extras);
+    final var sourceNames = sourceFields.stream().map(Field::name).toList();
+    final var match = PairingRules.matchFields(
+      sourceNames,
+      targetFields.stream().map(Field::name).toList(),
+      read,
+      written
+    );
+    final var refusals = Unpaired.refusals(
+      new Unpaired.Sides(
+        source.getSimpleName().toString(),
+        target.getSimpleName().toString(),
+        slotWord(source),
+        slotWord(target)
+      ),
+      sourceNames,
+      match,
+      injectedTargetFields,
+      Set.of()
+    );
+    if (refusals.isEmpty()) return true;
+    error(source, refusals.getFirst());
+    return false;
   }
 
   private boolean sameNames(

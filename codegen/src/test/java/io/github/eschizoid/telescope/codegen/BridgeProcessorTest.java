@@ -2111,8 +2111,8 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a non-bijection @Bridge should fail");
       assertTrue(
-        compilation.hasError("must expose the same field names"),
-        () -> "expected bijection diagnostic; saw " + compilation.errorMessages()
+        compilation.hasError(PairingMessages.noSameNameTarget("Src", "Dst", "field", "field", "extra")),
+        () -> "expected the unpaired source field refused by name; saw " + compilation.errorMessages()
       );
     }
 
@@ -5994,9 +5994,8 @@ class BridgeProcessorTest {
     @Test
     @DisplayName("lenient = false (default) still enforces strict bijection — regression guard")
     void defaultRemainsStrict() {
-      // Pin that the opt-in semantics hold: omitting `lenient` (or setting it to false) keeps the
-      // historical bijection error. A future refactor that silently flipped the default would
-      // change adopter semantics — this test would catch it immediately.
+      // Omitting `lenient`, or setting it to false, keeps the bridge strict: a target field with no
+      // source is refused by name.
       final var compilation = compile(
         source(
           "demo.Src",
@@ -6012,8 +6011,8 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "default lenient = false must still enforce bijection");
       assertTrue(
-        compilation.hasError("must expose the same field names"),
-        () -> "expected bijection diagnostic; saw " + compilation.errorMessages()
+        compilation.hasError(PairingMessages.noSameNameSource("Src", "Dst", "field", "field", "extra")),
+        () -> "expected the unpaired target field refused by name; saw " + compilation.errorMessages()
       );
     }
 
@@ -6858,8 +6857,8 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a strict nested mismatch must still fail compilation");
       assertTrue(
-        compilation.hasError("same field names"),
-        () -> "expected a nested bijection diagnostic; saw " + compilation.errorMessages()
+        compilation.hasError(PairingMessages.noSameNameSource("SInner", "SInnerBO", "field", "field", "extra")),
+        () -> "expected the nested unpaired target field refused by name; saw " + compilation.errorMessages()
       );
     }
 

@@ -28,6 +28,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
+import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -1340,6 +1341,9 @@ public final class DeepMap {
       // Whether a path row of this pair names no first hop on the target, so which target field it
       // writes is not known.
       var unknownTgtWrite = false;
+      // Whether a path row of this pair names no first hop on the source, so which source field it
+      // reads is not known.
+      var unknownSrcRead = false;
       final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
       // Which source properties the pair drops and writes, and into which targets, as the shared
       // spec refuses a property claimed twice. A write is a row backward reads the property back
@@ -1398,6 +1402,7 @@ public final class DeepMap {
             telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            else unknownSrcRead = true;
             final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
             if (readsOne) {
               pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
@@ -1419,6 +1424,7 @@ public final class DeepMap {
             final var firstSrcHop = ttRow.sourceTelescope().firstHopName();
             final var firstTgtHop = ttRow.targetTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+            else unknownSrcRead = true;
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
             telescopeFixups.add(rawRow);
@@ -1596,19 +1602,37 @@ public final class DeepMap {
       final var tgtNames = tgtRefl.names(target);
       final var readSrc = new HashSet<>(claimedSrc);
       readSrc.addAll(pathReadsSrc);
-      final var byName = new HashSet<>(
-        PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, claimedTgt).matched()
-      );
+      final var match = PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, claimedTgt);
+      final var byName = new HashSet<>(match.matched());
+      // Where a strict mapper decides a pair's fields, it refuses a field nothing pairs with
+      // whatever other rows the pair has: a target field no row fills and no source field of its
+      // name pairs with, and a source field no row reads and no target field of its name pairs
+      // with. A field a path, constant or compute row writes counts as filled, and one a path row
+      // reads as read.
+      if (!lenient && !forwardOnly && topStepsOut != null) {
+        Set<String> filled = null;
+        if (!unknownTgtWrite) {
+          filled = new HashSet<>(telescopeWritesTgt);
+          for (final var name : match.unmatchedTargets()) {
+            if (writtenThroughPath(overrides, target, name)) filled.add(name);
+          }
+        }
+        final var unpaired = Unpaired.refusals(
+          new Unpaired.Sides(source.getSimpleName(), target.getSimpleName(), slot(srcRefl), slot(tgtRefl)),
+          List.of(srcNames),
+          match,
+          filled,
+          unknownSrcRead ? null : telescopeReadsSrc
+        );
+        if (!unpaired.isEmpty()) throw new IllegalStateException(unpaired.getFirst());
+      }
       for (final var name : tgtNames) {
         if (claimedTgt.contains(name)) continue;
-        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, a
-        // target field nothing pairs with by name gets a NULLING_ISO placeholder. The post-fixup
-        // overlays it if a telescope row writes through that field; otherwise the field stays
-        // null. Telescope rows can't recover their top-level target field name from a
-        // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
-        // every nested write. Two cases still refuse: a pair with no telescope row, and a target
-        // field whose same-named source a row reads, which only a row naming that field lets
-        // through.
+        // A target field nothing pairs with by name gets a placeholder, which a row writing through
+        // that field overlays. Where a strict mapper decides the pair's fields, the refusal above
+        // leaves only the fields such a row fills, or every field when a path row names no first
+        // hop on the target. Elsewhere a field no row fills stays at its default, except a field
+        // whose same-named source a row reads, which only a row naming that field lets through.
         if (!byName.contains(name)) {
           // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
           // topStepsOut) was never explicitly configured by the user — it was visited because a
@@ -1736,9 +1760,10 @@ public final class DeepMap {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           continue;
         }
-        // Same permissive mode as the target side: when telescope rows are present, this is a
-        // nested auto-recursed pair, OR the resolution is forward-only (lenient), source fields
-        // with no consumer fall back to a NULLING placeholder rather than failing.
+        // A source field nothing reads falls back to a NULLING placeholder on a nested
+        // auto-recursed pair and on a mapper converting forward only. Where a strict mapper decides
+        // the pair's fields, the refusal above leaves one here only when a path row names no first
+        // hop on the source, so the field it reads is not known.
         if (!telescopeFixups.isEmpty() || topStepsOut == null || lenient) {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           if (trailOut != null) trailOut.add(new OpticNode.UnusedSource(name));

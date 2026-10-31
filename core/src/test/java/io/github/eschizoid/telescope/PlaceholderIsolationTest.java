@@ -85,7 +85,7 @@ class PlaceholderIsolationTest {
     // No instance of Node can be built without an instance of Node, so it has no default tree.
     // Resolving its component plans re-enters the same type, which without a guard descends until
     // the stack ends. It yields the null a type with no construction strategy yields instead.
-    final var mapper = Telescope.mapper(
+    final var mapper = Telescope.mapperForward(
       Slim.class,
       NodeHolder.class,
       Mapping.to(Slim::value, Telescope.of(NodeHolder.class).field(NodeHolder::node).field(Node::value))
@@ -100,7 +100,7 @@ class PlaceholderIsolationTest {
   @Test
   @DisplayName("mutually referential records terminate the same way")
   void mutualReferenceTerminates() {
-    final var mapper = Telescope.mapper(
+    final var mapper = Telescope.mapperForward(
       Slim.class,
       PingHolder.class,
       Mapping.to(Slim::value, Telescope.of(PingHolder.class).field(PingHolder::label))
