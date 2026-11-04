@@ -766,9 +766,9 @@ public sealed interface Mapping<A, B>
    * parameter is given a type, {@code (User user) -> ...}. An overloaded helper, such as {@code
    * Names.full(User)} beside {@code Names.full(Admin)}, cannot be resolved, and a lambda with an
    * inferred parameter takes {@code Object}, so its body can use only what {@code Object} has; hold
-   * the one meant in a {@code static final FromSource<User, String>} field
-   * and pass the field, or {@code FULL::apply}. A function already held as a plain {@code Function}
-   * is passed as {@code function::apply}.
+   * the one meant in a {@code static final FromSource<User, String>} field and pass the field, or
+   * {@code FULL::apply}. A function already held as a plain {@code Function} is passed as {@code
+   * function::apply}.
    *
    * <p>In a {@code @Bridge} mapper the processor calls {@code function} directly from the generated
    * bridge: it must be a reference to a static method taking the source ({@code Names::full}), to

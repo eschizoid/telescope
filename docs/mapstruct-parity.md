@@ -320,13 +320,13 @@ Telescope.mapperForward(Order.class, OrderDto.class, // one-way: the hook below 
 ```
 
 A better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no expression
-parser. compute() takes a Supplier, or a method reference to a function of the whole source (a FromSource; a function held
-as a plain Function is passed as fn::apply) for a value derived from several source fields;
-toOneWay(src, tgt, fn) converts one source field. compute/constant rows are forward-only by design (backward drops the
-slot). On a `@Bridge` field the same `compute` row compiles when its supplier is a method reference (`Instant::now`) or
-a `static final` field holding one, and when its function is a method reference taking the source (`Names::display`), a
-method of the source, or a `static final` field holding one, which the generated bridge calls directly; an inline
-lambda, as in the `traceId` row above, and a nested target written as a telescope path are refused on the row.
+parser. compute() takes a Supplier, or a method reference to a function of the whole source (a FromSource; a function
+held as a plain Function is passed as fn::apply) for a value derived from several source fields; toOneWay(src, tgt, fn)
+converts one source field. compute/constant rows are forward-only by design (backward drops the slot). On a `@Bridge`
+field the same `compute` row compiles when its supplier is a method reference (`Instant::now`) or a `static final` field
+holding one, and when its function is a method reference taking the source (`Names::display`), a method of the source,
+or a `static final` field holding one, which the generated bridge calls directly; an inline lambda, as in the `traceId`
+row above, and a nested target written as a telescope path are refused on the row.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `compute(Accessor, Supplier)`
 (javadoc names the expression=java(Instant.now()) gap), `compute(Accessor, FromSource)` (a value read from the whole
