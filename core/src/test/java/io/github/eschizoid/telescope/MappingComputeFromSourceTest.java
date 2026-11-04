@@ -368,7 +368,7 @@ class MappingComputeFromSourceTest {
     @Test
     @DisplayName("runs under when(...) only for a source the predicate accepts")
     void runsUnderWhen() {
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Person.class,
         Card.class,
         Mapping.<Person, Card>when(person -> person.age() > 18, compute(Card::full, Names::full))
@@ -440,7 +440,7 @@ class MappingComputeFromSourceTest {
     @DisplayName("is refused by name when the mapper is built, or fails on its first call inside a native image")
     void isRefusedWhenBuilt() {
       if (NativeImage.IN_IMAGE) {
-        final var mapper = Telescope.mapper(Person.class, Card.class, compute(Card::full, Names::foreign));
+        final var mapper = Telescope.mapperForward(Person.class, Card.class, compute(Card::full, Names::foreign));
         assertThrows(ClassCastException.class, () -> mapper.forward(ADA));
         return;
       }
