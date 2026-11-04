@@ -3077,6 +3077,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var strategy = level.getKind() == ElementKind.RECORD ? "AUTO" : strategyOf.apply(level);
         strategies.add(strategy);
         final var rebuild = rebuildFor(level, fieldsOf(level), strategy, bridgePackage);
+        // A setters rebuild of a class that declares a no-argument constructor but no setter for
+        // the property the path writes would drop the value, which is refused as the runtime
+        // refuses it, before whether the bridge's package can call that constructor.
+        if (
+          rebuild.kind() == Rebuild.Kind.NONE &&
+          "SETTERS".equals(strategy) &&
+          ElementFilter.constructorsIn(level.getEnclosedElements())
+            .stream()
+            .anyMatch(c -> c.getParameters().isEmpty()) &&
+          setterName(level, propertyOf(level, methods.get(levelAt))) == null
+        ) {
+          error(
+            source,
+            PairingMessages.pathIntermediateUnwritable(
+              source.getSimpleName().toString(),
+              target.getSimpleName().toString(),
+              name,
+              level.getSimpleName().toString(),
+              propertyOf(level, methods.get(levelAt)),
+              strategy
+            )
+          );
+          return null;
+        }
         if (rebuild.kind() == Rebuild.Kind.NONE) {
           // A strategy a hint names is held to alone, so the refusal names it.
           error(

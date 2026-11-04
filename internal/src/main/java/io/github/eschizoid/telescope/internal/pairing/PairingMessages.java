@@ -483,8 +483,8 @@ public final class PairingMessages {
       " BUILDER, or SETTERS, or add a name-matched constructor.";
       case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
       " SETTERS, or add a builder().";
-      default -> "no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a public no-arg" +
-      " constructor.";
+      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
+      " no-argument constructor the mapper's package can call.";
     };
     return (
       "Deep map " +

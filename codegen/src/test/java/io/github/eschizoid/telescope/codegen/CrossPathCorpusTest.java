@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
+import io.github.eschizoid.telescope.codegen.ctorbox.CityRow;
+import io.github.eschizoid.telescope.codegen.ctorbox.CityRuntime;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
@@ -1977,7 +1979,11 @@ class CrossPathCorpusTest {
     // Inherent: from another package only a subclass reaches a protected constructor,
     // and that builds the subclass rather than the target.
     "a protected constructor in another package",
-    "has no no-argument constructor a rebuild can call"
+    "has no no-argument constructor a rebuild can call",
+    // Inherent: no code but the class's own calls a private constructor, which a SETTERS hint
+    // builds an object a path steps through with.
+    "a private no-argument constructor of an object a path builds through its setters",
+    "no no-argument constructor a rebuild can call"
   );
 
   /**
@@ -2001,6 +2007,12 @@ class CrossPathCorpusTest {
         List.of("ctorbox/ProtectedBag", "ctorbox/GuardedDst", "ctorpair/GuardedSrc"),
         () -> Telescope.mapper(GuardedSrc.class, GuardedDst.class).forward(new GuardedSrc(List.of("b", "a"))).items(),
         "[b, a] in " + PACKAGE + ".ctorbox.ProtectedBag"
+      ),
+      new Limit(
+        "a private no-argument constructor of an object a path builds through its setters",
+        List.of("ctorbox/PrivateCity", "ctorbox/CityHolder", "ctorbox/CityRow", "ctorbox/CityMappers"),
+        () -> CityRuntime.mapper().backward(new CityRow("j", "R")).c().getCity(),
+        "R in java.lang.String"
       )
     );
     final var fixtures = Path.of("src/test/java/io/github/eschizoid/telescope/codegen");
@@ -11304,6 +11316,31 @@ class CrossPathCorpusTest {
       "#0(box=#1(n=7, s=\"x\"), qty=1)"
     ),
     new NestedPath(
+      "a record path through a setters bean whose no-argument constructor only its own package calls",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, %1$sPp c", "new %1$sSrc(\"i\", %1$sPp.of(\"P\"))"),
+        "public class %1$sPp {\n" +
+          "  private String city;\n  %1$sPp() {}\n" +
+          "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n" +
+          "  public static %1$sPp of(final String c) { final var p = new %1$sPp(); p.city = c; return p; }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sPp::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sPp::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", c=#1(city=\"R\"))",
+      "#0(id=\"j\", c=#1(city=\"R\"))"
+    ),
+    new NestedPath(
       "a record path through the same bean with no hint, built by its builder",
       false,
       List.of(
@@ -12194,8 +12231,8 @@ class CrossPathCorpusTest {
           SETTERS_FOR_EVERY_BEAN
         )
       ),
-      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS"),
-      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS")
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS"),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS")
     ),
     new SourceClaimedTwice(
       "the same bean named by a writeBean SETTERS hint keyed to it",
@@ -12222,8 +12259,8 @@ class CrossPathCorpusTest {
             " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
         )
       ),
-      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS"),
-      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS")
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS"),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS")
     ),
     new SourceClaimedTwice(
       "a two-way source path through a bean whose setters write no property the path writes",

@@ -659,10 +659,10 @@ public final class DeepMap {
   /**
    * Refuses a path the mapper writes through that steps through a bean it would build without the
    * property the path writes: one the strategy a {@code writeBean} hint or the {@code writeBeans}
-   * default names for it does not build, since a hinted strategy is held to alone, or whose writer
-   * has no member for that property, which would drop the value. A {@code SETTERS} hint builds only
-   * through a public no-argument constructor, as the generated path calls it. A source path is
-   * written on a mapper that converts backward, and a target path on every mapper.
+   * default names for it does not build at all, since a hinted strategy is held to alone, and one
+   * whose writer, hinted or chosen by the shared order, has no member for that property, which
+   * would drop the value. A source path is written on a mapper that converts backward, and a target
+   * path on every mapper.
    */
   private static void refuseUnwrittenPathObjects(
     final Reflective beanRefl,
@@ -704,10 +704,7 @@ public final class DeepMap {
           final var path = String.join(".", plan.names());
           final var name = PairingMessages.className(level);
           final var writer = beanRefl.writerFor(level);
-          if (
-            strategy != null &&
-            (writer == null || (strategy == WriteHint.WriteStrategy.SETTERS && !publicNoArgConstructor(level)))
-          ) {
+          if (strategy != null && writer == null) {
             throw new IllegalArgumentException(
               PairingMessages.pathIntermediateUnbuiltBy(
                 source.getSimpleName(),
@@ -733,13 +730,6 @@ public final class DeepMap {
         }
       }
     }
-  }
-
-  /** Whether {@code cls} is a concrete class with a public constructor taking no arguments. */
-  private static boolean publicNoArgConstructor(final Class<?> cls) {
-    if (Modifier.isAbstract(cls.getModifiers())) return false;
-    for (final var constructor : cls.getConstructors()) if (constructor.getParameterCount() == 0) return true;
-    return false;
   }
 
   /** Whether a row is keyed to a pair other than the mapper's own. */

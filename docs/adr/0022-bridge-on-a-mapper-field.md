@@ -173,11 +173,13 @@ the existing emitter without a second one.
 > class its property declares, with every type variable read as the type argument the path gives it, through nested
 > parameterized types and through the superclasses and interfaces that fix a variable. Each one is built through the
 > write strategy a `writeBean` hint names for its class, else the `writeBeans` default, else the shared
-> `BeanWriteStrategy` order. A strategy a hint names is held to alone: a path through a class it does not build, as
-> `SETTERS` on a class with no public no-argument constructor, is refused naming that strategy. Whatever the strategy, a
-> path through a class it builds with no member for the property the path writes is refused too, since the write would
-> drop the value; both refusals come when the mapper is built, and on the row. A `writeBean` hint keyed to such a class
-> is one the mapper uses.
+> `BeanWriteStrategy` order, and a `writeBean` hint keyed to such a class is one the mapper uses. A strategy a hint
+> names is held to alone, so a path through a class it cannot build at all, as `SETTERS` on a class with no no-argument
+> constructor, is refused naming that strategy. A path through a class whose strategy, hinted or not, has no member for
+> the property the path writes is refused too, since the write would drop the value. Both refusals come when the mapper
+> is built and on the row, in the same words. The generated path alone also refuses a setters rebuild whose no-argument
+> constructor the bridge's package cannot call, which the runtime reaches through a private lookup; that is the inherent
+> limit of generated code ADR-0019 allows.
 >
 > Forward reads the leaf, and a null object on the way reads as the leaf's null value: null for a reference, the default
 > for a primitive member of a record, a constructor or a builder, and no call to a primitive setter, as a null source
