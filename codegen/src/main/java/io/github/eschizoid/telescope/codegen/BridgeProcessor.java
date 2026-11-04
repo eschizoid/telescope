@@ -354,6 +354,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     String writeStrategy,
     String sourceWriteStrategy,
     Map<String, String> computes,
+    // Per-target-field expression a compute row reading the source fills the field with: a direct
+    // call on the forward source, which readForward writes in place of a source read.
+    Map<String, String> computedFrom,
     // Per-source-field method name, set when a forward-only converting row names a static method
     // of a top-level class: codegen emits a direct {@code UsingClass.methodName(value)} call
     // instead of instantiating a BridgeFn. The source field also lands in forwardOnlyTransforms
@@ -399,6 +402,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       "AUTO",
       Map.of(),
       Map.of(),
+      Map.of(),
       null,
       false,
       null,
@@ -425,6 +429,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Map.of(),
         "AUTO",
         "AUTO",
+        Map.of(),
         Map.of(),
         Map.of(),
         carrierEl.getQualifiedName().toString(),
@@ -828,6 +833,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           writeStrategy,
           Map.of(),
           Map.of(),
+          Map.of(),
           carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
           lenient,
           null,
@@ -1120,6 +1126,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       parsed.writeStrategyOf(parsed.target()),
       parsed.writeStrategyOf(parsed.source()),
       parsed.computes(),
+      parsed.computedFrom(),
       parsed.transformMethods(),
       carrier.getQualifiedName().toString(),
       !parsed.strict(),
@@ -1477,6 +1484,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetRebuild = rebuildFor(target, targetFields, writeStrategy, bridgePackage);
     final var sourceRebuild = rebuildFor(source, sourceFields, sourceWriteStrategy, bridgePackage);
     final var computes = cfg.computes();
+    final var computedFrom = cfg.computedFrom();
+    // Every target property a compute row fills, from a supplier or from the source.
+    final var computed = new LinkedHashSet<>(computes.keySet());
+    computed.addAll(computedFrom.keySet());
     // The properties the bridge converts by a conversion of its own, drops, or fills without
     // reading the source: a runtime mapper looks below the rest only, when it decides whether the
     // bridge may convert this pair for it.
@@ -1493,7 +1504,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A source path reads below its first property and fills its target property itself, so the
     // bridge walks neither.
     final var pathRoots = new LinkedHashSet<>(drops);
-    final var pathFilled = new LinkedHashSet<>(computes.keySet());
+    final var pathFilled = new LinkedHashSet<>(computed);
     for (final var path : cfg.sourcePaths()) {
       pathRoots.add(path.properties().getFirst());
       pathFilled.add(path.target());
@@ -1919,7 +1930,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     final var injectedTargetFields = new LinkedHashSet<String>();
     final var parsedConstants = new LinkedHashMap<String, String>();
-    for (final var fieldName : computes.keySet()) {
+    for (final var fieldName : computed) {
       if (!targetNames.contains(fieldName)) {
         error(
           source,
@@ -2233,6 +2244,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (path != null) return pathRead(path, forwardLocals, paired, sourceFields, source);
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
+      if (computedFrom.containsKey(targetName)) return computedFrom.get(targetName);
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
       final var sf = fieldByName(paired.source(), srcName);
       final var local = "__fs_" + srcName;
@@ -3477,7 +3489,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!config.drops().isEmpty()) given.add("drop rows");
     if (!config.renames().isEmpty() || !config.renameFanouts().isEmpty()) given.add("renaming rows");
     if (!config.transforms().isEmpty()) given.add("converting rows");
-    if (!config.computes().isEmpty()) given.add("constant and compute rows");
+    if (!config.computes().isEmpty() || !config.computedFrom().isEmpty()) given.add("constant and compute rows");
     if (!config.viaMappers().isEmpty()) given.add("via rows");
     if (!"AUTO".equals(config.writeStrategy()) || !"AUTO".equals(config.sourceWriteStrategy())) {
       given.add("write strategy");

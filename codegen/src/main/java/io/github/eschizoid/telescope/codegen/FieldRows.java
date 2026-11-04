@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -66,6 +67,10 @@ import javax.lang.model.util.ElementFilter;
 final class FieldRows {
 
   static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
+
+  /** The name of the source a generated bridge's {@code forward} is handed. */
+  static final String SOURCE = "s";
+
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
@@ -93,11 +98,14 @@ final class FieldRows {
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
    * classes the rows need written; {@code awaits} the classes, written by this compilation, that
-   * must exist before the bridge is planned. {@code rowKinds} are the classes of the rows the
-   * runtime builds from the same call, in order, and {@code rowAccessors} the accessor methods each
-   * names, as {@code source>target}; the generated provider records both. {@code beanStrategies}
-   * are the write strategies {@code writeBean} rows name, by the qualified name of the class each
-   * is keyed to, and {@code defaultStrategy} the one a {@code writeBeans} row names, or null.
+   * must exist before the bridge is planned. {@code computedFrom} holds, by target property, the
+   * expression a {@code compute} row reading the source fills it with: a direct call on {@link
+   * #SOURCE}, the source a generated {@code forward} is handed. {@code rowKinds} are the classes of
+   * the rows the runtime builds from the same call, in order, and {@code rowAccessors} the accessor
+   * methods each names, as {@code source>target}; the generated provider records both. {@code
+   * beanStrategies} are the write strategies {@code writeBean} rows name, by the qualified name of
+   * the class each is keyed to, and {@code defaultStrategy} the one a {@code writeBeans} row names,
+   * or null.
    */
   record Parsed(
     TypeElement source,
@@ -111,6 +119,7 @@ final class FieldRows {
     Set<String> forwardOnly,
     Map<String, String> viaMappers,
     Map<String, String> computes,
+    Map<String, String> computedFrom,
     List<String> rowKinds,
     List<String> rowAccessors,
     List<GeneratedClass> classes,
@@ -120,6 +129,13 @@ final class FieldRows {
     List<SourcePath> sourcePaths,
     List<TargetPath> targetPaths
   ) implements Result {
+    /** Every target property a {@code compute} row fills, from a supplier or from the source. */
+    Set<String> computedTargets() {
+      final var computed = new LinkedHashSet<>(computes.keySet());
+      computed.addAll(computedFrom.keySet());
+      return computed;
+    }
+
     /**
      * How {@code side} is rebuilt: the strategy a {@code writeBean} row keyed to it names, else the
      * {@code writeBeans} default, else {@code AUTO}.
@@ -536,6 +552,7 @@ final class FieldRows {
     private final Set<String> forwardOnly = new LinkedHashSet<>();
     private final Map<String, String> viaMappers = new LinkedHashMap<>();
     private final Map<String, String> computes = new LinkedHashMap<>();
+    private final Map<String, String> computedFrom = new LinkedHashMap<>();
     private final Set<String> targetsWritten = new LinkedHashSet<>();
     private final SourceWrites sourceWrites;
     private final List<String> rowKinds = new ArrayList<>();
@@ -608,6 +625,7 @@ final class FieldRows {
         forwardOnly,
         viaMappers,
         computes,
+        computedFrom,
         rowKinds,
         rowAccessors,
         classes,
@@ -655,6 +673,16 @@ final class FieldRows {
         );
       }
       final var rowArgs = row.getArguments();
+      final var kind = rowExec.getSimpleName().toString();
+      final var computeForm = kind.equals("compute") ? ComputeForms.computeForm(rowExec) : null;
+      if (ComputeForms.FROM_SOURCE_FQN.equals(computeForm) && rowArgs.get(1) instanceof LambdaExpressionTree lambda) {
+        return new Refused(
+          lambda,
+          "an inline lambda can't be compiled into the generated bridge; write the compute row's function as" +
+            " a method reference the bridge calls directly, such as a static method taking the source" +
+            " (Names::full) or a method of the source (User::initials)"
+        );
+      }
       for (final var rowArg : rowArgs) {
         if (rowArg instanceof LambdaExpressionTree) {
           return new Refused(
@@ -665,7 +693,6 @@ final class FieldRows {
           );
         }
       }
-      final var kind = rowExec.getSimpleName().toString();
       return switch (kind) {
         case "to" -> switch (rowArgs.size()) {
           case 2 -> pathParameter(rowExec, 0)
@@ -687,7 +714,7 @@ final class FieldRows {
         case "via" -> via(row);
         case "drop" -> drop(row);
         case "constant" -> filled(row, true);
-        case "compute" -> filled(row, false);
+        case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(computeForm) ? computedFrom(row) : filled(row, false);
         default -> new Refused(
           row,
           kind +
@@ -1408,6 +1435,20 @@ final class FieldRows {
         if (held instanceof String read) {
           value = read;
         } else {
+          final var rowExec = (ExecutableElement) elementAt(unit, row.getMethodSelect());
+          if (
+            ComputeForms.FRESH_FQN.equals(ComputeForms.computeForm(rowExec)) &&
+            elementAt(unit, args.get(1)) instanceof ExecutableElement chosen
+          ) {
+            final var bothForms = ComputeForms.sourceFormRefusal(
+              env.getTypeUtils(),
+              chosen,
+              source,
+              target,
+              t.property()
+            );
+            if (bothForms != null) return new Refused(args.get(1), bothForms);
+          }
           final var supplier = call(args.get(1), null, 0);
           if (supplier instanceof Refused refused) return refused;
           final var refusedType = returnFits(args.get(1), ((Call) supplier).method(), t);
@@ -1498,6 +1539,160 @@ final class FieldRows {
         );
       }
       return owner.getQualifiedName() + "." + held.getSimpleName() + ".get()";
+    }
+
+    /**
+     * A {@code compute} row filling a target property with what a function makes of the source,
+     * written into the bridge as a direct call on {@link #SOURCE}: {@code Names.full(s)} for a
+     * static method, {@code s.initials()} for a method of the source or of a type it extends, a
+     * constructor call, a call on a {@code static final} field, or {@code apply} on a {@code static
+     * final} field holding the function. The row names no source property, so it records no write
+     * of one, and the target property it fills counts as written.
+     */
+    private Refused computedFrom(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var tgt = accessor(args.get(0), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var t = (Accessor) tgt;
+      final var arg = args.get(1);
+      final var held = heldFunction(arg, t);
+      if (held instanceof Refused refused) return refused;
+      final String called;
+      final TypeMirror gives;
+      if (held instanceof Held read) {
+        called = read.expression();
+        gives = read.gives();
+      } else {
+        final var function = call(arg, SOURCE, 1);
+        if (function instanceof Refused refused) return refused;
+        final var method = ((Call) function).method();
+        final var types = env.getTypeUtils();
+        final var functionType = trees.getTypeMirror(TreePath.getPath(unit, arg));
+        final var qualifier = elementAt(unit, ((MemberReferenceTree) arg).getQualifierExpression());
+        final var unbound =
+          ((MemberReferenceTree) arg).getMode() == MemberReferenceTree.ReferenceMode.INVOKE &&
+          !method.getModifiers().contains(Modifier.STATIC) &&
+          qualifier instanceof TypeElement;
+        final var offSource = ComputeForms.offSourceRefusal(
+          types,
+          functionType,
+          method,
+          unbound,
+          source,
+          target,
+          t.property()
+        );
+        if (offSource != null) return new Refused(arg, offSource);
+        // A method of a held receiver gives what the receiver's type says it does, which a generic
+        // interface such as Function names by a type variable.
+        if (method.getKind() == ElementKind.CONSTRUCTOR) {
+          gives = method.getEnclosingElement().asType();
+        } else if (qualifier instanceof VariableElement receiver) {
+          gives = ((ExecutableType) types.asMemberOf((DeclaredType) receiver.asType(), method)).getReturnType();
+        } else {
+          gives = method.getReturnType();
+        }
+        if (!types.isAssignable(types.erasure(gives), types.erasure(t.type()))) {
+          return new Refused(
+            arg,
+            arg + " gives " + gives + ", which the " + shown(t) + " property '" + t.property() + "' does not hold"
+          );
+        }
+        called = ((Call) function).expression();
+      }
+      // A wrapper written into a primitive property takes the primitive's default where it is null,
+      // as a conversion's result does on both paths.
+      final var value =
+        t.primitive() && !gives.getKind().isPrimitive()
+          ? "java.util.Objects.requireNonNullElse(" + called + ", " + primitiveDefault(shown(t).getKind()) + ")"
+          : called;
+      if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
+        return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
+      }
+      computedFrom.put(t.property(), value);
+      rowKinds.add("ComputeFromSource");
+      rowAccessors.add(">");
+      return null;
+    }
+
+    /**
+     * The expression a {@code compute} row reads its value with when its function is a {@code
+     * static final} field: a call of that field's {@code apply} on {@link #SOURCE}, with what it
+     * gives. The refusal where the field is not static and final, the generated bridge cannot reach
+     * it, its function does not take the source, or it gives a value the target's property does not
+     * hold; null where {@code arg} names no field.
+     */
+    private Object heldFunction(final ExpressionTree arg, final Accessor into) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (!(elementAt(unit, arg) instanceof VariableElement held) || held.getKind() != ElementKind.FIELD) return null;
+      if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper computes a value from a function the generated bridge can name: a method" +
+            " reference (Names::full), or a static final field holding the function; " +
+            held.getSimpleName() +
+            " is not static and final"
+        );
+      }
+      final var owner = (TypeElement) held.getEnclosingElement();
+      if (!reachable(held, owner)) return new Refused(arg, unreachable(owner, held.getSimpleName()));
+      final var types = env.getTypeUtils();
+      final var apply = env
+        .getElementUtils()
+        .getTypeElement("java.util.function.Function")
+        .getEnclosedElements()
+        .stream()
+        .filter(e -> e.getKind() == ElementKind.METHOD && e.getSimpleName().contentEquals("apply"))
+        .findFirst()
+        .orElseThrow();
+      final var typed = (ExecutableType) types.asMemberOf((DeclaredType) held.asType(), apply);
+      final var takes = types.erasure(typed.getParameterTypes().get(0));
+      if (!types.isAssignable(types.erasure(source.asType()), takes)) {
+        return new Refused(
+          arg,
+          PairingMessages.computeFunctionOffSource(
+            simple(source),
+            simple(target),
+            into.property(),
+            heldName(held, takes),
+            ComputeForms.shownName(types, takes)
+          )
+        );
+      }
+      final var gives = typed.getReturnType();
+      if (!types.isAssignable(types.erasure(gives), types.erasure(into.type()))) {
+        return new Refused(
+          arg,
+          arg + " gives " + gives + ", which the " + shown(into) + " property '" + into.property() + "' does not hold"
+        );
+      }
+      return new Held(owner.getQualifiedName() + "." + held.getSimpleName() + ".apply(" + SOURCE + ")", gives);
+    }
+
+    /**
+     * How a message names the function {@code held} holds, as the runtime path names it from the
+     * function itself: "a lambda" for a lambda, the reference for a method reference written as the
+     * field's initializer in this compilation, where {@code takes} is the class it takes, and the
+     * field otherwise.
+     */
+    private String heldName(final VariableElement held, final TypeMirror takes) {
+      final var path = trees.getPath(held);
+      if (path != null && path.getLeaf() instanceof VariableTree variable) {
+        final var initializer = variable.getInitializer();
+        if (initializer instanceof LambdaExpressionTree) return "a lambda";
+        final var heldUnit = path.getCompilationUnit();
+        if (
+          initializer instanceof MemberReferenceTree reference &&
+          elementAt(heldUnit, reference) instanceof ExecutableElement method
+        ) {
+          final var unbound =
+            reference.getMode() == MemberReferenceTree.ReferenceMode.INVOKE &&
+            !method.getModifiers().contains(Modifier.STATIC) &&
+            elementAt(heldUnit, reference.getQualifierExpression()) instanceof TypeElement;
+          return ComputeForms.referenceName(env.getTypeUtils(), method, unbound, takes);
+        }
+      }
+      return ((TypeElement) held.getEnclosingElement()).getSimpleName() + "." + held.getSimpleName();
     }
 
     /**
@@ -2027,6 +2222,21 @@ final class FieldRows {
   }
 
   private record Call(String expression, ExecutableElement method) {}
+
+  /**
+   * A function a {@code static final} field holds: the call of its {@code apply}, and what it
+   * gives.
+   */
+  private record Held(String expression, TypeMirror gives) {}
+
+  /** The Java literal of the default value of the primitive {@code kind}. */
+  private static String primitiveDefault(final TypeKind kind) {
+    return switch (kind) {
+      case BOOLEAN -> "false";
+      case INT -> "0";
+      default -> "(" + kind.name().toLowerCase(Locale.ROOT) + ") 0";
+    };
+  }
 
   private static String simple(final TypeElement type) {
     return type.getSimpleName().toString();

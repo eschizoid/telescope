@@ -1032,6 +1032,111 @@ class VerifierSilenceAgreementTest {
     }
   }
 
+  /**
+   * A pair whose source has a name split in two, against a target holding the same two and the
+   * whole name, which a {@code compute} row reading the source fills. {@code Names} has a {@code
+   * full} taking the source and a {@code label} with a form taking nothing as well.
+   */
+  private static final String SPLIT = """
+    record @@Src(String first, String last) {}
+    record @@Tgt(String first, String last, String full) {}
+    class @@Names {
+      static String full(final @@Src s) { return s.first() + " " + s.last(); }
+      static String label() { return "plain"; }
+      static String label(final @@Src s) { return s.first(); }
+    }
+    record @@Plain(String first) {}
+    record @@Bag(String first, String last, List<String> tags) {}
+    """;
+
+  @Nested
+  @DisplayName("A compute row reading the source names no source property, for both")
+  class ComputedFromTheSource {
+
+    @Test
+    @DisplayName("so every source property still pairs with its namesake, on a strict mapper")
+    void namesakesStillPair() {
+      assertBothAccept(
+        verified(
+          "VcA",
+          SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Src::first))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("so it is no second write of a property another row writes, on a strict mapper")
+    void noFanOut() {
+      assertBothAccept(
+        verified(
+          "VcB",
+          SPLIT +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::first, @@Tgt::first), compute(@@Tgt::full, @@Src::first))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("so a kept source property a rename takes the target of is still refused beside it")
+    void aKeptNameIsStillRefused() {
+      assertBothRefuse(
+        verified(
+          "VcC",
+          KEPT +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::n, @@Tgt::label), compute(@@Tgt::z, @@Src::label))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("and a reference whose name has a form taking the source too is refused by both, in one message")
+    void aReferenceWithASourceFormIsRefused() {
+      final var outcome = verified(
+        "VcD",
+        SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Names::label))")
+      );
+      assertBothRefuse(outcome);
+      assertTrue(
+        outcome.construction().contains("from VcDNames::label, which Java binds as a supplier"),
+        outcome::construction
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "and a lambda or an unbound method taking a class the source is not is refused by both, in one message"
+    )
+    void anOffSourceFunctionIsRefused() {
+      final var lambda = verified(
+        "VcE",
+        SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, (@@Plain p) -> p.first()))")
+      );
+      assertBothRefuse(lambda);
+      assertTrue(lambda.construction().contains("from a lambda, which takes VcEPlain"), lambda::construction);
+      final var unbound = verified(
+        "VcF",
+        SPLIT + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Plain::first))")
+      );
+      assertBothRefuse(unbound);
+      assertTrue(unbound.construction().contains("from VcFPlain::first, which takes VcFPlain"), unbound::construction);
+    }
+
+    @Test
+    @DisplayName("and a factory whose one-value form takes any Object is accepted by both, as a supplier")
+    void aFactoryTakingAnyObjectIsAccepted() {
+      assertBothAccept(
+        verified(
+          "VcG",
+          SPLIT + holder("Telescope.mapperForward(@@Src.class, @@Bag.class, compute(@@Bag::tags, List::of))")
+        )
+      );
+    }
+  }
+
   /** A pair whose source and target each hold a {@code Mid}, beside a class neither side is. */
   private static final String NESTED = """
     record @@Mid(String n, String k) {}

@@ -421,6 +421,68 @@ public final class PairingMessages {
   }
 
   /**
+   * A {@code compute} row filling {@code tgtField} through {@code reference}, which Java binds as a
+   * supplier taking no argument, while {@code sourceForm}, a form of the same name, takes the
+   * source. The supplier is rarely the one meant, and nothing in the call says which is.
+   */
+  public static String computeSupplierHasASourceForm(
+    final String source,
+    final String target,
+    final String tgtField,
+    final String reference,
+    final String sourceForm
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": compute(...) fills '" +
+      tgtField +
+      "' from " +
+      reference +
+      ", which Java binds as a supplier taking no argument, though " +
+      sourceForm +
+      " takes the source " +
+      source +
+      ". Hold the one meant in a static final Supplier or FromSource field, or give the form taking the" +
+      " source a name of its own."
+    );
+  }
+
+  /**
+   * A {@code compute} row filling {@code tgtField} through {@code reference}, a function that takes
+   * {@code takes}, which the source is not an instance of.
+   */
+  public static String computeFunctionOffSource(
+    final String source,
+    final String target,
+    final String tgtField,
+    final String reference,
+    final String takes
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": compute(...) fills '" +
+      tgtField +
+      "' from " +
+      reference +
+      ", which takes " +
+      takes +
+      ", and the source " +
+      source +
+      " is not one. Name a method taking " +
+      source +
+      ", or a method of " +
+      source +
+      "."
+    );
+  }
+
+  /**
    * A source property one row drops while another reads the source path {@code path} through it,
    * which backward writes back.
    */

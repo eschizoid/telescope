@@ -162,6 +162,28 @@ the existing emitter without a second one.
 > calls, with the result the annotation gave. The class form of `@Bridge` keeps `value`, `writeStrategy`, `lenient` and
 > the carrier's `source` and `target`.
 
+> **Amendment: a `compute` row reading the source.** `compute(tgt, Names::full)` fills a target property with what a
+> function makes of the whole source, beside `compute(tgt, supplier)`. The function's parameter type is
+> `Mapping.FromSource`, a `Serializable` `Function`, so building the mapper can read the class the function takes. A
+> reference whose name has a form taking no argument and a form taking one, such as `Instant::now` or `HashMap::new`,
+> fits both a `Supplier` and a `FromSource`, and Java picks between two such overloads only when one parameter type
+> extends the other. A third overload takes `Mapping.Fresh`, which extends both and which users never write, so Java
+> binds such a reference to it, as the supplier. A value that is a `Supplier`, a class that is also a plain `Function`
+> included, binds to the `Supplier` overload as before. So every `compute` written before binds as it did, and every one
+> converts as it did but one kind: a reference whose name also has a non-private form whose parameter the source is an
+> instance of, which that binding never reaches. That one is refused by name: on the row at compile time, and when the
+> runtime path builds the mapper, except inside a native image, where the reference is not decoded and runs as the
+> supplier. A form whose parameter is `Object`, which a type variable with no bound erases to, takes any value rather
+> than the source, so `List::of` and `AtomicReference::new` run as suppliers as before. In a `@Bridge` mapper the
+> function is a reference to a static method taking the source, to an instance method of the source or of a type it
+> extends, to a constructor taking the source, or to a method of a `static final` field, or a `static final` field
+> holding the function, and the generated bridge calls it directly on the source. The row names no source property, so
+> it records no write of one and every source property pairs by name as it would without the row; `backward` and `patch`
+> skip the property it fills. A null source never reaches the function, since both paths hand a null source back as
+> null, and a null wrapper result written into a primitive property takes the primitive's default, as a conversion's
+> result does. A function taking a class the source is not is refused by name, in the same words, by the processor, the
+> verifier and the runtime path when it builds the mapper; inside a native image it fails on its first call.
+
 > **Amendment: source and target paths.** A `to(path, accessor)` row compiles when the path is written in place from
 > `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
 > to a property of the class the step before it reads, and so does a `to(accessor, path)` row whose path is written the

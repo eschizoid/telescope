@@ -122,6 +122,7 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 | `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                                                               | (composition by hand)                       |
 | `constant(tgt, value)`        | Forward-only literal at the target slot                                                         | `@Mapping(constant = "...")`                |
 | `compute(tgt, supplier)`      | Forward-only supplier-computed value                                                            | `@Mapping(expression = "java(...)")`        |
+| `compute(tgt, Names::full)`   | Forward-only value computed from the whole source                                               | `@Mapping(expression = "java(...)")`        |
 | `drop(src)`                   | Skip the source field; backward fills it with null (references) or the JLS default (primitives) | `@Mapping(ignore = true)`                   |
 
 Example — three of those rows together:
