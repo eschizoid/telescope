@@ -3076,14 +3076,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         strategies.add(strategy);
         final var rebuild = rebuildFor(level, fieldsOf(level), strategy, bridgePackage);
         if (rebuild.kind() == Rebuild.Kind.NONE) {
+          // A strategy a hint names is held to alone, so the refusal names it.
           error(
             source,
-            PairingMessages.pathIntermediateUnbuildable(
-              source.getSimpleName().toString(),
-              target.getSimpleName().toString(),
-              name,
-              level.getSimpleName().toString()
-            )
+            "AUTO".equals(strategy)
+              ? PairingMessages.pathIntermediateUnbuildable(
+                  source.getSimpleName().toString(),
+                  target.getSimpleName().toString(),
+                  name,
+                  level.getSimpleName().toString()
+                )
+              : PairingMessages.pathIntermediateUnbuiltBy(
+                  source.getSimpleName().toString(),
+                  target.getSimpleName().toString(),
+                  name,
+                  level.getSimpleName().toString(),
+                  strategy
+                )
           );
           return null;
         }

@@ -8,7 +8,9 @@ import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Reads and writes through a mapping row's path that steps through properties alone ({@link
@@ -145,18 +147,65 @@ final class PathWrites {
   }
 
   /**
-   * {@code member}, a property's declared type, as it is read on an object of type {@code owner}: a
-   * type variable of the class {@code owner} parameterizes is its type argument there, and any
-   * other type is itself.
+   * {@code member}, a property's declared type, as it is read on an object of type {@code owner}:
+   * each type variable it names, at any depth, is read as the type argument {@code owner} gives it,
+   * directly or through the superclasses and interfaces {@code owner}'s class extends, and a
+   * variable nothing gives an argument stays a variable.
    */
   private static Type resolved(final Type member, final Type owner) {
-    if (!(member instanceof TypeVariable<?> variable) || !(owner instanceof ParameterizedType given)) return member;
-    if (!(given.getRawType() instanceof Class<?> raw) || variable.getGenericDeclaration() != raw) return member;
-    final var parameters = raw.getTypeParameters();
-    for (var i = 0; i < parameters.length; i++) {
-      if (parameters[i].getName().equals(variable.getName())) return given.getActualTypeArguments()[i];
+    final var given = new HashMap<TypeVariable<?>, Type>();
+    bind(owner, given);
+    return substituted(member, given);
+  }
+
+  /**
+   * Records in {@code given} the type argument {@code type} gives each type variable of its class,
+   * and those its class's generic superclass and interfaces give theirs, read through the same
+   * arguments.
+   */
+  private static void bind(final Type type, final Map<TypeVariable<?>, Type> given) {
+    final Class<?> raw;
+    if (type instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> c) {
+      raw = c;
+      final var parameters = c.getTypeParameters();
+      final var arguments = parameterized.getActualTypeArguments();
+      for (var i = 0; i < parameters.length && i < arguments.length; i++) {
+        given.putIfAbsent(parameters[i], substituted(arguments[i], given));
+      }
+    } else if (type instanceof Class<?> c) {
+      raw = c;
+    } else {
+      return;
     }
-    return member;
+    if (raw.getGenericSuperclass() != null) bind(raw.getGenericSuperclass(), given);
+    for (final var parent : raw.getGenericInterfaces()) bind(parent, given);
+  }
+
+  /** {@code type} with each type variable {@code given} binds replaced by its argument. */
+  private static Type substituted(final Type type, final Map<TypeVariable<?>, Type> given) {
+    if (type instanceof TypeVariable<?> variable) return given.getOrDefault(variable, variable);
+    if (!(type instanceof ParameterizedType parameterized)) return type;
+    final var arguments = parameterized.getActualTypeArguments().clone();
+    for (var i = 0; i < arguments.length; i++) arguments[i] = substituted(arguments[i], given);
+    return new Parameterized(parameterized.getRawType(), arguments, parameterized.getOwnerType());
+  }
+
+  /** A parameterized type built with the arguments a path gives it. */
+  private record Parameterized(Type raw, Type[] arguments, Type owner) implements ParameterizedType {
+    @Override
+    public Type[] getActualTypeArguments() {
+      return arguments.clone();
+    }
+
+    @Override
+    public Type getRawType() {
+      return raw;
+    }
+
+    @Override
+    public Type getOwnerType() {
+      return owner;
+    }
   }
 
   /** The class {@code type} names, its raw class or the erasure of a variable's bound. */

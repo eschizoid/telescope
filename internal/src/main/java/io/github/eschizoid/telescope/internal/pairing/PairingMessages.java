@@ -467,6 +467,41 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A path a mapper writes through that steps through a class the write strategy a hint names for
+   * it, {@code strategy} ({@code CONSTRUCTOR}, {@code BUILDER} or {@code SETTERS}), does not build.
+   */
+  public static String pathIntermediateUnbuiltBy(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String strategy
+  ) {
+    final var reason = switch (strategy) {
+      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
+      " BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
+      " SETTERS, or add a builder().";
+      default -> "no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a public no-arg" +
+      " constructor.";
+    };
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and writeStrategy = " +
+      strategy +
+      " for it finds " +
+      reason
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

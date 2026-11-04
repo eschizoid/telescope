@@ -467,6 +467,7 @@ public final class DeepMap {
       trail
     );
     validateAllHintsConsumed(hintMap, cache, overrides, source, target);
+    refuseUnbuiltByDefault(beanRefl, defaultStrategy, overrides, source, target, lenient);
     if (walked != null) {
       // Every pair that leaves the runtime walk open is one the build refuses, so a build that
       // finished was walked to the end.
@@ -653,6 +654,56 @@ public final class DeepMap {
         ". Remove the row, or verify the class is actually reached by the source/target" +
         " structure."
     );
+  }
+
+  /**
+   * Refuses a path the mapper writes through that steps through a bean the {@code writeBeans}
+   * default, {@code strategy}, does not build, though the shared order would: the default is held
+   * to alone for every bean a path builds, as for every other bean the mapper builds. A source path
+   * is written on a mapper that converts backward, and a target path on every mapper.
+   */
+  private static void refuseUnbuiltByDefault(
+    final Reflective beanRefl,
+    final WriteHint.WriteStrategy strategy,
+    final List<Mapping<?, ?>> rows,
+    final Class<?> source,
+    final Class<?> target,
+    final boolean forwardOnly
+  ) {
+    if (strategy == null) return;
+    for (final var raw : rows) {
+      final Mapping<?, ?> row = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
+      final var read = switch (row) {
+        case FromTelescopeTo<?, ?, ?> r -> forwardOnly ? null : PathWrites.plan(r.sourceTelescope(), source);
+        case TelescopeToTelescope<?, ?, ?> r -> forwardOnly || r.kind() != TelescopeToTelescope.Kind.BROADCAST
+          ? null
+          : PathWrites.plan(r.sourceTelescope(), source);
+        default -> null;
+      };
+      final var written = switch (row) {
+        case TelescopeTo<?, ?, ?> r -> PathWrites.plan(r.targetTelescope(), target);
+        case TelescopeToTelescope<?, ?, ?> r -> r.kind() != TelescopeToTelescope.Kind.BROADCAST
+          ? null
+          : PathWrites.plan(r.targetTelescope(), target);
+        default -> null;
+      };
+      for (final var plan : new PathWrites.Plan[] { read, written }) {
+        if (plan == null) continue;
+        for (var i = 1; i < plan.levels().length; i++) {
+          final var level = plan.levels()[i];
+          if (level.isRecord() || beanRefl.writerFor(level) != null) continue;
+          throw new IllegalArgumentException(
+            PairingMessages.pathIntermediateUnbuiltBy(
+              source.getSimpleName(),
+              target.getSimpleName(),
+              String.join(".", plan.names()),
+              PairingMessages.className(level),
+              strategy.name()
+            )
+          );
+        }
+      }
+    }
   }
 
   /** Whether a row is keyed to a pair other than the mapper's own. */

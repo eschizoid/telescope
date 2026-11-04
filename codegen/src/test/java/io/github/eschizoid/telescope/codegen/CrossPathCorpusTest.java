@@ -10830,6 +10830,45 @@ class CrossPathCorpusTest {
   private static final String GENERIC_BOX = "public record %1$sBox<T>(T value, String tag) {}\n";
   private static final String GENERIC_CUST = "public record %1$sCust(String city, int zip) {}\n";
 
+  private static final String NESTED_INNER = "public record %1$sInner<U>(U value, String k) {}\n";
+  private static final String NESTED_OUTER = "public record %1$sOuter<T>(%1$sInner<T> inner, String o) {}\n";
+  private static final String GENERIC_BASE =
+    "public class %1$sBase<T> {\n  private T value;\n  public T getValue() { return value; }\n" +
+    "  public void setValue(final T v) { value = v; }\n}\n";
+  private static final String FIXED_SUB =
+    "public class %1$sSub extends %1$sBase<%1$sCust> {\n" +
+    "  public static %1$sSub of(final %1$sCust c) { final var s = new %1$sSub(); s.setValue(c); return s; }\n}\n";
+  private static final String NESTED_GENERIC_PATH = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::outer",
+    "%1$sOuter::inner",
+    "%1$sInner::value",
+    "%1$sCust::city"
+  );
+  private static final String NESTED_GENERIC_TARGET = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::outer",
+    "%1$sOuter::inner",
+    "%1$sInner::value",
+    "%1$sCust::city"
+  );
+  private static final String INHERITED_PATH = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::sub",
+    "%1$sSub::getValue",
+    "%1$sCust::city"
+  );
+  private static final String INHERITED_TARGET = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::sub",
+    "%1$sSub::getValue",
+    "%1$sCust::city"
+  );
+
   private static final String TWO_STEP_NAME = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::name");
   private static final String TWO_STEP_AGE = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::age");
   private static final String THREE_STEP_CITY = pathOf(
@@ -11143,6 +11182,42 @@ class CrossPathCorpusTest {
       "#0(city=\"P\", qty=3)",
       "#0(box=#1(value=#2(city=\"R\", zip=0), tag=null), qty=1)",
       "#0(box=#1(value=#2(city=\"R\", zip=1), tag=\"t\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a generic record held in another, each read through its type argument",
+      false,
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "String id, %1$sOuter<%1$sCust> outer",
+          "new %1$sSrc(\"i\", new %1$sOuter<>(new %1$sInner<>(new %1$sCust(\"P\", 1), \"k\"), \"o\"))"
+        ),
+        NESTED_OUTER,
+        NESTED_INNER,
+        GENERIC_CUST,
+        typedField(false, "to(" + NESTED_GENERIC_PATH + ", %1$sTgt::city)"),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        runtimeMapper(false, "", "to(" + NESTED_GENERIC_PATH + ", %1$sTgt::city)")
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", outer=#1(inner=#2(value=#3(city=\"R\", zip=0), k=null), o=null))",
+      "#0(id=\"j\", outer=#1(inner=#2(value=#3(city=\"R\", zip=1), k=\"k\"), o=\"o\"))"
+    ),
+    new NestedPath(
+      "a bean path through a property a superclass declares with a variable the subclass fixes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, %1$sSub sub", "new %1$sSrc(\"i\", %1$sSub.of(new %1$sCust(\"P\", 1)))"),
+        GENERIC_BASE,
+        FIXED_SUB,
+        GENERIC_CUST,
+        typedField(false, "to(" + INHERITED_PATH + ", %1$sTgt::city)"),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        runtimeMapper(false, "", "to(" + INHERITED_PATH + ", %1$sTgt::city)")
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", sub=#1(value=#2(city=\"R\", zip=0)))",
+      "#0(id=\"j\", sub=#1(value=#2(city=\"R\", zip=1)))"
     ),
     new NestedPath(
       "a bean path through an object built by its name-matched constructor",
@@ -11523,6 +11598,42 @@ class CrossPathCorpusTest {
       "#0(box=#1(value=#2(city=\"P\", zip=0), tag=null), qty=3)",
       "#0(city=\"R\", qty=1)",
       "#0(city=\"R\", qty=1)"
+    ),
+    new NestedPath(
+      "a target path through a generic record held in another, each read through its type argument",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String city", "new %1$sSrc(\"i\", \"P\")"),
+        NESTED_OUTER,
+        NESTED_INNER,
+        GENERIC_CUST,
+        typedField(false, "to(%1$sSrc::city, " + NESTED_GENERIC_TARGET + ")"),
+        sampled(
+          "%1$sTgt",
+          "String id, %1$sOuter<%1$sCust> outer",
+          "new %1$sTgt(\"j\", new %1$sOuter<>(new %1$sInner<>(new %1$sCust(\"R\", 5), \"k\"), \"o\"))"
+        ),
+        runtimeMapper(false, "", "to(%1$sSrc::city, " + NESTED_GENERIC_TARGET + ")")
+      ),
+      "#0(id=\"i\", outer=#1(inner=#2(value=#3(city=\"P\", zip=0), k=null), o=null))",
+      "#0(id=\"j\", city=\"R\")",
+      "#0(id=\"j\", city=\"R\")"
+    ),
+    new NestedPath(
+      "a target path through a property a superclass declares with a variable the subclass fixes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String city", "new %1$sSrc(\"i\", \"P\")"),
+        GENERIC_BASE,
+        FIXED_SUB,
+        GENERIC_CUST,
+        typedField(false, "to(%1$sSrc::city, " + INHERITED_TARGET + ")"),
+        sampled("%1$sTgt", "String id, %1$sSub sub", "new %1$sTgt(\"j\", %1$sSub.of(new %1$sCust(\"R\", 5)))"),
+        runtimeMapper(false, "", "to(%1$sSrc::city, " + INHERITED_TARGET + ")")
+      ),
+      "#0(id=\"i\", sub=#1(value=#2(city=\"P\", zip=0)))",
+      "#0(id=\"j\", city=\"R\")",
+      "#0(id=\"j\", city=\"R\")"
     ),
     new NestedPath(
       "a target path through a bean a writeBean hint builds through its setters",
@@ -12031,6 +12142,34 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),
       PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean a writeBeans default does not build",
+      List.of(
+        "public record %1$sSrc(%1$sBox box, int qty) {}\n",
+        "public class %1$sBox {\n" +
+          "  private final String s;\n" +
+          "  private %1$sBox(final String s) { this.s = s; }\n" +
+          "  public String getS() { return s; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s); }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        "public record %1$sTgt(String s, int qty) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS"),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS")
     )
   );
 

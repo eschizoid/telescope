@@ -169,26 +169,30 @@ the existing emitter without a second one.
 > navigator, a step other than `field`, a lambda step, and a path rooted at a class its side neither is nor extends. A
 > row with a path on both sides is refused too.
 >
-> Both paths give such a row one meaning, decided in the shared spec. Forward reads the leaf, and a null object on the
-> way reads as the leaf's null value: null for a reference, the default for a primitive member of a record, a
-> constructor or a builder, and no call to a primitive setter, as a null source value is written anywhere else. Backward
-> writes the target's value back through the path and rebuilds every object the path steps through, each through the
-> write strategy `BeanWriteStrategy` picks for its class; an object that is null is built, with its other properties at
-> their null value, when the value is not null, and stays null when it is, so a reference leaf read forward as null
-> through a null object is written back as null, and the object stays null. A primitive leaf reads its default there,
-> which is not null, so it is written back and the objects above it are built. `patch` writes a partial's non-null value
-> the same way, after the rest of the source is rebuilt, in the order the rows came. A mapper that converts both ways
-> refuses a path through a class no write strategy builds, by name, when it is built and on the row. A forward-only
-> mapper never writes through a source path, and its lenient bridge's backward writes nothing through one.
+> Both paths give such a row one meaning, decided in the shared spec. Each object a path steps through is read as the
+> class its property declares, with every type variable read as the type argument the path gives it, through nested
+> parameterized types and through the superclasses and interfaces that fix a variable. Each one is built through the
+> write strategy a `writeBean` hint names for its class, else the `writeBeans` default, else the shared
+> `BeanWriteStrategy` order; a strategy a hint names is held to alone, and a path through a class it does not build is
+> refused naming that strategy. A `writeBean` hint keyed to such a class is one the mapper uses.
+>
+> Forward reads the leaf, and a null object on the way reads as the leaf's null value: null for a reference, the default
+> for a primitive member of a record, a constructor or a builder, and no call to a primitive setter, as a null source
+> value is written anywhere else. Backward writes the target's value back through the path and rebuilds every object the
+> path steps through. An object that is null is built, with its other properties at their null value, when the value is
+> not null, and stays null when it is: a reference leaf read forward as null through a null object is written back as
+> null and the object stays null, while a primitive leaf reads its default there, which is not null, so writing it back
+> builds the objects above it. `patch` writes a partial's non-null value the same way, after the rest of the source is
+> rebuilt, in the order the rows came. A path's leaf crosses as it is, so a container leaf is the same instance on both
+> sides. A mapper that converts both ways refuses a path through a class no write strategy builds, by name, when it is
+> built and on the row. A forward-only mapper never writes through a source path, and its lenient bridge's backward
+> writes nothing through one.
 >
 > Rebuilding is chosen over refusing a path longer than one step in a two-way mapper: it keeps both directions of the
 > row, it needs no reflection, since every object on the path has a class the processor sees, and the null rule above
 > makes a round trip of a reference leaf through a null object return the null it started from. The runtime mapper used
 > to leave such an object null on backward and lose the value, and ignored the row in `patch`; it now writes as
-> described. A path's leaf crosses as it is, so a container leaf is the same instance on both sides. Each object a path
-> steps through is read as the class its property declares, a type variable read as the type argument the path gives it,
-> and is built through the write strategy a `writeBean` hint names for its class, else a `writeBeans` default, else the
-> shared order; a `writeBean` hint keyed to such a class is a hint the mapper uses.
+> described.
 >
 > A target path follows the same rule the other way. Forward writes the source property through the path, building a
 > null object on the way unless the value is null, over whatever the target property the path starts at holds; backward
