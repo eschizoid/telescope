@@ -173,8 +173,11 @@ the existing emitter without a second one.
 > class its property declares, with every type variable read as the type argument the path gives it, through nested
 > parameterized types and through the superclasses and interfaces that fix a variable. Each one is built through the
 > write strategy a `writeBean` hint names for its class, else the `writeBeans` default, else the shared
-> `BeanWriteStrategy` order; a strategy a hint names is held to alone, and a path through a class it does not build is
-> refused naming that strategy. A `writeBean` hint keyed to such a class is one the mapper uses.
+> `BeanWriteStrategy` order. A strategy a hint names is held to alone: a path through a class it does not build, as
+> `SETTERS` on a class with no public no-argument constructor, is refused naming that strategy. Whatever the strategy, a
+> path through a class it builds with no member for the property the path writes is refused too, since the write would
+> drop the value; both refusals come when the mapper is built, and on the row. A `writeBean` hint keyed to such a class
+> is one the mapper uses.
 >
 > Forward reads the leaf, and a null object on the way reads as the leaf's null value: null for a reference, the default
 > for a primitive member of a record, a constructor or a builder, and no call to a primitive setter, as a null source

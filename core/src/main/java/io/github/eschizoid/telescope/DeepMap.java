@@ -467,7 +467,7 @@ public final class DeepMap {
       trail
     );
     validateAllHintsConsumed(hintMap, cache, overrides, source, target);
-    refuseUnbuiltByDefault(beanRefl, defaultStrategy, overrides, source, target, lenient);
+    refuseUnwrittenPathObjects(beanRefl, hints, defaultStrategy, overrides, source, target, lenient);
     if (walked != null) {
       // Every pair that leaves the runtime walk open is one the build refuses, so a build that
       // finished was walked to the end.
@@ -657,20 +657,28 @@ public final class DeepMap {
   }
 
   /**
-   * Refuses a path the mapper writes through that steps through a bean the {@code writeBeans}
-   * default, {@code strategy}, does not build, though the shared order would: the default is held
-   * to alone for every bean a path builds, as for every other bean the mapper builds. A source path
-   * is written on a mapper that converts backward, and a target path on every mapper.
+   * Refuses a path the mapper writes through that steps through a bean it would build without the
+   * property the path writes: one the strategy a {@code writeBean} hint or the {@code writeBeans}
+   * default names for it does not build, since a hinted strategy is held to alone, or whose writer
+   * has no member for that property, which would drop the value. A {@code SETTERS} hint builds only
+   * through a public no-argument constructor, as the generated path calls it. A source path is
+   * written on a mapper that converts backward, and a target path on every mapper.
    */
-  private static void refuseUnbuiltByDefault(
+  private static void refuseUnwrittenPathObjects(
     final Reflective beanRefl,
-    final WriteHint.WriteStrategy strategy,
+    final List<WriteHint<?>> hints,
+    final WriteHint.WriteStrategy defaultStrategy,
     final List<Mapping<?, ?>> rows,
     final Class<?> source,
     final Class<?> target,
     final boolean forwardOnly
   ) {
-    if (strategy == null) return;
+    final var keyed = new HashMap<Class<?>, WriteHint.WriteStrategy>();
+    for (final var hint : hints) {
+      if (hint instanceof WriteHint.BeanWriteHint<?>(final Class<?> cls, final WriteHint.WriteStrategy strategy)) {
+        keyed.put(cls, strategy);
+      }
+    }
     for (final var raw : rows) {
       final Mapping<?, ?> row = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
       final var read = switch (row) {
@@ -691,19 +699,47 @@ public final class DeepMap {
         if (plan == null) continue;
         for (var i = 1; i < plan.levels().length; i++) {
           final var level = plan.levels()[i];
-          if (level.isRecord() || beanRefl.writerFor(level) != null) continue;
-          throw new IllegalArgumentException(
-            PairingMessages.pathIntermediateUnbuiltBy(
-              source.getSimpleName(),
-              target.getSimpleName(),
-              String.join(".", plan.names()),
-              PairingMessages.className(level),
-              strategy.name()
-            )
-          );
+          if (level.isRecord()) continue;
+          final var strategy = keyed.getOrDefault(level, defaultStrategy);
+          final var path = String.join(".", plan.names());
+          final var name = PairingMessages.className(level);
+          final var writer = beanRefl.writerFor(level);
+          if (
+            strategy != null &&
+            (writer == null || (strategy == WriteHint.WriteStrategy.SETTERS && !publicNoArgConstructor(level)))
+          ) {
+            throw new IllegalArgumentException(
+              PairingMessages.pathIntermediateUnbuiltBy(
+                source.getSimpleName(),
+                target.getSimpleName(),
+                path,
+                name,
+                strategy.name()
+              )
+            );
+          }
+          if (writer != null && !writer.writes(plan.names()[i])) {
+            throw new IllegalArgumentException(
+              PairingMessages.pathIntermediateUnwritable(
+                source.getSimpleName(),
+                target.getSimpleName(),
+                path,
+                name,
+                plan.names()[i],
+                strategy == null ? null : strategy.name()
+              )
+            );
+          }
         }
       }
     }
+  }
+
+  /** Whether {@code cls} is a concrete class with a public constructor taking no arguments. */
+  private static boolean publicNoArgConstructor(final Class<?> cls) {
+    if (Modifier.isAbstract(cls.getModifiers())) return false;
+    for (final var constructor : cls.getConstructors()) if (constructor.getParameterCount() == 0) return true;
+    return false;
   }
 
   /** Whether a row is keyed to a pair other than the mapper's own. */

@@ -12170,6 +12170,81 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS"),
       PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean with a private no-argument constructor that a writeBeans SETTERS default names",
+      List.of(
+        "public record %1$sSrc(String id, %1$sHb c) {}\n",
+        "public class %1$sHb {\n" +
+          "  private String city;\n  private %1$sHb() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n    private String city;\n" +
+          "    public Builder city(final String v) { city = v; return this; }\n" +
+          "    public %1$sHb build() { final var b = new %1$sHb(); b.city = city; return b; }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS"),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "the same bean named by a writeBean SETTERS hint keyed to it",
+      List.of(
+        "public record %1$sSrc(String id, %1$sHb c) {}\n",
+        "public class %1$sHb {\n" +
+          "  private String city;\n  private %1$sHb() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n    private String city;\n" +
+          "    public Builder city(final String v) { city = v; return this; }\n" +
+          "    public %1$sHb build() { final var b = new %1$sHb(); b.city = city; return b; }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS"),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean whose setters write no property the path writes",
+      List.of(
+        "public record %1$sSrc(String id, %1$sRo c) {}\n",
+        "public class %1$sRo {\n" +
+          "  private String city;\n  private int n;\n  public %1$sRo() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public int getN() { return n; }\n  public void setN(final int v) { n = v; }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sRo::getCity") + ", %1$sTgt::city)"
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sRo::getCity") + ", %1$sTgt::city)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sRo", "city", null),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sRo", "city", null)
     )
   );
 
@@ -12234,8 +12309,18 @@ class CrossPathCorpusTest {
     );
   }
 
-  /** What the processor refuses a row given a path with, which has no generated form yet. */
+  /**
+   * What the processor refuses a constant or compute row given a path with, which has no generated
+   * form yet.
+   */
   private static final String PATH_ROW_UNCOMPILED = "a telescope path or another expression has no generated form yet";
+
+  /**
+   * What the processor refuses a row with a path on both sides with, which has no generated form
+   * yet.
+   */
+  private static final String PATH_BOTH_UNCOMPILED =
+    "a row whose source and target are both telescope paths has no generated form yet";
 
   /** The value a compute row supplies, and the predicate a when row gates on, for each row. */
   private static final String UNPAIRED_HELP =
@@ -12345,7 +12430,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -12355,7 +12440,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -12365,7 +12450,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      PATH_BOTH_UNCOMPILED,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -12440,7 +12525,7 @@ class CrossPathCorpusTest {
         SOURCE_Y_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
@@ -12450,7 +12535,7 @@ class CrossPathCorpusTest {
         SOURCE_Y_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
@@ -12493,7 +12578,7 @@ class CrossPathCorpusTest {
         List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      null,
       null
     ),
     new UnpairedBeside(
@@ -12503,7 +12588,7 @@ class CrossPathCorpusTest {
         List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      null,
       null
     ),
     new UnpairedBeside(

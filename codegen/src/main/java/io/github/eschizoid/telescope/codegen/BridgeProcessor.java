@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -3071,7 +3072,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var rebuilds = new ArrayList<Rebuild>();
     final var strategies = new ArrayList<String>();
     if (writes) {
-      for (final var level : levels.subList(1, levels.size())) {
+      for (var levelAt = 1; levelAt < levels.size(); levelAt++) {
+        final var level = levels.get(levelAt);
         final var strategy = level.getKind() == ElementKind.RECORD ? "AUTO" : strategyOf.apply(level);
         strategies.add(strategy);
         final var rebuild = rebuildFor(level, fieldsOf(level), strategy, bridgePackage);
@@ -3096,6 +3098,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
           return null;
         }
+        // A rebuild with no member for the property the path writes would drop the value.
+        final var written = propertyOf(level, methods.get(levelAt));
+        if (!rebuildWrites(level, rebuild, written)) {
+          error(
+            source,
+            PairingMessages.pathIntermediateUnwritable(
+              source.getSimpleName().toString(),
+              target.getSimpleName().toString(),
+              name,
+              level.getSimpleName().toString(),
+              written,
+              "AUTO".equals(strategy) ? null : strategy
+            )
+          );
+          return null;
+        }
         rebuilds.add(rebuild);
       }
     }
@@ -3106,6 +3124,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.copyOf(levelTypes),
       List.copyOf(strategies)
     );
+  }
+
+  /**
+   * The property {@code method} reads on {@code type}: a component's name, or a getter's property.
+   */
+  private static String propertyOf(final TypeElement type, final String method) {
+    return type.getKind() == ElementKind.RECORD ? method : PropertyNames.property(method);
+  }
+
+  /** Whether {@code rebuild} of {@code type} writes {@code property} into the object it builds. */
+  private boolean rebuildWrites(final TypeElement type, final Rebuild rebuild, final String property) {
+    return switch (rebuild.kind()) {
+      case RECORD -> true;
+      case CONSTRUCTOR -> rebuild
+        .constructor()
+        .getParameters()
+        .stream()
+        .anyMatch(p -> p.getSimpleName().contentEquals(property));
+      case BUILDER -> builderSetter(type, rebuild.builderType(), property) != null;
+      case SETTERS -> setterName(type, property) != null;
+      case NONE -> false;
+    };
   }
 
   /**

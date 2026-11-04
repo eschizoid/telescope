@@ -502,6 +502,40 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A path a mapper writes through that steps through a class the write strategy it is built
+   * through, {@code strategy} as a hint names it or null for the one it takes, writes no {@code
+   * property} into, so the value written through the path would be dropped.
+   */
+  public static String pathIntermediateUnwritable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String property,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
+      property +
+      "' into it, so a write through the path would drop the value. Give " +
+      intermediate +
+      " a member that writes '" +
+      property +
+      "', or name a strategy that writes it."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (
