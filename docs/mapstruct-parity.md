@@ -320,7 +320,8 @@ Telescope.mapperForward(Order.class, OrderDto.class, // one-way: the hook below 
 ```
 
 A better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no expression
-parser. compute() takes a Supplier, or a Function of the whole source for a value derived from several source fields;
+parser. compute() takes a Supplier, or a method reference to a function of the whole source (a FromSource; a function held
+as a plain Function is passed as fn::apply) for a value derived from several source fields;
 toOneWay(src, tgt, fn) converts one source field. compute/constant rows are forward-only by design (backward drops the
 slot). On a `@Bridge` field the same `compute` row compiles when its supplier is a method reference (`Instant::now`) or
 a `static final` field holding one, and when its function is a method reference taking the source (`Names::display`), a

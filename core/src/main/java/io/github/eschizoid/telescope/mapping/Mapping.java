@@ -764,8 +764,9 @@ public sealed interface Mapping<A, B>
    * <p><b>Inference.</b> Nothing in the call fixes the source class, so {@code function} must say
    * which class it takes: a reference to a method with one form of its name, or a lambda whose
    * parameter is given a type, {@code (User user) -> ...}. An overloaded helper, such as {@code
-   * Names.full(User)} beside {@code Names.full(Admin)}, and a lambda with an inferred parameter
-   * cannot be resolved; hold the one meant in a {@code static final FromSource<User, String>} field
+   * Names.full(User)} beside {@code Names.full(Admin)}, cannot be resolved, and a lambda with an
+   * inferred parameter takes {@code Object}, so its body can use only what {@code Object} has; hold
+   * the one meant in a {@code static final FromSource<User, String>} field
    * and pass the field, or {@code FULL::apply}. A function already held as a plain {@code Function}
    * is passed as {@code function::apply}.
    *
