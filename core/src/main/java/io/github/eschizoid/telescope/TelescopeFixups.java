@@ -92,9 +92,10 @@ final class TelescopeFixups {
     final Reflective srcRefl,
     final Class<S> source,
     final Reflective tgtRefl,
-    final Class<T> target
+    final Class<T> target,
+    final Reflective beanRefl
   ) {
-    final var plans = new Plans(new IdentityHashMap<>(), new IdentityHashMap<>(), tgtRefl);
+    final var plans = new Plans(new IdentityHashMap<>(), new IdentityHashMap<>(), tgtRefl, beanRefl);
     for (final var raw : fixups) {
       final Mapping<?, ?> fx = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
       final Telescope<?, ?> read = switch (fx) {
@@ -124,13 +125,14 @@ final class TelescopeFixups {
 
   /**
    * The plans of the rows whose paths step through properties alone, by row, for the path each
-   * reads or writes on the source and on the target, and the reflective the target is rebuilt
-   * through.
+   * reads or writes on the source and on the target, the reflective the target is rebuilt through,
+   * and the one each bean a path steps through is, which carries the mapper's write hints.
    */
   private record Plans(
     Map<Mapping<?, ?>, PathWrites.Plan> source,
     Map<Mapping<?, ?>, PathWrites.Plan> target,
-    Reflective tgtRefl
+    Reflective tgtRefl,
+    Reflective beanRefl
   ) {}
 
   /**
@@ -153,11 +155,14 @@ final class TelescopeFixups {
   static BiFunction<Object, Object, Object> patchOverlay(
     final FromTelescopeTo<?, ?, ?> row,
     final Class<?> source,
-    final Reflective srcRefl
+    final Reflective srcRefl,
+    final Reflective beanRefl
   ) {
     final var plan = PathWrites.plan(row.sourceTelescope(), source);
     final var path = (Telescope<Object, Object>) row.sourceTelescope();
-    return plan != null ? (s, value) -> PathWrites.write(plan, s, value, srcRefl) : (s, value) -> path.set(s, value);
+    return plan != null
+      ? (s, value) -> PathWrites.write(plan, s, value, srcRefl, beanRefl)
+      : (s, value) -> path.set(s, value);
   }
 
   @SuppressWarnings("unchecked")
@@ -220,7 +225,7 @@ final class TelescopeFixups {
         case TelescopeTo<?, ?, ?> r -> {
           final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
           final var plan = plans.target().get(r);
-          if (plan != null) yield (T) PathWrites.write(plan, t, srcAcc.apply(s), plans.tgtRefl());
+          if (plan != null) yield (T) PathWrites.write(plan, t, srcAcc.apply(s), plans.tgtRefl(), plans.beanRefl());
           final var tgtT = (Telescope<T, Object>) r.targetTelescope();
           yield tgtT.set(t, srcAcc.apply(s));
         }
@@ -252,7 +257,7 @@ final class TelescopeFixups {
           final var sourcePlan = plans.source().get(r);
           final var value = sourcePlan != null ? PathWrites.read(sourcePlan, s) : srcT.find(s).orElse(null);
           final var targetPlan = plans.target().get(r);
-          if (targetPlan != null) yield (T) PathWrites.write(targetPlan, t, value, plans.tgtRefl());
+          if (targetPlan != null) yield (T) PathWrites.write(targetPlan, t, value, plans.tgtRefl(), plans.beanRefl());
           yield tgtT.set(t, value);
         }
         case Constant<?, ?, ?> r -> {
@@ -349,7 +354,7 @@ final class TelescopeFixups {
         case FromTelescopeTo<?, ?, ?> r -> {
           final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
           final var plan = plans.source().get(r);
-          if (plan != null) yield (S) PathWrites.write(plan, s, tgtAcc.apply(t), srcRefl);
+          if (plan != null) yield (S) PathWrites.write(plan, s, tgtAcc.apply(t), srcRefl, plans.beanRefl());
           final var srcT = (Telescope<S, Object>) r.sourceTelescope();
           yield srcT.set(s, tgtAcc.apply(t));
         }
@@ -371,7 +376,7 @@ final class TelescopeFixups {
           final var targetPlan = plans.target().get(r);
           final var value = targetPlan != null ? PathWrites.read(targetPlan, t) : tgtT.find(t).orElse(null);
           final var sourcePlan = plans.source().get(r);
-          if (sourcePlan != null) yield (S) PathWrites.write(sourcePlan, s, value, srcRefl);
+          if (sourcePlan != null) yield (S) PathWrites.write(sourcePlan, s, value, srcRefl, plans.beanRefl());
           yield srcT.set(s, value);
         }
         // TelescopeTo already applied through fieldOverrides in the rebuild above.

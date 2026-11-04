@@ -151,8 +151,10 @@ way, described in the 'Null objects on the path' paragraph of `to(Accessor, Tele
 nested. Paths are typed Telescope values instead of dotted strings, so javac checks every hop. A source path is started
 at the mapper's source; one whose first property is read through a class the source neither is nor extends is refused
 when the mapper is built, and by the compile-time verifier where it can tell. Rows using Telescope paths apply at the
-outer (source, target) pair only — same scope as MapStruct's per-method @Mapping. A path through a class no write
-strategy builds is refused by name when the mapper is built.
+outer (source, target) pair only — same scope as MapStruct's per-method @Mapping. A path through `field` steps alone
+that the mapper writes through, a source path on a two-way mapper or a target path on any mapper, is refused by name
+when the mapper is built if it steps through a class no write strategy builds; a path of another shape is set through
+the lattice as it is.
 
 A path through `field` steps alone reads a null object on the way as the leaf's null value, and a write through it
 builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on

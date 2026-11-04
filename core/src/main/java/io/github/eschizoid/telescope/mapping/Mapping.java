@@ -398,6 +398,9 @@ public sealed interface Mapping<A, B>
    * strategy builds. A path of any other shape is written into a default-tree instance of the
    * target property it starts at, and set and read through the lattice as it is.
    *
+   * <p>The value goes across the path as it is: a container leaf, a {@code List} or a {@code Map},
+   * is the same instance on both sides, not the copy a row between two accessors makes.
+   *
    * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
    * Telescope.of(Target.class)} or {@code Telescope.ofBean(Target.class)} through {@code field}
    * steps alone, each a method reference to a property: writes call each class's accessors and
@@ -434,6 +437,9 @@ public sealed interface Mapping<A, B>
    * is null, an object that is null stays null. A mapper that converts both ways refuses, when it
    * is built, a path through a class no write strategy builds. A path of any other shape is read
    * and set through the lattice as it is.
+   *
+   * <p>The value goes across the path as it is: a container leaf, a {@code List} or a {@code Map},
+   * is the same instance on both sides, not the copy a row between two accessors makes.
    *
    * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
    * Telescope.of(Source.class)} or {@code Telescope.ofBean(Source.class)} through {@code field}

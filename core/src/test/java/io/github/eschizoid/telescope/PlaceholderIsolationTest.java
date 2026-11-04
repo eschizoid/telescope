@@ -96,6 +96,24 @@ class PlaceholderIsolationTest {
   }
 
   @Test
+  @DisplayName("a constant through a path into a self-referential record has no default tree, rather than no bound")
+  void selfReferentialRecordYieldsNoDefaultTree() {
+    // A constant written through a path starts from a default tree of the property the path starts
+    // at. No instance of Node can be built without an instance of Node, so Node has no default
+    // tree: resolving its component plans re-enters the same type, which without a guard descends
+    // until the stack ends. It yields the null a type with no construction strategy yields, and
+    // the constant has nothing to land on.
+    final var mapper = Telescope.mapperForward(
+      Slim.class,
+      NodeHolder.class,
+      Mapping.drop(Slim::value),
+      Mapping.constant(Telescope.of(NodeHolder.class).field(NodeHolder::node).field(Node::value), "x")
+    );
+
+    assertNull(mapper.forward(new Slim("y")).node(), "a record that cannot be defaulted stays null");
+  }
+
+  @Test
   @DisplayName("mutually referential records terminate the same way")
   void mutualReferenceTerminates() {
     final var mapper = Telescope.mapperForward(

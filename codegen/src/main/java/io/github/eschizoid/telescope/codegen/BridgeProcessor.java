@@ -380,7 +380,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     List<FieldRows.SourcePath> sourcePaths,
     // For a field's bridge, its rows writing a source property into the target through a path, in
     // the order the rows came.
-    List<FieldRows.TargetPath> targetPaths
+    List<FieldRows.TargetPath> targetPaths,
+    // For a field's bridge, the write strategy its writeBean rows name for each class, by
+    // qualified name, and the one its writeBeans row names, or null: a path builds an object it
+    // steps through by the one its class takes.
+    Map<String, String> pathStrategies,
+    String pathDefault
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -399,7 +404,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.of(),
       List.of(),
       List.of(),
-      List.of()
+      List.of(),
+      Map.of(),
+      null
     );
 
     /**
@@ -425,7 +432,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         List.of(),
         List.of(),
         List.of(),
-        List.of()
+        List.of(),
+        Map.of(),
+        null
       );
     }
   }
@@ -824,7 +833,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           List.of(),
           List.of(),
           List.of(),
-          List.of()
+          List.of(),
+          Map.of(),
+          null
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
@@ -1115,7 +1126,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.copyOf(parsed.rowKinds()),
       List.copyOf(parsed.rowAccessors()),
       List.copyOf(parsed.sourcePaths()),
-      List.copyOf(parsed.targetPaths())
+      List.copyOf(parsed.targetPaths()),
+      Map.copyOf(parsed.beanStrategies()),
+      parsed.defaultStrategy()
     );
     if (
       !roundEnv.processingOver() && (carriesLombokTrigger(parsed.source()) || carriesLombokTrigger(parsed.target()))
@@ -1513,11 +1526,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
     // What each source path reads at every level, and how a strict bridge rebuilds each object it
     // writes back through.
-    final var sourcePaths = planSourcePaths(source, target, targetFields, cfg.sourcePaths(), lenient, bridgePackage);
+    // An object a path builds is built through the strategy a writeBean row names for its class,
+    // else the writeBeans default, as every bean the runtime mapper builds is.
+    final Function<TypeElement, String> pathStrategyOf = level -> {
+      final var keyed = cfg.pathStrategies().get(level.getQualifiedName().toString());
+      if (keyed != null) return keyed;
+      return cfg.pathDefault() != null ? cfg.pathDefault() : "AUTO";
+    };
+    final var sourcePaths = planSourcePaths(
+      source,
+      target,
+      targetFields,
+      cfg.sourcePaths(),
+      lenient,
+      pathStrategyOf,
+      bridgePackage
+    );
     if (sourcePaths == null) return;
     // What each target path writes at every level, and how each object below the target is rebuilt
     // when the value is written through it, which forward does on a strict and a lenient bridge.
-    final var targetPaths = planTargetPaths(source, target, cfg.targetPaths(), bridgePackage);
+    final var targetPaths = planTargetPaths(source, target, cfg.targetPaths(), pathStrategyOf, bridgePackage);
     if (targetPaths == null) return;
 
     // Validate every transform field is a real source field (drops would mask the validation).
@@ -2728,6 +2756,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         path.row().methods(),
         path.levels(),
         path.rebuilds(),
+        path.levelTypes(),
+        path.strategies(),
         fieldByName(sourceFields, path.row().source()).type(),
         source
       );
@@ -2896,7 +2926,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     int index,
     List<TypeElement> levels,
     List<TypeMirror> reads,
-    List<Rebuild> rebuilds
+    List<Rebuild> rebuilds,
+    List<DeclaredType> levelTypes,
+    List<String> strategies
   ) {}
 
   /**
@@ -2911,14 +2943,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final List<FieldRows.SourcePath> rows,
     final boolean lenient,
+    final Function<TypeElement, String> strategyOf,
     final PackageElement bridgePackage
   ) {
     final var plans = new ArrayList<SourcePathPlan>();
     for (var index = 0; index < rows.size(); index++) {
       final var row = rows.get(index);
-      final var planned = steps(source, target, source, row.name(), row.methods(), !lenient, bridgePackage);
+      final var planned = steps(source, target, source, row.name(), row.methods(), !lenient, strategyOf, bridgePackage);
       if (planned == null) return null;
-      plans.add(new SourcePathPlan(row, index, planned.levels(), planned.reads(), planned.rebuilds()));
+      plans.add(
+        new SourcePathPlan(
+          row,
+          index,
+          planned.levels(),
+          planned.reads(),
+          planned.rebuilds(),
+          planned.levelTypes(),
+          planned.strategies()
+        )
+      );
     }
     return plans;
   }
@@ -2935,7 +2978,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     int index,
     List<TypeElement> levels,
     List<TypeMirror> reads,
-    List<Rebuild> rebuilds
+    List<Rebuild> rebuilds,
+    List<DeclaredType> levelTypes,
+    List<String> strategies
   ) {}
 
   /**
@@ -2947,25 +2992,48 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement source,
     final TypeElement target,
     final List<FieldRows.TargetPath> rows,
+    final Function<TypeElement, String> strategyOf,
     final PackageElement bridgePackage
   ) {
     final var plans = new ArrayList<TargetPathPlan>();
     for (var index = 0; index < rows.size(); index++) {
       final var row = rows.get(index);
-      final var planned = steps(source, target, target, row.name(), row.methods(), true, bridgePackage);
+      final var planned = steps(source, target, target, row.name(), row.methods(), true, strategyOf, bridgePackage);
       if (planned == null) return null;
-      plans.add(new TargetPathPlan(row, index, planned.levels(), planned.reads(), planned.rebuilds()));
+      plans.add(
+        new TargetPathPlan(
+          row,
+          index,
+          planned.levels(),
+          planned.reads(),
+          planned.rebuilds(),
+          planned.levelTypes(),
+          planned.strategies()
+        )
+      );
     }
     return plans;
   }
 
-  /** The classes a path steps through, the type each property is read as, and their rebuilds. */
-  private record Steps(List<TypeElement> levels, List<TypeMirror> reads, List<Rebuild> rebuilds) {}
+  /**
+   * The classes a path steps through, the type each property is read as, their rebuilds, the type
+   * each class is given there, and the write strategy each rebuild was asked for.
+   */
+  private record Steps(
+    List<TypeElement> levels,
+    List<TypeMirror> reads,
+    List<Rebuild> rebuilds,
+    List<DeclaredType> levelTypes,
+    List<String> strategies
+  ) {}
 
   /**
    * What the path {@code name} reads by {@code methods} from {@code root} steps through, with how
-   * each object below {@code root} is rebuilt when {@code writes}; or null once the path is refused
-   * on {@code source}, the pair's own class a refusal is reported on.
+   * each object below {@code root} is rebuilt when {@code writes}, through the strategy {@code
+   * strategyOf} names for its class; or null once the path is refused on {@code source}, the pair's
+   * own class a refusal is reported on. Each property is read as a member of the type its object is
+   * given, so a property a generic class declares with its type variable is read as the type
+   * argument the path gives it.
    */
   private Steps steps(
     final TypeElement source,
@@ -2974,15 +3042,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String name,
     final List<String> methods,
     final boolean writes,
+    final Function<TypeElement, String> strategyOf,
     final PackageElement bridgePackage
   ) {
     final var types = processingEnv.getTypeUtils();
     final var levels = new ArrayList<TypeElement>();
+    final var levelTypes = new ArrayList<DeclaredType>();
     final var reads = new ArrayList<TypeMirror>();
     var at = (DeclaredType) root.asType();
     for (var step = 0; step < methods.size(); step++) {
       final var level = (TypeElement) at.asElement();
       levels.add(level);
+      levelTypes.add(at);
       final var method = accessorNamed(level, methods.get(step));
       if (method == null) {
         error(source, "the path '" + name + "' reads no property " + methods.get(step) + "() on " + level);
@@ -2998,21 +3069,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       at = next;
     }
     final var rebuilds = new ArrayList<Rebuild>();
+    final var strategies = new ArrayList<String>();
     if (writes) {
       for (final var level : levels.subList(1, levels.size())) {
-        if (!level.getTypeParameters().isEmpty()) {
-          error(
-            source,
-            "the path '" +
-              name +
-              "' steps through the generic class " +
-              level.getSimpleName() +
-              ", which the generated bridge has no write through yet; build this mapper without @Bridge to" +
-              " run it on the runtime path"
-          );
-          return null;
-        }
-        final var rebuild = rebuildFor(level, fieldsOf(level), "AUTO", bridgePackage);
+        final var strategy = level.getKind() == ElementKind.RECORD ? "AUTO" : strategyOf.apply(level);
+        strategies.add(strategy);
+        final var rebuild = rebuildFor(level, fieldsOf(level), strategy, bridgePackage);
         if (rebuild.kind() == Rebuild.Kind.NONE) {
           error(
             source,
@@ -3028,7 +3090,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         rebuilds.add(rebuild);
       }
     }
-    return new Steps(List.copyOf(levels), List.copyOf(reads), List.copyOf(rebuilds));
+    return new Steps(
+      List.copyOf(levels),
+      List.copyOf(reads),
+      List.copyOf(rebuilds),
+      List.copyOf(levelTypes),
+      List.copyOf(strategies)
+    );
   }
 
   /**
@@ -3214,6 +3282,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       path.row().methods(),
       path.levels(),
       path.rebuilds(),
+      path.levelTypes(),
+      path.strategies(),
       fieldByName(targetFields, path.row().target()).type(),
       source
     );
@@ -3234,6 +3304,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<String> methods,
     final List<TypeElement> levels,
     final List<Rebuild> rebuilds,
+    final List<DeclaredType> levelTypes,
+    final List<String> strategies,
     final TypeMirror given,
     final TypeElement source
   ) {
@@ -3242,7 +3314,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writers = new ArrayList<String>();
     for (var step = 1; step < depth; step++) {
       final var level = levels.get(step);
-      final var levelFq = level.getQualifiedName().toString();
+      // A class given type arguments is held as that type, and rebuilt through its raw class.
+      final var levelFq = declarable(levelTypes.get(step)).toString();
       final var rebuild = rebuilds.get(step - 1);
       final var levelFields = fieldsOf(level);
       final var property = properties.get(step);
@@ -3274,7 +3347,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         level,
         read,
         levelFields,
-        "AUTO",
+        strategies.get(step - 1),
         source,
         rebuild,
         null,
@@ -3285,6 +3358,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (body == null) return null;
       final var text = new StringWriter();
       try (var out = new PrintWriter(text)) {
+        if (!level.getTypeParameters().isEmpty()) out.println("  @SuppressWarnings({\"rawtypes\", \"unchecked\"})");
         out.println(
           "  private static " +
             levelFq +
@@ -3302,7 +3376,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (!last) {
           out.println(
             "    final " +
-              levels.get(step + 1).getQualifiedName() +
+              declarable(levelTypes.get(step + 1)) +
               " __n = " +
               helper +
               "_" +

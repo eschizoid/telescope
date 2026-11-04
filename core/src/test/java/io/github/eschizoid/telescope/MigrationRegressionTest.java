@@ -2358,8 +2358,9 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapperForward(
         NullIntermediateInner.class,
         MultiPropBuilderOuter.class,
-        Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        // No writeBeans default: one reaches every bean a path builds, and the leaf has no
+        // setters.
+        Mapping.to(srcLeaf, tgtLeaf)
       );
       final var src = new NullIntermediateInner();
       src.setName("alpha");

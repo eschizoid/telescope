@@ -139,6 +139,27 @@ class NestedTargetPathTest {
     );
   }
 
+  public record Labelled(String label, int qty) {}
+
+  @Test
+  @DisplayName(
+    "a row with a path on both sides refuses, when it is built, a target path through a class no write strategy builds"
+  )
+  void bothSidedPathThroughAnUnbuildableClassIsRefused() {
+    final var path = Telescope.of(Framed.class).field(Framed::shape).field(Shape::getLabel);
+    final var refused = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapperForward(
+        Labelled.class,
+        Framed.class,
+        to(Telescope.of(Labelled.class).field(Labelled::label), path)
+      )
+    );
+    assertEquals(
+      PairingMessages.pathIntermediateUnbuildable("Labelled", "Framed", "shape.label", "Shape"),
+      refused.getMessage()
+    );
+  }
+
   @Test
   @DisplayName("a source property written into two target paths by a two-way mapper is refused by name")
   void fanOutIntoTwoTargetPathsIsRefused() {

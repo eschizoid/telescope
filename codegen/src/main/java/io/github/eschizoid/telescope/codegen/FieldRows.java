@@ -514,6 +514,8 @@ final class FieldRows {
     }
     final var fannedOut = rows.fanOut();
     if (fannedOut != null) return fannedOut;
+    final var offThePair = rows.hintsOffThePair();
+    if (offThePair != null) return offThePair;
     return rows.parsed();
   }
 
@@ -544,6 +546,32 @@ final class FieldRows {
     private String defaultStrategy;
     private final List<SourcePath> sourcePaths = new ArrayList<>();
     private final List<TargetPath> targetPaths = new ArrayList<>();
+
+    /** The classes a path of these rows steps through below its root, by qualified name. */
+    private final Set<String> pathIntermediates = new HashSet<>();
+
+    /** The refusal of each writeBean hint keyed to a class other than the pair's, by that class. */
+    private final Map<String, Refused> keyedElsewhere = new LinkedHashMap<>();
+
+    /**
+     * The refusal of the first writeBean hint keyed to a class neither side of the pair is and no
+     * path steps through, or null.
+     */
+    Refused hintsOffThePair() {
+      for (final var keyed : keyedElsewhere.entrySet()) {
+        if (!pathIntermediates.contains(keyed.getKey())) return keyed.getValue();
+      }
+      return null;
+    }
+
+    /** Records the classes {@code hops} steps through below its root. */
+    private void stepsThrough(final List<?> hops) {
+      for (final var hop : hops.subList(0, hops.size() - 1)) {
+        if (((Accessor) hop).type() instanceof DeclaredType declared) {
+          pathIntermediates.add(((TypeElement) declared.asElement()).getQualifiedName().toString());
+        }
+      }
+    }
 
     /** The field the rows are read from, as {@code Carrier.FIELD}, which a refusal names. */
     private final String fieldName;
@@ -721,6 +749,7 @@ final class FieldRows {
       if (claimed != null) return new Refused(row, claimed);
       if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
       sourcePaths.add(new SourcePath(t.property(), List.copyOf(properties), List.copyOf(methods)));
+      stepsThrough(hops);
       rowKinds.add("FromTelescopeTo");
       rowAccessors.add(named + ">" + t.method());
       return null;
@@ -763,6 +792,7 @@ final class FieldRows {
       if (claimed != null) return new Refused(row, claimed);
       if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
       targetPaths.add(new TargetPath(s.property(), List.copyOf(properties), List.copyOf(methods)));
+      stepsThrough(hops);
       rowKinds.add("TelescopeTo");
       rowAccessors.add(s.method() + ">" + named);
       return null;
@@ -814,7 +844,8 @@ final class FieldRows {
         );
       }
       final var hops = new ArrayList<Accessor>();
-      var on = side;
+      var on = (DeclaredType) side.asType();
+      TypeMirror reached = on;
       for (final var step : calls.subList(1, calls.size())) {
         final var name = selectedName(step);
         if (!name.equals("field") || step.getArguments().size() != 1) {
@@ -835,14 +866,19 @@ final class FieldRows {
           );
         }
         if (on == null) {
-          return new Refused(step, "this step reads a property of a value that is not a class with properties");
+          return new Refused(
+            step,
+            "this step reads a property of " +
+              (reached.getKind() == TypeKind.TYPEVAR ? "the type variable " + reached : reached) +
+              ", which is not a class with properties"
+          );
         }
-        final var hop = accessor(reference, on);
+        final var hop = accessor(reference, (TypeElement) on.asElement(), on);
         if (hop instanceof Refused refused) return refused;
         final var read = (Accessor) hop;
         hops.add(read);
-        on =
-          !read.primitive() && read.type() instanceof DeclaredType declared ? (TypeElement) declared.asElement() : null;
+        reached = read.type();
+        on = !read.primitive() && read.type() instanceof DeclaredType declared ? declared : null;
       }
       return hops;
     }
@@ -1469,16 +1505,21 @@ final class FieldRows {
         return new Refused(row, PairingMessages.writeBeanTargetsRecord(binary));
       }
       if (!keyed.equals(source) && !keyed.equals(target)) {
-        return new Refused(
-          row,
-          "writeBean(" +
-            keyed.getSimpleName() +
-            ".class, ...) is keyed to a class other than " +
-            simple(source) +
-            " and " +
-            simple(target) +
-            ", a nested pair the generated bridge has no hint for yet; give that pair its own @Bridge field" +
-            " with its own writeBean row"
+        // A class a path steps through is built with the hint too; any other class is a nested
+        // pair the bridge does not build itself, which is refused once every row is read.
+        keyedElsewhere.putIfAbsent(
+          keyed.getQualifiedName().toString(),
+          new Refused(
+            row,
+            "writeBean(" +
+              keyed.getSimpleName() +
+              ".class, ...) is keyed to a class other than " +
+              simple(source) +
+              " and " +
+              simple(target) +
+              ", a nested pair the generated bridge has no hint for yet; give that pair its own @Bridge field" +
+              " with its own writeBean row"
+          )
         );
       }
       if (beanStrategies.put(keyed.getQualifiedName().toString(), strategy) != null) {
@@ -1560,6 +1601,14 @@ final class FieldRows {
 
     /** The accessor a row argument names on {@code side}, or the refusal. */
     private Object accessor(final ExpressionTree arg, final TypeElement side) {
+      return accessor(arg, side, (DeclaredType) side.asType());
+    }
+
+    /**
+     * The accessor a row argument names on {@code side}, read as a member of {@code as}, the type
+     * {@code side} is given where the row reads it; or the refusal.
+     */
+    private Object accessor(final ExpressionTree arg, final TypeElement side, final DeclaredType as) {
       if (!(arg instanceof MemberReferenceTree)) {
         return new Refused(
           arg,
@@ -1596,7 +1645,7 @@ final class FieldRows {
             "; a row names a record component, or a bean's getX() or isX()"
         );
       }
-      final var declared = types.asMemberOf((DeclaredType) side.asType(), accessor);
+      final var declared = types.asMemberOf(as, accessor);
       final var read = ((ExecutableType) declared).getReturnType();
       final var type = read.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) read).asType() : read;
       final var method = accessor.getSimpleName().toString();

@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,7 +33,9 @@ final class PathWrites {
   /**
    * A path of {@code hops} names, read from the class at each level: {@code levels[i]} is the class
    * the {@code i}-th property is read on, the root class first, and each later one the class the
-   * property before it declares.
+   * property before it declares, with a type variable of the class it is declared on read as the
+   * type argument that class is given there, as {@code Box<Customer>} gives {@code value()} the
+   * class {@code Customer}.
    */
   record Plan(String[] names, Class<?>[] levels, List<Lens<Object, Object>> reads) {}
 
@@ -46,15 +49,16 @@ final class PathWrites {
     final var names = new String[hops.size()];
     final var levels = new Class<?>[hops.size()];
     final var reads = new ArrayList<Lens<Object, Object>>(hops.size());
-    var at = root;
+    Type at = root;
     for (var i = 0; i < hops.size(); i++) {
       names[i] = hops.get(i).component();
-      levels[i] = at;
+      final var level = declaredClass(at);
+      levels[i] = level;
       // A field hop reads through the lens its accessor built, which reads a method that names no
       // bean property, such as an interface's label(), as the accessor does.
       if (!(hops.get(i).segment() instanceof Lens<Object, Object> lens)) return null;
       reads.add(lens);
-      if (i + 1 < hops.size()) at = declaredClass(Reflective.of(at).genericType(at, names[i]));
+      if (i + 1 < hops.size()) at = resolved(Reflective.of(level).genericType(level, names[i]), at);
     }
     return new Plan(names, levels, List.copyOf(reads));
   }
@@ -93,8 +97,14 @@ final class PathWrites {
    * {@code root}, rebuilt through {@code rootRefl}, with {@code value} written at the leaf of
    * {@code plan}.
    */
-  static Object write(final Plan plan, final Object root, final Object value, final Reflective rootRefl) {
-    return writeAt(plan, 0, root, value, rootRefl);
+  static Object write(
+    final Plan plan,
+    final Object root,
+    final Object value,
+    final Reflective rootRefl,
+    final Reflective beanRefl
+  ) {
+    return writeAt(plan, 0, root, value, rootRefl, beanRefl);
   }
 
   private static Object writeAt(
@@ -102,7 +112,8 @@ final class PathWrites {
     final int level,
     final Object current,
     final Object value,
-    final Reflective refl
+    final Reflective refl,
+    final Reflective beanRefl
   ) {
     if (current == null && value == null) return null;
     final var cls = plan.levels[level];
@@ -112,7 +123,8 @@ final class PathWrites {
       next = value;
     } else {
       final var child = current == null ? null : plan.reads.get(level).get(current);
-      next = writeAt(plan, level + 1, child, value, Reflective.of(plan.levels[level + 1]));
+      final var below = plan.levels[level + 1];
+      next = writeAt(plan, level + 1, child, value, below.isRecord() ? Reflective.RECORDS : beanRefl, beanRefl);
     }
     return refl.construct(cls, property -> {
       if (property.equals(name)) return next == null ? nullValue(cls, property) : next;
@@ -132,11 +144,27 @@ final class PathWrites {
       : null;
   }
 
+  /**
+   * {@code member}, a property's declared type, as it is read on an object of type {@code owner}: a
+   * type variable of the class {@code owner} parameterizes is its type argument there, and any
+   * other type is itself.
+   */
+  private static Type resolved(final Type member, final Type owner) {
+    if (!(member instanceof TypeVariable<?> variable) || !(owner instanceof ParameterizedType given)) return member;
+    if (!(given.getRawType() instanceof Class<?> raw) || variable.getGenericDeclaration() != raw) return member;
+    final var parameters = raw.getTypeParameters();
+    for (var i = 0; i < parameters.length; i++) {
+      if (parameters[i].getName().equals(variable.getName())) return given.getActualTypeArguments()[i];
+    }
+    return member;
+  }
+
   /** The class {@code type} names, its raw class or the erasure of a variable's bound. */
   private static Class<?> declaredClass(final Type type) {
     if (type instanceof Class<?> c) return c;
     if (type instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> c) return c;
     if (type instanceof TypeVariable<?> v && v.getBounds().length > 0) return declaredClass(v.getBounds()[0]);
+    if (type instanceof WildcardType w && w.getUpperBounds().length > 0) return declaredClass(w.getUpperBounds()[0]);
     return Object.class;
   }
 }

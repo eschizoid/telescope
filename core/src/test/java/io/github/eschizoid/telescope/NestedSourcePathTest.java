@@ -182,6 +182,26 @@ class NestedSourcePathTest {
     assertNull(back.getLine().getSku());
   }
 
+  public record Box<T>(T value, String tag) {}
+
+  public record GOrder(Box<Customer> box, int qty) {}
+
+  public record GOrderDto(String name, int qty) {}
+
+  @Test
+  @DisplayName(
+    "a two-way path through a property a generic record declares with its type variable reads its type argument"
+  )
+  void pathThroughAGenericPropertyReadsItsTypeArgument() {
+    final var mapper = Telescope.mapper(
+      GOrder.class,
+      GOrderDto.class,
+      to(Telescope.of(GOrder.class).field(GOrder::box).field(Box::value).field(Customer::name), GOrderDto::name)
+    );
+    assertEquals(new GOrderDto("n", 3), mapper.forward(new GOrder(new Box<>(new Customer(null, "n"), "t"), 3)));
+    assertEquals(new GOrder(new Box<>(new Customer(null, "m"), null), 1), mapper.backward(new GOrderDto("m", 1)));
+  }
+
   public interface Shape {
     String label();
   }
