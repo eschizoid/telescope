@@ -18,8 +18,10 @@ import java.util.function.Supplier;
  *   <li>{@link #NULLING_ISO} — null in both directions, the reference-typed default.
  *   <li>primitive targets — the JLS default (0 / false / etc.) so canonical-ctor reflection doesn't
  *       NPE unboxing a null Object.
- *   <li>record / allocatable-bean targets claimed by a telescope-row write — a recursive
- *       default-tree instance, so the post-fixup overlay can descend into a non-null intermediate.
+ *   <li>record / allocatable-bean targets a constant, a computed value or a path of another shape
+ *       than properties alone writes through — a recursive default-tree instance, so the post-fixup
+ *       overlay can descend into a non-null intermediate. A path through properties alone builds a
+ *       null intermediate itself, so its target starts at the null value.
  * </ul>
  *
  * <p>{@link #placeholderIsoFor} is the single entry point for the permissive-mode selection; {@link

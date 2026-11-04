@@ -39,7 +39,7 @@ class MappingWhenTest {
     record Dst(String name, Wrapper wrapped) {}
 
     @Test
-    @DisplayName("predicate true → inner TelescopeTo applies; predicate false → target field stays at default")
+    @DisplayName("predicate true → inner TelescopeTo applies; predicate false → the object on the path stays null")
     void predicateGatesTelescopeTo() {
       final var emailTelescope = Telescope.of(Dst.class).field(Dst::wrapped).field(Wrapper::value);
       final var mapper = Telescope.mapper(
@@ -52,15 +52,14 @@ class MappingWhenTest {
       // predicate true → email written deep into wrapped.value
       assertEquals(new Dst("Alice", new Wrapper("alice@ex.com")), mapper.forward(new Src("Alice", "alice@ex.com")));
 
-      // predicate false (null email) → row skipped, wrapped stays at recursive default (null
-      // inside)
+      // predicate false (null email) → row skipped, and nothing builds the object on its path
       final var skipped = mapper.forward(new Src("Bob", null));
       assertEquals("Bob", skipped.name());
-      assertNull(skipped.wrapped().value(), "skipped row → leaf at recursive default");
+      assertNull(skipped.wrapped(), "skipped row → nothing written through the path");
 
       // predicate false (blank email) → same skip path
       final var blankSkipped = mapper.forward(new Src("Carol", "   "));
-      assertNull(blankSkipped.wrapped().value());
+      assertNull(blankSkipped.wrapped());
     }
 
     @Test
@@ -243,10 +242,10 @@ class MappingWhenTest {
 
       // both true → score lands in scoreWrap.value
       assertEquals(42, mapper.forward(new Src("Alice", 42)).scoreWrap().value(), "both true → applies");
-      // score == -1 → first predicate fails → row skipped → leaf stays at recursive default (null)
-      assertNull(mapper.forward(new Src("Bob", -1)).scoreWrap().value(), "score not > 0 → skipped");
-      // name null → second predicate fails → row skipped → leaf stays at recursive default (null)
-      assertNull(mapper.forward(new Src(null, 42)).scoreWrap().value(), "name null → skipped");
+      // score == -1 → first predicate fails → row skipped → nothing builds the object on its path
+      assertNull(mapper.forward(new Src("Bob", -1)).scoreWrap(), "score not > 0 → skipped");
+      // name null → second predicate fails → row skipped → nothing builds the object on its path
+      assertNull(mapper.forward(new Src(null, 42)).scoreWrap(), "name null → skipped");
     }
   }
 

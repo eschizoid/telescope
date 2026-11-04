@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
+import io.github.eschizoid.telescope.codegen.ctorbox.CityRow;
+import io.github.eschizoid.telescope.codegen.ctorbox.CityRuntime;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
@@ -1977,7 +1979,11 @@ class CrossPathCorpusTest {
     // Inherent: from another package only a subclass reaches a protected constructor,
     // and that builds the subclass rather than the target.
     "a protected constructor in another package",
-    "has no no-argument constructor a rebuild can call"
+    "has no no-argument constructor a rebuild can call",
+    // Inherent: no code but the class's own calls a private constructor, which a SETTERS hint
+    // builds an object a path steps through with.
+    "a private no-argument constructor of an object a path builds through its setters",
+    "no no-argument constructor a rebuild can call"
   );
 
   /**
@@ -2001,6 +2007,12 @@ class CrossPathCorpusTest {
         List.of("ctorbox/ProtectedBag", "ctorbox/GuardedDst", "ctorpair/GuardedSrc"),
         () -> Telescope.mapper(GuardedSrc.class, GuardedDst.class).forward(new GuardedSrc(List.of("b", "a"))).items(),
         "[b, a] in " + PACKAGE + ".ctorbox.ProtectedBag"
+      ),
+      new Limit(
+        "a private no-argument constructor of an object a path builds through its setters",
+        List.of("ctorbox/PrivateCity", "ctorbox/CityHolder", "ctorbox/CityRow", "ctorbox/CityMappers"),
+        () -> CityRuntime.mapper().backward(new CityRow("j", "R")).c().getCity(),
+        "R in java.lang.String"
       )
     );
     final var fixtures = Path.of("src/test/java/io/github/eschizoid/telescope/codegen");
@@ -10752,6 +10764,1040 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * A row reading the source through a path that steps through properties into a flat target
+   * property, or writing a flat source property into the target through one: the declarations, each
+   * with {@code %1$s} as the row's prefix and the last of them the runtime row, and what both paths
+   * owe for {@code Src.sample()} forward, {@code Tgt.sample()} backward, and {@code Tgt.sample()}
+   * laid over {@code Src.sample()}. A forward-only row owes no backward or patch.
+   */
+  private record NestedPath(
+    String name,
+    boolean forwardOnly,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  /**
+   * An inline telescope path started by {@code factory} at {@code root}, one field step per hop.
+   */
+  private static String pathOf(final String factory, final String root, final String... hops) {
+    final var path = new StringBuilder("io.github.eschizoid.telescope.Telescope." + factory + "(" + root + ".class)");
+    for (final var hop : hops) path.append(".field(").append(hop).append(")");
+    return path.toString();
+  }
+
+  /**
+   * A public bean {@code name} with a private field, a getter and a setter per property, each given
+   * as its declaration ({@code "int count = 99"}), and a {@code sample()} whose body is {@code
+   * sample}.
+   */
+  private static String sampledBean(final String name, final String sample, final String... properties) {
+    final var out = new StringBuilder("public class " + name + " {\n");
+    for (final var property : properties) {
+      final var declared = property.split("=")[0].trim().split(" ");
+      final var type = declared[0];
+      final var field = declared[1];
+      final var capital = Character.toUpperCase(field.charAt(0)) + field.substring(1);
+      out.append("  private ").append(property).append(";\n");
+      out.append("  public ").append(type).append(" get").append(capital).append("() { return ").append(field);
+      out.append("; }\n");
+      out.append("  public void set").append(capital).append("(final ").append(type).append(" v) { ");
+      out.append(field).append(" = v; }\n");
+    }
+    return out
+      .append("  public static ")
+      .append(name)
+      .append(" sample() { ")
+      .append(sample)
+      .append(" }\n}\n")
+      .toString();
+  }
+
+  private static final String MAPPING = "io.github.eschizoid.telescope.mapping.Mapping.";
+  private static final String SETTERS_FOR_INTER =
+    "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sInter.class," +
+    " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)";
+  private static final String SETTERS_FOR_EVERY_BEAN =
+    "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
+    "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)";
+
+  /**
+   * A bean built by its builder unless a hint names its setters: the builder leaves {@code n} at
+   * zero where nothing writes it, and the no-argument constructor at 7.
+   */
+  private static final String INTER =
+    "public class %1$sInter {\n" +
+    "  private String s;\n  private int n = 7;\n" +
+    "  public String getS() { return s; }\n  public void setS(final String v) { s = v; }\n" +
+    "  public int getN() { return n; }\n  public void setN(final int v) { n = v; }\n" +
+    "  public static Builder builder() { return new Builder(); }\n" +
+    "  public static final class Builder {\n" +
+    "    private String s;\n    private int n = 6;\n" +
+    "    public Builder s(final String v) { s = v; return this; }\n" +
+    "    public Builder n(final int v) { n = v; return this; }\n" +
+    "    public %1$sInter build() { final var i = new %1$sInter(); i.s = s; i.n = n; return i; }\n  }\n}\n";
+
+  private static final String GENERIC_BOX = "public record %1$sBox<T>(T value, String tag) {}\n";
+  private static final String GENERIC_CUST = "public record %1$sCust(String city, int zip) {}\n";
+
+  private static final String NESTED_INNER = "public record %1$sInner<U>(U value, String k) {}\n";
+  private static final String NESTED_OUTER = "public record %1$sOuter<T>(%1$sInner<T> inner, String o) {}\n";
+  private static final String GENERIC_BASE =
+    "public class %1$sBase<T> {\n  private T value;\n  public T getValue() { return value; }\n" +
+    "  public void setValue(final T v) { value = v; }\n}\n";
+  private static final String FIXED_SUB =
+    "public class %1$sSub extends %1$sBase<%1$sCust> {\n" +
+    "  public static %1$sSub of(final %1$sCust c) { final var s = new %1$sSub(); s.setValue(c); return s; }\n}\n";
+  private static final String NESTED_GENERIC_PATH = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::outer",
+    "%1$sOuter::inner",
+    "%1$sInner::value",
+    "%1$sCust::city"
+  );
+  private static final String NESTED_GENERIC_TARGET = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::outer",
+    "%1$sOuter::inner",
+    "%1$sInner::value",
+    "%1$sCust::city"
+  );
+  private static final String INHERITED_PATH = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::sub",
+    "%1$sSub::getValue",
+    "%1$sCust::city"
+  );
+  private static final String INHERITED_TARGET = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::sub",
+    "%1$sSub::getValue",
+    "%1$sCust::city"
+  );
+
+  private static final String TWO_STEP_NAME = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::name");
+  private static final String TWO_STEP_AGE = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::age");
+  private static final String THREE_STEP_CITY = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::customer",
+    "%1$sOuter::address",
+    "%1$sInner::city"
+  );
+  private static final String THREE_STEP_ZIP = pathOf(
+    "of",
+    "%1$sSrc",
+    "%1$sSrc::customer",
+    "%1$sOuter::address",
+    "%1$sInner::zip"
+  );
+  private static final String OUTER_INNER = "public record %1$sOuter(%1$sInner address, String label) {}\n";
+  private static final String INNER = "public record %1$sInner(String city, int zip) {}\n";
+
+  /** The rows of a three-step pair reading the city and the zip, the field's and the runtime's. */
+  private static List<String> threeSteps(final String srcSample, final String tgtSample) {
+    final var city = "to(" + THREE_STEP_CITY + ", %1$sTgt::city)";
+    final var zip = "to(" + THREE_STEP_ZIP + ", %1$sTgt::zip)";
+    return List.of(
+      sampled("%1$sSrc", "%1$sOuter customer, int qty", srcSample),
+      OUTER_INNER,
+      INNER,
+      typedField(false, city, zip),
+      sampled("%1$sTgt", "String city, int zip, int qty", tgtSample),
+      runtimeMapper(false, "", city, zip)
+    );
+  }
+
+  private static final List<NestedPath> NESTED_SOURCE_PATHS = List.of(
+    new NestedPath(
+      "a record path of two steps into renamed targets, both ways",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(" + TWO_STEP_NAME + ", %1$sTgt::label)", "to(" + TWO_STEP_AGE + ", %1$sTgt::years)"),
+        sampled("%1$sTgt", "String label, int years, int qty", "new %1$sTgt(\"m\", 7, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + TWO_STEP_NAME + ", %1$sTgt::label)",
+          "to(" + TWO_STEP_AGE + ", %1$sTgt::years)"
+        )
+      ),
+      "#0(label=\"n\", years=4, qty=3)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps through a null object, written back as null",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(null, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(" + TWO_STEP_NAME + ", %1$sTgt::label)"),
+        sampled("%1$sTgt", "String label, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(" + TWO_STEP_NAME + ", %1$sTgt::label)")
+      ),
+      "#0(label=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=null, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps through a null object, built backward for a value",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(null, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(" + TWO_STEP_NAME + ", %1$sTgt::label)"),
+        sampled("%1$sTgt", "String label, int qty", "new %1$sTgt(\"m\", 1)"),
+        runtimeMapper(false, "", "to(" + TWO_STEP_NAME + ", %1$sTgt::label)")
+      ),
+      "#0(label=null, qty=3)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps",
+      false,
+      threeSteps("new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 75), \"L\"), 3)", "new %1$sTgt(\"R\", 5, 1)"),
+      "#0(city=\"P\", zip=75, qty=3)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps, null at its first object",
+      false,
+      threeSteps("new %1$sSrc(null, 3)", "new %1$sTgt(\"R\", 5, 1)"),
+      "#0(city=null, zip=0, qty=3)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps, null at its second object",
+      false,
+      threeSteps("new %1$sSrc(new %1$sOuter(null, \"L\"), 3)", "new %1$sTgt(null, 5, 1)"),
+      "#0(city=null, zip=0, qty=3)",
+      "#0(customer=#1(address=#2(city=null, zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=null, zip=5), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps to a reference, null at its second object and written back as null",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer, int qty", "new %1$sSrc(new %1$sOuter(null, \"L\"), 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(false, "to(" + THREE_STEP_CITY + ", %1$sTgt::city)"),
+        sampled("%1$sTgt", "String city, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(" + THREE_STEP_CITY + ", %1$sTgt::city)")
+      ),
+      "#0(city=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=#1(address=null, label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a wrapper leaf into a primitive target and a primitive leaf into a wrapper target",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid m", "new %1$sSrc(null)"),
+        "public record %1$sMid(Integer a, int b) {}\n",
+        typedField(
+          false,
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::m", "%1$sMid::a") + ", %1$sTgt::a)",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::m", "%1$sMid::b") + ", %1$sTgt::b)"
+        ),
+        sampled("%1$sTgt", "int a, Integer b", "new %1$sTgt(5, null)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::m", "%1$sMid::a") + ", %1$sTgt::a)",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::m", "%1$sMid::b") + ", %1$sTgt::b)"
+        )
+      ),
+      "#0(a=0, b=null)",
+      "#0(m=#1(a=5, b=0))",
+      "#0(m=#1(a=5, b=0))"
+    ),
+    new NestedPath(
+      "a forward-only record path of three steps written into two targets",
+      true,
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer", "new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 1), \"L\"))"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(" + THREE_STEP_CITY + ", %1$sTgt::city)", "to(" + THREE_STEP_CITY + ", %1$sTgt::town)"),
+        sampled("%1$sTgt", "String city, String town", "new %1$sTgt(\"q\", \"r\")"),
+        runtimeMapper(
+          true,
+          "",
+          "to(" + THREE_STEP_CITY + ", %1$sTgt::city)",
+          "to(" + THREE_STEP_CITY + ", %1$sTgt::town)"
+        )
+      ),
+      "#0(city=\"P\", town=\"P\")",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a forward-only record path of three steps, null at its first object",
+      true,
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer, int qty", "new %1$sSrc(null, 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(" + THREE_STEP_ZIP + ", %1$sTgt::zip)"),
+        sampled("%1$sTgt", "int zip, int qty", "new %1$sTgt(1, 1)"),
+        runtimeMapper(true, "", "to(" + THREE_STEP_ZIP + ", %1$sTgt::zip)")
+      ),
+      "#0(zip=0, qty=3)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters, a null object leaving a primitive setter unwritten",
+      false,
+      List.of(
+        sampledBean("%1$sSrc", "final var s = new %1$sSrc(); s.setTotal(2); return s;", "%1$sLine line", "int total"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count"),
+        typedField(
+          false,
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setCount(5); t.setSku(\"s\"); t.setTotal(1); return t;",
+          "int count = 99",
+          "String sku",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        )
+      ),
+      "#0(count=99, sku=null, total=2)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)"
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters, every object present",
+      false,
+      List.of(
+        sampledBean(
+          "%1$sSrc",
+          "final var l = new %1$sLine(); l.setSku(\"a\"); l.setCount(3); final var s = new %1$sSrc();" +
+            " s.setLine(l); s.setTotal(2); return s;",
+          "%1$sLine line",
+          "int total"
+        ),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count"),
+        typedField(
+          false,
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setCount(5); t.setTotal(1); return t;",
+          "int count = 99",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)"
+        )
+      ),
+      "#0(count=3, total=2)",
+      "#0(line=#1(count=5, sku=null), total=1)",
+      "#0(line=#1(count=5, sku=\"a\"), total=1)"
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters, building an object whose other primitive setter is left unwritten",
+      false,
+      List.of(
+        sampledBean("%1$sSrc", "return new %1$sSrc();", "%1$sLine line", "int total"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setSku(\"s\"); t.setTotal(1); return t;",
+          "String sku",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        )
+      ),
+      "#0(sku=null, total=0)",
+      "#0(line=#1(count=4, sku=\"s\"), total=1)",
+      "#0(line=#1(count=4, sku=\"s\"), total=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps through a bean built by its builder",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sBox box, int qty", "new %1$sSrc(null, 3)"),
+        "public class %1$sBox {\n" +
+          "  private final String s;\n  private final int n;\n" +
+          "  private %1$sBox(final String s, final int n) { this.s = s; this.n = n; }\n" +
+          "  public String getS() { return s; }\n  public int getN() { return n; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n    private int n = 6;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public Builder n(final int v) { n = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s, n); }\n  }\n}\n",
+        typedField(false, "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)"),
+        sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
+        runtimeMapper(false, "", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)")
+      ),
+      "#0(s=null, qty=3)",
+      "#0(box=#1(n=0, s=\"x\"), qty=1)",
+      "#0(box=#1(n=0, s=\"x\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a property a generic record declares with its type variable",
+      false,
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "%1$sBox<%1$sCust> box, int qty",
+          "new %1$sSrc(new %1$sBox<>(new %1$sCust(\"P\", 1), \"t\"), 3)"
+        ),
+        GENERIC_BOX,
+        GENERIC_CUST,
+        typedField(
+          false,
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::value", "%1$sCust::city") + ", %1$sTgt::city)"
+        ),
+        sampled("%1$sTgt", "String city, int qty", "new %1$sTgt(\"R\", 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::value", "%1$sCust::city") + ", %1$sTgt::city)"
+        )
+      ),
+      "#0(city=\"P\", qty=3)",
+      "#0(box=#1(value=#2(city=\"R\", zip=0), tag=null), qty=1)",
+      "#0(box=#1(value=#2(city=\"R\", zip=1), tag=\"t\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a generic record held in another, each read through its type argument",
+      false,
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "String id, %1$sOuter<%1$sCust> outer",
+          "new %1$sSrc(\"i\", new %1$sOuter<>(new %1$sInner<>(new %1$sCust(\"P\", 1), \"k\"), \"o\"))"
+        ),
+        NESTED_OUTER,
+        NESTED_INNER,
+        GENERIC_CUST,
+        typedField(false, "to(" + NESTED_GENERIC_PATH + ", %1$sTgt::city)"),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        runtimeMapper(false, "", "to(" + NESTED_GENERIC_PATH + ", %1$sTgt::city)")
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", outer=#1(inner=#2(value=#3(city=\"R\", zip=0), k=null), o=null))",
+      "#0(id=\"j\", outer=#1(inner=#2(value=#3(city=\"R\", zip=1), k=\"k\"), o=\"o\"))"
+    ),
+    new NestedPath(
+      "a bean path through a property a superclass declares with a variable the subclass fixes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, %1$sSub sub", "new %1$sSrc(\"i\", %1$sSub.of(new %1$sCust(\"P\", 1)))"),
+        GENERIC_BASE,
+        FIXED_SUB,
+        GENERIC_CUST,
+        typedField(false, "to(" + INHERITED_PATH + ", %1$sTgt::city)"),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        runtimeMapper(false, "", "to(" + INHERITED_PATH + ", %1$sTgt::city)")
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", sub=#1(value=#2(city=\"R\", zip=0)))",
+      "#0(id=\"j\", sub=#1(value=#2(city=\"R\", zip=1)))"
+    ),
+    new NestedPath(
+      "a bean path through an object built by its name-matched constructor",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sPair pair, int qty", "new %1$sSrc(new %1$sPair(\"a\", 4), 3)"),
+        "public class %1$sPair {\n" +
+          "  private final String s;\n  private final int n;\n" +
+          "  public %1$sPair(final String s, final int n) { this.s = s; this.n = n; }\n" +
+          "  public String getS() { return s; }\n  public int getN() { return n; }\n}\n",
+        typedField(false, "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::pair", "%1$sPair::getS") + ", %1$sTgt::s)"),
+        sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
+        runtimeMapper(false, "", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::pair", "%1$sPair::getS") + ", %1$sTgt::s)")
+      ),
+      "#0(s=\"a\", qty=3)",
+      "#0(pair=#1(n=0, s=\"x\"), qty=1)",
+      "#0(pair=#1(n=4, s=\"x\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path of four steps, null at its third object",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sL1 a, int qty", "new %1$sSrc(new %1$sL1(new %1$sL2(null, \"M\"), 9), 3)"),
+        "public record %1$sL1(%1$sL2 b, int k) {}\n",
+        "public record %1$sL2(%1$sL3 c, String m) {}\n",
+        "public record %1$sL3(String d, int e) {}\n",
+        typedField(
+          false,
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::a", "%1$sL1::b", "%1$sL2::c", "%1$sL3::d") + ", %1$sTgt::d)"
+        ),
+        sampled("%1$sTgt", "String d, int qty", "new %1$sTgt(\"X\", 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::a", "%1$sL1::b", "%1$sL2::c", "%1$sL3::d") + ", %1$sTgt::d)"
+        )
+      ),
+      "#0(d=null, qty=3)",
+      "#0(a=#1(b=#2(c=#3(d=\"X\", e=0), m=null), k=0), qty=1)",
+      "#0(a=#1(b=#2(c=#3(d=\"X\", e=0), m=\"M\"), k=9), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a bean a writeBean hint builds through its setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sInter box, int qty", "new %1$sSrc(null, 3)"),
+        INTER,
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_INTER
+        ),
+        sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_INTER
+        )
+      ),
+      "#0(s=null, qty=3)",
+      "#0(box=#1(n=7, s=\"x\"), qty=1)",
+      "#0(box=#1(n=7, s=\"x\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a bean a writeBeans default builds through its setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sInter box, int qty", "new %1$sSrc(null, 3)"),
+        INTER,
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      "#0(s=null, qty=3)",
+      "#0(box=#1(n=7, s=\"x\"), qty=1)",
+      "#0(box=#1(n=7, s=\"x\"), qty=1)"
+    ),
+    new NestedPath(
+      "a record path through a setters bean whose no-argument constructor only its own package calls",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, %1$sPp c", "new %1$sSrc(\"i\", %1$sPp.of(\"P\"))"),
+        "public class %1$sPp {\n" +
+          "  private String city;\n  %1$sPp() {}\n" +
+          "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n" +
+          "  public static %1$sPp of(final String c) { final var p = new %1$sPp(); p.city = c; return p; }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sPp::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        sampled("%1$sTgt", "String id, String city", "new %1$sTgt(\"j\", \"R\")"),
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sPp::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      "#0(id=\"i\", city=\"P\")",
+      "#0(id=\"j\", c=#1(city=\"R\"))",
+      "#0(id=\"j\", c=#1(city=\"R\"))"
+    ),
+    new NestedPath(
+      "a record path through the same bean with no hint, built by its builder",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sInter box, int qty", "new %1$sSrc(null, 3)"),
+        INTER,
+        typedField(false, "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)"),
+        sampled("%1$sTgt", "String s, int qty", "new %1$sTgt(\"x\", 1)"),
+        runtimeMapper(false, "", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sInter::getS") + ", %1$sTgt::s)")
+      ),
+      "#0(s=null, qty=3)",
+      "#0(box=#1(n=0, s=\"x\"), qty=1)",
+      "#0(box=#1(n=0, s=\"x\"), qty=1)"
+    )
+  );
+
+  /**
+   * {@code rows}, each written in full, on a {@code @Bridge} field of {@code %1$sSrc} to {@code
+   * %1$sTgt}.
+   */
+  private static String plainField(final boolean forwardOnly, final String... rows) {
+    return forwardOnly ? forwardFieldBridge("%1$sSrc", "%1$sTgt", rows) : fieldBridge("%1$sSrc", "%1$sTgt", rows);
+  }
+
+  /** As {@link #runtimeMapper}, with {@code rows} each written in full. */
+  private static String plainRuntime(final boolean forwardOnly, final String... rows) {
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    return io.github.eschizoid.telescope.Telescope." +
+      (forwardOnly ? "mapperForward" : "mapper") +
+      "(%1$sSrc.class, %1$sTgt.class,\n      " +
+      String.join(",\n      ", rows) +
+      ");\n  }\n}\n"
+    );
+  }
+
+  private static final String TO_NAME = pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::name");
+  private static final String TO_AGE = pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::age");
+  private static final String TO_CITY = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::customer",
+    "%1$sOuter::address",
+    "%1$sInner::city"
+  );
+  private static final String TO_ZIP = pathOf(
+    "of",
+    "%1$sTgt",
+    "%1$sTgt::customer",
+    "%1$sOuter::address",
+    "%1$sInner::zip"
+  );
+
+  /** The rows of a three-step pair writing the city and the zip, the field's and the runtime's. */
+  private static List<String> threeStepsDown(final String srcSample, final String tgtSample) {
+    final var city = "to(%1$sSrc::city, " + TO_CITY + ")";
+    final var zip = "to(%1$sSrc::zip, " + TO_ZIP + ")";
+    return List.of(
+      sampled("%1$sSrc", "String city, int zip, int qty", srcSample),
+      OUTER_INNER,
+      INNER,
+      typedField(false, city, zip),
+      sampled("%1$sTgt", "%1$sOuter customer, int qty", tgtSample),
+      runtimeMapper(false, "", city, zip)
+    );
+  }
+
+  private static final List<NestedPath> NESTED_TARGET_PATHS = List.of(
+    new NestedPath(
+      "a record path of two steps written from two source properties, both ways",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int age, int qty", "new %1$sSrc(\"n\", 4, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")", "to(%1$sSrc::age, " + TO_AGE + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(new %1$sMid(\"m\", 7), 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")", "to(%1$sSrc::age, " + TO_AGE + ")")
+      ),
+      "#0(customer=#1(name=\"n\", age=4), qty=3)",
+      "#0(name=\"m\", age=7, qty=1)",
+      "#0(name=\"m\", age=7, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps given a null value, which builds nothing",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(null, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")")
+      ),
+      "#0(customer=null, qty=3)",
+      "#0(name=null, qty=1)",
+      "#0(name=null, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps building its object for a value",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(\"n\", 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + TO_NAME + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + TO_NAME + ")")
+      ),
+      "#0(customer=#1(name=\"n\", age=0), qty=3)",
+      "#0(name=null, qty=1)",
+      "#0(name=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps",
+      false,
+      threeStepsDown("new %1$sSrc(\"P\", 75, 3)", "new %1$sTgt(new %1$sOuter(new %1$sInner(\"R\", 5), \"L\"), 1)"),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=\"R\", zip=5, qty=1)",
+      "#0(city=\"R\", zip=5, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps read back through a null first object",
+      false,
+      threeStepsDown("new %1$sSrc(\"P\", 75, 3)", "new %1$sTgt(null, 1)"),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=\"P\", zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a record path of three steps read back through a null second object",
+      false,
+      threeStepsDown("new %1$sSrc(null, 75, 3)", "new %1$sTgt(new %1$sOuter(null, \"L\"), 1)"),
+      "#0(customer=#1(address=#2(city=null, zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=null, zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a wrapper source into a primitive leaf and a primitive source into a wrapper leaf",
+      false,
+      List.of(
+        sampled("%1$sSrc", "Integer a, int b", "new %1$sSrc(null, 2)"),
+        "public record %1$sMid(int a, Integer b) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::a, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::a") + ")",
+          "to(%1$sSrc::b, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::b") + ")"
+        ),
+        sampled("%1$sTgt", "%1$sMid m", "new %1$sTgt(new %1$sMid(5, null))"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::a, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::a") + ")",
+          "to(%1$sSrc::b, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::b") + ")"
+        )
+      ),
+      "#0(m=#1(a=0, b=2))",
+      "#0(a=5, b=0)",
+      "#0(a=5, b=2)"
+    ),
+    new NestedPath(
+      "a forward-only path of three steps written from one source property into two targets",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String n", "new %1$sSrc(\"x\")"),
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          true,
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        ),
+        sampled("%1$sTgt", "%1$sMid a, %1$sMid b", "new %1$sTgt(null, null)"),
+        runtimeMapper(
+          true,
+          "",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        )
+      ),
+      "#0(a=#1(name=\"x\"), b=#2(name=\"x\"))",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a forward-only path of three steps given a null value",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String city, int qty", "new %1$sSrc(null, 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(%1$sSrc::city, " + TO_CITY + ")"),
+        sampled("%1$sTgt", "%1$sOuter customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(true, "", "to(%1$sSrc::city, " + TO_CITY + ")")
+      ),
+      "#0(customer=null, qty=3)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String sku, int count, int total", "new %1$sSrc(\"a\", 3, 2)"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(%1$sSrc::count, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        ),
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setTotal(1); return t;", "%1$sLine line", "int total"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(%1$sSrc::count, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        )
+      ),
+      "#0(line=#1(count=3, sku=\"a\"), total=2)",
+      "#0(sku=null, count=0, total=1)",
+      "#0(sku=\"a\", count=3, total=1)"
+    ),
+    new NestedPath(
+      "a bean path of two steps through setters, building an object whose other primitive setter is left unwritten",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String sku, int total", "new %1$sSrc(\"a\", 2)"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(
+          false,
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var l = new %1$sLine(); l.setSku(\"s\"); final var t = new %1$sTgt(); t.setLine(l);" +
+            " t.setTotal(1); return t;",
+          "%1$sLine line",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::sku, " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")"
+        )
+      ),
+      "#0(line=#1(count=4, sku=\"a\"), total=2)",
+      "#0(sku=\"s\", total=1)",
+      "#0(sku=\"s\", total=1)"
+    ),
+    new NestedPath(
+      "a record path of two steps through a bean built by its builder",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String s, int qty", "new %1$sSrc(\"x\", 3)"),
+        "public class %1$sBox {\n" +
+          "  private final String s;\n  private final int n;\n" +
+          "  private %1$sBox(final String s, final int n) { this.s = s; this.n = n; }\n" +
+          "  public String getS() { return s; }\n  public int getN() { return n; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n    private int n = 6;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public Builder n(final int v) { n = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s, n); }\n  }\n}\n",
+        typedField(false, "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::getS") + ")"),
+        sampled("%1$sTgt", "%1$sBox box, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::getS") + ")")
+      ),
+      "#0(box=#1(n=0, s=\"x\"), qty=3)",
+      "#0(s=null, qty=1)",
+      "#0(s=\"x\", qty=1)"
+    ),
+    new NestedPath(
+      "a target path through a property a generic record declares with its type variable",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String city, int qty", "new %1$sSrc(\"P\", 3)"),
+        GENERIC_BOX,
+        GENERIC_CUST,
+        typedField(
+          false,
+          "to(%1$sSrc::city, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::value", "%1$sCust::city") + ")"
+        ),
+        sampled(
+          "%1$sTgt",
+          "%1$sBox<%1$sCust> box, int qty",
+          "new %1$sTgt(new %1$sBox<>(new %1$sCust(\"R\", 5), \"t\"), 1)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::city, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sBox::value", "%1$sCust::city") + ")"
+        )
+      ),
+      "#0(box=#1(value=#2(city=\"P\", zip=0), tag=null), qty=3)",
+      "#0(city=\"R\", qty=1)",
+      "#0(city=\"R\", qty=1)"
+    ),
+    new NestedPath(
+      "a target path through a generic record held in another, each read through its type argument",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String city", "new %1$sSrc(\"i\", \"P\")"),
+        NESTED_OUTER,
+        NESTED_INNER,
+        GENERIC_CUST,
+        typedField(false, "to(%1$sSrc::city, " + NESTED_GENERIC_TARGET + ")"),
+        sampled(
+          "%1$sTgt",
+          "String id, %1$sOuter<%1$sCust> outer",
+          "new %1$sTgt(\"j\", new %1$sOuter<>(new %1$sInner<>(new %1$sCust(\"R\", 5), \"k\"), \"o\"))"
+        ),
+        runtimeMapper(false, "", "to(%1$sSrc::city, " + NESTED_GENERIC_TARGET + ")")
+      ),
+      "#0(id=\"i\", outer=#1(inner=#2(value=#3(city=\"P\", zip=0), k=null), o=null))",
+      "#0(id=\"j\", city=\"R\")",
+      "#0(id=\"j\", city=\"R\")"
+    ),
+    new NestedPath(
+      "a target path through a property a superclass declares with a variable the subclass fixes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String city", "new %1$sSrc(\"i\", \"P\")"),
+        GENERIC_BASE,
+        FIXED_SUB,
+        GENERIC_CUST,
+        typedField(false, "to(%1$sSrc::city, " + INHERITED_TARGET + ")"),
+        sampled("%1$sTgt", "String id, %1$sSub sub", "new %1$sTgt(\"j\", %1$sSub.of(new %1$sCust(\"R\", 5)))"),
+        runtimeMapper(false, "", "to(%1$sSrc::city, " + INHERITED_TARGET + ")")
+      ),
+      "#0(id=\"i\", sub=#1(value=#2(city=\"P\", zip=0)))",
+      "#0(id=\"j\", city=\"R\")",
+      "#0(id=\"j\", city=\"R\")"
+    ),
+    new NestedPath(
+      "a target path through a bean a writeBean hint builds through its setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String s, int qty", "new %1$sSrc(\"x\", 3)"),
+        INTER,
+        plainField(
+          false,
+          MAPPING + "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sInter::getS") + ")",
+          SETTERS_FOR_INTER
+        ),
+        sampled("%1$sTgt", "%1$sInter box, int qty", "new %1$sTgt(null, 1)"),
+        plainRuntime(
+          false,
+          MAPPING + "to(%1$sSrc::s, " + pathOf("of", "%1$sTgt", "%1$sTgt::box", "%1$sInter::getS") + ")",
+          SETTERS_FOR_INTER
+        )
+      ),
+      "#0(box=#1(n=7, s=\"x\"), qty=3)",
+      "#0(s=null, qty=1)",
+      "#0(s=\"x\", qty=1)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a row reading the source through a path converts the same way on both paths, a null object on the way included"
+  )
+  void aNestedSourcePathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NESTED_SOURCE_PATHS, "Ns");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a row writing a source property into the target through a path converts the same way on both paths, a null" +
+      " object on the way included"
+  )
+  void aNestedTargetPathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NESTED_TARGET_PATHS, "Nt");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
+  private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
+    throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : rows) {
+      final var prefix = head + index++;
+      final var header = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), header + code))
+        .toList();
+      // The runtime matches a constructor's parameters to properties by the names -parameters
+      // keeps.
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      @SuppressWarnings("unchecked")
+      final Mapper<Object, Object> mapper = row.forwardOnly() ? null : (Mapper<Object, Object>) runtime;
+      @SuppressWarnings("unchecked")
+      final ForwardMapper<Object, Object> forwardMapper = row.forwardOnly()
+        ? (ForwardMapper<Object, Object>) runtime
+        : null;
+      final var bridge = emitted(processed, plain, prefix, nested);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", row.forward()));
+      if (row.backward() != null) owed.add(Map.entry("backward", row.backward()));
+      if (row.patch() != null) owed.add(Map.entry("patch", row.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardMapper != null
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              row.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    return failures;
+  }
+
+  /**
    * Rows of a {@code @Bridge} field and the runtime rows over the same pair that claim one source
    * property twice: written into two targets of a mapper that converts both ways, or both dropped
    * and written. The declarations each take {@code %1$s} as the row's prefix, the last of them the
@@ -11016,6 +12062,226 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
       PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a source path written into two targets by a two-way mapper",
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer", "new %1$sSrc(null)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(" + TWO_STEP_NAME + ", %1$sTgt::a)", "to(" + TWO_STEP_NAME + ", %1$sTgt::b)"),
+        "public record %1$sTgt(String a, String b) {}\n",
+        runtimeMapper(false, "", "to(" + TWO_STEP_NAME + ", %1$sTgt::a)", "to(" + TWO_STEP_NAME + ", %1$sTgt::b)")
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "customer.name", List.of("a", "b")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "customer.name", List.of("a", "b"))
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and read through by a source path, with the runtime rows given the other way round",
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer", "new %1$sSrc(null)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "drop(%1$sSrc::customer)", "to(" + TWO_STEP_NAME + ", %1$sTgt::a)"),
+        "public record %1$sTgt(String a) {}\n",
+        runtimeMapper(false, "", "to(" + TWO_STEP_NAME + ", %1$sTgt::a)", "drop(%1$sSrc::customer)")
+      ),
+      PairingMessages.droppedAndReadThrough("%1$sSrc", "%1$sTgt", "customer", "customer.name"),
+      PairingMessages.droppedAndReadThrough("%1$sSrc", "%1$sTgt", "customer", "customer.name")
+    ),
+    new SourceClaimedTwice(
+      "a property read through by a source path and dropped, by a forward-only mapper",
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer", "new %1$sSrc(null)"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(" + THREE_STEP_CITY + ", %1$sTgt::city)", "drop(%1$sSrc::customer)"),
+        "public record %1$sTgt(String city) {}\n",
+        runtimeMapper(true, "", "drop(%1$sSrc::customer)", "to(" + THREE_STEP_CITY + ", %1$sTgt::city)")
+      ),
+      PairingMessages.droppedAndReadThrough("%1$sSrc", "%1$sTgt", "customer", "customer.address.city"),
+      PairingMessages.droppedAndReadThrough("%1$sSrc", "%1$sTgt", "customer", "customer.address.city")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a class no write strategy builds",
+      List.of(
+        "public interface %1$sShape { String getLabel(); }\n",
+        sampled("%1$sSrc", "%1$sShape shape", "new %1$sSrc(null)"),
+        typedField(
+          false,
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"
+        ),
+        "public record %1$sTgt(String label) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::shape", "%1$sShape::getLabel") + ", %1$sTgt::label)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape")
+    ),
+    new SourceClaimedTwice(
+      "a source property written into two target paths by a two-way mapper",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        ),
+        "public record %1$sTgt(%1$sMid a, %1$sMid b) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::a", "%1$sMid::name") + ")",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::b", "%1$sMid::name") + ")"
+        )
+      ),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a.name", "b.name")),
+      PairingMessages.fanOutBothWays("%1$sSrc", "%1$sTgt", "n", List.of("a.name", "b.name"))
+    ),
+    new SourceClaimedTwice(
+      "a property dropped and written into a target path of two steps",
+      List.of(
+        "public record %1$sSrc(String n) {}\n",
+        "public record %1$sMid(String name) {}\n",
+        typedField(
+          false,
+          "drop(%1$sSrc::n)",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::name") + ")"
+        ),
+        "public record %1$sTgt(%1$sMid m) {}\n",
+        runtimeMapper(
+          false,
+          "",
+          "drop(%1$sSrc::n)",
+          "to(%1$sSrc::n, " + pathOf("of", "%1$sTgt", "%1$sTgt::m", "%1$sMid::name") + ")"
+        )
+      ),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n"),
+      PairingMessages.droppedAndWritten("%1$sSrc", "%1$sTgt", "n")
+    ),
+    new SourceClaimedTwice(
+      "a forward-only target path through a class no write strategy builds",
+      List.of(
+        "public interface %1$sShape { String getLabel(); }\n",
+        "public record %1$sSrc(String label) {}\n",
+        typedField(
+          true,
+          "to(%1$sSrc::label, " + pathOf("of", "%1$sTgt", "%1$sTgt::shape", "%1$sShape::getLabel") + ")"
+        ),
+        "public record %1$sTgt(%1$sShape shape) {}\n",
+        runtimeMapper(
+          true,
+          "",
+          "to(%1$sSrc::label, " + pathOf("of", "%1$sTgt", "%1$sTgt::shape", "%1$sShape::getLabel") + ")"
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape"),
+      PairingMessages.pathIntermediateUnbuildable("%1$sSrc", "%1$sTgt", "shape.label", "%1$sShape")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean a writeBeans default does not build",
+      List.of(
+        "public record %1$sSrc(%1$sBox box, int qty) {}\n",
+        "public class %1$sBox {\n" +
+          "  private final String s;\n" +
+          "  private %1$sBox(final String s) { this.s = s; }\n" +
+          "  public String getS() { return s; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String s;\n" +
+          "    public Builder s(final String v) { s = v; return this; }\n" +
+          "    public %1$sBox build() { return new %1$sBox(s); }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        "public record %1$sTgt(String s, int qty) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::box", "%1$sBox::getS") + ", %1$sTgt::s)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS"),
+      PairingMessages.pathIntermediateUnbuiltBy("%1$sSrc", "%1$sTgt", "box.s", "%1$sBox", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean with a private no-argument constructor that a writeBeans SETTERS default names",
+      List.of(
+        "public record %1$sSrc(String id, %1$sHb c) {}\n",
+        "public class %1$sHb {\n" +
+          "  private String city;\n  private %1$sHb() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n    private String city;\n" +
+          "    public Builder city(final String v) { city = v; return this; }\n" +
+          "    public %1$sHb build() { final var b = new %1$sHb(); b.city = city; return b; }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          SETTERS_FOR_EVERY_BEAN
+        )
+      ),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS"),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "the same bean named by a writeBean SETTERS hint keyed to it",
+      List.of(
+        "public record %1$sSrc(String id, %1$sHb c) {}\n",
+        "public class %1$sHb {\n" +
+          "  private String city;\n  private %1$sHb() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static final class Builder {\n    private String city;\n" +
+          "    public Builder city(final String v) { city = v; return this; }\n" +
+          "    public %1$sHb build() { final var b = new %1$sHb(); b.city = city; return b; }\n  }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
+          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS"),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS")
+    ),
+    new SourceClaimedTwice(
+      "a two-way source path through a bean whose setters write no property the path writes",
+      List.of(
+        "public record %1$sSrc(String id, %1$sRo c) {}\n",
+        "public class %1$sRo {\n" +
+          "  private String city;\n  private int n;\n  public %1$sRo() {}\n" +
+          "  public String getCity() { return city; }\n" +
+          "  public int getN() { return n; }\n  public void setN(final int v) { n = v; }\n}\n",
+        plainField(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sRo::getCity") + ", %1$sTgt::city)"
+        ),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(
+          false,
+          MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sRo::getCity") + ", %1$sTgt::city)"
+        )
+      ),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sRo", "city", null),
+      PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sRo", "city", null)
     )
   );
 
@@ -11080,8 +12346,18 @@ class CrossPathCorpusTest {
     );
   }
 
-  /** What the processor refuses a row given a path with, which has no generated form yet. */
+  /**
+   * What the processor refuses a constant or compute row given a path with, which has no generated
+   * form yet.
+   */
   private static final String PATH_ROW_UNCOMPILED = "a telescope path or another expression has no generated form yet";
+
+  /**
+   * What the processor refuses a row with a path on both sides with, which has no generated form
+   * yet.
+   */
+  private static final String PATH_BOTH_UNCOMPILED =
+    "a row whose source and target are both telescope paths has no generated form yet";
 
   /** The value a compute row supplies, and the predicate a when row gates on, for each row. */
   private static final String UNPAIRED_HELP =
@@ -11191,7 +12467,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -11201,7 +12477,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -11211,7 +12487,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      PATH_BOTH_UNCOMPILED,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -11286,7 +12562,7 @@ class CrossPathCorpusTest {
         SOURCE_Y_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
@@ -11296,7 +12572,7 @@ class CrossPathCorpusTest {
         SOURCE_Y_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
@@ -11339,7 +12615,7 @@ class CrossPathCorpusTest {
         List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
         "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_ROW_UNCOMPILED,
+      null,
       null
     ),
     new UnpairedBeside(
@@ -11349,7 +12625,7 @@ class CrossPathCorpusTest {
         List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
       ),
-      PATH_ROW_UNCOMPILED,
+      null,
       null
     ),
     new UnpairedBeside(

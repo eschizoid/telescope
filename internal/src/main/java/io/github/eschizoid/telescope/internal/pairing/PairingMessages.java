@@ -420,6 +420,122 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A source property one row drops while another reads the source path {@code path} through it,
+   * which backward writes back.
+   */
+  public static String droppedAndReadThrough(
+    final String source,
+    final String target,
+    final String srcField,
+    final String path
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row, and another reads the path '" +
+      path +
+      "' through it. Drop it, or read through it, not both."
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class no write strategy builds, so a null
+   * object of that class on the path cannot be built to take the value.
+   */
+  public static String pathIntermediateUnbuildable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and no write strategy builds it. Give it" +
+      " a public no-argument constructor, a public constructor taking its properties or a static builder()."
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class the write strategy a hint names for
+   * it, {@code strategy} ({@code CONSTRUCTOR}, {@code BUILDER} or {@code SETTERS}), does not build.
+   */
+  public static String pathIntermediateUnbuiltBy(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String strategy
+  ) {
+    final var reason = switch (strategy) {
+      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
+      " BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
+      " SETTERS, or add a builder().";
+      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
+      " no-argument constructor the mapper's package can call.";
+    };
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and writeStrategy = " +
+      strategy +
+      " for it finds " +
+      reason
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class the write strategy it is built
+   * through, {@code strategy} as a hint names it or null for the one it takes, writes no {@code
+   * property} into, so the value written through the path would be dropped.
+   */
+  public static String pathIntermediateUnwritable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String property,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
+      property +
+      "' into it, so a write through the path would drop the value. Give " +
+      intermediate +
+      " a member that writes '" +
+      property +
+      "', or name a strategy that writes it."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (
