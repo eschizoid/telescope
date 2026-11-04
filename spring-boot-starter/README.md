@@ -263,8 +263,7 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
 that converts both ways pairs every property, so `contact`, which the summary does not hold, is dropped by name. A
 projection that overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and in
 `patch`. On a `@Bridge` field the same rows declare the pair's generated bridge, which a projection with no `translate`
-override
-calls.
+override calls.
 
 ### Bridge or core mapper
 

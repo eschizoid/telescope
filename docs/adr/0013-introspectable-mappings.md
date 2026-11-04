@@ -229,9 +229,10 @@ not four separate PRs. The build order lets each commit stand on its own and be 
 - **Universal report, semantics reflect what the optic did.** A strict `mapper(...)` cannot have `MISSING_SOURCE` rows —
   an unmatched target is a _hard construction error_ (the strict bijection guard throws; `DeepMap` ~L113/555/601), so
   its `Skipped` set is provably empty, which is itself a useful assertion. `MISSING_SOURCE` therefore only appears on
-  the lenient paths (`mapperForward`, nested pairs, `fromMap`), and on a strict top-level mapper the moment it carries a
-  `constant` / `compute` row or a nested pair (which flip resolution lenient; `DeepMap` ~L535/596). `explain()`
-  describes whatever the mapper actually did, uniformly, without special-casing.
+  the lenient paths (`mapperForward`, nested pairs, `fromMap`). A `constant`, `compute` or path row on a strict
+  top-level mapper no longer makes it lenient: the property such a row writes counts as filled and every other property
+  is still refused, so its `Skipped` set stays empty. `explain()` describes whatever the mapper actually did, uniformly,
+  without special-casing.
 - **`explain()` static vs `trace()` expanded.** Without input, fan-out points are single `Traverse` nodes;
   `trace(input)` is the only surface that expands them into per-element subtrees.
 - **Non-mapping / non-navigation optics** return an empty report, never throw.
