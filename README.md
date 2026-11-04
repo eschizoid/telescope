@@ -24,7 +24,7 @@ public record Invoice(String id, Customer customer, long totalCents, String inte
     // a renamed field
     to(Invoice::id, InvoiceDto::number),
     // a field read through a nested object
-    to(of(Invoice.class).field(Invoice::customer).field(Customer::email), InvoiceDto::billTo),
+    to(path(Invoice::customer, Customer::email), InvoiceDto::billTo),
     // a field built from the whole invoice
     compute(InvoiceDto::total, Money::format),
     // a field left out on purpose
@@ -51,22 +51,21 @@ same field runs the same rows at run time instead, with the same result.
 
 You name only what differs between the two types. Each kind of difference has one row.
 
-| What differs                                | Row                                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| a field has another name                    | `to(Order::customerName, OrderDto::fullName)`                                      |
-| a field has another type                    | `to(Order::placedAt, OrderDto::placedOn, IsoDate.class)`                           |
-| a field lives inside a nested object        | `to(of(Order.class).field(Order::customer).field(Customer::city), OrderDto::city)` |
-| a field is built from the source            | `compute(OrderDto::label, Labels::of)`                                             |
-| a field gets a fresh value on each call     | `compute(OrderDto::createdAt, Instant::now)`                                       |
-| a field is the same literal every time      | `constant(OrderDto::tenant, "production")`                                         |
-| a field falls back to a default             | `toOrElse(Order::region, OrderDto::region, "EMEA")`                                |
-| a field converts through a mapper you wrote | `via(Order::lines, OrderDto::lines, LineMapper.class)`                             |
-| a source field is left out                  | `drop(Order::internalNote)`                                                        |
+| What differs                                | Row                                                         |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| a field has another name                    | `to(Order::customerName, OrderDto::fullName)`               |
+| a field has another type                    | `to(Order::placedAt, OrderDto::placedOn, IsoDate.class)`    |
+| a field lives inside a nested object        | `to(path(Order::customer, Customer::city), OrderDto::city)` |
+| a field is built from the source            | `compute(OrderDto::label, Labels::of)`                      |
+| a field gets a fresh value on each call     | `compute(OrderDto::createdAt, Instant::now)`                |
+| a field is the same literal every time      | `constant(OrderDto::tenant, "production")`                  |
+| a field falls back to a default             | `toOrElse(Order::region, OrderDto::region, "EMEA")`         |
+| a field converts through a mapper you wrote | `via(Order::lines, OrderDto::lines, LineMapper.class)`      |
+| a source field is left out                  | `drop(Order::internalNote)`                                 |
 
 `IsoDate` is a class implementing `BridgeFn<LocalDate, String>`, `Labels.of(Order)` is any static method taking the
 source, and `LineMapper` is a hand-written class with `forward` and `backward` methods. A nested path also works as a
-target, so `to(Order::city, of(OrderDto.class).field(OrderDto::shipping).field(Shipping::city))` builds the `shipping`
-object it writes into.
+target, so `to(Order::city, path(OrderDto::shipping, Shipping::city))` builds the `shipping` object it writes into.
 
 `Telescope.mapper(...)` returns a two-way `Mapper` with `forward`, `backward` and `patch`. Its rows run in reverse on
 `backward`, and it refuses, when it is built, any field it can't map in both directions. `Telescope.mapperForward(...)`
@@ -153,18 +152,18 @@ MapStruct's own rows as the control in the same run.
 
 ## Coming from MapStruct
 
-| MapStruct                                                | telescope                                                                          |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `@Mapping(source = "customerName", target = "fullName")` | `to(Order::customerName, OrderDto::fullName)`                                      |
-| `@Mapping(source = "customer.city", target = "city")`    | `to(of(Order.class).field(Order::customer).field(Customer::city), OrderDto::city)` |
-| `@Mapping(target = "tenant", constant = "production")`   | `constant(OrderDto::tenant, "production")`                                         |
-| `@Mapping(target = "label", expression = "java(...)")`   | `compute(OrderDto::label, Labels::of)`                                             |
-| `@Mapping(target = "region", defaultValue = "EMEA")`     | `toOrElse(Order::region, OrderDto::region, "EMEA")`                                |
-| `@Mapping(target = "internalNote", ignore = true)`       | `drop(Order::internalNote)`                                                        |
-| `@Mapper(uses = LineMapper.class)`                       | `via(Order::lines, OrderDto::lines, LineMapper.class)`                             |
-| `@InheritInverseConfiguration` on a second method        | `backward(...)` on the same mapper                                                 |
-| `@MappingTarget` to update an existing bean              | `into(existingBean, source)`                                                       |
-| `unmappedTargetPolicy = ReportingPolicy.ERROR`           | the default for `Telescope.mapper(...)`                                            |
+| MapStruct                                                | telescope                                                   |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| `@Mapping(source = "customerName", target = "fullName")` | `to(Order::customerName, OrderDto::fullName)`               |
+| `@Mapping(source = "customer.city", target = "city")`    | `to(path(Order::customer, Customer::city), OrderDto::city)` |
+| `@Mapping(target = "tenant", constant = "production")`   | `constant(OrderDto::tenant, "production")`                  |
+| `@Mapping(target = "label", expression = "java(...)")`   | `compute(OrderDto::label, Labels::of)`                      |
+| `@Mapping(target = "region", defaultValue = "EMEA")`     | `toOrElse(Order::region, OrderDto::region, "EMEA")`         |
+| `@Mapping(target = "internalNote", ignore = true)`       | `drop(Order::internalNote)`                                 |
+| `@Mapper(uses = LineMapper.class)`                       | `via(Order::lines, OrderDto::lines, LineMapper.class)`      |
+| `@InheritInverseConfiguration` on a second method        | `backward(...)` on the same mapper                          |
+| `@MappingTarget` to update an existing bean              | `into(existingBean, source)`                                |
+| `unmappedTargetPolicy = ReportingPolicy.ERROR`           | the default for `Telescope.mapper(...)`                     |
 
 A MapStruct mapper names its fields in strings inside annotations, because Java annotations only accept constants. Its
 processor checks those strings when it compiles, but an IDE rename doesn't update them. Telescope keeps the mapping out
