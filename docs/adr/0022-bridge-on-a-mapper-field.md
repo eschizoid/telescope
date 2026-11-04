@@ -165,9 +165,10 @@ the existing emitter without a second one.
 > **Amendment: source and target paths.** A `to(path, accessor)` row compiles when the path is written in place from
 > `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
 > to a property of the class the step before it reads, and so does a `to(accessor, path)` row whose path is written the
-> same way from the target. Any other path is refused on the row by name: one held in a variable or built by a
-> navigator, a step other than `field`, a lambda step, and a path rooted at a class its side neither is nor extends. A
-> row with a path on both sides is refused too.
+> same way from the target. `Telescope.path(A::b, B::c, ...)` is read as the `field` chain it stands for, starting at
+> the class javac gives its first accessor, and generates the same code. Any other path is refused on the row by name:
+> one held in a variable or built by a navigator, a step other than `field`, a lambda step, and a path rooted at a class
+> its side neither is nor extends. A row with a path on both sides is refused too.
 >
 > Both paths give such a row one meaning, decided in the shared spec. Each object a path steps through is read as the
 > class its property declares, with every type variable read as the type argument the path gives it, through nested
