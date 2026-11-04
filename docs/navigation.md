@@ -18,6 +18,7 @@ inventory lives here as a reference; pick what you need by what you're trying to
 | `Telescope.map(A.class, B.class, MapStep...)`                      | **Recommended.** Deep recursive mapping for any combination of records and POJOs (record↔record, POJO↔POJO, cross-paradigm at any depth). Same-name components identity-map (a same-typed `List`/`Set`/`Map` is copied), nested records/beans recurse, `List`/`Set`/`Map`/`Optional` lift the inner conversion through the container automatically. Override rows (`Mapping.to`, `Mapping.via`) and write-strategy hints (`WriteHint.writeBean(target, strategy)`) apply at any depth where their type pair appears. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>`. |
 | `Telescope.ofBean(Class<P>)`                                       | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](pojos.md)).                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `.field(Class::accessor)`                                          | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `Telescope.path(A::b, B::c, ...)`                                  | Shorthand for `Telescope.of(A.class).field(A::b).field(B::c)` (`ofBean` when `A` is not a record), two to five accessors. Same lens, `explain()` nodes and fusion; the root is the class the first accessor is applied to where it is written. **Compile-checked.**                                                                                                                                                                                                                                                                                                          |
 | `.fieldByName(String)`                                             | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error. A wrong name surfaces at the first operation, not at path build.                                                                                                                                                                                                                                                                                                                                                                   |
 | `.fieldByName(String, Class<B>)`                                   | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `.each(Class::collectionAccessor)`                                 | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -84,6 +85,36 @@ final Telescope<User, String> city = Telescope.of(User.class)
 
 city.update(alice, String::toUpperCase);
 ```
+
+A path through properties alone can be written as the accessors it steps through. `Telescope.path` takes two to five of
+them and builds the same telescope as the chain above, so the two read, write, explain and fuse in `Telescope.all`
+alike:
+
+```java
+import static io.github.eschizoid.telescope.Telescope.path;
+
+final Telescope<User, String> city = path(User::address, Address::city);
+```
+
+The path starts at the class the first accessor is applied to where it is written: `path(Admin::getAddress, ...)` starts
+at `Admin` even when `getAddress` is declared by a superclass. It starts with `Telescope.of` for a record and
+`Telescope.ofBean` for any other class, as the chain would. A first accessor that is a lambda is refused by name, since
+a path needs the class it starts at. `path(...)` is a `Telescope`, so navigation continues after it
+(`path(User::address, Address::geo).field(Geo::lat)`), and it goes into every mapping row that takes a path, as a source
+or as a target.
+
+Java infers the class a path starts at from its first accessor, and cannot when that accessor names an overloaded
+method, as `Bean::getInner` does beside `getInner(int)`. Name the types for it, with a typed variable or a type witness:
+
+```java
+final Telescope<Bean, String> name = path(Bean::getInner, Inner::getName);
+
+final var same = Telescope.<Bean, Inner, String>path(Bean::getInner, Inner::getName);
+```
+
+Inside a class that implements `TelescopePath` or `TelescopeTransformation`, the inherited `path()` method hides a
+static import of `Telescope.path`, as any member method hides a static import of its name; write `Telescope.path(...)`
+there.
 
 ### Every element of a collection inside a record
 

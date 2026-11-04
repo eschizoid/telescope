@@ -378,6 +378,26 @@ class BridgeFieldTest {
         " UserDto::kind)",
         "then(...) in a path has no generated form",
       },
+      new String[] {
+        "to(Telescope.path(User::address, (final Address a) -> a.city()), UserDto::kind)",
+        "an inline lambda in a path can't be compiled into the generated bridge",
+      },
+      new String[] {
+        "to(Telescope.path(UserDto::handle, Handle::value), UserDto::kind)",
+        "this path starts at UserDto, which is not User or a class it extends",
+      },
+      new String[] {
+        "to(User::nick, Telescope.path(User::address, Address::city))",
+        "this path starts at User, which is not UserDto or a class it extends",
+      },
+      new String[] {
+        "to(Telescope.path(User::address, Address::city).filter(c -> c != null), UserDto::kind)",
+        "filter(...) in a path has no generated form",
+      },
+      new String[] {
+        "to(Telescope.path(User::address, Address::city), Telescope.path(UserDto::address, Address::city))",
+        "a row whose source and target are both telescope paths has no generated form yet",
+      },
       new String[] { "to(Rows.CITY, UserDto::kind)", "this argument is not such a path" },
       new String[] {
         "to(Telescope.of(Address.class).field(Address::city), UserDto::kind)",

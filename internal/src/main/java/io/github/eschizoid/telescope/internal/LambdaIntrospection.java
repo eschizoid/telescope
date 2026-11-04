@@ -52,6 +52,7 @@ public final class LambdaIntrospection {
     private volatile Metadata metadata;
     private volatile Class<?> implClass;
     private volatile Class<?> receiverClass;
+    private volatile Class<?> instantiatedReceiver;
 
     Metadata get(final Serializable lambda) {
       final var cached = metadata;
@@ -366,6 +367,46 @@ public final class LambdaIntrospection {
       }
     }
     return (Class<A>) result;
+  }
+
+  /**
+   * The class the instantiation of a Serializable method reference types its first argument as,
+   * read from {@link SerializedLambda#getInstantiatedMethodType()}. For an unbound reference this
+   * is the receiver as the use site types it: the class written before {@code ::}, or the subtype
+   * inference gave it there. A getter {@code Sub} inherits from {@code Base}, written {@code
+   * Sub::getName}, answers {@code Sub}, while {@link #implClassOf} answers {@code Base}. Null when
+   * that argument is a primitive or an array, which names no class.
+   *
+   * <p>The class is loaded by name through the lambda's class loader, as {@link #receiverClassOf}
+   * loads a receiver, so inside a native image it answers only for a class registered for
+   * reflection.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   * @throws IllegalStateException if the class cannot be loaded
+   */
+  public static Class<?> instantiatedReceiverOf(final Serializable lambda) {
+    final var slot = CACHE.get(lambda.getClass());
+    final var cached = slot.instantiatedReceiver;
+    if (cached != null) return cached;
+    final var metadata = slot.get(lambda);
+    final var name = metadata.receiverName();
+    if (name == null) return null;
+    try {
+      final var receiver = Class.forName(name, false, lambda.getClass().getClassLoader());
+      slot.instantiatedReceiver = receiver;
+      return receiver;
+    } catch (final ClassNotFoundException e) {
+      throw new IllegalStateException(
+        "Cannot load " +
+          name +
+          ", the class the method reference " +
+          metadata.implName() +
+          "::" +
+          metadata.methodName() +
+          " is applied to. Inside a native image, register it for reflection.",
+        e
+      );
+    }
   }
 
   /**

@@ -1464,14 +1464,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * ofBean} followed by one {@code field} hop and nothing else.
      */
     private boolean oneFieldHop(final ExpressionTree arg) {
-      final var calls = telescopeCalls(arg);
-      if (calls == null || calls.size() != 2) return false;
-      final var root = factoryName(calls.getFirst());
-      return (
-        ("of".equals(root) || "ofBean".equals(root)) &&
-        ((MemberSelectTree) calls.get(1).getMethodSelect()).getIdentifier().contentEquals("field") &&
-        calls.get(1).getArguments().size() == 1
-      );
+      final var path = inlinePath(arg);
+      if (path == null || path.steps().size() != 1) return false;
+      final var step = path.steps().getFirst();
+      return path.startsAtClass() && "field".equals(step.name()) && step.args().size() == 1;
     }
 
     /**
@@ -2122,8 +2118,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       if (src == null && tgt != null) {
         final var named = fieldPath(args.get(0), srcEl);
-        final var calls = telescopeCalls(args.get(0));
-        if (named != null && calls.size() == named.size() + 1 && sameClass(tgt.owner(), tgtEl)) {
+        if (named != null && inlinePath(args.get(0)).steps().size() == named.size() && sameClass(tgt.owner(), tgtEl)) {
           writes.write(String.join(".", named), tgt.name(), row, true);
         }
       }
@@ -2135,18 +2130,16 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * for a path with any other step, or rooted at another class.
      */
     private List<String> fieldPath(final ExpressionTree arg, final TypeElement root) {
-      final var calls = telescopeCalls(arg);
-      if (calls == null || calls.getFirst().getArguments().size() != 1) return null;
-      final var rootName = factoryName(calls.getFirst());
-      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return null;
-      final var rooted = classLiteral(calls.getFirst().getArguments().getFirst());
+      final var path = inlinePath(arg);
+      if (path == null || !path.startsAtClass()) return null;
+      final var rooted = path.root();
       if (rooted == null || !types.isSameType(types.erasure(rooted), types.erasure(root.asType()))) return null;
       final var names = new ArrayList<String>();
-      for (final var call : calls.subList(1, calls.size())) {
-        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+      for (final var step : path.steps()) {
+        final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name)) continue;
-        if (!"field".equals(name) || call.getArguments().size() != 1) return null;
-        final var hop = accessorProp(call.getArguments().getFirst());
+        if (!"field".equals(name) || step.args().size() != 1) return null;
+        final var hop = accessorProp(step.args().getFirst());
         if (hop == null) return null;
         names.add(hop.name());
       }
@@ -2164,15 +2157,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * chain from {@code Telescope.of} or {@code ofBean} whose first step reads through an accessor.
      */
     private String pathStart(final ExpressionTree arg) {
-      final var calls = arg == null ? null : telescopeCalls(arg);
-      if (calls == null) return null;
-      final var rootName = factoryName(calls.getFirst());
-      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return null;
-      for (final var call : calls.subList(1, calls.size())) {
-        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+      final var path = inlinePath(arg);
+      if (path == null || !path.startsAtClass()) return null;
+      for (final var step : path.steps()) {
+        final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name) || "as".equals(name)) continue;
-        if (!ROOT_HOPS.contains(name) || call.getArguments().size() != 1) return null;
-        final var hop = accessorProp(call.getArguments().getFirst());
+        if (!ROOT_HOPS.contains(name) || step.args().size() != 1) return null;
+        final var hop = accessorProp(step.args().getFirst());
         return hop == null ? null : hop.method();
       }
       return null;
@@ -2753,20 +2744,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String srcSimple,
       final String tgtSimple
     ) {
-      final var calls = telescopeCalls(arg);
-      if (calls == null) return;
-      final var rootArgs = calls.getFirst().getArguments();
-      final var rootName = factoryName(calls.getFirst());
-      if ("lens".equals(rootName)) {
+      final var path = inlinePath(arg);
+      if (path == null) return;
+      final var rootArgs = path.factoryArgs();
+      if ("lens".equals(path.factory())) {
         final var getter = rootArgs.isEmpty() ? null : accessorProp(rootArgs.getFirst());
         if (getter != null) verifyRootRelated(row, rowName, getter.owner().asType(), tgtType, srcSimple, tgtSimple);
         return;
       }
-      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return;
-      final var focus = rootArgs.size() == 1 ? classLiteral(rootArgs.getFirst()) : null;
-      for (final var call : calls.subList(1, calls.size())) {
-        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
-        final var callArgs = call.getArguments();
+      if (!path.startsAtClass()) return;
+      final var focus = path.root();
+      for (final var step : path.steps()) {
+        final var name = step.name();
+        final var callArgs = step.args();
         if ("filter".equals(name) || "observe".equals(name)) continue;
         if ("as".equals(name) && callArgs.size() == 1) {
           final var narrowed = classLiteral(callArgs.getFirst());
@@ -2811,20 +2801,71 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     /**
      * The calls of an inline telescope chain, the factory first, when the chain starts at a static
      * factory of {@code Telescope}, or null for any other expression: a path held in a variable, or
-     * one returned by a method of another class.
+     * one returned by a method of another class. A factory imported statically, as {@code
+     * path(A::b, B::c)} often is, is named without a qualifier and starts the chain all the same.
      */
     private List<MethodInvocationTree> telescopeCalls(final ExpressionTree arg) {
       final var calls = new ArrayList<MethodInvocationTree>();
       var current = arg;
-      while (
-        current instanceof MethodInvocationTree call && call.getMethodSelect() instanceof MemberSelectTree select
-      ) {
+      while (current instanceof MethodInvocationTree call) {
         calls.addFirst(call);
-        current = select.getExpression();
+        current = call.getMethodSelect() instanceof MemberSelectTree select ? select.getExpression() : null;
       }
-      if (calls.isEmpty()) return null;
+      if (calls.isEmpty() || elementAt(calls.getFirst().getMethodSelect()) == null) return null;
       final var owner = (TypeElement) elementAt(calls.getFirst().getMethodSelect()).getEnclosingElement();
       return owner.getQualifiedName().contentEquals(TELESCOPE_FQN) ? calls : null;
+    }
+
+    /**
+     * An inline telescope path read the way construction reads it: the {@code Telescope} factory it
+     * starts at; the factory's arguments; the class it starts at, which a class literal or a {@code
+     * path(...)} call's {@code Telescope<A, Z>} type names, or null; and each call after the
+     * factory, a {@code path(...)} call's accessors first, each read as the {@code field(...)} step
+     * it stands for.
+     */
+    private record InlinePath(
+      String factory,
+      List<? extends ExpressionTree> factoryArgs,
+      TypeMirror root,
+      List<Step> steps
+    ) {
+      /** Whether the path starts at a class, through {@code of}, {@code ofBean} or {@code path}. */
+      boolean startsAtClass() {
+        return "of".equals(factory) || "ofBean".equals(factory) || "path".equals(factory);
+      }
+    }
+
+    /** One call after a path's factory: the method it names and its arguments. */
+    private record Step(String name, List<? extends ExpressionTree> args) {}
+
+    /**
+     * {@code arg} read as an inline path, or null for any expression {@link #telescopeCalls} does
+     * not read as one.
+     */
+    private InlinePath inlinePath(final ExpressionTree arg) {
+      final var calls = arg == null ? null : telescopeCalls(arg);
+      if (calls == null) return null;
+      final var first = calls.getFirst();
+      final var steps = new ArrayList<Step>();
+      final var factory = factoryName(first);
+      final TypeMirror root;
+      if ("path".equals(factory)) {
+        final var typed = trees.getTypeMirror(TreePath.getPath(getCurrentPath().getCompilationUnit(), first));
+        root =
+          typed instanceof DeclaredType telescope &&
+          !telescope.getTypeArguments().isEmpty() &&
+          types.asElement(types.erasure(telescope.getTypeArguments().getFirst())) instanceof TypeElement start
+            ? start.asType()
+            : null;
+        for (final var accessor : first.getArguments()) steps.add(new Step("field", List.of(accessor)));
+      } else {
+        root = first.getArguments().size() == 1 ? classLiteral(first.getArguments().getFirst()) : null;
+      }
+      for (final var call : calls.subList(1, calls.size())) {
+        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+        steps.add(new Step(name, call.getArguments()));
+      }
+      return new InlinePath(factory, first.getArguments(), root, List.copyOf(steps));
     }
 
     /** The name of the method a call invokes, read from its resolved element. */
@@ -2856,12 +2897,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String srcSimple,
       final String tgtSimple
     ) {
-      final var calls = telescopeCalls(arg);
-      if (calls == null) return;
-      final var rootArgs = calls.getFirst().getArguments();
-      final var rootName = factoryName(calls.getFirst());
+      final var path = inlinePath(arg);
+      if (path == null) return;
+      final var rootArgs = path.factoryArgs();
       final var srcErased = types.erasure(srcType);
-      if ("lens".equals(rootName)) {
+      if ("lens".equals(path.factory())) {
         final var getter = accessorProp(rootArgs.getFirst());
         if (getter != null) verifySourceRootRelated(
           row,
@@ -2873,10 +2913,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         );
         return;
       }
-      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return;
-      for (final var call : calls.subList(1, calls.size())) {
-        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
-        final var callArgs = call.getArguments();
+      if (!path.startsAtClass()) return;
+      for (final var step : path.steps()) {
+        final var name = step.name();
+        final var callArgs = step.args();
         if ("filter".equals(name) || "observe".equals(name)) continue;
         if ("as".equals(name)) {
           final var narrowed = classLiteral(callArgs.getFirst());
@@ -2901,7 +2941,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         );
         return;
       }
-      verifySourceRootRelated(row, rowName, classLiteral(rootArgs.getFirst()), srcType, srcSimple, tgtSimple);
+      verifySourceRootRelated(row, rowName, path.root(), srcType, srcSimple, tgtSimple);
     }
 
     /**

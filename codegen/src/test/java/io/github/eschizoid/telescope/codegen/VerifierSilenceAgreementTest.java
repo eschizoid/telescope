@@ -1031,4 +1031,117 @@ class VerifierSilenceAgreementTest {
       );
     }
   }
+
+  /** A pair whose source and target each hold a {@code Mid}, beside a class neither side is. */
+  private static final String NESTED = """
+    record @@Mid(String n, String k) {}
+    record @@Src(@@Mid m, String n) {}
+    record @@Tgt(String a, String b, @@Mid m) {}
+    record @@Other(@@Mid m) {}
+    """;
+
+  @Nested
+  @DisplayName("A row written with Telescope.path(...) gets what the field chain it stands for gets, from both")
+  class PathShorthand {
+
+    /**
+     * The outcome of {@code chain}'s call and of {@code shorthand}'s, each compiled under a prefix
+     * of its own, held to one answer once the prefixes are made one; that answer.
+     */
+    private Outcome agreeing(final String prefix, final String chain, final String shorthand) {
+      final var written = verified(prefix + "C", NESTED + holder(chain));
+      final var path = verified(prefix + "P", NESTED + holder(shorthand));
+      final var named = new Outcome(
+        path
+          .warnings()
+          .stream()
+          .map(w -> w.replace(prefix + "P", prefix + "C"))
+          .toList(),
+        path.construction() == null ? null : path.construction().replace(prefix + "P", prefix + "C")
+      );
+      assertEquals(written, named);
+      return written;
+    }
+
+    @Test
+    @DisplayName("one source path written into two targets")
+    void fanOut() {
+      final var outcome = agreeing(
+        "VpA",
+        "Telescope.mapper(@@Src.class, @@Tgt.class, drop(@@Src::n), to(@@Src::m, @@Tgt::m)," +
+          " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
+          " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::b))",
+        "Telescope.mapper(@@Src.class, @@Tgt.class, drop(@@Src::n), to(@@Src::m, @@Tgt::m)," +
+          " to(Telescope.path(@@Src::m, @@Mid::n), @@Tgt::a), to(Telescope.path(@@Src::m, @@Mid::n), @@Tgt::b))"
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.fanOutBothWays("VpACSrc", "VpACTgt", "m.n", List.of("a", "b")),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a statically imported path read through a property that is also dropped")
+    void dropThenReadThrough() {
+      final var outcome = agreeing(
+        "VpB",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class, drop(@@Src::m)," +
+          " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a))",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class, drop(@@Src::m)," +
+          " to(io.github.eschizoid.telescope.Telescope.path(@@Src::m, @@Mid::n), @@Tgt::a))"
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.droppedAndReadThrough("VpBCSrc", "VpBCTgt", "m", "m.n"), outcome.construction());
+      final var imported = verified(
+        "VpBI",
+        "import static io.github.eschizoid.telescope.Telescope.path;\n" +
+          NESTED +
+          holder(
+            "Telescope.mapperForward(@@Src.class, @@Tgt.class, drop(@@Src::m), to(path(@@Src::m, @@Mid::n), @@Tgt::a))"
+          )
+      );
+      assertBothRefuse(imported);
+      assertEquals(PairingMessages.droppedAndReadThrough("VpBISrc", "VpBITgt", "m", "m.n"), imported.construction());
+    }
+
+    @Test
+    @DisplayName("two source paths through one property, each into a target of its own")
+    void twoPathsThroughOneProperty() {
+      assertBothAccept(
+        agreeing(
+          "VpC",
+          "Telescope.mapperForward(@@Src.class, @@Tgt.class," +
+            " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::n), @@Tgt::a)," +
+            " to(Telescope.of(@@Src.class).field(@@Src::m).field(@@Mid::k), @@Tgt::b))",
+          "Telescope.mapperForward(@@Src.class, @@Tgt.class," +
+            " to(Telescope.path(@@Src::m, @@Mid::n), @@Tgt::a), to(Telescope.path(@@Src::m, @@Mid::k), @@Tgt::b))"
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a target path rooted at a class the target is not")
+    void targetPathOffTarget() {
+      final var outcome = agreeing(
+        "VpD",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class," +
+          " to(@@Src::n, Telescope.of(@@Other.class).field(@@Other::m).field(@@Mid::n)))",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class, to(@@Src::n, Telescope.path(@@Other::m, @@Mid::n)))"
+      );
+      assertBothRefuse(outcome);
+    }
+
+    @Test
+    @DisplayName("a source path rooted at a class the source is not")
+    void sourcePathOffSource() {
+      final var outcome = agreeing(
+        "VpE",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class," +
+          " to(Telescope.of(@@Other.class).field(@@Other::m).field(@@Mid::n), @@Tgt::a))",
+        "Telescope.mapperForward(@@Src.class, @@Tgt.class, to(Telescope.path(@@Other::m, @@Mid::n), @@Tgt::a))"
+      );
+      assertBothRefuse(outcome);
+    }
+  }
 }

@@ -41,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -694,6 +695,140 @@ public sealed class Telescope<
       List.of(),
       pojoClass
     );
+  }
+
+  /**
+   * A path through two properties, written as the accessors it steps through. {@code path(A::b,
+   * B::c)} is the path {@code Telescope.of(A.class).field(A::b).field(B::c)} builds, or {@code
+   * Telescope.ofBean(A.class)} in place of {@code of} when {@code A} is not a record: the same
+   * lens, the same {@code explain()} nodes, and the same hops {@link #all(Edit[])} fuses by, so the
+   * two forms fuse with each other.
+   *
+   * <pre>{@code
+   * // in a mapper row
+   * to(path(Invoice::customer, Customer::email), InvoiceDto::billTo)
+   *
+   * // on its own
+   * final Telescope<Invoice, String> email = path(Invoice::customer, Customer::email);
+   * final Invoice lower = email.update(invoice, String::toLowerCase);
+   * }</pre>
+   *
+   * <p>The class the path starts at is the one the first accessor is applied to where it is
+   * written, which its {@code SerializedLambda} records: {@code path(Sub::getCustomer, ...)} starts
+   * at {@code Sub} even when {@code getCustomer} is declared by a superclass of it. A path takes
+   * any row a telescope path does, as a source or as a target, and a {@code @Bridge} field compiles
+   * it wherever it compiles the {@code field} chain it stands for, into the same generated code.
+   * Overloads take three, four and five accessors.
+   *
+   * <p>Each accessor is a method reference, as {@link #field(Accessor)} takes one. A path needs the
+   * class it starts at, so a first accessor that is a lambda, or a class implementing {@link
+   * Accessor}, is refused by name. Inside a native image the accessors are decoded as every other
+   * accessor is, which needs the same serialization registration.
+   *
+   * <p>Java infers the class a path starts at from the first accessor, and cannot when that
+   * accessor names an overloaded method, as {@code Bean::getInner} does beside {@code
+   * getInner(int)}. Name the types for it: give the path a typed variable, {@code Telescope<Bean,
+   * String> t = path(Bean::getInner, Inner::getName)}, or a type witness, {@code Telescope.<Bean,
+   * Inner, String>path(Bean::getInner, Inner::getName)}.
+   *
+   * @param first the accessor of a property of the class the path starts at
+   * @param second the accessor of a property of the class {@code first} reads
+   * @return the path through both properties
+   * @throws IllegalArgumentException when {@code first} is not a method reference, or is applied to
+   *     a primitive or an array
+   * @throws IllegalStateException when the class {@code first} is applied to cannot be loaded,
+   *     which inside a native image happens for a class not registered for reflection
+   * @throws NullPointerException when an accessor is null
+   */
+  public static <A, B, C> Telescope<A, C> path(final Accessor<A, B> first, final Accessor<B, C> second) {
+    return pathRoot(first, second).field(first).field(second);
+  }
+
+  /**
+   * A path through three properties; see {@link #path(Accessor, Accessor)}.
+   *
+   * @throws IllegalArgumentException when {@code first} is not a method reference, or is applied to
+   *     a primitive or an array
+   * @throws IllegalStateException when the class {@code first} is applied to cannot be loaded
+   * @throws NullPointerException when an accessor is null
+   */
+  public static <A, B, C, D> Telescope<A, D> path(
+    final Accessor<A, B> first,
+    final Accessor<B, C> second,
+    final Accessor<C, D> third
+  ) {
+    return pathRoot(first, second, third).field(first).field(second).field(third);
+  }
+
+  /**
+   * A path through four properties; see {@link #path(Accessor, Accessor)}.
+   *
+   * @throws IllegalArgumentException when {@code first} is not a method reference, or is applied to
+   *     a primitive or an array
+   * @throws IllegalStateException when the class {@code first} is applied to cannot be loaded
+   * @throws NullPointerException when an accessor is null
+   */
+  public static <A, B, C, D, E> Telescope<A, E> path(
+    final Accessor<A, B> first,
+    final Accessor<B, C> second,
+    final Accessor<C, D> third,
+    final Accessor<D, E> fourth
+  ) {
+    return pathRoot(first, second, third, fourth).field(first).field(second).field(third).field(fourth);
+  }
+
+  /**
+   * A path through five properties; see {@link #path(Accessor, Accessor)}.
+   *
+   * @throws IllegalArgumentException when {@code first} is not a method reference, or is applied to
+   *     a primitive or an array
+   * @throws IllegalStateException when the class {@code first} is applied to cannot be loaded
+   * @throws NullPointerException when an accessor is null
+   */
+  public static <A, B, C, D, E, F> Telescope<A, F> path(
+    final Accessor<A, B> first,
+    final Accessor<B, C> second,
+    final Accessor<C, D> third,
+    final Accessor<D, E> fourth,
+    final Accessor<E, F> fifth
+  ) {
+    return pathRoot(first, second, third, fourth, fifth)
+      .field(first)
+      .field(second)
+      .field(third)
+      .field(fourth)
+      .field(fifth);
+  }
+
+  // The root a path(...) starts at: of for a record, ofBean for any other class, as a hand-written
+  // chain starts there. The class is the receiver the first accessor's instantiation names, which
+  // is the class written at the use site; the class declaring the method may be a superclass.
+  @SuppressWarnings("unchecked")
+  private static <A> Telescope<A, A> pathRoot(final Accessor<A, ?> first, final Accessor<?, ?>... rest) {
+    Objects.requireNonNull(first, "Telescope.path(...): accessor 1 is null");
+    for (var i = 0; i < rest.length; i++) {
+      Objects.requireNonNull(rest[i], "Telescope.path(...): accessor " + (i + 2) + " is null");
+    }
+    final Class<?> root;
+    try {
+      root = LambdaIntrospection.instantiatedReceiverOf(first);
+    } catch (final IllegalArgumentException e) {
+      throw new IllegalArgumentException(
+        "Telescope.path(...) starts at the class its first accessor is applied to, so that accessor must" +
+          " be a method reference such as Invoice::customer; " +
+          e.getMessage(),
+        e
+      );
+    }
+    if (root == null) throw new IllegalArgumentException(
+      "Telescope.path(...) starts at the class its first accessor is applied to, and " +
+        LambdaIntrospection.implClassNameOf(first) +
+        "::" +
+        LambdaIntrospection.methodNameOf(first) +
+        " is applied to a primitive or an array; start the path at a class with properties"
+    );
+    final var typed = (Class<A>) root;
+    return root.isRecord() ? of(typed) : ofBean(typed);
   }
 
   /**

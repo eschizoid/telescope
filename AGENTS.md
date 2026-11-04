@@ -134,8 +134,9 @@ Seven exported packages (`module-info.java`): the root, `annotations`, `conversi
 common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`asMap`/`asOptional`, `after`, `before`,
 `hop`, `explain`, `trace`, `asForwardMapper`, `mapperForward`, `fromMap` and `merge` also live there:
 
-- **Navigation (typed, compile-checked):** `of`, `ofBean`, `from/to/using`, `field(Accessor)`, `each(Accessor)`,
-  `eachValue(Accessor)`, `whenPresent(Accessor)`, `as`, `filter`, `then`.
+- **Navigation (typed, compile-checked):** `of`, `ofBean`, `path(Accessor...)` (two to five accessors, shorthand for the
+  `of`/`ofBean` + `field` chain, rooted at the first accessor's use-site receiver), `from/to/using`, `field(Accessor)`,
+  `each(Accessor)`, `eachValue(Accessor)`, `whenPresent(Accessor)`, `as`, `filter`, `then`.
 - **Navigation (runtime-checked, loudly named):** `fieldByName(String)`, `fieldByName(String, Class<B>)`, `each()`
   no-arg. Documented escape hatches; see Compile-safety scoring below.
 - **Read:** `read`, `find`, `toList`, `toListIndexed`, `count`, `exists`.
@@ -258,7 +259,7 @@ from "compile-checked" to "runtime-checked" is a regression.
 
 ### ✓ Fully compile-checked (default)
 
-- **Entry points**: `Telescope.of(Class)` / `ofBean(Class)`, `lens(getter, setter)`,
+- **Entry points**: `Telescope.of(Class)` / `ofBean(Class)`, `path(A::b, B::c, ...)`, `lens(getter, setter)`,
   `from(Class).to(Class).using(fwd, bwd)`, `map(A.class, B.class, rows...)`, `mapperBuilder(A.class, B.class)…build()`.
 - **Navigation**: `.field`, `.each`, `.eachValue`, `.whenPresent`, `.as(Class)`, `.filter`, `.then`, `.withIndex` — all
   take `Accessor` method refs.

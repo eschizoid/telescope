@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.IntFunction;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -463,6 +464,56 @@ class LambdaIntrospectionTest {
     void aLambdaIsRefused() {
       final Fn<String, Integer> f = x -> x.length();
       assertThrows(IllegalArgumentException.class, () -> of(f));
+    }
+  }
+
+  static class ReceiverBase {
+
+    public String getName() {
+      return "base";
+    }
+  }
+
+  static final class ReceiverSub extends ReceiverBase {}
+
+  interface SerIntFn<B> extends IntFunction<B>, Serializable {}
+
+  static String digits(final int value) {
+    return Integer.toString(value);
+  }
+
+  @Nested
+  @DisplayName("instantiatedReceiverOf")
+  class InstantiatedReceiverOf {
+
+    @Test
+    @DisplayName("an inherited getter written on the subclass answers the subclass, not the class declaring it")
+    void answersTheClassWrittenAtTheUseSite() {
+      final SerFn<ReceiverSub, String> ref = ReceiverSub::getName;
+      assertSame(ReceiverSub.class, LambdaIntrospection.instantiatedReceiverOf(ref));
+      assertSame(ReceiverBase.class, LambdaIntrospection.implClassOf(ref));
+    }
+
+    @Test
+    @DisplayName("a getter written on its own class answers that class, and a second call answers the same")
+    void answersTheDeclaringClassAndCaches() {
+      final SerFn<ReceiverBase, String> ref = ReceiverBase::getName;
+      assertSame(ReceiverBase.class, LambdaIntrospection.instantiatedReceiverOf(ref));
+      assertSame(ReceiverBase.class, LambdaIntrospection.instantiatedReceiverOf(ref));
+    }
+
+    @Test
+    @DisplayName("a reference whose first argument is a primitive names no class")
+    void aPrimitiveArgumentNamesNoClass() {
+      final SerIntFn<String> ref = LambdaIntrospectionTest::digits;
+      assertNull(LambdaIntrospection.instantiatedReceiverOf(ref));
+    }
+
+    @Test
+    @DisplayName("a lambda is refused, since only a method reference names its receiver")
+    void aLambdaIsRefused() {
+      final SerFn<ReceiverSub, String> lambda = sub -> sub.getName();
+      assertThrows(IllegalArgumentException.class, () -> LambdaIntrospection.instantiatedReceiverOf(lambda));
     }
   }
 }

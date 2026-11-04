@@ -11696,6 +11696,132 @@ class CrossPathCorpusTest {
     )
   );
 
+  /** A path written as {@code Telescope.path(...)} through {@code hops}. */
+  private static String shorthandOf(final String... hops) {
+    return "io.github.eschizoid.telescope.Telescope.path(" + String.join(", ", hops) + ")";
+  }
+
+  private static final String SHORT_NAME = shorthandOf("%1$sSrc::customer", "%1$sMid::name");
+  private static final String SHORT_CITY = shorthandOf("%1$sSrc::customer", "%1$sOuter::address", "%1$sInner::city");
+  private static final String SHORT_ZIP = shorthandOf("%1$sSrc::customer", "%1$sOuter::address", "%1$sInner::zip");
+  private static final String SHORT_TO_NAME = shorthandOf("%1$sTgt::customer", "%1$sMid::name");
+  private static final String SHORT_TO_CITY = shorthandOf("%1$sTgt::customer", "%1$sOuter::address", "%1$sInner::city");
+  private static final String SHORT_TO_ZIP = shorthandOf("%1$sTgt::customer", "%1$sOuter::address", "%1$sInner::zip");
+
+  private static final List<NestedPath> SHORTHAND_PATHS = List.of(
+    new NestedPath(
+      "a source path(...) of two steps, through a null object",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(null, 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(" + SHORT_NAME + ", %1$sTgt::label)"),
+        sampled("%1$sTgt", "String label, int qty", "new %1$sTgt(\"m\", 1)"),
+        runtimeMapper(false, "", "to(" + SHORT_NAME + ", %1$sTgt::label)")
+      ),
+      "#0(label=null, qty=3)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)"
+    ),
+    new NestedPath(
+      "a source path(...) of three steps, null at its second object",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer, int qty", "new %1$sSrc(new %1$sOuter(null, \"L\"), 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(false, "to(" + SHORT_CITY + ", %1$sTgt::city)", "to(" + SHORT_ZIP + ", %1$sTgt::zip)"),
+        sampled("%1$sTgt", "String city, int zip, int qty", "new %1$sTgt(null, 5, 1)"),
+        runtimeMapper(false, "", "to(" + SHORT_CITY + ", %1$sTgt::city)", "to(" + SHORT_ZIP + ", %1$sTgt::zip)")
+      ),
+      "#0(city=null, zip=0, qty=3)",
+      "#0(customer=#1(address=#2(city=null, zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=null, zip=5), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a target path(...) of two steps building its object for a value",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(\"n\", 3)"),
+        "public record %1$sMid(String name, int age) {}\n",
+        typedField(false, "to(%1$sSrc::name, " + SHORT_TO_NAME + ")"),
+        sampled("%1$sTgt", "%1$sMid customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::name, " + SHORT_TO_NAME + ")")
+      ),
+      "#0(customer=#1(name=\"n\", age=0), qty=3)",
+      "#0(name=null, qty=1)",
+      "#0(name=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a target path(...) of three steps read back through a null first object",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String city, int zip, int qty", "new %1$sSrc(\"P\", 75, 3)"),
+        OUTER_INNER,
+        INNER,
+        typedField(false, "to(%1$sSrc::city, " + SHORT_TO_CITY + ")", "to(%1$sSrc::zip, " + SHORT_TO_ZIP + ")"),
+        sampled("%1$sTgt", "%1$sOuter customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(false, "", "to(%1$sSrc::city, " + SHORT_TO_CITY + ")", "to(%1$sSrc::zip, " + SHORT_TO_ZIP + ")")
+      ),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=\"P\", zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a forward-only source path(...) of three steps written into two targets",
+      true,
+      List.of(
+        sampled("%1$sSrc", "%1$sOuter customer", "new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 1), \"L\"))"),
+        OUTER_INNER,
+        INNER,
+        typedField(true, "to(" + SHORT_CITY + ", %1$sTgt::city)", "to(" + SHORT_CITY + ", %1$sTgt::town)"),
+        sampled("%1$sTgt", "String city, String town", "new %1$sTgt(\"q\", \"r\")"),
+        runtimeMapper(true, "", "to(" + SHORT_CITY + ", %1$sTgt::city)", "to(" + SHORT_CITY + ", %1$sTgt::town)")
+      ),
+      "#0(city=\"P\", town=\"P\")",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a source path(...) of two steps through beans, a null object leaving a primitive setter unwritten",
+      false,
+      List.of(
+        sampledBean("%1$sSrc", "final var s = new %1$sSrc(); s.setTotal(2); return s;", "%1$sLine line", "int total"),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count"),
+        typedField(
+          false,
+          "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)",
+          "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setCount(5); t.setSku(\"s\"); t.setTotal(1); return t;",
+          "int count = 99",
+          "String sku",
+          "int total"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getCount") + ", %1$sTgt::getCount)",
+          "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getSku") + ", %1$sTgt::getSku)"
+        )
+      ),
+      "#0(count=99, sku=null, total=2)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a row whose path is written as path(...), as a source or as a target, converts the same way on both paths"
+  )
+  void aShorthandPathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(SHORTHAND_PATHS, "Nh");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   @Test
   @DisplayName(
     "a row reading the source through a path converts the same way on both paths, a null object on the way included"

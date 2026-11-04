@@ -812,24 +812,35 @@ final class FieldRows {
       }
       final var written =
         "a @Bridge mapper compiles a path written in place as Telescope.of(Type.class) or" +
-        " Telescope.ofBean(Type.class) followed by field(...) steps, each through a property";
-      if (
-        calls.size() < 2 || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)
-      ) {
+        " Telescope.ofBean(Type.class) followed by field(...) steps, or as Telescope.path(...) of" +
+        " method references, each through a property";
+      if (calls.isEmpty() || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) {
         return new Refused(arg, written + "; this argument is not such a path");
       }
       final var rootOwner = (TypeElement) root.getEnclosingElement();
       final var rootName = root.getSimpleName().toString();
-      final var rooted =
-        calls.getFirst().getArguments().size() == 1
+      final var shorthand = rootOwner.getQualifiedName().contentEquals(TELESCOPE_FQN) && rootName.equals("path");
+      final var rooted = shorthand
+        ? pathRoot(calls.getFirst())
+        : calls.getFirst().getArguments().size() == 1
           ? classLiteral(unit, calls.getFirst().getArguments().getFirst())
           : null;
       if (
         !rootOwner.getQualifiedName().contentEquals(TELESCOPE_FQN) ||
-        !(rootName.equals("of") || rootName.equals("ofBean")) ||
+        !(shorthand || rootName.equals("of") || rootName.equals("ofBean")) ||
         rooted == null
       ) {
         return new Refused(arg, written + "; this path starts at " + calls.getFirst().getMethodSelect() + "(...)");
+      }
+      if (!shorthand && calls.size() < 2) return new Refused(arg, written + "; this argument is not such a path");
+      // Each accessor a path(...) call takes is the step a field(...) call would take, in order.
+      // The tree a step's refusal is reported on: the field(...) call, or the accessor path(...)
+      // takes.
+      final var references = new ArrayList<ExpressionTree>();
+      final var stepsAt = new ArrayList<Tree>();
+      if (shorthand) {
+        references.addAll(calls.getFirst().getArguments());
+        stepsAt.addAll(calls.getFirst().getArguments());
       }
       final var types = env.getTypeUtils();
       if (!types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) {
@@ -843,9 +854,6 @@ final class FieldRows {
             side.getSimpleName()
         );
       }
-      final var hops = new ArrayList<Accessor>();
-      var on = (DeclaredType) side.asType();
-      TypeMirror reached = on;
       for (final var step : calls.subList(1, calls.size())) {
         final var name = selectedName(step);
         if (!name.equals("field") || step.getArguments().size() != 1) {
@@ -857,7 +865,15 @@ final class FieldRows {
               ", so build this mapper without @Bridge to run it on the runtime path"
           );
         }
-        final var reference = step.getArguments().getFirst();
+        references.add(step.getArguments().getFirst());
+        stepsAt.add(step);
+      }
+      final var hops = new ArrayList<Accessor>();
+      var on = (DeclaredType) side.asType();
+      TypeMirror reached = on;
+      for (var i = 0; i < references.size(); i++) {
+        final var reference = references.get(i);
+        final var step = stepsAt.get(i);
         if (reference instanceof LambdaExpressionTree) {
           return new Refused(
             reference,
@@ -881,6 +897,19 @@ final class FieldRows {
         on = !read.primitive() && read.type() instanceof DeclaredType declared ? declared : null;
       }
       return hops;
+    }
+
+    /**
+     * The class a {@code Telescope.path(...)} call starts at: the first type argument of the {@code
+     * Telescope<A, Z>} javac gives the call, which is the class the first accessor is applied to
+     * where it is written, as the runtime reads it from that accessor's instantiation; or null when
+     * javac gives the call no such class.
+     */
+    private TypeElement pathRoot(final MethodInvocationTree call) {
+      final var typed = trees.getTypeMirror(TreePath.getPath(unit, call));
+      if (!(typed instanceof DeclaredType telescope) || telescope.getTypeArguments().isEmpty()) return null;
+      final var root = env.getTypeUtils().erasure(telescope.getTypeArguments().getFirst());
+      return env.getTypeUtils().asElement(root) instanceof TypeElement type ? type : null;
     }
 
     /** Whether the factory's parameter at {@code index} is a telescope path. */

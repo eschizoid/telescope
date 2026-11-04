@@ -134,13 +134,16 @@ nested source
 **telescope:**
 
 ```java
+import static io.github.eschizoid.telescope.Telescope.path;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 
 // Nested source -> flat target: source side is a real Telescope path, each hop typed
 Mapper<Order, OrderDto> mapper = Telescope.mapper(
     Order.class, OrderDto.class,
-    to(Telescope.of(Order.class).field(Order::customer).field(Customer::address).field(Address::city),
-       OrderDto::city));
+    to(path(Order::customer, Customer::address, Address::city), OrderDto::city));
+
+// path(...) is shorthand for the field chain, which reads the same way:
+to(Telescope.of(Order.class).field(Order::customer).field(Customer::address).field(Address::city), OrderDto::city)
 
 // Or with a @Focus-generated navigator (zero runtime reflection on the path):
 to(OrderTelescope.of().customer().address().city(), OrderDto::city)
@@ -159,10 +162,11 @@ the lattice as it is.
 A path through `field` steps alone reads a null object on the way as the leaf's null value, and a write through it
 builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on
 `forward`. Both paths do the same: on a `@Bridge` field, a source or target path written in place from `Telescope.of` or
-`Telescope.ofBean` compiles into a null-safe chain of reads and direct calls to each class's accessors and write
-strategy. A path held in a variable, a generated navigator, a step other than `field`, a lambda step and a row with a
-path on both sides are refused on the row by name. A mapper that writes through a path refuses one through a class no
-write strategy builds, on both paths in the same words.
+`Telescope.ofBean`, or as `Telescope.path(...)`, which generates the same code as that chain, compiles into a null-safe
+chain of reads and direct calls to each class's accessors and write strategy. A path held in a variable, a generated
+navigator, a step other than `field`, a lambda step and a row with a path on both sides are refused on the row by name.
+A mapper that writes through a path refuses one through a class no write strategy builds, on both paths in the same
+words.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
@@ -1010,8 +1014,7 @@ Telescope.mapperForward(Order.class, OrderDto.class, // one-way, as the gated ro
     toOrElseGet(Order::traceId, OrderDto::traceId, () -> UUID.randomUUID().toString(), String::isBlank),
     // whole-source predicate gating on deep writes / stamping rows:
     when(order -> order.shipping() != null,
-        to(Telescope.of(Order.class).field(Order::shipping).field(Shipping::country),
-           OrderDto::shipCountry)),
+        to(Telescope.path(Order::shipping, Shipping::country), OrderDto::shipCountry)),
     when(order -> order.priority() == Priority.HIGH,
         constant(OrderDto::expediteFlag, true)));
 ```
