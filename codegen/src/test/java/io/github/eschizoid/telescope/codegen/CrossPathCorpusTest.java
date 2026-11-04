@@ -11061,6 +11061,361 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  /**
+   * Rows of a {@code @Bridge} field and the runtime rows over the same pair that leave a property
+   * of the pair with nothing to pair it with, or pair every one, beside a row of each kind. The
+   * declarations each take {@code %1$s} as the row's prefix, the last of them the runtime row;
+   * {@code generated} is what the processor refuses the field with, or null where it builds the
+   * bridge, and {@code runtime} the message the runtime refuses the mapper with, or null where it
+   * builds it.
+   */
+  private record UnpairedBeside(String name, List<String> declarations, String generated, String runtime) {}
+
+  private static final String MAPPING_PREFIX = "io.github.eschizoid.telescope.mapping.Mapping.";
+
+  /** A path rooted at {@code %1$s<side>} through its property {@code property}. */
+  private static String pathOn(final String side, final String property) {
+    return (
+      "io.github.eschizoid.telescope.Telescope.of(%1$s" + side + ".class).field(%1$s" + side + "::" + property + ")"
+    );
+  }
+
+  /** What the processor refuses a row given a path with, which has no generated form yet. */
+  private static final String PATH_ROW_UNCOMPILED = "a telescope path or another expression has no generated form yet";
+
+  /** The value a compute row supplies, and the predicate a when row gates on, for each row. */
+  private static final String UNPAIRED_HELP =
+    "public class %1$sHelp {\n" +
+    "  public static String k() { return \"k\"; }\n" +
+    "  public static boolean open(final Object o) { return true; }\n}\n";
+
+  /**
+   * The row's declarations: {@code records}, then the {@code @Bridge} field holding {@code rows},
+   * the helper class they may name, and the runtime mapper built from the same rows.
+   */
+  private static List<String> unpairedDeclarations(
+    final boolean forwardOnly,
+    final List<String> records,
+    final String... rows
+  ) {
+    final var all = new ArrayList<>(records);
+    all.add(UNPAIRED_HELP);
+    all.add(typedField(forwardOnly, rows));
+    all.add(runtimeMapper(forwardOnly, "", rows));
+    return all;
+  }
+
+  /**
+   * A source holding {@code a} and a target holding {@code a, b, c}, which no row fills {@code b}
+   * of.
+   */
+  private static final List<String> TARGET_B_UNPAIRED = List.of(
+    "public record %1$sSrc(String a) {}\n",
+    "public record %1$sTgt(String a, String b, String c) {}\n"
+  );
+
+  /** As {@link #TARGET_B_UNPAIRED}, with a source {@code x} for a row to read into {@code c}. */
+  private static final List<String> TARGET_B_UNPAIRED_X = List.of(
+    "public record %1$sSrc(String a, String x) {}\n",
+    "public record %1$sTgt(String a, String b, String c) {}\n"
+  );
+
+  /**
+   * A source holding {@code a, y} and a target holding {@code a, c}, which no row reads {@code y}
+   * of.
+   */
+  private static final List<String> SOURCE_Y_UNPAIRED = List.of(
+    "public record %1$sSrc(String a, String y) {}\n",
+    "public record %1$sTgt(String a, String c) {}\n"
+  );
+
+  /** As {@link #SOURCE_Y_UNPAIRED}, with a source {@code x} for a row to read into {@code c}. */
+  private static final List<String> SOURCE_Y_UNPAIRED_X = List.of(
+    "public record %1$sSrc(String a, String x, String y) {}\n",
+    "public record %1$sTgt(String a, String c) {}\n"
+  );
+
+  private static final String NO_SOURCE_FOR_B = PairingMessages.noSameNameSource(
+    "%1$sSrc",
+    "%1$sTgt",
+    "field",
+    "field",
+    "b"
+  );
+
+  private static final String NO_TARGET_FOR_Y = PairingMessages.noSameNameTarget(
+    "%1$sSrc",
+    "%1$sTgt",
+    "field",
+    "field",
+    "y"
+  );
+
+  private static final List<UnpairedBeside> UNPAIRED_BESIDE = List.of(
+    new UnpairedBeside(
+      "a target property beside a constant row",
+      unpairedDeclarations(false, TARGET_B_UNPAIRED, "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"),
+      NO_SOURCE_FOR_B,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a compute row",
+      unpairedDeclarations(false, TARGET_B_UNPAIRED, "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::k)"),
+      NO_SOURCE_FOR_B,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a constant row given a path",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED,
+        "<%1$sSrc, %1$sTgt, String>constant(" + pathOn("Tgt", "c") + ", \"k\")"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a compute row given a path",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED,
+        "<%1$sSrc, %1$sTgt, String>compute(" + pathOn("Tgt", "c") + ", %1$sHelp::k)"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a row writing through a target path",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a row reading through a source path",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a row given a path on both sides",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a zip row",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>zip(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
+      ),
+      "zip(...) has no generated form yet",
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a constant row under when",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED,
+        "<%1$sSrc, %1$sTgt>when(%1$sHelp::open, " +
+          MAPPING_PREFIX +
+          "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
+      ),
+      "when(...) has no generated form yet",
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a toOrElse row",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::x, %1$sTgt::c, \"d\")"
+      ),
+      NO_SOURCE_FOR_B,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property beside a toOrElseGet row",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>toOrElseGet(%1$sSrc::x, %1$sTgt::c, %1$sHelp::k)"
+      ),
+      NO_SOURCE_FOR_B,
+      NO_SOURCE_FOR_B
+    ),
+    new UnpairedBeside(
+      "a target property whose namesake a rename reads, beside a constant row",
+      unpairedDeclarations(
+        false,
+        List.of("public record %1$sSrc(String n) {}\n", "public record %1$sTgt(String label, String n, String c) {}\n"),
+        "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::n, %1$sTgt::label)",
+        "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"
+      ),
+      PairingMessages.sameNameSourceRead("%1$sSrc", "%1$sTgt", "field", "field", "n"),
+      PairingMessages.sameNameSourceRead("%1$sSrc", "%1$sTgt", "field", "field", "n")
+    ),
+    new UnpairedBeside(
+      "a source property beside a constant row",
+      unpairedDeclarations(false, SOURCE_Y_UNPAIRED, "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"),
+      NO_TARGET_FOR_Y,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "a source property beside a compute row",
+      unpairedDeclarations(false, SOURCE_Y_UNPAIRED, "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::k)"),
+      NO_TARGET_FOR_Y,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "a source property beside a row writing through a target path",
+      unpairedDeclarations(
+        false,
+        SOURCE_Y_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "a source property beside a row reading through a source path",
+      unpairedDeclarations(
+        false,
+        SOURCE_Y_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
+      ),
+      PATH_ROW_UNCOMPILED,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "a source property beside a constant row under when",
+      unpairedDeclarations(
+        false,
+        SOURCE_Y_UNPAIRED,
+        "<%1$sSrc, %1$sTgt>when(%1$sHelp::open, " +
+          MAPPING_PREFIX +
+          "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
+      ),
+      "when(...) has no generated form yet",
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "a source property beside a toOrElse row",
+      unpairedDeclarations(
+        false,
+        SOURCE_Y_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::x, %1$sTgt::c, \"d\")"
+      ),
+      NO_TARGET_FOR_Y,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
+      "every target property filled by a constant or compute row",
+      unpairedDeclarations(
+        false,
+        TARGET_B_UNPAIRED,
+        "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::b, \"k\")",
+        "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::k)"
+      ),
+      null,
+      null
+    ),
+    new UnpairedBeside(
+      "a target property a path row writes, and a source property it reads",
+      unpairedDeclarations(
+        false,
+        List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
+        "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::x, " + pathOn("Tgt", "c") + ")"
+      ),
+      PATH_ROW_UNCOMPILED,
+      null
+    ),
+    new UnpairedBeside(
+      "a source property a path row reads, and a target property it writes",
+      unpairedDeclarations(
+        false,
+        List.of("public record %1$sSrc(String a, String x) {}\n", "public record %1$sTgt(String a, String c) {}\n"),
+        "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", %1$sTgt::c)"
+      ),
+      PATH_ROW_UNCOMPILED,
+      null
+    ),
+    new UnpairedBeside(
+      "a target and a source property left unpaired beside a constant row, by a mapper converting forward only",
+      unpairedDeclarations(
+        true,
+        List.of(
+          "public record %1$sSrc(String a, String y) {}\n",
+          "public record %1$sTgt(String a, String b, String c) {}\n"
+        ),
+        "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"
+      ),
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a strict mapper refuses a property nothing pairs with whatever other rows it has, in the same words on both paths"
+  )
+  void anUnpairedPropertyIsRefusedBesideAnyRowOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : UNPAIRED_BESIDE) {
+      final var prefix = "Wu" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (row.generated() == null) {
+        if (!processed.success()) failures.add(
+          row.name() + ": the processor owed a bridge, saw " + describe(processed)
+        );
+      } else {
+        final var generated = row.generated().formatted(prefix);
+        if (processed.success() || !processed.hasError(generated)) {
+          failures.add(row.name() + ": the processor owed '" + generated + "', saw " + describe(processed));
+        }
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      String built;
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        built = "a mapper";
+      } catch (final InvocationTargetException e) {
+        built = String.valueOf(e.getCause());
+      }
+      final var runtime =
+        row.runtime() == null ? "a mapper" : "java.lang.IllegalStateException: " + row.runtime().formatted(prefix);
+      if (!runtime.equals(built)) {
+        failures.add(row.name() + ": the runtime owed '" + runtime + "', saw " + built);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   @Test
   @DisplayName("a converting row's result is checked against the property the row names, and refused by name")
   void aRenamedTransformIsCheckedAgainstTheRenamedProperty() {

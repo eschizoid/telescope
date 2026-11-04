@@ -677,4 +677,296 @@ class VerifierSilenceAgreementTest {
       assertEquals(List.of(), outcome.warnings());
     }
   }
+
+  /** A source holding {@code a} and a target holding {@code a, b, c}, at the mapper's pair. */
+  private static final String B_UNPAIRED = """
+    record @@Src(String a) {}
+    record @@Tgt(String a, String b, String c) {}
+    """;
+
+  /** As {@link #B_UNPAIRED}, with a source {@code x} for a row to read into {@code c}. */
+  private static final String B_UNPAIRED_X = """
+    record @@Src(String a, String x) {}
+    record @@Tgt(String a, String b, String c) {}
+    """;
+
+  /** A source holding {@code a, x, y} and a target holding {@code a, c}, at the mapper's pair. */
+  private static final String Y_UNPAIRED_X = """
+    record @@Src(String a, String x, String y) {}
+    record @@Tgt(String a, String c) {}
+    """;
+
+  /** Every property of the pair paired with one, once a row reads {@code x} into {@code c}. */
+  private static final String X_INTO_C = """
+    record @@Src(String a, String x) {}
+    record @@Tgt(String a, String c) {}
+    """;
+
+  /** The refusal of target {@code b} of the pair prefixed {@code prefix}, which nothing fills. */
+  private static String noSourceForB(final String prefix) {
+    return PairingMessages.noSameNameSource(prefix + "Src", prefix + "Tgt", "field", "field", "b");
+  }
+
+  /** The refusal of source {@code y} of the pair prefixed {@code prefix}, which nothing reads. */
+  private static String noTargetForY(final String prefix) {
+    return PairingMessages.noSameNameTarget(prefix + "Src", prefix + "Tgt", "field", "field", "y");
+  }
+
+  @Nested
+  @DisplayName("A property nothing pairs with, beside a row given a path, a constant or a compute, is refused by both")
+  class UnpairedBesideARow {
+
+    private void assertTargetBRefused(final String prefix, final String records, final String row) {
+      final var outcome = verified(prefix, records + holder("Telescope.mapper(@@Src.class, @@Tgt.class, " + row + ")"));
+      assertBothRefuse(outcome);
+      assertEquals(noSourceForB(prefix), outcome.construction());
+    }
+
+    private void assertSourceYRefused(final String prefix, final String records, final String row) {
+      final var outcome = verified(prefix, records + holder("Telescope.mapper(@@Src.class, @@Tgt.class, " + row + ")"));
+      assertBothRefuse(outcome);
+      assertEquals(noTargetForY(prefix), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("a target property beside a constant row")
+    void targetBesideAConstant() {
+      assertTargetBRefused("VuA", B_UNPAIRED, "constant(@@Tgt::c, \"k\")");
+    }
+
+    @Test
+    @DisplayName("a target property beside a compute row")
+    void targetBesideACompute() {
+      assertTargetBRefused("VuB", B_UNPAIRED, "compute(@@Tgt::c, () -> \"k\")");
+    }
+
+    @Test
+    @DisplayName("a target property beside a constant row given a path")
+    void targetBesideAConstantPath() {
+      assertTargetBRefused("VuC", B_UNPAIRED, "constant(Telescope.of(@@Tgt.class).field(@@Tgt::c), \"k\")");
+    }
+
+    @Test
+    @DisplayName("a target property beside a compute row given a path")
+    void targetBesideAComputePath() {
+      assertTargetBRefused("VuD", B_UNPAIRED, "compute(Telescope.of(@@Tgt.class).field(@@Tgt::c), () -> \"k\")");
+    }
+
+    @Test
+    @DisplayName("a target property beside a row writing through a target path")
+    void targetBesideATargetPath() {
+      assertTargetBRefused("VuE", B_UNPAIRED_X, "to(@@Src::x, Telescope.of(@@Tgt.class).field(@@Tgt::c))");
+    }
+
+    @Test
+    @DisplayName("a target property beside a row reading through a source path")
+    void targetBesideASourcePath() {
+      assertTargetBRefused("VuF", B_UNPAIRED_X, "to(Telescope.of(@@Src.class).field(@@Src::x), @@Tgt::c)");
+    }
+
+    @Test
+    @DisplayName("a target property beside a row given a path on both sides")
+    void targetBesideTwoPaths() {
+      assertTargetBRefused(
+        "VuG",
+        B_UNPAIRED_X,
+        "to(Telescope.of(@@Src.class).field(@@Src::x), Telescope.of(@@Tgt.class).field(@@Tgt::c))"
+      );
+    }
+
+    @Test
+    @DisplayName("a target property beside a zip row")
+    void targetBesideAZip() {
+      assertTargetBRefused(
+        "VuH",
+        B_UNPAIRED_X,
+        "zip(Telescope.of(@@Src.class).field(@@Src::x), Telescope.of(@@Tgt.class).field(@@Tgt::c))"
+      );
+    }
+
+    @Test
+    @DisplayName("a target property beside a constant row under when")
+    void targetBesideAGatedConstant() {
+      assertTargetBRefused("VuI", B_UNPAIRED, "when(s -> true, constant(@@Tgt::c, \"k\"))");
+    }
+
+    @Test
+    @DisplayName("a target property beside a row writing through a path two properties deep")
+    void targetBesideADeepTargetPath() {
+      assertTargetBRefused(
+        "VuJ",
+        """
+        record @@In(String v) {}
+        record @@Src(String a, String x) {}
+        record @@Tgt(String a, String b, @@In c) {}
+        """,
+        "to(@@Src::x, Telescope.of(@@Tgt.class).field(@@Tgt::c).field(@@In::v))"
+      );
+    }
+
+    @Test
+    @DisplayName("a source property beside a constant row")
+    void sourceBesideAConstant() {
+      assertSourceYRefused(
+        "VuK",
+        """
+        record @@Src(String a, String y) {}
+        record @@Tgt(String a, String c) {}
+        """,
+        "constant(@@Tgt::c, \"k\")"
+      );
+    }
+
+    @Test
+    @DisplayName("a source property beside a row writing through a target path")
+    void sourceBesideATargetPath() {
+      assertSourceYRefused("VuL", Y_UNPAIRED_X, "to(@@Src::x, Telescope.of(@@Tgt.class).field(@@Tgt::c))");
+    }
+
+    @Test
+    @DisplayName("a source property beside a row reading through a source path")
+    void sourceBesideASourcePath() {
+      assertSourceYRefused("VuM", Y_UNPAIRED_X, "to(Telescope.of(@@Src.class).field(@@Src::x), @@Tgt::c)");
+    }
+
+    @Test
+    @DisplayName("a source property beside a row reading through a source path under when")
+    void sourceBesideAGatedSourcePath() {
+      assertSourceYRefused(
+        "VuN",
+        Y_UNPAIRED_X,
+        "when(s -> true, to(Telescope.of(@@Src.class).field(@@Src::x), @@Tgt::c))"
+      );
+    }
+
+    @Test
+    @DisplayName("a target property whose namesake a source path one field hop long reads, which no row writes")
+    void namesakeOfAOneHopSourcePath() {
+      final var outcome = verified(
+        "VuV",
+        """
+          record @@Src(String a, String x) {}
+          record @@Tgt(String a, String x, String c) {}
+          """ +
+          holder("Telescope.mapper(@@Src.class, @@Tgt.class, to(Telescope.of(@@Src.class).field(@@Src::x), @@Tgt::c))")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.sameNameSourceRead("VuVSrc", "VuVTgt", "field", "field", "x"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("a target property of a pair of sealed cases, beside a constant row through the target interface")
+    void targetOfASealedCase() {
+      final var outcome = verified(
+        "VuO",
+        """
+          sealed interface @@Sh permits @@Sq { String n(); }
+          record @@Sq(String n) implements @@Sh {}
+          sealed interface @@ShD permits @@SqD { String c(); }
+          record @@SqD(String n, String b, String c) implements @@ShD {}
+          """ +
+          holder(
+            "Telescope.mapper(@@Sh.class, @@ShD.class, io.github.eschizoid.telescope.mapping.Cases.cases(@@Sq.class," +
+              " @@SqD.class), constant(@@ShD::c, \"k\"))"
+          )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(PairingMessages.noSameNameSource("VuOSq", "VuOSqD", "field", "field", "b"), outcome.construction());
+    }
+
+    @Test
+    @DisplayName("not where constant and compute rows fill every target property nothing else pairs")
+    void filledByConstantAndCompute() {
+      assertBothAccept(
+        verified(
+          "VuP",
+          B_UNPAIRED +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, constant(@@Tgt::b, \"k\"), compute(@@Tgt::c, () -> \"k\"))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not where a path row writes the target property and reads the source property nothing else pairs")
+    void pairedThroughATargetPath() {
+      assertBothAccept(
+        verified(
+          "VuQ",
+          X_INTO_C +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::x, Telescope.of(@@Tgt.class).field(@@Tgt::c)))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not where a path row reads the source property and writes the target property nothing else pairs")
+    void pairedThroughASourcePath() {
+      assertBothAccept(
+        verified(
+          "VuR",
+          X_INTO_C +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(Telescope.of(@@Src.class).field(@@Src::x), @@Tgt::c))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not where a target path steps again through the target's class, as construction counts it filling")
+    void notThroughARecursiveTargetPath() {
+      assertBothAccept(
+        verified(
+          "VuU",
+          """
+            record @@Src(String a, String x) {}
+            record @@Tgt(String a, String b, @@Tgt c) {}
+            """ +
+            holder(
+              "Telescope.mapper(@@Src.class, @@Tgt.class, to(@@Src::x," +
+                " Telescope.of(@@Tgt.class).field(@@Tgt::c).field(@@Tgt::b)))"
+            )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not on a mapperForward call, beside a constant row")
+    void notForwardOnly() {
+      assertBothAccept(
+        verified(
+          "VuS",
+          """
+            record @@Src(String a, String y) {}
+            record @@Tgt(String a, String b, String c) {}
+            """ +
+            holder("Telescope.mapperForward(@@Src.class, @@Tgt.class, constant(@@Tgt::c, \"k\"))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("not on a nested pair no row is keyed to, beside a constant row on the mapper's pair")
+    void notOnANestedPair() {
+      assertBothAccept(
+        verified(
+          "VuT",
+          """
+            record @@Src(String a) {}
+            record @@Tgt(String a, String b) {}
+            record @@Outer(@@Src in) {}
+            record @@OuterDto(@@Tgt in, String note) {}
+            """ +
+            holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, constant(@@OuterDto::note, \"k\"))")
+        )
+      );
+    }
+  }
 }

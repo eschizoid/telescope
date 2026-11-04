@@ -2674,9 +2674,9 @@ class BridgeFieldTest {
     throws Exception {
     final var pair = new ReadSource(name, src, tgt, false, rows, List.of(), List.of(), null, null, null);
     final var generated = compile(readSourcePair(pair, true));
-    assertFalse(generated.success(), name);
-    assertTrue(generated.hasError("must expose the same field names (a bijection)"), generated::errorMessages);
     final var refusal = PairingMessages.sameNameSourceRead("Src", "Tgt", "field", "field", "n");
+    assertFalse(generated.success(), name);
+    assertTrue(generated.hasError(refusal), generated::errorMessages);
     final var verified = compile(readSourcePair(pair, false));
     assertTrue(verified.hasError(refusal), verified::errorMessages);
     final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), readSourcePair(pair, false));

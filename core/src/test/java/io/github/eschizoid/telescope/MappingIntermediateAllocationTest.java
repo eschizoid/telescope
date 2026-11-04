@@ -62,7 +62,7 @@ class MappingIntermediateAllocationTest {
     void flatSourceRoutesIntoAllocatedAddress() {
       record Slim(String displayCity) {}
 
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Slim.class,
         OneHopPerson.class,
         to(Slim::displayCity, Telescope.of(OneHopPerson.class).field(OneHopPerson::address).field(OneHopAddress::city))
@@ -86,7 +86,7 @@ class MappingIntermediateAllocationTest {
     void twoHopNestedTarget() {
       record Slim(double latitude) {}
 
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Slim.class,
         DeepPerson.class,
         to(
@@ -259,7 +259,7 @@ class MappingIntermediateAllocationTest {
     void flatSourceRoutesIntoAllocatedBean() {
       record Slim(String displayCity) {}
 
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Slim.class,
         PersonBean.class,
         to(

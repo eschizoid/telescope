@@ -940,6 +940,17 @@ public sealed class Telescope<
    * a property into every target its rows name. On every factory, a property one row drops is
    * written by no other.
    *
+   * <p><b>Every property paired.</b> A mapper that converts both ways refuses by name, when it is
+   * built, a property of the pair it is built for, or of one of that pair's sealed cases, that
+   * nothing pairs with: a target property no row writes and no source property of its name fills,
+   * and a source property no row reads and no target property of its name takes. A target property
+   * a {@code constant}, {@code compute} or path row writes counts as written, and a source property
+   * a path row reads counts as read, whatever other rows the pair has. {@link #mapperForward
+   * mapperForward} leaves such a target property at its default and such a source property unread.
+   * So does a nested pair, except for a property a row of its own keeps from its namesake: a target
+   * property whose same-named source a row reads, and a source property whose same-named target a
+   * row reading another property writes.
+   *
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>

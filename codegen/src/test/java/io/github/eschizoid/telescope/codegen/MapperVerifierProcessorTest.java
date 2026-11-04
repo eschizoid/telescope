@@ -183,7 +183,8 @@ class MapperVerifierProcessorTest {
         class Labelled extends Named<String> { public Labelled() {} }
         record Plain(int n) {}
         class Holder {
-          static final Object M = Telescope.mapper(Plain.class, Labelled.class, compute(Named<String>::getLabel, () -> "made"));
+          static final Object M = Telescope.mapper(Plain.class, Labelled.class, drop(Plain::n),
+            compute(Named<String>::getLabel, () -> "made"));
         }
         """
       );
@@ -228,7 +229,7 @@ class MapperVerifierProcessorTest {
         """
         record Coded(String code, String label) {}
         class Holder {
-          static final Object A = Telescope.mapper(Coded.class, Sub.class,
+          static final Object A = Telescope.mapper(Coded.class, Sub.class, drop(Coded::label),
             constant(Telescope.of(Base.class).field(Base::getName), "fixed"));
           static final Object B = Telescope.mapper(Coded.class, Sub.class,
             to(Coded::label, Telescope.of(Base.class).filter(b -> true).field(Base::getName)));
@@ -565,7 +566,7 @@ class MapperVerifierProcessorTest {
             to(Telescope.of(SourceRootOther.class).then(Telescope.of(SourceRootOther.class).field(SourceRootOther::getLabel)),
               SourceRootDto::note));
           static final Object G = Telescope.mapper(Tree.class, TreeDto.class,
-            to(Telescope.of(Tree.class).field(Tree::label), TreeDto::note));
+            to(Telescope.of(Tree.class).field(Tree::label), TreeDto::note), to(Tree::note, TreeDto::label));
         }
         """
       );

@@ -250,15 +250,20 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
     mapping
       .from(Customer::name)
       .to(CustomerSummary::displayName)
-      .add(constant(CustomerSummary::source, "crm"), compute(CustomerSummary::generatedAt, Instant::now));
+      .add(
+        drop(Customer::contact),
+        constant(CustomerSummary::source, "crm"),
+        compute(CustomerSummary::generatedAt, Instant::now)
+      );
   }
 }
 ```
 
-`constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection that
-overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and in `patch`. On a
-`@Bridge` field the same rows declare the pair's generated bridge, which a projection with no `translate` override
-calls.
+`drop`, `constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection
+that converts both ways pairs every property, so `contact`, which the summary does not hold, is dropped by name. A
+projection that overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and in
+`patch`. On a `@Bridge` field the same rows declare the pair's generated bridge, which a projection with no `translate`
+override calls.
 
 ### Bridge or core mapper
 

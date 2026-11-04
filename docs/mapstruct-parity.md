@@ -289,7 +289,7 @@ transform round-trip)</sub>
 **telescope:**
 
 ```java
-Telescope.mapper(Order.class, OrderDto.class,
+Telescope.mapperForward(Order.class, OrderDto.class, // one-way: the hook below fills displayName from two fields
     to(Order::id, OrderDto::id),
     compute(OrderDto::createdAt, Instant::now),          // expression: fresh per forward call
     compute(OrderDto::traceId, () -> UUID.randomUUID().toString()),
@@ -990,7 +990,7 @@ core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, the predi
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.*;
 
-Telescope.mapper(Order.class, OrderDto.class,
+Telescope.mapperForward(Order.class, OrderDto.class, // one-way, as the gated rows below are
     // per-field value predicate — 'only map non-blank strings', else default:
     toOrElse(Order::promoCode, OrderDto::promoCode, "NONE", String::isBlank),
     toOrElseGet(Order::traceId, OrderDto::traceId, () -> UUID.randomUUID().toString(), String::isBlank),

@@ -46,7 +46,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("runtime Telescope.of(...).field(...).field(...) — intermediate Address allocated")
     void runtimeTelescope() {
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Slim.class,
         Person.class,
         to(Slim::value, Telescope.of(Person.class).field(Person::address).field(Address::city))
@@ -60,7 +60,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("codegen PersonTelescope.of().address().city() — same allocator path")
     void codegenNavigator() {
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Slim.class,
         Person.class,
         to(Slim::value, PersonTelescope.of().address().city())
@@ -99,7 +99,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("runtime Telescope.of(Person.class).field(...).field(...) — nested target via runtime chain")
     void runtimeTelescope() {
-      record SrcZ(String name) {}
+      record SrcZ(String name, int age) {}
 
       final var mapper = Telescope.mapper(
         SrcZ.class,
@@ -108,7 +108,7 @@ class MappingCodegenOneToOneTest {
         constant(Telescope.of(Person.class).field(Person::address).field(Address::zip), "11201")
       );
 
-      final var out = mapper.forward(new SrcZ("Alice"));
+      final var out = mapper.forward(new SrcZ("Alice", 30));
       assertEquals("Alice", out.name());
       assertNotNull(out.address(), "intermediate allocated because the constant claims address as a write hop");
       assertEquals("11201", out.address().zip()); // constant stamped at nested target
@@ -117,7 +117,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("codegen PersonTelescope.of().address().zip() — same constant behavior end-to-end")
     void codegenNavigator() {
-      record SrcZ(String name) {}
+      record SrcZ(String name, int age) {}
 
       final var mapper = Telescope.mapper(
         SrcZ.class,
@@ -126,7 +126,7 @@ class MappingCodegenOneToOneTest {
         constant(PersonTelescope.of().address().zip(), "11201")
       );
 
-      final var out = mapper.forward(new SrcZ("Alice"));
+      final var out = mapper.forward(new SrcZ("Alice", 30));
       assertEquals("Alice", out.name());
       assertNotNull(out.address(), "intermediate allocated via codegen navigator firstHopName");
       assertEquals("11201", out.address().zip());
@@ -159,7 +159,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("runtime Telescope.of(Person.class).field(...).field(...) — supplier at nested location")
     void runtimeTelescope() {
-      record SrcZ(String name) {}
+      record SrcZ(String name, int age) {}
 
       final var counter = new int[] { 0 };
       final var mapper = Telescope.mapper(
@@ -171,8 +171,8 @@ class MappingCodegenOneToOneTest {
         )
       );
 
-      final var t1 = mapper.forward(new SrcZ("Alice"));
-      final var t2 = mapper.forward(new SrcZ("Bob"));
+      final var t1 = mapper.forward(new SrcZ("Alice", 30));
+      final var t2 = mapper.forward(new SrcZ("Bob", 31));
       assertEquals("00001", t1.address().zip());
       assertEquals("00002", t2.address().zip());
     }
@@ -180,7 +180,7 @@ class MappingCodegenOneToOneTest {
     @Test
     @DisplayName("codegen PersonTelescope.of().address().zip() — supplier identical behavior")
     void codegenNavigator() {
-      record SrcZ(String name) {}
+      record SrcZ(String name, int age) {}
 
       final var counter = new int[] { 0 };
       final var mapper = Telescope.mapper(
@@ -190,8 +190,8 @@ class MappingCodegenOneToOneTest {
         compute(PersonTelescope.of().address().zip(), () -> String.format("%05d", ++counter[0]))
       );
 
-      final var t1 = mapper.forward(new SrcZ("Alice"));
-      final var t2 = mapper.forward(new SrcZ("Bob"));
+      final var t1 = mapper.forward(new SrcZ("Alice", 30));
+      final var t2 = mapper.forward(new SrcZ("Bob", 31));
       assertEquals("00001", t1.address().zip());
       assertEquals("00002", t2.address().zip());
     }
@@ -206,10 +206,10 @@ class MappingCodegenOneToOneTest {
     void allThreeFeaturesAtOnce() {
       record FlatSrc(String displayName, String displayCity) {}
 
-      // displayName is dropped and age has no source counterpart. address is allocated by
-      // intermediate allocation, city routes from displayCity via the codegen navigator, zip is a
-      // constant and name is computed.
-      final var mapper = Telescope.mapper(
+      // displayName is dropped and age has no source counterpart, which a mapper converting forward
+      // only leaves at its default. address is allocated by intermediate allocation, city routes
+      // from displayCity via the codegen navigator, zip is a constant and name is computed.
+      final var mapper = Telescope.mapperForward(
         FlatSrc.class,
         Person.class,
         drop(FlatSrc::displayName),

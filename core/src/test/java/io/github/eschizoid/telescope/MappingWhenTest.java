@@ -89,7 +89,7 @@ class MappingWhenTest {
     @DisplayName("high-priority orders get expediteFlag stamped; low-priority orders do not")
     void prioritySkippedFlag() {
       final java.util.function.Predicate<Order> highPriority = o -> o.priority() >= 10;
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Order.class,
         OrderDto.class,
         to(Order::id, OrderDto::id),
@@ -113,7 +113,7 @@ class MappingWhenTest {
     void supplierFiresOnlyOnAccept() {
       final var calls = new AtomicInteger();
       final java.util.function.Predicate<Order> highPriority = o -> o.priority() >= 10;
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Order.class,
         OrderDto.class,
         to(Order::id, OrderDto::id),
@@ -145,7 +145,7 @@ class MappingWhenTest {
     @DisplayName("predicate true → deep read applies; predicate false → target field stays at default")
     void predicateGatesFromTelescopeTo() {
       final var cityTelescope = Telescope.of(Order.class).field(Order::shipping).field(Address::city);
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Order.class,
         OrderDto.class,
         to(Order::id, OrderDto::id),
@@ -169,7 +169,7 @@ class MappingWhenTest {
     void predicateGatesTelescopeToTelescope() {
       final var srcCity = Telescope.of(Order.class).field(Order::shipping).field(Address::city);
       final var tgtCity = Telescope.of(OrderDto.class).field(OrderDto::shipCity);
-      final var mapper = Telescope.mapper(
+      final var mapper = Telescope.mapperForward(
         Order.class,
         OrderDto.class,
         to(Order::id, OrderDto::id),
@@ -269,6 +269,7 @@ class MappingWhenTest {
         Dst.class,
         to(Src::name, Dst::name),
         to(Src::region, Dst::region),
+        constant(Dst::emailWrap, new Wrapper(null)),
         when(s -> s.email() != null, to(emailDeep, Dst::region))
       );
 
