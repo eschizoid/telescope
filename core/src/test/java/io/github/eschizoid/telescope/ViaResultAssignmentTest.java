@@ -2038,4 +2038,60 @@ class ViaResultAssignmentTest {
       "java.util.List<java.lang.Integer>"
     );
   }
+
+  /** A list class whose element variable is bounded by its other variable. */
+  public static final class KvList<K, V extends K> extends ArrayList<V> {
+
+    private static final long serialVersionUID = 1L;
+
+    public KvList(final List<V> items) {
+      super(items);
+    }
+  }
+
+  public record KeyValues(KvList<String, ?> v) {}
+
+  public static final class FromKeyValues {
+
+    private FromKeyValues() {}
+
+    public static <T> List<T> forward(final List<? extends T> a) {
+      return List.copyOf(a);
+    }
+
+    public static KvList<?, ?> backward(final List<?> b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a wildcard argument whose variable is bounded by another of its class's variables is bounded by the type the" +
+      " argument gives that variable"
+  )
+  void aCaptureBoundedByAnotherVariableReadsTheArgumentsType() {
+    final var values = new KeyValues(new KvList<String, String>(List.of("x")));
+    final var strings = Telescope.mapperForward(
+      KeyValues.class,
+      Strings.class,
+      Mapping.<KeyValues, Strings>via(KeyValues::v, Strings::v, FromKeyValues.class)
+    );
+    assertEquals(new Strings(List.of("x")), strings.forward(values));
+    final var chars = Telescope.mapperForward(
+      KeyValues.class,
+      Chars.class,
+      Mapping.<KeyValues, Chars>via(KeyValues::v, Chars::v, FromKeyValues.class)
+    );
+    assertEquals(new Chars(List.of("x")), chars.forward(values));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          KeyValues.class,
+          Integers.class,
+          Mapping.<KeyValues, Integers>via(KeyValues::v, Integers::v, FromKeyValues.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
+    );
+  }
 }
