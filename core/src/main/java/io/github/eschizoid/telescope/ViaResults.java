@@ -73,8 +73,10 @@ final class ViaResults {
    * What the argument a generic method is handed forces on the method's own type variables: the
    * type each variable it fixes is, in {@code fixed} and {@code values}; for each variable in
    * {@code lowered}, the types in the matching list of {@code lowers}, of which the variable has to
-   * be a supertype of at least one; and the variables in {@code captured}, each the fresh variable
-   * the capture of a wildcard gives, which is no type a row's property names.
+   * be a supertype of at least one; for each variable in {@code raised}, the matching type of
+   * {@code uppers}, which the variable has to be a subtype of; and the variables in {@code
+   * captured}, which only the fresh variable of a wildcard's capture satisfies, and which is no
+   * type a row's property names.
    *
    * @param variables the method's own type variables
    */
@@ -84,16 +86,33 @@ final class ViaResults {
     List<Type> values,
     List<Type> lowered,
     List<List<Type>> lowers,
+    List<Type> raised,
+    List<Type> uppers,
     List<Type> captured
   ) {
     Forced(final List<Type> variables) {
-      this(variables, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+      this(
+        variables,
+        new ArrayList<>(),
+        new ArrayList<>(),
+        new ArrayList<>(),
+        new ArrayList<>(),
+        new ArrayList<>(),
+        new ArrayList<>(),
+        new ArrayList<>()
+      );
     }
 
     /** Records that {@code variable} is a supertype of at least one of {@code types}. */
     void lower(final TypeVariable<?> variable, final List<Type> types) {
       lowered.add(variable);
       lowers.add(types);
+    }
+
+    /** Records that {@code variable} is a subtype of {@code type}. */
+    void raise(final TypeVariable<?> variable, final Type type) {
+      raised.add(variable);
+      uppers.add(type);
     }
   }
 
@@ -153,13 +172,18 @@ final class ViaResults {
   /**
    * Records in {@code forced} what {@code argument} forces on each of {@code variables} {@code
    * parameter} names; false where it gives one variable two types. A {@code via} row's methods are
-   * static, so every type variable their signatures name is their own.
+   * static, so every type variable their signatures name is their own, and {@code argument} names
+   * none.
    *
    * <p>A variable that is a type argument of the parameter is the argument's type argument in its
-   * place where that is a type, and the fresh variable its capture gives where it is a wildcard.
-   * One that bounds a wildcard of the parameter from above is a supertype of what the argument's
-   * type argument in its place holds: the type itself, or for a wildcard its capture, a subtype of
-   * the wildcard's upper bound and of the bound the class declares for that argument.
+   * place where that is a type. One that bounds a wildcard of the parameter from above is a
+   * supertype of what the argument's type argument in its place holds: the type itself, or for a
+   * wildcard its capture, a subtype of the wildcard's upper bound and of the bound the class
+   * declares for that argument. One that bounds a wildcard of the parameter from below is a subtype
+   * of the argument's type argument in its place, or of the lower bound of a wildcard there. Where
+   * the argument has a wildcard and the parameter a type naming a variable, or a wildcard bounded
+   * from below by one, which a wildcard bounded from below alone satisfies, only the capture's
+   * fresh variable satisfies the parameter, so each variable it names is one no property names.
    */
   private static boolean fix(
     final Type parameter,
@@ -181,45 +205,52 @@ final class ViaResults {
     final var declared = raw.getTypeParameters();
     for (int i = 0; i < arguments.length; i++) {
       final var met = seen.get(i);
-      if (DeepMap.PROPS.mentionsTypeVariable(met)) continue;
-      if (arguments[i] instanceof TypeVariable<?> variable) {
-        if (met instanceof WildcardType) {
+      final var wildcard = arguments[i] instanceof WildcardType bounded ? bounded : null;
+      if (wildcard != null && bound(wildcard) instanceof TypeVariable<?> variable) {
+        if (wildcard.getLowerBounds().length == 0) {
+          forced.lower(variable, heldBy(met, declared[i]));
+        } else if (!(met instanceof WildcardType metWildcard)) {
+          forced.raise(variable, met);
+        } else if (metWildcard.getLowerBounds().length > 0) {
+          forced.raise(variable, metWildcard.getLowerBounds()[0]);
+        } else {
           forced.captured().add(variable);
-        } else if (!put(variable, met, forced)) {
-          return false;
         }
-      } else if (extended(arguments[i]) instanceof TypeVariable<?> variable) {
-        final var held = heldBy(met, declared[i]);
-        if (held != null) forced.lower(variable, held);
-      } else if (
-        !(met instanceof WildcardType) &&
-        arguments[i] instanceof ParameterizedType &&
-        !fix(arguments[i], met, variables, forced)
-      ) {
+      } else if (met instanceof WildcardType) {
+        if (wildcard == null) {
+          for (final var variable : variables)
+            if (names(arguments[i], List.of(variable))) forced.captured().add(variable);
+        }
+      } else if (arguments[i] instanceof TypeVariable<?> variable) {
+        if (!put(variable, met, forced)) return false;
+      } else if (arguments[i] instanceof ParameterizedType && !fix(arguments[i], met, variables, forced)) {
         return false;
       }
     }
     return true;
   }
 
-  /** The variable {@code argument} bounds from above, as a wildcard; or null. */
-  private static TypeVariable<?> extended(final Type argument) {
-    if (!(argument instanceof WildcardType wildcard) || wildcard.getLowerBounds().length > 0) return null;
-    final var upper = wildcard.getUpperBounds();
-    return upper.length == 1 && upper[0] instanceof TypeVariable<?> variable ? variable : null;
+  /**
+   * The type that bounds {@code wildcard}: its lower bound where it has one, or its upper bound.
+   */
+  private static Type bound(final WildcardType wildcard) {
+    final var lower = wildcard.getLowerBounds();
+    return lower.length > 0 ? lower[0] : wildcard.getUpperBounds()[0];
   }
 
   /**
    * The types a value the type argument {@code met} holds, in the place of {@code declared}, is a
    * value of, any of which it can be the whole of: {@code met} itself where it is a type, and where
-   * it is a wildcard its upper bound and the class's bounds for that argument; null where a bound
-   * names a variable, which a supertype of the capture can be raised through.
+   * it is a wildcard its upper bound and the class's bounds for that argument, a bound naming the
+   * class's variables read as its erasure, which every value of it is one of.
    */
   private static List<Type> heldBy(final Type met, final TypeVariable<?> declared) {
     if (!(met instanceof WildcardType wildcard)) return List.of(met);
     final var held = new ArrayList<Type>(List.of(wildcard.getUpperBounds()));
-    held.addAll(List.of(declared.getBounds()));
-    return held.stream().anyMatch(DeepMap.PROPS::mentionsTypeVariable) ? null : held;
+    for (final var bound : declared.getBounds()) {
+      held.add(DeepMap.PROPS.mentionsTypeVariable(bound) ? DeepMap.PROPS.rawType(bound) : bound);
+    }
+    return held;
   }
 
   /** Fixes {@code variable} to {@code value}; false where it is fixed to another type already. */
@@ -234,21 +265,30 @@ final class ViaResults {
   /**
    * Whether an instantiation of the method's variables lets the result {@code declared}, which
    * still names one of them, be passed where {@code taken} is taken, as far as its type arguments
-   * decide it. Seen as {@code taken}'s class, each argument the result gives where {@code taken}
-   * has a type, not a wildcard, has to be that type exactly, since a generic class's arguments are
-   * invariant: a variable there is that type, the same type at every such place and wherever the
-   * argument fixes it. A variable so fixed is no fresh variable of a capture, is a supertype of a
-   * type of each list the argument forces on it, and is a subtype of each of its bounds that names
-   * no other variable, read with it in place. A result whose class {@code taken}'s does not extend,
-   * and a variable nothing fixes, are left to the checks each call makes.
+   * decide it. A result of a generic class no instantiation makes a subtype of {@code taken}'s
+   * class, or a supertype of it, is passed as it is, and fits under none. Seen as {@code taken}'s
+   * class, each argument the result gives where {@code taken} has a type, not a wildcard, has to be
+   * that type exactly, since a generic class's arguments are invariant: a variable there is that
+   * type, the same type at every such place and wherever the argument fixes it, and a generic class
+   * there is that type's class. A variable so fixed is no fresh variable of a capture, is a
+   * supertype of a type of each list the argument forces on it and a subtype of each type it forces
+   * above it, and is a subtype of each of its bounds that names no other variable, read with it in
+   * place. A variable nothing fixes is left to the checks each call makes.
    */
   private static boolean instantiable(final Forced forced, final Type declared, final Type taken) {
     final var exact = new ArrayList<Type>(forced.fixed());
     final var as = new ArrayList<Type>(forced.values());
-    final var seen = resultSeenAs(declared, taken);
-    final var takenArguments = DeepMap.PROPS.typeArguments(taken);
-    if (seen.size() == takenArguments.size()) {
-      for (int i = 0; i < seen.size(); i++) meet(seen.get(i), takenArguments.get(i), forced.variables(), exact, as);
+    if (declared instanceof ParameterizedType parameterized) {
+      final var cls = (Class<?>) parameterized.getRawType();
+      final var takenClass = DeepMap.heldClassOf(taken);
+      if (!takenClass.isAssignableFrom(cls)) return false;
+      final var seen = resultArguments(parameterized, cls, takenClass);
+      final var takenArguments = DeepMap.PROPS.typeArguments(taken);
+      if (seen.size() == takenArguments.size()) {
+        for (int i = 0; i < seen.size(); i++) {
+          if (!meet(seen.get(i), takenArguments.get(i), exact, as)) return false;
+        }
+      }
     }
     for (int i = 0; i < exact.size(); i++) {
       final var variable = (TypeVariable<?>) exact.get(i);
@@ -269,6 +309,9 @@ final class ViaResults {
             .noneMatch(lower -> assignable(lower, value))
         ) return false;
       }
+      for (int u = 0; u < forced.raised().size(); u++) {
+        if (forced.raised().get(u).equals(variable) && !assignable(value, forced.uppers().get(u))) return false;
+      }
       final var others = forced
         .variables()
         .stream()
@@ -283,19 +326,15 @@ final class ViaResults {
   }
 
   /**
-   * The type arguments the result {@code declared}, which may name the method's variables, gives
-   * the class of {@code taken}, which its class is or extends; empty where it gives none.
+   * The type arguments the result {@code declared}, of {@code cls}, which may name the method's
+   * variables, gives {@code takenClass}, which {@code cls} is or extends.
    */
-  private static List<Type> resultSeenAs(final Type declared, final Type taken) {
+  private static List<Type> resultArguments(
+    final ParameterizedType declared,
+    final Class<?> cls,
+    final Class<?> takenClass
+  ) {
     final var props = DeepMap.PROPS;
-    if (
-      !(declared instanceof ParameterizedType) ||
-      !(props.rawType(declared) instanceof Class<?> cls) ||
-      !(props.rawType(taken) instanceof Class<?> takenClass) ||
-      !takenClass.isAssignableFrom(cls)
-    ) {
-      return List.of();
-    }
     final var given = props.typeArguments(declared);
     if (cls == takenClass) return given;
     final var own = List.<Type>of(cls.getTypeParameters());
@@ -307,31 +346,31 @@ final class ViaResults {
   }
 
   /**
-   * Records in {@code exact} and {@code as} each variable of {@code variables} the result's type
-   * argument {@code given} names where it has to be {@code taken} exactly.
+   * Records in {@code exact} and {@code as} each of the method's variables the result's type
+   * argument {@code given} names where it has to be {@code taken} exactly; false where {@code
+   * given} is a generic class's parameterization and {@code taken} no parameterization of that
+   * class.
    */
-  private static void meet(
-    final Type given,
-    final Type taken,
-    final List<Type> variables,
-    final List<Type> exact,
-    final List<Type> as
-  ) {
-    if (taken instanceof WildcardType) return;
-    if (given instanceof TypeVariable<?> variable && variables.contains(variable)) {
+  private static boolean meet(final Type given, final Type taken, final List<Type> exact, final List<Type> as) {
+    if (taken instanceof WildcardType) return true;
+    if (given instanceof TypeVariable<?> variable) {
       exact.add(variable);
       as.add(taken);
-    } else if (
-      given instanceof ParameterizedType parameterized &&
-      taken instanceof ParameterizedType takenParameterized &&
-      parameterized.getRawType().equals(takenParameterized.getRawType())
-    ) {
-      final var givenArguments = parameterized.getActualTypeArguments();
-      final var takenArguments = takenParameterized.getActualTypeArguments();
-      for (int i = 0; i < givenArguments.length && i < takenArguments.length; i++) {
-        meet(givenArguments[i], takenArguments[i], variables, exact, as);
-      }
+      return true;
     }
+    if (!(given instanceof ParameterizedType parameterized)) return true;
+    if (
+      !(taken instanceof ParameterizedType takenParameterized) ||
+      !parameterized.getRawType().equals(takenParameterized.getRawType())
+    ) {
+      return false;
+    }
+    final var givenArguments = parameterized.getActualTypeArguments();
+    final var takenArguments = takenParameterized.getActualTypeArguments();
+    for (int i = 0; i < givenArguments.length; i++) {
+      if (!meet(givenArguments[i], takenArguments[i], exact, as)) return false;
+    }
+    return true;
   }
 
   /**

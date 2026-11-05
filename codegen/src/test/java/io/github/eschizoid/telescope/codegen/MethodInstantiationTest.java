@@ -86,6 +86,18 @@ class MethodInstantiationTest {
     new Call("<T> List<T> m(List<T> t)", "List<? extends Integer>", "List<Integer>", REFUSED),
     new Call("<T> List<T> m(List<? extends T> t)", "List<? extends Number>", "List<Integer>", REFUSED),
     new Call("<T> List<T> m(List<? extends T> t)", "List<?>", "List<Integer>", REFUSED),
+    new Call("<T> List<T> m(List<? super T> t)", "List<String>", "List<CharSequence>", REFUSED),
+    new Call("<T> List<T> m(List<? super T> t)", "List<? extends Number>", "List<Integer>", REFUSED),
+    new Call("<T> List<T> m(List<List<T>> t)", "List<? extends List<String>>", "List<String>", REFUSED),
+    new Call("<T> ArrayList<T> m(T t)", "String", "List<Integer>", REFUSED),
+    new Call("<T> List<List<T>> m(T t)", "String", "List<Set<String>>", REFUSED),
+    new Call("<T> List<List<T>> m(T t)", "String", "List<List<Integer>>", REFUSED),
+    new Call(
+      "<K, V> Map<K, V> m(Map<? extends K, ? extends V> t)",
+      "Map<String, Integer>",
+      "Map<CharSequence, Long>",
+      REFUSED
+    ),
     new Call("<T> Collection<T> m()", null, "List<String>", REFUSED),
     new Call("<T> Collection<T> m(T t)", "String", "List<String>", "java.util.Collection<java.lang.String>"),
     new Call("<T> List<T> m()", null, "int", REFUSED),

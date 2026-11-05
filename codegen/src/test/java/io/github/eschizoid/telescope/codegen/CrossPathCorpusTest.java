@@ -16406,14 +16406,16 @@ class CrossPathCorpusTest {
       "java.util.Optional<Integer>",
       REFUSED + "which no instantiation of its type variables"
     ),
-    // A variable that is the parameter's whole type, or that bounds a wildcard of it from
-    // above,
-    // is a supertype of what the property holds. One in a type argument of the result where
-    // the
-    // target's property has a type is that type exactly, which has to admit the property and
-    // satisfy the variable's bound. One the target's property bounds by a wildcard from below
-    // is
-    // as high as that wildcard needs.
+    // A variable that is the parameter's whole type, or that bounds a wildcard of it
+    // from above, is a supertype of what the property holds; one that bounds a wildcard
+    // from below is a subtype of it; and one the parameter names inside a type argument
+    // where the property has a wildcard is that wildcard's capture. One in a type
+    // argument of the result where the target's property has a type is that type
+    // exactly, which has to admit the property and satisfy the variable's bound, and a
+    // generic class there is that type's class. A result of a class the target's class
+    // is not is seen as the target's class, and one of a class no subtype of it fits
+    // under no instantiation. One the target's property bounds by a wildcard from below
+    // is as high as that wildcard needs.
     new GenericResult(
       "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
       "String",
@@ -16482,6 +16484,41 @@ class CrossPathCorpusTest {
       "java.util.List<?>",
       "java.util.List.of(7)",
       "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? super T> a) { return java.util.List.of(); }",
+      "java.util.List<String>",
+      "java.util.List.of(\"x\")",
+      "java.util.List<CharSequence>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<java.util.List<T>> a) { return a.get(0); }",
+      "java.util.List<? extends java.util.List<String>>",
+      "java.util.List.of(java.util.List.of(\"x\"))",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "Comparable<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.ArrayList<T> forward(final T a) { return new java.util.ArrayList<>(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<java.util.List<T>> forward(final T a) { return java.util.List.of(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<java.util.Set<String>>",
       REFUSED + "which no instantiation of its type variables"
     ),
     // No value of the class the method returns is one the target's property takes.
