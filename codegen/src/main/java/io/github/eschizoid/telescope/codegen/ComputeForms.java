@@ -5,6 +5,8 @@ import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
+import com.sun.source.tree.ParenthesizedTree;
+import com.sun.source.tree.TypeCastTree;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -56,11 +58,11 @@ final class ComputeForms {
    * The refusal of {@code arg}, the second argument of a {@code compute} row bound to the overload
    * taking a supplier or a function, where it is a method reference to a method or constructor
    * taking no argument whose name has a form taking {@code source} too; null otherwise. Only a
-   * reference written as the argument names the method the row chose: an argument of another shape,
-   * such as a call returning the supplier, names the method that made the supplier, which the row
-   * never runs. A reference javac compiles into a lambda method of its own names no method at run
-   * time either, since the reference's record there names that lambda method, so it is treated as
-   * the lambda the runtime path reads.
+   * reference written as the argument names the method the row chose, in parentheses or under a
+   * cast or not: an argument of another shape, such as a call returning the supplier, names the
+   * method that made the supplier, which the row never runs. A reference javac compiles into a
+   * lambda method of its own names no method at run time either, since the reference's record there
+   * names that lambda method, so it is treated as the lambda the runtime path reads.
    */
   static String sourceFormRefusal(
     final Trees trees,
@@ -72,7 +74,7 @@ final class ComputeForms {
     final TypeElement target,
     final String property
   ) {
-    if (!(arg instanceof MemberReferenceTree reference)) return null;
+    if (!(unwrapped(arg) instanceof MemberReferenceTree reference)) return null;
     final var path = TreePath.getPath(unit, reference);
     if (path == null || !(trees.getElement(path) instanceof ExecutableElement chosen)) return null;
     final var refusal = formRefusal(
@@ -85,6 +87,20 @@ final class ComputeForms {
       property
     );
     return refusal == null || compiledAsLambda(trees, elements, path, reference, chosen) ? null : refusal;
+  }
+
+  /**
+   * {@code arg} without the parentheses and casts written around it. Each leaves the value
+   * unchanged, so the row is handed what is written inside them, and a cast gives a method
+   * reference or a lambda inside it the cast's type as the one it implements.
+   */
+  static ExpressionTree unwrapped(final ExpressionTree arg) {
+    var at = arg;
+    while (true) {
+      if (at instanceof ParenthesizedTree parenthesized) at = parenthesized.getExpression();
+      else if (at instanceof TypeCastTree cast) at = cast.getExpression();
+      else return at;
+    }
   }
 
   /**
