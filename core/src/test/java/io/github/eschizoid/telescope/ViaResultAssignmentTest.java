@@ -1124,4 +1124,282 @@ class ViaResultAssignmentTest {
     final var mapper = Telescope.mapper(Objects.class, Same.class, via(Objects::v, Same::v, Lengths.class));
     assertEquals(new Same(4), mapper.forward(new Objects("abcd")));
   }
+
+  public record Count(int v) {}
+
+  public record Longs(Optional<Long> v) {}
+
+  public record Numbered(Optional<Number> v) {}
+
+  public record Pairs(Map<String, CharSequence> v) {}
+
+  public record SameKeyed(Map<CharSequence, CharSequence> v) {}
+
+  /** A class comparable to itself. */
+  public static class Earlier implements Comparable<Earlier> {
+
+    private final int at;
+
+    public Earlier(final int at) {
+      this.at = at;
+    }
+
+    @Override
+    public int compareTo(final Earlier other) {
+      return Integer.compare(at, other.at);
+    }
+  }
+
+  /**
+   * A subclass of one comparable to itself, which is comparable to its superclass, not to itself.
+   */
+  public static final class Later extends Earlier {
+
+    public Later(final int at) {
+      super(at);
+    }
+  }
+
+  public record Stamp(Later v) {}
+
+  public record Stamps(List<Later> v) {}
+
+  public record Dated(Earlier v) {}
+
+  public record Dates(List<Earlier> v) {}
+
+  public record ExtendsInteger(List<? extends Integer> v) {}
+
+  public record ExtendsNumber(List<? extends Number> v) {}
+
+  public record Unbounded(List<?> v) {}
+
+  public record Lowered(List<? super Integer> v) {}
+
+  public static final class Singleton {
+
+    private Singleton() {}
+
+    public static <T> List<T> forward(final T a) {
+      return List.of(a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Optioned {
+
+    private Optioned() {}
+
+    public static <T> Optional<T> forward(final T a) {
+      return Optional.of(a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Paired {
+
+    private Paired() {}
+
+    public static <T> Map<T, T> forward(final T a) {
+      return Map.of(a, a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Ordered {
+
+    private Ordered() {}
+
+    public static <T extends Comparable<T>> List<T> forward(final T a) {
+      return List.of(a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Captures {
+
+    private Captures() {}
+
+    public static <T> List<T> forward(final List<T> a) {
+      return a;
+    }
+
+    public static List<Integer> backward(final List<Integer> b) {
+      return null;
+    }
+  }
+
+  public static final class Widening {
+
+    private Widening() {}
+
+    public static <T> List<T> forward(final List<? extends T> a) {
+      return List.copyOf(a);
+    }
+
+    public static List<Integer> backward(final List<Integer> b) {
+      return null;
+    }
+  }
+
+  private static final String NO_INSTANTIATION = "which no instantiation of its type variables";
+
+  /** The refusal building {@code built} throws, which names the row and the member's type. */
+  private static void assertNoInstantiation(final Supplier<?> built, final String declared, final String taken) {
+    final var refused = assertThrows(IllegalArgumentException.class, built::get);
+    final var message = refused.getMessage();
+    assertTrue(message.contains("via(...) of 'v'"), message);
+    assertTrue(message.contains("returns " + declared + ", " + NO_INSTANTIATION), message);
+    assertTrue(message.endsWith("it takes " + taken), message);
+  }
+
+  @Test
+  @DisplayName(
+    "a variable that is the parameter's whole type, in a type argument of the result, is refused where the target's" +
+      " type argument there does not admit the property"
+  )
+  void aVariableTheArgumentLowersIsHeldToTheTargetsArgument() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Integers.class,
+          Mapping.<Text, Integers>via(Text::v, Integers::v, Singleton.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Count.class,
+          Longs.class,
+          Mapping.<Count, Longs>via(Count::v, Longs::v, Optioned.class)
+        ),
+      "java.util.Optional<T>",
+      "java.util.Optional<java.lang.Long>"
+    );
+  }
+
+  @Test
+  @DisplayName("a variable the target's type arguments give two different types is refused")
+  void aVariableGivenTwoTypesIsRefused() {
+    assertNoInstantiation(
+      () -> Telescope.mapperForward(Text.class, Pairs.class, Mapping.<Text, Pairs>via(Text::v, Pairs::v, Paired.class)),
+      "java.util.Map<T, T>",
+      "java.util.Map<java.lang.String, java.lang.CharSequence>"
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a variable the target's type argument fixes to a class its bound, read with that class, does not admit is refused"
+  )
+  void aVariableFixedOutsideItsBoundIsRefused() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Stamp.class,
+          Stamps.class,
+          Mapping.<Stamp, Stamps>via(Stamp::v, Stamps::v, Ordered.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<io.github.eschizoid.telescope.ViaResultAssignmentTest$Later>"
+    );
+    final var date = new Earlier(0);
+    final var dates = Telescope.mapperForward(
+      Dated.class,
+      Dates.class,
+      Mapping.<Dated, Dates>via(Dated::v, Dates::v, Ordered.class)
+    );
+    assertEquals(new Dates(List.of(date)), dates.forward(new Dated(date)));
+  }
+
+  @Test
+  @DisplayName(
+    "a variable a wildcard argument fixes to its capture, or that bounds a wildcard of the parameter above a capture" +
+      " the target's argument does not admit, is refused"
+  )
+  void aVariableAWildcardArgumentForcesIsHeldToTheTargetsArgument() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          ExtendsInteger.class,
+          Integers.class,
+          Mapping.<ExtendsInteger, Integers>via(ExtendsInteger::v, Integers::v, Captures.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          ExtendsNumber.class,
+          Integers.class,
+          Mapping.<ExtendsNumber, Integers>via(ExtendsNumber::v, Integers::v, Widening.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Unbounded.class,
+          Integers.class,
+          Mapping.<Unbounded, Integers>via(Unbounded::v, Integers::v, Widening.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
+    );
+    final var widened = Telescope.mapperForward(
+      ExtendsInteger.class,
+      Integers.class,
+      Mapping.<ExtendsInteger, Integers>via(ExtendsInteger::v, Integers::v, Widening.class)
+    );
+    assertEquals(new Integers(List.of(7)), widened.forward(new ExtendsInteger(List.of(7))));
+  }
+
+  @Test
+  @DisplayName(
+    "a variable in a type argument of the result converts where the target's argument admits the property, or bounds" +
+      " it by a wildcard"
+  )
+  void aVariableTheTargetAdmitsConverts() {
+    final var chars = Telescope.mapperForward(
+      Text.class,
+      Chars.class,
+      Mapping.<Text, Chars>via(Text::v, Chars::v, Singleton.class)
+    );
+    assertEquals(new Chars(List.of("x")), chars.forward(new Text("x")));
+    final var lowered = Telescope.mapperForward(
+      Text.class,
+      Lowered.class,
+      Mapping.<Text, Lowered>via(Text::v, Lowered::v, Singleton.class)
+    );
+    assertEquals(List.of("x"), lowered.forward(new Text("x")).v());
+    final var numbered = Telescope.mapperForward(
+      Count.class,
+      Numbered.class,
+      Mapping.<Count, Numbered>via(Count::v, Numbered::v, Optioned.class)
+    );
+    assertEquals(new Numbered(Optional.of(7)), numbered.forward(new Count(7)));
+    final var keyed = Telescope.mapperForward(
+      Text.class,
+      SameKeyed.class,
+      Mapping.<Text, SameKeyed>via(Text::v, SameKeyed::v, Paired.class)
+    );
+    assertEquals(new SameKeyed(Map.of("x", "x")), keyed.forward(new Text("x")));
+  }
 }

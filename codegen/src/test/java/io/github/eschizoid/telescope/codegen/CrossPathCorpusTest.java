@@ -16406,6 +16406,83 @@ class CrossPathCorpusTest {
       "java.util.Optional<Integer>",
       REFUSED + "which no instantiation of its type variables"
     ),
+    // A variable that is the parameter's whole type, or that bounds a wildcard of it from
+    // above, is
+    // a supertype of what the property holds; one in a type argument of the result where the
+    // target's property has a type is that type exactly, which has to admit the property and
+    // satisfy the variable's bound. One the target's property bounds by a wildcard from below
+    // is
+    // as high as that wildcard needs.
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<CharSequence>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return new java.util.ArrayList<>(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? super Integer>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<? extends Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      "#0(child=[7])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Optional<T> forward(final T a) { return java.util.Optional.of(a); }",
+      "int",
+      "7",
+      "java.util.Optional<Long>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Map<T, T> forward(final T a) { return java.util.Map.of(a, a); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, CharSequence>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T extends Comparable<T>> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "java.sql.Timestamp",
+      "new java.sql.Timestamp(0L)",
+      "java.util.List<java.sql.Timestamp>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<T> a) { return a; }",
+      "java.util.List<? extends Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<? extends Number>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<?>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
     // No value of the class the method returns is one the target's property takes.
     new GenericResult(
       "Integer forward(final String a) { return a.length(); }",
@@ -16436,7 +16513,9 @@ class CrossPathCorpusTest {
           row.source() +
           " backward(final " +
           row.target() +
-          " b) { return null; }\n}\n",
+          " b) { return " +
+          (row.source().equals("int") ? "0" : "null") +
+          "; }\n}\n",
         sampled("%1$sSrc", row.source() + " child", "new %1$sSrc(" + row.sample() + ")"),
         forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::child, %1$sChMap.class)"),
         sampled("%1$sTgt", row.target() + " child", "new %1$sTgt(" + targetSample + ")"),

@@ -36,10 +36,11 @@ import javax.lang.model.util.Types;
  *       reach one generic class give it the same type for each argument both give a type, since a
  *       class has one supertype of each generic class.
  *   <li>A variable that is the method's one parameter is a supertype of the argument's type. It is
- *       the argument's type only where no bound names it, since a bound naming it can raise it. A
- *       parameter that names a variable inside it is a supertype of the argument's type, read as
- *       the result is read against the taken type, so {@code List<? extends T>} handed a {@code
- *       List<String>} makes {@code T} a supertype of {@code String}.
+ *       the argument's type only where no bound names it and no wildcard of the taken type bounds
+ *       it from below, since either can raise it. A parameter that names a variable inside it is a
+ *       supertype of the argument's type, read as the result is read against the taken type, so
+ *       {@code List<? extends T>} handed a {@code List<String>} makes {@code T} a supertype of
+ *       {@code String}.
  *   <li>A variable bounded by a final class, or that has to be a subtype of one, is that class, the
  *       only class whose instances it can hold.
  * </ul>
@@ -122,11 +123,13 @@ final class MethodInstantiation {
         continue;
       }
       solved[i] = finalClass(boundsOf(variables.get(i)));
-      // An argument is a lower bound only: a bound naming the variable can raise it above the
-      // argument's type, so the argument is its instantiation only where no bound names it. A
-      // result fixed so is then checked against the taken type as a whole, which a check of its
-      // class may still reach.
-      if (solved[i] == null && parameter == i && !namedByABound(variables.get(i), variables)) {
+      // An argument is a lower bound only: a bound naming the variable, or a wildcard of the taken
+      // type bounding it from below, can raise it above the argument's type, so the argument is
+      // its instantiation only where neither does. A result fixed so is then checked against the
+      // taken type as a whole, which a check of its class may still reach.
+      if (
+        solved[i] == null && parameter == i && fact.lower.size() == 1 && !namedByABound(variables.get(i), variables)
+      ) {
         solved[i] = boxed(argument);
       }
       if (solved[i] == null) solved[i] = finalClass(fact.uppers());

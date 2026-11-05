@@ -33,8 +33,10 @@ import java.util.function.Function;
  * A property of a generic class used raw, or of a class extending it raw, handed to a parameter
  * that gives the class type arguments, reaches it through an unchecked conversion, and the call's
  * result is then the erasure of the one the method declares. A property a class's own variable
- * types fixes nothing, and a result that still names a variable the property does not fix is left
- * to the checks each call makes.
+ * types fixes nothing. A result that still names a variable the property does not fix is held to
+ * the member's type where its type arguments are invariant: a variable in an argument the member
+ * gives a type has to be that type, which has to admit the property, and is refused where none can
+ * be; anything else it names is left to the checks each call makes.
  */
 final class ViaResults {
 
@@ -51,8 +53,49 @@ final class ViaResults {
    *     or null
    * @param using the class the row names, by its name
    * @param method the method's name
+   * @param forced what the argument forces on the variables {@code given} leaves for the call to
+   *     infer, or null where it is not read
    */
-  record Given(Type declared, Type given, boolean generic, Type raw, String using, String method) {}
+  record Given(Type declared, Type given, boolean generic, Type raw, String using, String method, Forced forced) {
+    Given(
+      final Type declared,
+      final Type given,
+      final boolean generic,
+      final Type raw,
+      final String using,
+      final String method
+    ) {
+      this(declared, given, generic, raw, using, method, null);
+    }
+  }
+
+  /**
+   * What the argument a generic method is handed forces on the method's own type variables: the
+   * type each variable it fixes is, in {@code fixed} and {@code values}; for each variable in
+   * {@code lowered}, the types in the matching list of {@code lowers}, of which the variable has to
+   * be a supertype of at least one; and the variables in {@code captured}, each the fresh variable
+   * the capture of a wildcard gives, which is no type a row's property names.
+   *
+   * @param variables the method's own type variables
+   */
+  record Forced(
+    List<Type> variables,
+    List<Type> fixed,
+    List<Type> values,
+    List<Type> lowered,
+    List<List<Type>> lowers,
+    List<Type> captured
+  ) {
+    Forced(final List<Type> variables) {
+      this(variables, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    }
+
+    /** Records that {@code variable} is a supertype of at least one of {@code types}. */
+    void lower(final TypeVariable<?> variable, final List<Type> types) {
+      lowered.add(variable);
+      lowers.add(types);
+    }
+  }
 
   /**
    * What {@code method} returns when handed a value of {@code argument}, called by a row naming
@@ -80,14 +123,14 @@ final class ViaResults {
     // A variable that is the parameter's whole type is only a supertype of the argument's class,
     // which the type the result is written as can raise where the result gives the variable as a
     // type argument; the argument is its class only where the result is the variable itself.
-    if (parameter instanceof TypeVariable<?> && !parameter.equals(declared)) {
-      return new Given(declared, null, true, null, using, name);
+    final var forced = new Forced(variables);
+    if (parameter instanceof TypeVariable<?> variable && !parameter.equals(declared)) {
+      forced.lower(variable, List.of(boxed(argument)));
+      return new Given(declared, null, true, null, using, name, forced);
     }
-    final var fixed = new ArrayList<Type>();
-    final var values = new ArrayList<Type>();
-    if (!fix(parameter, argument, variables, fixed, values)) return new Given(declared, null, true, null, using, name);
-    final var given = DeepMap.PROPS.substitute(declared, fixed, values);
-    return new Given(declared, names(given, variables) ? null : given, true, null, using, name);
+    if (!fix(parameter, argument, variables, forced)) return new Given(declared, null, true, null, using, name);
+    final var given = DeepMap.PROPS.substitute(declared, forced.fixed(), forced.values());
+    return new Given(declared, names(given, variables) ? null : given, true, null, using, name, forced);
   }
 
   /**
@@ -108,51 +151,187 @@ final class ViaResults {
   }
 
   /**
-   * Records in {@code fixed} and {@code values} what {@code argument} fixes each of {@code
-   * variables} {@code parameter} names to; false where it gives one variable two types. A {@code
-   * via} row's methods are static, so every type variable their signatures name is their own.
+   * Records in {@code forced} what {@code argument} forces on each of {@code variables} {@code
+   * parameter} names; false where it gives one variable two types. A {@code via} row's methods are
+   * static, so every type variable their signatures name is their own.
+   *
+   * <p>A variable that is a type argument of the parameter is the argument's type argument in its
+   * place where that is a type, and the fresh variable its capture gives where it is a wildcard.
+   * One that bounds a wildcard of the parameter from above is a supertype of what the argument's
+   * type argument in its place holds: the type itself, or for a wildcard its capture, a subtype of
+   * the wildcard's upper bound and of the bound the class declares for that argument.
    */
   private static boolean fix(
     final Type parameter,
     final Type argument,
     final List<Type> variables,
-    final List<Type> fixed,
-    final List<Type> values
+    final Forced forced
   ) {
     if (parameter instanceof TypeVariable<?> variable) {
       // A bound naming another of the method's variables can raise the variable above the
       // argument's class, so the argument fixes it only where its bounds name none.
       if (Arrays.stream(variable.getBounds()).anyMatch(bound -> names(bound, variables))) return true;
-      return put(variable, boxed(argument), fixed, values);
+      return put(variable, boxed(argument), forced);
     }
     if (!(parameter instanceof ParameterizedType parameterized)) return true;
-    final var seen = seenAs(argument, (Class<?>) parameterized.getRawType());
+    final var raw = (Class<?>) parameterized.getRawType();
+    final var seen = seenAs(argument, raw);
     if (seen == null) return true;
     final var arguments = parameterized.getActualTypeArguments();
+    final var declared = raw.getTypeParameters();
     for (int i = 0; i < arguments.length; i++) {
       final var met = seen.get(i);
-      if (met instanceof WildcardType || DeepMap.PROPS.mentionsTypeVariable(met)) continue;
+      if (DeepMap.PROPS.mentionsTypeVariable(met)) continue;
       if (arguments[i] instanceof TypeVariable<?> variable) {
-        if (!put(variable, met, fixed, values)) return false;
-      } else if (arguments[i] instanceof ParameterizedType && !fix(arguments[i], met, variables, fixed, values)) {
+        if (met instanceof WildcardType) {
+          forced.captured().add(variable);
+        } else if (!put(variable, met, forced)) {
+          return false;
+        }
+      } else if (extended(arguments[i]) instanceof TypeVariable<?> variable) {
+        final var held = heldBy(met, declared[i]);
+        if (held != null) forced.lower(variable, held);
+      } else if (
+        !(met instanceof WildcardType) &&
+        arguments[i] instanceof ParameterizedType &&
+        !fix(arguments[i], met, variables, forced)
+      ) {
         return false;
       }
     }
     return true;
   }
 
+  /** The variable {@code argument} bounds from above, as a wildcard; or null. */
+  private static TypeVariable<?> extended(final Type argument) {
+    if (!(argument instanceof WildcardType wildcard) || wildcard.getLowerBounds().length > 0) return null;
+    final var upper = wildcard.getUpperBounds();
+    return upper.length == 1 && upper[0] instanceof TypeVariable<?> variable ? variable : null;
+  }
+
+  /**
+   * The types a value the type argument {@code met} holds, in the place of {@code declared}, is a
+   * value of, any of which it can be the whole of: {@code met} itself where it is a type, and where
+   * it is a wildcard its upper bound and the class's bounds for that argument; null where a bound
+   * names a variable, which a supertype of the capture can be raised through.
+   */
+  private static List<Type> heldBy(final Type met, final TypeVariable<?> declared) {
+    if (!(met instanceof WildcardType wildcard)) return List.of(met);
+    final var held = new ArrayList<Type>(List.of(wildcard.getUpperBounds()));
+    held.addAll(List.of(declared.getBounds()));
+    return held.stream().anyMatch(DeepMap.PROPS::mentionsTypeVariable) ? null : held;
+  }
+
   /** Fixes {@code variable} to {@code value}; false where it is fixed to another type already. */
-  private static boolean put(
-    final TypeVariable<?> variable,
-    final Type value,
-    final List<Type> fixed,
-    final List<Type> values
-  ) {
-    final var at = fixed.indexOf(variable);
-    if (at >= 0) return values.get(at).equals(value);
-    fixed.add(variable);
-    values.add(value);
+  private static boolean put(final TypeVariable<?> variable, final Type value, final Forced forced) {
+    final var at = forced.fixed().indexOf(variable);
+    if (at >= 0) return forced.values().get(at).equals(value);
+    forced.fixed().add(variable);
+    forced.values().add(value);
     return true;
+  }
+
+  /**
+   * Whether an instantiation of the method's variables lets the result {@code declared}, which
+   * still names one of them, be passed where {@code taken} is taken, as far as its type arguments
+   * decide it. Seen as {@code taken}'s class, each argument the result gives where {@code taken}
+   * has a type, not a wildcard, has to be that type exactly, since a generic class's arguments are
+   * invariant: a variable there is that type, the same type at every such place and wherever the
+   * argument fixes it. A variable so fixed is no fresh variable of a capture, is a supertype of a
+   * type of each list the argument forces on it, and is a subtype of each of its bounds that names
+   * no other variable, read with it in place. A result whose class {@code taken}'s does not extend,
+   * and a variable nothing fixes, are left to the checks each call makes.
+   */
+  private static boolean instantiable(final Forced forced, final Type declared, final Type taken) {
+    final var exact = new ArrayList<Type>(forced.fixed());
+    final var as = new ArrayList<Type>(forced.values());
+    final var seen = resultSeenAs(declared, taken);
+    final var takenArguments = DeepMap.PROPS.typeArguments(taken);
+    if (seen.size() == takenArguments.size()) {
+      for (int i = 0; i < seen.size(); i++) meet(seen.get(i), takenArguments.get(i), forced.variables(), exact, as);
+    }
+    for (int i = 0; i < exact.size(); i++) {
+      final var variable = (TypeVariable<?>) exact.get(i);
+      final var value = as.get(i);
+      final var first = exact.indexOf(variable);
+      if (first < i) {
+        if (!as.get(first).equals(value)) return false;
+        continue;
+      }
+      if (forced.captured().contains(variable)) return false;
+      for (int l = 0; l < forced.lowered().size(); l++) {
+        if (!forced.lowered().get(l).equals(variable)) continue;
+        if (
+          forced
+            .lowers()
+            .get(l)
+            .stream()
+            .noneMatch(lower -> assignable(lower, value))
+        ) return false;
+      }
+      final var others = forced
+        .variables()
+        .stream()
+        .filter(other -> !other.equals(variable))
+        .toList();
+      for (final var bound : variable.getBounds()) {
+        if (names(bound, others)) continue;
+        if (!assignable(value, DeepMap.PROPS.substitute(bound, List.of(variable), List.of(value)))) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The type arguments the result {@code declared}, which may name the method's variables, gives
+   * the class of {@code taken}, which its class is or extends; empty where it gives none.
+   */
+  private static List<Type> resultSeenAs(final Type declared, final Type taken) {
+    final var props = DeepMap.PROPS;
+    if (
+      !(declared instanceof ParameterizedType) ||
+      !(props.rawType(declared) instanceof Class<?> cls) ||
+      !(props.rawType(taken) instanceof Class<?> takenClass) ||
+      !takenClass.isAssignableFrom(cls)
+    ) {
+      return List.of();
+    }
+    final var given = props.typeArguments(declared);
+    if (cls == takenClass) return given;
+    final var own = List.<Type>of(cls.getTypeParameters());
+    return props
+      .declaredArgumentsAs(cls, takenClass)
+      .stream()
+      .map(argument -> props.substitute(argument, own, given))
+      .toList();
+  }
+
+  /**
+   * Records in {@code exact} and {@code as} each variable of {@code variables} the result's type
+   * argument {@code given} names where it has to be {@code taken} exactly.
+   */
+  private static void meet(
+    final Type given,
+    final Type taken,
+    final List<Type> variables,
+    final List<Type> exact,
+    final List<Type> as
+  ) {
+    if (taken instanceof WildcardType) return;
+    if (given instanceof TypeVariable<?> variable && variables.contains(variable)) {
+      exact.add(variable);
+      as.add(taken);
+    } else if (
+      given instanceof ParameterizedType parameterized &&
+      taken instanceof ParameterizedType takenParameterized &&
+      parameterized.getRawType().equals(takenParameterized.getRawType())
+    ) {
+      final var givenArguments = parameterized.getActualTypeArguments();
+      final var takenArguments = takenParameterized.getActualTypeArguments();
+      for (int i = 0; i < givenArguments.length && i < takenArguments.length; i++) {
+        meet(givenArguments[i], takenArguments[i], variables, exact, as);
+      }
+    }
   }
 
   /**
@@ -236,7 +415,21 @@ final class ViaResults {
       );
     }
     final var result = given.given();
-    if (result == null) return null;
+    if (result == null) {
+      if (given.forced() == null || instantiable(given.forced(), given.declared(), memberType)) return null;
+      throw refused(
+        given,
+        source,
+        target,
+        field,
+        PairingMessages.viaResultNoInstantiation(
+          given.declared().getTypeName(),
+          ownerName,
+          property,
+          memberType.getTypeName()
+        )
+      );
+    }
     final var resultClass = boxed(DeepMap.heldClassOf(result));
     final var unboxed = MethodType.methodType(resultClass).unwrap().returnType();
     if (member.isPrimitive() && unboxed.isPrimitive()) {
