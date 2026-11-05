@@ -2122,6 +2122,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
+    // The properties the bridge writes a value into, which a setters strategy it is told to take
+    // has to have a setter for: on the target, each a kept source property is written into and each
+    // a row fills; on the source, which only a mapper that converts backward writes, each kept
+    // source property backward reads back from its target and each a source path starts at, which
+    // backward writes back through.
+    final var writesTarget = new HashSet<>(computed);
+    final var writesSource = new HashSet<String>();
+    for (final var path : sourcePaths) {
+      writesTarget.add(path.row().target());
+      if (!lenient) writesSource.add(path.row().properties().getFirst());
+    }
+    for (final var path : targetPaths) writesTarget.add(path.row().properties().getFirst());
+    for (final var sf : sourceFields) {
+      if (effectiveDrops.contains(sf.name())) continue;
+      writesTarget.add(renames.getOrDefault(sf.name(), sf.name()));
+      writesTarget.addAll(renameFanouts.getOrDefault(sf.name(), List.of()));
+      if (!lenient && !forwardOnlyTransforms.contains(sf.name())) writesSource.add(sf.name());
+    }
+
     // Bijection check: apply forward renames on the source side, then compare to target names —
     // skipping target names covered by constants/computes (injected; no source counterpart needed).
     // Dropped sources are excluded from the check entirely.
@@ -2604,7 +2623,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pkg,
       forwardWritten,
       forwardResults,
-      referenceTargets
+      referenceTargets,
+      target,
+      writesTarget
     );
     if (builtForward == null) return;
     final var builtBackward = buildExpr(
@@ -2617,7 +2638,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pkg,
       backwardWritten,
       backwardResults,
-      referenceSources
+      referenceSources,
+      target,
+      writesSource
     );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
@@ -2766,7 +2789,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       null,
       patchCasts.keySet(),
       patchCasts,
-      Set.of()
+      Set.of(),
+      target,
+      writesSource
     );
     patchSplits = Map.of();
     pathArg = guarded ? "__path" : null;
@@ -3480,7 +3505,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         null,
         transformed,
         gives,
-        referenceValued
+        referenceValued,
+        null,
+        null
       );
       if (body == null) return null;
       final var text = new StringWriter();
@@ -8492,9 +8519,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The expression that rebuilds {@code to}, emitted from the rung {@code rebuild} chose.
    *
-   * <p>It reads {@code writeStrategy} only to say which rung was asked for when none applied — the
-   * ladder itself, and records always taking their canonical constructor whatever the strategy, are
-   * {@link #rebuildFor}'s.
+   * <p>It reads {@code writeStrategy} only to say which rung was asked for when none applied, and,
+   * where {@code to} is a side of the pair of {@code annotationSite} and {@code pairTarget}, to
+   * refuse a setters strategy asked for with no setter for a property in {@code written}, the
+   * properties the bridge writes into {@code to}. The ladder itself, and records always taking
+   * their canonical constructor whatever the strategy, are {@link #rebuildFor}'s. {@code
+   * pairTarget} and {@code written} are null where {@code to} is an object a path steps through,
+   * which the path's plan has already held to its strategy.
    *
    * <p>The choice is made once, by {@link #rebuildFor}, and handed here rather than made again. A
    * transform is checked against the member this will write through, so a second run of the ladder
@@ -8511,9 +8542,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String hoistInto,
     final Set<String> transformed,
     final Map<String, TypeMirror> transformGives,
-    final Set<String> referenceValued
+    final Set<String> referenceValued,
+    final TypeElement pairTarget,
+    final Set<String> written
   ) {
     final var toFq = to.getQualifiedName().toString();
+    // A setters strategy the bridge is told to take, rebuilding a side of the pair, with no setter
+    // for a property it writes would drop the value. That is refused as the runtime refuses it,
+    // before whether the bridge's package can call the no-argument constructor.
+    final var heldToSetters =
+      pairTarget != null && "SETTERS".equals(writeStrategy) && to.getKind() != ElementKind.RECORD;
+    if (
+      heldToSetters &&
+      rebuild.kind() == Rebuild.Kind.NONE &&
+      ElementFilter.constructorsIn(to.getEnclosedElements())
+        .stream()
+        .anyMatch(c -> c.getParameters().isEmpty())
+    ) {
+      for (final var f : toFields) {
+        if (!written.contains(f.name()) || setterName(to, f.name()) != null) continue;
+        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name()));
+        return null;
+      }
+    }
     switch (rebuild.kind()) {
       case RECORD -> {
         final var slots = new ArrayList<CtorSlot>();
@@ -8587,10 +8638,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var setter = setterName(to, f.name());
+          // A property the bridge writes nothing into is left as the constructor leaves it, as the
+          // runtime writer leaves a property its setters strategy has no setter for.
+          if (setter == null && heldToSetters && !written.contains(f.name())) continue;
           if (setter == null) {
             error(
               annotationSite,
-              "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
+              heldToSetters
+                ? settersDropMessage(annotationSite, pairTarget, to, f.name())
+                : "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
             );
             return null;
           }
@@ -9250,6 +9306,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       (wildcard.getSuperBound() == null || writableFrom(wildcard.getSuperBound(), bridgePkg));
       default -> type.getKind().isPrimitive();
     };
+  }
+
+  /**
+   * The refusal of a setters strategy the bridge of {@code source} and {@code target} is told to
+   * rebuild {@code side} with, which has no setter for {@code property}: the runtime's words.
+   */
+  private static String settersDropMessage(
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement side,
+    final String property
+  ) {
+    return PairingMessages.beanPropertyUnwritable(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side.getSimpleName().toString(),
+      property,
+      "SETTERS"
+    );
   }
 
   /**

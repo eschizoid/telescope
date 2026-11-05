@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.ResultCheck;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.KeptNames;
@@ -70,6 +71,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1536,6 +1538,9 @@ public final class DeepMap {
       // OK.
       final var telescopeReadsSrc = new HashSet<String>();
       final var telescopeWritesTgt = new HashSet<String>();
+      // The source fields backward writes back through a source path a `when` does not gate, on a
+      // mapper that converts backward.
+      final var pathWritesSrc = new HashSet<String>();
       // The target fields a row writes through a path of another shape than properties alone, or
       // fills with a constant or a computed value through a path: each starts as a default-tree
       // instance for the row to write into. A path through properties alone builds a null object
@@ -1617,6 +1622,7 @@ public final class DeepMap {
             final var firstSrcHop = fRow.sourceTelescope().firstHopName();
             if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
             else unknownSrcRead = true;
+            if (firstSrcHop != null && !forwardOnly && rawRow == row) pathWritesSrc.add(srcRefl.normalize(firstSrcHop));
             final var readsOne = firstSrcHop != null && rawRow == row && fRow.sourceTelescope().readsOneProperty();
             if (readsOne) {
               pathReadsSrc.add(srcRefl.normalize(firstSrcHop));
@@ -1659,6 +1665,14 @@ public final class DeepMap {
             else unknownSrcRead = true;
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
+            if (
+              firstSrcHop != null &&
+              !forwardOnly &&
+              rawRow == row &&
+              ttRow.kind() == TelescopeToTelescope.Kind.BROADCAST
+            ) {
+              pathWritesSrc.add(srcRefl.normalize(firstSrcHop));
+            }
             if (
               firstTgtHop != null &&
               (ttRow.kind() == TelescopeToTelescope.Kind.ZIP || !ttRow.targetTelescope().stepsThroughProperties())
@@ -2045,10 +2059,10 @@ public final class DeepMap {
       }
 
       // A value converted for a bean property's own type is written through its setter, so a
-      // setter that cannot take that type refuses the pair here, on the side each direction the
-      // mapper runs writes.
-      refuseUnwritableSetters(target, tgtRefl.writerFor(target), byTargetName, true);
-      if (!forwardOnly) refuseUnwritableSetters(source, srcRefl.writerFor(source), bySourceName, false);
+      // setter that cannot take that type, or a setters strategy a hint names with no setter for
+      // the property, refuses the pair here, on the side each direction the mapper runs writes.
+      refuseUnwritableSetters(source, target, target, tgtRefl, byTargetName, telescopeWritesTgt, true);
+      if (!forwardOnly) refuseUnwritableSetters(source, target, source, srcRefl, bySourceName, pathWritesSrc, false);
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
       cache.put(
         key,
@@ -3903,23 +3917,49 @@ public final class DeepMap {
   }
 
   /**
-   * Refuses a bean side whose setter cannot take a value of the property's own type, for every
-   * property of {@code cls} a step fills from the other side: the target's properties when {@code
-   * target} is true, and otherwise the source's, which the backward direction writes.
+   * Refuses a bean side, {@code cls} of the pair of {@code source} and {@code target}, for every
+   * property of it the mapper writes: each a step fills from the other side, the target's
+   * properties when {@code isTarget} is true and otherwise the source's, which the backward
+   * direction writes, and each in {@code rowWritten}, which a row writes through a path, a constant
+   * or a computed value. A setter that cannot take a value of the property's own type is refused
+   * for a property a step fills, and then a setters strategy a hint names for {@code cls} that has
+   * no setter for a property the mapper writes, which would drop the value.
    */
   private static void refuseUnwritableSetters(
+    final Class<?> source,
+    final Class<?> target,
     final Class<?> cls,
-    final Beans.BeanWriter<?> writer,
+    final Reflective refl,
     final Map<String, FieldStep> steps,
-    final boolean target
+    final Set<String> rowWritten,
+    final boolean isTarget
   ) {
+    final var writer = refl.writerFor(cls);
     if (writer == null) return;
+    final var written = new LinkedHashSet<String>();
     for (final var step : steps.values()) {
-      final var written = target ? step.targetName() : step.sourceName();
-      final var from = target ? step.sourceName() : step.targetName();
-      if (written == null || from == null) continue;
-      final var refusal = Beans.setterRefusal(writer, cls, written);
+      final var name = isTarget ? step.targetName() : step.sourceName();
+      final var from = isTarget ? step.sourceName() : step.targetName();
+      if (name == null || from == null) continue;
+      final var refusal = Beans.setterRefusal(writer, cls, name);
       if (refusal != null) throw new IllegalStateException(refusal);
+      written.add(name);
+    }
+    written.addAll(rowWritten);
+    final var named = refl.namedWriterFor(cls);
+    if (named == null || Beans.strategyOf(named) != BeanWriteStrategy.SETTERS) return;
+    for (final var name : written) {
+      if (!named.writes(name)) {
+        throw new IllegalArgumentException(
+          PairingMessages.beanPropertyUnwritable(
+            source.getSimpleName(),
+            target.getSimpleName(),
+            PairingMessages.className(cls),
+            name,
+            BeanWriteStrategy.SETTERS.name()
+          )
+        );
+      }
     }
   }
 

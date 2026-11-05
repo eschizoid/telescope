@@ -46,7 +46,8 @@ public record Reflective(
   BiFunction<Object, String, Object> read,
   BiFunction<Class<?>, Function<String, Object>, Object> construct,
   Function<String, String> normalize,
-  Function<Class<?>, Beans.BeanWriter<?>> chosenWriter
+  Function<Class<?>, Beans.BeanWriter<?>> chosenWriter,
+  Function<Class<?>, Beans.BeanWriter<?>> namedWriter
 ) {
   private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
 
@@ -56,6 +57,7 @@ public record Reflective(
     Records::read,
     Reflective::constructRecord,
     name -> name,
+    cls -> null,
     cls -> null
   );
 
@@ -65,7 +67,8 @@ public record Reflective(
     Beans::readProperty,
     Reflective::constructBean,
     Beans::propertyOf,
-    cls -> cls.isRecord() ? null : Beans.autoWriterOrNull(cls)
+    cls -> cls.isRecord() ? null : Beans.autoWriterOrNull(cls),
+    cls -> null
   );
 
   /**
@@ -97,7 +100,8 @@ public record Reflective(
       BEANS.read,
       (cls, valueByName) -> constructBeanWithHints(hints, defaultWriterFactory, cls, valueByName),
       BEANS.normalize,
-      cls -> hintedWriter(hints, defaultWriterFactory, cls)
+      cls -> hintedWriter(hints, defaultWriterFactory, cls),
+      cls -> hintNamedWriter(hints, defaultWriterFactory, cls)
     );
   }
 
@@ -152,6 +156,15 @@ public record Reflective(
    */
   public Beans.BeanWriter<?> writerFor(final Class<?> cls) {
     return chosenWriter.apply(cls);
+  }
+
+  /**
+   * The writer a {@code writeBean} hint or the {@code writeBeans} default names for bean {@code
+   * cls}, which is the one {@link #writerFor} answers with, or {@code null} where no hint names one
+   * and the shared order picks it, for a record, and for a bean the named strategy cannot build.
+   */
+  public Beans.BeanWriter<?> namedWriterFor(final Class<?> cls) {
+    return namedWriter.apply(cls);
   }
 
   /** Read a value by name. */
@@ -394,20 +407,34 @@ public record Reflective(
   }
 
   /**
-   * The writer the hints pick for {@code cls}: the hint naming {@code cls}, else the default
-   * strategy, else the writer {@link Beans#autoWriter} picks. {@code null} for a record, and for a
-   * class whose writer cannot be built, so the construction that follows raises that failure
-   * itself.
+   * The writer the hints pick for {@code cls}: the one {@link #hintNamedWriter} answers with, else,
+   * with no default strategy, the writer {@link Beans#autoWriter} picks. {@code null} for a record,
+   * and for a class whose writer cannot be built, so the construction that follows raises that
+   * failure itself.
    */
   private static Beans.BeanWriter<?> hintedWriter(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
     final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory,
     final Class<?> cls
   ) {
+    final var named = hintNamedWriter(hints, defaultWriterFactory, cls);
+    if (named != null || defaultWriterFactory != null || cls.isRecord()) return named;
+    return BEANS.writerFor(cls);
+  }
+
+  /**
+   * The writer a hint names for {@code cls}: the hint naming {@code cls}, else the default
+   * strategy. {@code null} for a record, for a class no hint names, and for a class the default
+   * strategy cannot build.
+   */
+  private static Beans.BeanWriter<?> hintNamedWriter(
+    final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory,
+    final Class<?> cls
+  ) {
     if (cls.isRecord()) return null;
     final var hinted = hints.get(cls);
-    if (hinted != null) return hinted;
-    if (defaultWriterFactory == null) return BEANS.writerFor(cls);
+    if (hinted != null || defaultWriterFactory == null) return hinted;
     try {
       return defaultWriterFactory.apply(cls);
     } catch (final RuntimeException e) {

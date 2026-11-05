@@ -41,6 +41,7 @@ import io.github.eschizoid.telescope.focus.WriteChainLeaf;
 import io.github.eschizoid.telescope.focus.WriteChainMid;
 import io.github.eschizoid.telescope.focus.WriteChainOuter;
 import io.github.eschizoid.telescope.focus.WriteChainRoot;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -1091,11 +1092,11 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Getter-only target properties — SettersWriter silently skips instead of throwing")
+  @DisplayName("Getter-only target properties — a setters hint refuses a property it cannot write")
   class GetterOnlyProperties {
 
-    // Both Source and OrderResponse have a `processed` property so DeepMap's same-name bijection
-    // strict-bijection check passes — we want to isolate the SettersWriter getter-only path.
+    // Both Source and OrderResponse have a `processed` property, so the same-name pairing writes
+    // it into a target whose setters strategy has no setter for it.
     public static class Source {
 
       private String name;
@@ -1139,24 +1140,31 @@ class MigrationRegressionTest {
     }
 
     @Test
-    @DisplayName("forward(source) silently skips getter-only target properties — no throw")
-    void getterOnlyTargetPropertiesAreSilentlySkipped() {
-      // MapStruct silently ignores target fields whose setter is missing. Telescope used to throw
-      // IllegalArgumentException("no setter setX") at first forward() call. This pins the new
-      // no-op contract: forward() succeeds; the getter-only target property stays at its JLS
-      // default (false for boolean primitive).
-      final var mapper = Telescope.mapper(
+    @DisplayName("a writeBeans SETTERS default is refused when it would drop a paired getter-only property")
+    void aSettersDefaultRefusesAPairedGetterOnlyProperty() {
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(Source.class, OrderResponse.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+      assertEquals(
+        PairingMessages.beanPropertyUnwritable("Source", "OrderResponse", "OrderResponse", "processed", "SETTERS"),
+        refused.getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a getter-only target property no row writes stays at its default under a writeBeans SETTERS default")
+    void aGetterOnlyPropertyNothingWritesStaysAtItsDefault() {
+      final var mapper = Telescope.mapperForward(
         Source.class,
         OrderResponse.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteHint.WriteStrategy.SETTERS),
+        Mapping.drop(Source::isProcessed)
       );
       final var src = new Source();
       src.setName("alice");
       src.setProcessed(true);
-      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      final var tgt = mapper.forward(src);
       assertEquals("alice", tgt.getName());
-      // The `processed` source value was discarded — target's getter-only field stays at the
-      // primitive default. MapStruct would do the same.
       assertFalse(tgt.isProcessed());
     }
   }
