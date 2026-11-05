@@ -183,7 +183,10 @@ final class ViaResults {
    * of the argument's type argument in its place, or of the lower bound of a wildcard there. Where
    * the argument has a wildcard and the parameter a type naming a variable, or a wildcard bounded
    * from below by one, which a wildcard bounded from below alone satisfies, only the capture's
-   * fresh variable satisfies the parameter, so each variable it names is one no property names.
+   * fresh variable satisfies the parameter, so each variable it names is one no property names. A
+   * wildcard of the parameter bounded from above by a generic class naming a variable is met as
+   * that class is, by the first type what the argument's type argument in its place holds is that
+   * gives the class type arguments.
    */
   private static boolean fix(
     final Type parameter,
@@ -214,6 +217,20 @@ final class ViaResults {
           forced.raise(variable, metWildcard.getLowerBounds()[0]);
         } else {
           forced.captured().add(variable);
+        }
+      } else if (
+        wildcard != null &&
+        wildcard.getLowerBounds().length == 0 &&
+        wildcard.getUpperBounds()[0] instanceof ParameterizedType bounding
+      ) {
+        // What the property holds there is a subtype of the generic class bounding the wildcard
+        // through the type it is, or a bound of its wildcard, and gives the class the arguments
+        // that one gives it, since a class has one supertype of each generic class.
+        final var boundClass = (Class<?>) bounding.getRawType();
+        for (final var held : heldBy(met, argument, raw, i)) {
+          if (seenAs(held, boundClass) == null) continue;
+          if (!fix(bounding, held, variables, forced)) return false;
+          break;
         }
       } else if (met instanceof WildcardType) {
         if (wildcard == null) {
@@ -287,63 +304,119 @@ final class ViaResults {
   /**
    * Whether an instantiation of the method's variables lets the result {@code declared}, which
    * still names one of them, be passed where {@code taken} is taken, as far as its type arguments
-   * decide it. A result of a generic class no instantiation makes a subtype of {@code taken}'s
+   * decide it. A result that is one of the variables is a subtype of {@code taken}, where that is
+   * no primitive. A result of a generic class no instantiation makes a subtype of {@code taken}'s
    * class, or a supertype of it, is passed as it is, and fits under none. Seen as {@code taken}'s
-   * class, each argument the result gives where {@code taken} has a type, not a wildcard, has to be
-   * that type exactly, since a generic class's arguments are invariant: a variable there is that
-   * type, the same type at every such place and wherever the argument fixes it, and a generic class
-   * there is that type's class. A variable so fixed is no fresh variable of a capture, is a
-   * supertype of a type of each list the argument forces on it and a subtype of each type it forces
-   * above it, and is a subtype of each of its bounds that names no other variable, read with it in
-   * place. A variable nothing fixes is left to the checks each call makes.
+   * class, each argument the result gives is contained in {@code taken}'s: where {@code taken} has
+   * a type it is that type exactly, since a generic class's arguments are invariant; where it has a
+   * wildcard bounded from above it is a subtype of the bound, and where it has one bounded from
+   * below a supertype of it. A variable met exactly is that type, the same type at every such place
+   * and wherever the argument fixes it, is no fresh variable of a capture, and is held to every
+   * bound below. A variable met by no type is held to every bound below that names no type: no two
+   * of the types it is a subtype of are two classes neither of which extends the other, or an array
+   * and a class no array is. Each type a variable is a subtype of, a bound it declares read with
+   * each variable met exactly in place among them, is a supertype of a type of each list the
+   * argument forces below it, and of each type the result's shape puts below it. A bound still
+   * naming a variable is left to the checks each call makes.
    */
   private static boolean instantiable(final Forced forced, final Type declared, final Type taken) {
-    final var exact = new ArrayList<Type>(forced.fixed());
-    final var as = new ArrayList<Type>(forced.values());
-    if (declared instanceof ParameterizedType parameterized) {
-      final var cls = (Class<?>) parameterized.getRawType();
-      final var takenClass = DeepMap.heldClassOf(taken);
-      final var seen = resultArguments(parameterized, cls, takenClass);
-      final var takenArguments = DeepMap.PROPS.typeArguments(taken);
-      if (seen.size() == takenArguments.size()) {
-        for (int i = 0; i < seen.size(); i++) {
-          if (!meet(seen.get(i), takenArguments.get(i), exact, as)) return false;
+    final var met = new Met(forced.variables());
+    if (declared instanceof TypeVariable<?> variable && forced.variables().contains(variable)) {
+      if (!(taken instanceof Class<?> cls && cls.isPrimitive())) met.upper(variable, taken);
+    } else if (declared instanceof ParameterizedType parameterized && !below(parameterized, taken, met, true)) {
+      return false;
+    }
+    for (int i = 0; i < forced.fixed().size(); i++) met.exact(forced.fixed().get(i), forced.values().get(i));
+    for (int i = 0; i < forced.lowered().size(); i++) met.lower(forced.lowered().get(i), forced.lowers().get(i));
+    for (int i = 0; i < forced.raised().size(); i++) met.upper(forced.raised().get(i), forced.uppers().get(i));
+    return met.satisfiable(forced.captured());
+  }
+
+  /**
+   * What the result's shape asks of the method's variables, each at the index it has among them:
+   * the types each is exactly, the types each is a subtype of, and the lists of types each is a
+   * supertype of at least one of.
+   */
+  private record Met(List<Type> variables, List<List<Type>> exact, List<List<Type>> uppers, List<List<List<Type>>> lowers) {
+    Met(final List<Type> variables) {
+      this(variables, lists(variables.size()), lists(variables.size()), lists(variables.size()));
+    }
+
+    private static <E> List<List<E>> lists(final int size) {
+      final var all = new ArrayList<List<E>>();
+      for (int i = 0; i < size; i++) all.add(new ArrayList<>());
+      return all;
+    }
+
+    void exact(final Type variable, final Type type) {
+      exact.get(variables.indexOf(variable)).add(type);
+    }
+
+    void upper(final Type variable, final Type type) {
+      uppers.get(variables.indexOf(variable)).add(type);
+    }
+
+    void lower(final Type variable, final List<Type> types) {
+      lowers.get(variables.indexOf(variable)).add(types);
+    }
+
+    /** Whether an instantiation meets every bound recorded; see {@link #instantiable}. */
+    boolean satisfiable(final List<Type> captured) {
+      final var fixed = new ArrayList<Type>();
+      final var values = new ArrayList<Type>();
+      for (int i = 0; i < variables.size(); i++) {
+        final var types = exact.get(i);
+        if (types.isEmpty()) continue;
+        if (types.stream().anyMatch(type -> !type.equals(types.getFirst()))) return false;
+        if (captured.contains(variables.get(i))) return false;
+        fixed.add(variables.get(i));
+        values.add(types.getFirst());
+      }
+      for (int i = 0; i < variables.size(); i++) {
+        final var variable = (TypeVariable<?>) variables.get(i);
+        final var above = new ArrayList<Type>(uppers.get(i));
+        for (final var bound : variable.getBounds()) {
+          final var read = DeepMap.PROPS.substitute(bound, fixed, values);
+          if (!names(read, variables)) above.add(read);
+        }
+        final var at = fixed.indexOf(variable);
+        if (at >= 0) {
+          final var value = values.get(at);
+          if (above.stream().anyMatch(upper -> !assignable(value, upper))) return false;
+          for (final var below : lowers.get(i)) {
+            if (below.stream().noneMatch(lower -> assignable(lower, value))) return false;
+          }
+          continue;
+        }
+        for (int a = 0; a < above.size(); a++) {
+          for (int b = a + 1; b < above.size(); b++) {
+            if (exclusive(DeepMap.heldClassOf(above.get(a)), DeepMap.heldClassOf(above.get(b)))) return false;
+          }
+        }
+        for (final var below : lowers.get(i)) {
+          for (final var upper : above) {
+            if (below.stream().noneMatch(lower -> assignable(lower, upper))) return false;
+          }
         }
       }
+      return true;
     }
-    for (int i = 0; i < exact.size(); i++) {
-      final var variable = (TypeVariable<?>) exact.get(i);
-      final var value = as.get(i);
-      final var first = exact.indexOf(variable);
-      if (first < i) {
-        if (!as.get(first).equals(value)) return false;
-        continue;
-      }
-      if (forced.captured().contains(variable)) return false;
-      for (int l = 0; l < forced.lowered().size(); l++) {
-        if (!forced.lowered().get(l).equals(variable)) continue;
-        if (
-          forced
-            .lowers()
-            .get(l)
-            .stream()
-            .noneMatch(lower -> assignable(lower, value))
-        ) return false;
-      }
-      for (int u = 0; u < forced.raised().size(); u++) {
-        if (forced.raised().get(u).equals(variable) && !assignable(value, forced.uppers().get(u))) return false;
-      }
-      final var others = forced
-        .variables()
-        .stream()
-        .filter(other -> !other.equals(variable))
-        .toList();
-      for (final var bound : variable.getBounds()) {
-        if (names(bound, others)) continue;
-        if (!assignable(value, DeepMap.PROPS.substitute(bound, List.of(variable), List.of(value)))) return false;
-      }
+  }
+
+  /**
+   * Whether no class is a subclass of both {@code a} and {@code b}, as Java reads two upper bounds
+   * of one variable: two classes, not interfaces, neither of which extends the other; an array and
+   * a class no array is; or two arrays whose components are so, or are two primitives.
+   */
+  private static boolean exclusive(final Class<?> a, final Class<?> b) {
+    if (a.isArray() && b.isArray()) {
+      final var ac = a.getComponentType();
+      final var bc = b.getComponentType();
+      return ac.isPrimitive() || bc.isPrimitive() ? ac != bc : exclusive(ac, bc);
     }
-    return true;
+    if (a.isArray()) return !b.isAssignableFrom(a);
+    if (b.isArray()) return !a.isAssignableFrom(b);
+    return !a.isInterface() && !b.isInterface() && !a.isAssignableFrom(b) && !b.isAssignableFrom(a);
   }
 
   /**
@@ -367,17 +440,125 @@ final class ViaResults {
   }
 
   /**
-   * Records in {@code exact} and {@code as} each of the method's variables the result's type
-   * argument {@code given} names where it has to be {@code taken} exactly; false where {@code
-   * given} is a generic class's parameterization and {@code taken} no parameterization of that
-   * class.
+   * Records in {@code met} what {@code given}, a part of the result, asks of the method's variables
+   * for it to be a subtype of {@code taken}; false where no instantiation makes it one. A generic
+   * class is one where its class is a subclass of {@code taken}'s, and the arguments it gives that
+   * class are contained in {@code taken}'s; one reaching {@code taken}'s class only raw, or with
+   * another count of arguments, is left as it is. An array is a subtype of an array whose
+   * component its component is a subtype of, a primitive one only of its own, and of the classes
+   * every array extends. At the result's top, {@code top}, a class no instantiation makes a
+   * subtype is left to the check of the result's class that writes it.
    */
-  private static boolean meet(final Type given, final Type taken, final List<Type> exact, final List<Type> as) {
-    if (taken instanceof WildcardType) return true;
-    if (given instanceof TypeVariable<?> variable) {
-      exact.add(variable);
-      as.add(taken);
+  private static boolean below(final Type given, final Type taken, final Met met, final boolean top) {
+    if (!names(given, met.variables())) return true;
+    if (given instanceof TypeVariable<?>) {
+      met.upper(given, taken);
       return true;
+    }
+    if (given instanceof GenericArrayType array) {
+      final var takenClass = DeepMap.heldClassOf(taken);
+      if (!takenClass.isArray()) return takenClass.isAssignableFrom(Object[].class);
+      final var component = componentOf(taken);
+      return !takenClass.getComponentType().isPrimitive() && below(array.getGenericComponentType(), component, met, false);
+    }
+    if (!(given instanceof ParameterizedType parameterized)) return true;
+    final var cls = (Class<?>) parameterized.getRawType();
+    final var takenClass = DeepMap.heldClassOf(taken);
+    if (!takenClass.isAssignableFrom(cls)) return top;
+    final var seen = resultArguments(parameterized, cls, takenClass);
+    final var takenArguments = DeepMap.PROPS.typeArguments(taken);
+    if (seen.size() != takenArguments.size()) return true;
+    for (int i = 0; i < seen.size(); i++) {
+      if (!contained(seen.get(i), takenArguments.get(i), met)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Records in {@code met} what {@code given}, a part of the result, asks of the method's variables
+   * for it to be a supertype of {@code taken}; false where no instantiation makes it one. A generic
+   * class is one where {@code taken}'s class is a subclass of its own, and each argument {@code
+   * taken} gives that class is the type it gives in its place, or within the wildcard it gives.
+   */
+  private static boolean above(final Type given, final Type taken, final Met met) {
+    if (!names(given, met.variables())) return true;
+    if (given instanceof TypeVariable<?>) {
+      met.lower(given, List.of(taken));
+      return true;
+    }
+    if (given instanceof GenericArrayType array) {
+      final var takenClass = DeepMap.heldClassOf(taken);
+      if (!takenClass.isArray() || takenClass.getComponentType().isPrimitive()) return false;
+      return above(array.getGenericComponentType(), componentOf(taken), met);
+    }
+    if (!(given instanceof ParameterizedType parameterized)) return true;
+    final var cls = (Class<?>) parameterized.getRawType();
+    if (!cls.isAssignableFrom(DeepMap.heldClassOf(taken))) return false;
+    final var seen = seenAs(taken, cls);
+    if (seen == null) return true;
+    final var arguments = parameterized.getActualTypeArguments();
+    for (int i = 0; i < arguments.length; i++) {
+      final var argument = arguments[i];
+      final var held = seen.get(i);
+      if (!(argument instanceof WildcardType wildcard)) {
+        if (!exactly(argument, held, met)) return false;
+      } else if (!(held instanceof WildcardType)) {
+        final var fits = wildcard.getLowerBounds().length > 0
+          ? below(wildcard.getLowerBounds()[0], held, met, false)
+          : above(wildcard.getUpperBounds()[0], held, met);
+        if (!fits) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Records in {@code met} what {@code given}, a type argument of the result, asks of the method's
+   * variables for it to be contained in {@code taken}, the one in its place in the type the result
+   * is passed as: a type contains that type alone, a wildcard bounded from above the arguments
+   * below its bound, and one bounded from below those above it. A wildcard bounded from below is
+   * contained in one bounded from above only by {@code Object}, and one bounded from above in none
+   * bounded from below.
+   */
+  private static boolean contained(final Type given, final Type taken, final Met met) {
+    if (!(taken instanceof WildcardType wildcard)) return exactly(given, taken, met);
+    if (!names(given, met.variables())) return true;
+    final var lower = wildcard.getLowerBounds();
+    if (given instanceof WildcardType inResult) {
+      final var resultLower = inResult.getLowerBounds();
+      if (lower.length > 0) return resultLower.length > 0 && above(resultLower[0], lower[0], met);
+      if (resultLower.length > 0) return wildcard.getUpperBounds()[0] == Object.class;
+      return below(inResult.getUpperBounds()[0], wildcard.getUpperBounds()[0], met, false);
+    }
+    return lower.length > 0 ? above(given, lower[0], met) : below(given, wildcard.getUpperBounds()[0], met, false);
+  }
+
+  /**
+   * Records in {@code met} what {@code given}, a part of the result, asks of the method's variables
+   * for it to be {@code taken} exactly; false where no instantiation makes it so. A variable is
+   * never a wildcard, and a wildcard is another only where both are bounded the same way, by the
+   * same type.
+   */
+  private static boolean exactly(final Type given, final Type taken, final Met met) {
+    if (!names(given, met.variables())) return true;
+    if (given instanceof TypeVariable<?>) {
+      if (taken instanceof WildcardType) return false;
+      met.exact(given, taken);
+      return true;
+    }
+    if (given instanceof WildcardType inResult) {
+      if (!(taken instanceof WildcardType wildcard)) return false;
+      final var resultLower = inResult.getLowerBounds();
+      final var lower = wildcard.getLowerBounds();
+      if (resultLower.length != lower.length) return false;
+      return lower.length > 0
+        ? exactly(resultLower[0], lower[0], met)
+        : exactly(inResult.getUpperBounds()[0], wildcard.getUpperBounds()[0], met);
+    }
+    if (given instanceof GenericArrayType array) {
+      if (taken instanceof WildcardType || !DeepMap.heldClassOf(taken).isArray()) return false;
+      if (DeepMap.heldClassOf(taken).getComponentType().isPrimitive()) return false;
+      return exactly(array.getGenericComponentType(), componentOf(taken), met);
     }
     if (!(given instanceof ParameterizedType parameterized)) return true;
     if (
@@ -389,9 +570,16 @@ final class ViaResults {
     final var givenArguments = parameterized.getActualTypeArguments();
     final var takenArguments = takenParameterized.getActualTypeArguments();
     for (int i = 0; i < givenArguments.length; i++) {
-      if (!meet(givenArguments[i], takenArguments[i], exact, as)) return false;
+      if (!exactly(givenArguments[i], takenArguments[i], met)) return false;
     }
     return true;
+  }
+
+  /** The component of {@code array}, an array type naming no variable. */
+  private static Type componentOf(final Type array) {
+    return array instanceof GenericArrayType generic
+      ? generic.getGenericComponentType()
+      : ((Class<?>) array).getComponentType();
   }
 
   /**

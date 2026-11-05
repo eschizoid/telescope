@@ -6311,9 +6311,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var widens = wrapperIntoPrimitive(gives, chosen) && !types.isSameType(types.unboxedType(gives), chosen);
     final var written = generic && chosen.getKind().isPrimitive() && !widens ? declared : gives;
     if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
-    // A result of a generic class used raw is written where the class takes type arguments
-    // through an unchecked conversion, as Java's assignment writes it.
-    if (usedRaw(gives) && types.isAssignable(gives, chosen)) return new ViaResult(written, null, true);
+    // A result of a generic class used raw, or of a class extending it raw, is written where the
+    // class takes type arguments through an unchecked conversion, as Java's assignment writes it.
+    if (
+      (usedRaw(gives) || instantiation().reachesOnlyRaw(gives, chosen)) && types.isAssignable(gives, chosen)
+    ) {
+      return new ViaResult(written, null, true);
+    }
     if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);
     if (!generic && !mayShareInstance(boxedErasure(gives), boxedErasure(chosen))) {
       return new ViaResult(
