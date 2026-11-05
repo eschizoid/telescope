@@ -2865,13 +2865,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pathWriters.addAll(written);
     }
 
+    // The target properties the bridge writes, which into updates: every one but a derived getter
+    // nothing fills. A strict bridge updates a target in place itself where generated code can.
+    final var intoNames = new ArrayList<String>();
+    for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
+    final var intoStatements = lenient ? null : intoStatements(target, targetFields, intoNames);
+
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
     if (carrierEl != null) {
-      final var intoNames = new ArrayList<String>();
-      for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
-      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission, intoNames);
+      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission, intoNames, intoStatements != null);
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
 
@@ -2998,6 +3002,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
+        // A generic target is named raw, so each setter call is an unchecked call on a raw type.
+        if (intoStatements != null) emitInto(
+          out,
+          target.getTypeParameters().isEmpty() ? suppressRaw : RAW_SUPPRESSION + "\n",
+          sourceFq,
+          targetFq,
+          intoStatements
+        );
         emitBridgeHandles(
           out,
           namesRaw,
@@ -3730,7 +3742,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form umbrella lives beside its carrier like any carrier-form bridge, so it is
     // registered for the same ServiceLoader lookup.
     if (configsByPair.getOrDefault(new TypePair(sourceFq, targetFq), BridgeConfig.EMPTY).carrierFq() != null) {
-      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of());
+      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of(), false);
     }
 
     writeClass(
@@ -7722,7 +7734,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * java.util.ServiceLoader}. The public class has an implicit no-arg constructor for {@code
    * ServiceLoader}; source/target are imported and referenced by simple name like the bridge
    * itself. {@code intoNames} are the target properties the bridge writes, which a field-declared
-   * mapper's {@code into} updates; a derived getter the bridge leaves out is not among them.
+   * mapper's {@code into} updates; a derived getter the bridge leaves out is not among them. {@code
+   * writesInto} says the bridge has an {@code into} of its own, which that mapper's {@code into}
+   * then calls.
    */
   private void emitBridgeProvider(
     final TypeElement source,
@@ -7730,7 +7744,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgeName,
     final String pkg,
     final BridgeConfig cfg,
-    final List<String> intoNames
+    final List<String> intoNames,
+    final boolean writesInto
   ) {
     final var providerName = bridgeName + "Provider";
     final var carrier =
@@ -7789,7 +7804,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println("    return List.of(" + quotedList(intoNames) + ");");
           out.println("  }");
           out.println();
-          emitFieldMapper(out, source, target, bridgeName, cfg);
+          if (writesInto) {
+            out.println("  @Override");
+            out.println("  public boolean writesInto() {");
+            out.println("    return true;");
+            out.println("  }");
+            out.println();
+          }
+          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -7813,14 +7835,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * the bridge and overrides each direction with one call through the bridge's {@code BRIDGE_FN}
    * constant, so a call through the field resolves to the bridge as a call to {@code BRIDGE_FN}
    * does. Names are written in full, since the source or target may share a simple name with the
-   * telescope types.
+   * telescope types. Where {@code writesInto}, {@code into} is one call to the bridge's own {@code
+   * into} too.
    */
   private static void emitFieldMapper(
     final PrintWriter out,
     final TypeElement source,
     final TypeElement target,
     final String bridgeName,
-    final BridgeConfig cfg
+    final BridgeConfig cfg,
+    final boolean writesInto
   ) {
     final var s = source.getQualifiedName().toString();
     final var t = target.getQualifiedName().toString();
@@ -7867,6 +7891,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       out.println("    public " + s + " patch(final " + s + " base, final " + t + " partial) {");
       out.println("      return " + fn + ".patch(base, partial);");
       out.println("    }");
+      if (writesInto) {
+        out.println();
+        out.println("    @Override");
+        out.println("    public " + t + " into(final " + t + " target, final " + s + " source) {");
+        // The bridge's into binds each setter on the target class itself, and the runtime into
+        // binds it on the class of the object it is handed, so a subclass, whose own setter can
+        // take the value instead, is written by the runtime into.
+        if (!target.getModifiers().contains(Modifier.FINAL)) {
+          out.println(
+            "      if (target != null && target.getClass() != " + t + ".class) return super.into(target, source);"
+          );
+        }
+        out.println("      return " + bridgeName + ".into(target, source);");
+        out.println("    }");
+      }
     }
     out.println("  }");
     out.println();
@@ -8331,6 +8370,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    } finally {");
     out.println("      __active.remove(" + in + ");");
     out.println("    }");
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * The bridge's {@code into(target, source)}, whose body is {@code statements}: a null target or
+   * source is refused by name, as {@code Mapper.into} refuses it, before anything converts.
+   */
+  private static void emitInto(
+    final PrintWriter out,
+    final String suppression,
+    final String sourceFq,
+    final String targetFq,
+    final List<String> statements
+  ) {
+    out.println("  /**");
+    out.println("   * Writes into {@code target} the value {@code forward(source)} gives each property this bridge");
+    out.println("   * writes, through the setter the property's type chooses, and returns {@code target}.");
+    out.println("   */");
+    out.print(suppression);
+    out.println(
+      "  public static " + targetFq + " into(final " + targetFq + " target, final " + sourceFq + " source) {"
+    );
+    out.println("    if (target == null) throw new NullPointerException(\"target\");");
+    out.println("    if (source == null) throw new NullPointerException(\"source\");");
+    for (final var statement : statements) out.println("    " + statement);
     out.println("  }");
     out.println();
   }
@@ -8857,6 +8922,52 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // would fall through here and return the value meaning "already reported" -- emitting nothing
     // and saying nothing.
     throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
+  }
+
+  /**
+   * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
+   * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
+   * names} has no setter that the runtime writer chooses from the property's type and that takes a
+   * value of that type without a cast. A record has no setter at all, so it never has an {@code
+   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as
+   * the runtime writer does.
+   *
+   * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
+   * forward(source)} gives it, read back through its getter. Every value is read before the first
+   * setter runs, so a getter that throws leaves {@code target} as it was. Each is written through
+   * the setter the property's type chooses, the rule the runtime writer applies; where the name has
+   * overloads the value is first assigned to a local of that setter's parameter type, which binds
+   * that method whatever javac would bind for the value's own type. A value of a wrapper class
+   * bound for a primitive parameter is skipped when null, as the runtime writer skips it.
+   */
+  private List<String> intoStatements(
+    final TypeElement target,
+    final List<Field> targetFields,
+    final List<String> names
+  ) {
+    final var reads = new ArrayList<String>();
+    final var writes = new ArrayList<String>();
+    reads.add("final var __produced = forward(source);");
+    var index = 0;
+    for (final var name : names) {
+      final var field = fieldByName(targetFields, name);
+      final var choice = setterChoice(target, name);
+      if (choice.member() == null) return null;
+      if (setterRefusal(target, name, false) != null) return null;
+      final var local = "__in" + index++;
+      reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");
+      final var setter = choice.member().getSimpleName();
+      final var write =
+        choice.argumentType() == null
+          ? "target." + setter + "(" + local + ");"
+          : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
+      final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
+      writes.add(guarded ? "if (" + local + " != null) " + write : write);
+    }
+    final var statements = new ArrayList<>(reads);
+    statements.addAll(writes);
+    statements.add("return target;");
+    return statements;
   }
 
   /**

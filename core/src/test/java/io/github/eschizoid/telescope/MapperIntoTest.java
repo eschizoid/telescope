@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -198,15 +197,17 @@ class MapperIntoTest {
     record EntityRec(String name) {}
 
     @Test
-    @DisplayName("calling into() with a record target throws with a clear message pointing at forward()")
+    @DisplayName("calling into() with a record target throws, naming the record and pointing at forward()")
     void recordTargetRejected() {
       final var mapper = Telescope.mapper(DtoRec.class, EntityRec.class);
       final var existing = new EntityRec("old");
 
       final var ex = assertThrows(UnsupportedOperationException.class, () -> mapper.into(existing, new DtoRec("new")));
 
-      assertTrue(ex.getMessage().contains("records are immutable"), "message explains the constraint");
-      assertTrue(ex.getMessage().contains("Mapper.forward"), "message suggests the alternative");
+      assertEquals(
+        PairingMessages.intoRecordTarget("DtoRec", "EntityRec", PairingMessages.className(EntityRec.class)),
+        ex.getMessage()
+      );
     }
   }
 

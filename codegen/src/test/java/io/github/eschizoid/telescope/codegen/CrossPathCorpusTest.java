@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -13994,10 +13995,11 @@ class CrossPathCorpusTest {
   /**
    * A mapper's {@code into} handed {@code %1$sTgt.sample()} and {@code %1$sSrc.sample()}: the
    * declarations, each taking {@code %1$s} as the row's prefix and the last of them the runtime
-   * row, and what both paths owe, the target's {@link #shape} after the call or the message {@code
-   * into} refuses with.
+   * row, what both paths owe, the target's {@link #shape} after the call or the message {@code
+   * into} refuses with, and whether the field's mapper writes through the bridge's own {@code
+   * into}.
    */
-  private record IntoRow(String name, List<String> declarations, String owed) {}
+  private record IntoRow(String name, List<String> declarations, String owed, boolean generated) {}
 
   /**
    * A bean {@code %1$s<name>} built by a static builder with a member for {@code value}, with a
@@ -14025,29 +14027,104 @@ class CrossPathCorpusTest {
     );
   }
 
+  /**
+   * A bean {@code %1$s<name>} with one public constructor, taking {@code value}, and a getter and a
+   * public setter for it, whose {@code sample()} holds {@code "y"}.
+   */
+  private static String constructorAndSetterBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String value;\n  public %1$s" +
+      name +
+      "(final String value) { this.value = value; }\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return new %1$s" +
+      name +
+      "(\"y\"); }\n}\n"
+    );
+  }
+
+  /** What follows a refusal of {@code into}: the target's {@link #shape} after the call. */
+  private static final String LEFT = ", leaving ";
+
   private static final String INTO_SOURCE =
     "public record %1$sSrc(String value) {\n" + "  public static %1$sSrc sample() { return new %1$sSrc(\"x\"); }\n}\n";
+
+  /**
+   * A bean {@code %1$sTgtIn} with a getter and a setter for {@code x}, and a getter alone for
+   * {@code tag}, which a new instance holds as {@code "fresh"} and {@code mark()} sets to {@code
+   * "old"}: a property neither path writes, so its value tells a new nested object from the one the
+   * target held.
+   */
+  private static final String NESTED_TARGET =
+    "public class %1$sTgtIn {\n  private String x;\n  private String tag = \"fresh\";\n" +
+    "  public String getX() { return x; }\n  public void setX(final String v) { x = v; }\n" +
+    "  public String getTag() { return tag; }\n  public void mark() { tag = \"old\"; }\n}\n";
+
+  /** A bean {@code %1$sTgt} with a setter for {@code value} of each of two types. */
+  private static final String OVERLOADED_TARGET =
+    "public class %1$sTgt {\n  private String value;\n  public %1$sTgt() {}\n" +
+    "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+    "  public void setValue(final Object v) { value = \"object \" + v; }\n" +
+    "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setValue(\"y\"); return t; }\n}\n";
+
+  /**
+   * {@code rows}, each written in full, on the {@code @Bridge} field and the runtime mapper alike.
+   */
+  private static List<String> intoPair(final String source, final String target, final String... rows) {
+    return List.of(source, target, plainField(false, rows), plainRuntime(false, rows));
+  }
 
   private static final List<IntoRow> INTO_ROWS = List.of(
     new IntoRow(
       "a target built by its builder, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), builderOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value")
+      REFUSED +
+        PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") +
+        LEFT +
+        "#0(value=\"y\")",
+      false
     ),
     new IntoRow(
       "a target built by a constructor, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), constructorOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value")
+      REFUSED +
+        PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") +
+        LEFT +
+        "#0(value=\"y\")",
+      false
+    ),
+    new IntoRow(
+      "a record target",
+      List.of(
+        INTO_SOURCE,
+        plainField(false),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"y\")"),
+        plainRuntime(false)
+      ),
+      REFUSED + PairingMessages.intoRecordTarget("%1$sSrc", "%1$sTgt", "%1$sTgt") + LEFT + "#0(value=\"y\")",
+      false
     ),
     new IntoRow(
       "a target built through its setters",
       List.of(INTO_SOURCE, plainField(false), settersOnlyBean("Tgt"), plainRuntime(false)),
-      "#0(value=\"x\")"
+      "#0(value=\"x\")",
+      true
     ),
     new IntoRow(
       "a target built by its builder, with a setter for every property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), builderAndSetterBean("Tgt"), plainRuntime(false)),
-      "#0(value=\"x\")"
+      "#0(value=\"x\")",
+      true
+    ),
+    new IntoRow(
+      "a target built by a constructor, with a setter for every property the mapper writes",
+      List.of(INTO_SOURCE, plainField(false), constructorAndSetterBean("Tgt"), plainRuntime(false)),
+      "#0(value=\"x\")",
+      true
     ),
     new IntoRow(
       "a target with a derived getter nothing writes",
@@ -14057,7 +14134,286 @@ class CrossPathCorpusTest {
         derivedBean("Tgt"),
         plainRuntime(false)
       ),
-      "#0(first=\"a\", full=\"a b\", last=\"b\")"
+      "#0(first=\"a\", full=\"a b\", last=\"b\")",
+      true
+    ),
+    new IntoRow(
+      "a target whose setter name has an overload of another type",
+      List.of(INTO_SOURCE, plainField(false), OVERLOADED_TARGET, plainRuntime(false)),
+      "#0(value=\"x\")",
+      true
+    ),
+    new IntoRow(
+      "a subclass of the target whose own setter takes the value more closely",
+      List.of(
+        sampled("%1$sSrc", "String id, String label", "new %1$sSrc(\"1\", \"x\")"),
+        "public class %1$sTgt {\n  private String id;\n  private String label;\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public String getLabel() { return label; }\n" +
+          "  public void setLabel(final CharSequence l) { label = \"base:\" + l; }\n" +
+          "  public static %1$sTgt sample() { return (%1$sTgt) (Object) new %1$sSub(); }\n}\n",
+        "public class %1$sSub extends %1$sTgt {\n  private String sub = \"untouched\";\n" +
+          "  @Override public String getLabel() { return sub; }\n" +
+          "  public void setLabel(final String l) { sub = \"sub:\" + l; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(id=\"1\", label=\"sub:base:x\")",
+      true
+    ),
+    new IntoRow(
+      "a primitive property whose setter name has an overload for a wider primitive and one for its wrapper",
+      List.of(
+        sampled("%1$sSrc", "int qty", "new %1$sSrc(3)"),
+        "public class %1$sTgt {\n  private int qty;\n  private String how = \"none\";\n  public %1$sTgt() {}\n" +
+          "  public int getQty() { return qty; }\n" +
+          "  public void setQty(final long v) { qty = (int) v; how = \"long\"; }\n" +
+          "  public void setQty(final Integer v) { qty = v; how = \"Integer\"; }\n" +
+          "  public String getHow() { return how; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(how=\"long\", qty=3)",
+      true
+    ),
+    new IntoRow(
+      "a setter narrower than its getter, which takes the value only after a check of its class",
+      List.of(
+        sampled("%1$sSrc", "Object value", "new %1$sSrc(\"x\")"),
+        "public class %1$sTgt {\n  private Object value;\n  public %1$sTgt(final Object value) { this.value = value; }\n" +
+          "  public Object getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"y\"); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x\")",
+      false
+    ),
+    new IntoRow(
+      "a variable-arity setter",
+      List.of(
+        INTO_SOURCE,
+        "public class %1$sTgt {\n  private String value;\n  public %1$sTgt() {}\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public void setValue(final String... v) { value = String.join(\"+\", v) + \"!\"; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.value = \"y\"; return t; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x!!\")",
+      true
+    ),
+    new IntoRow(
+      "a value whose getter throws on the object forward built, read before any setter runs",
+      List.of(
+        sampled("%1$sSrc", "String a, String b", "new %1$sSrc(\"x\", \"boom\")"),
+        "public class %1$sTgt {\n  private String a;\n  private String b;\n  public %1$sTgt() {}\n" +
+          "  public String getA() { return a; }\n  public void setA(final String v) { a = v; }\n" +
+          "  public String getB() {\n    if (\"boom\".equals(b)) throw new IllegalStateException(\"unreadable b\");\n" +
+          "    return b;\n  }\n  public void setB(final String v) { b = v; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.a = \"y\"; t.b = \"z\"; return t; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      REFUSED + "unreadable b" + LEFT + "#0(a=\"y\", b=\"z\")",
+      true
+    ),
+    new IntoRow(
+      "a wrapper property written through a primitive setter, which a null leaves as the target had it",
+      List.of(
+        sampled("%1$sSrc", "Integer qty", "new %1$sSrc(null)"),
+        "public class %1$sTgt {\n  private Integer qty;\n  public %1$sTgt() {}\n" +
+          "  public Integer getQty() { return qty; }\n  public void setQty(final int v) { qty = v; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setQty(9); return t; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(qty=9)",
+      true
+    ),
+    new IntoRow(
+      "a nested bean, written whole as a new object forward builds",
+      List.of(
+        sampled("%1$sSrc", "String id, %1$sSrcIn in", "new %1$sSrc(\"x\", new %1$sSrcIn(\"y\"))"),
+        "public record %1$sSrcIn(String x) {}\n",
+        sampledBean(
+          "%1$sTgt",
+          "final var n = new %1$sTgtIn(); n.setX(\"oldx\"); n.mark(); final var t = new %1$sTgt(); t.setId(\"old\");" +
+            " t.setIn(n); return t;",
+          "String id",
+          "%1$sTgtIn in"
+        ),
+        NESTED_TARGET,
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(id=\"x\", in=#1(tag=\"fresh\", x=\"y\"))",
+      true
+    ),
+    new IntoRow(
+      "a primitive written from a null wrapper takes the primitive's default",
+      List.of(
+        sampled("%1$sSrc", "Integer qty", "new %1$sSrc(null)"),
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setQty(9); return t;", "int qty = 5"),
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(qty=0)",
+      true
+    ),
+    new IntoRow(
+      "a renaming to row",
+      intoPair(
+        sampled("%1$sSrc", "String name", "new %1$sSrc(\"x\")"),
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setLabel(\"y\"); return t;", "String label"),
+        MAPPING + "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::name, %1$sTgt::getLabel)"
+      ),
+      "#0(label=\"x\")",
+      true
+    ),
+    new IntoRow(
+      "a converting to row",
+      intoPair(
+        sampled("%1$sSrc", "String name", "new %1$sSrc(\"x\")"),
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setLabel(\"y\"); return t;", "String label"),
+        MAPPING +
+          "<%1$sSrc, %1$sTgt, String, String>to(%1$sSrc::name, %1$sTgt::getLabel, String::toUpperCase," +
+          " String::toLowerCase)"
+      ),
+      "#0(label=\"X\")",
+      true
+    ),
+    new IntoRow(
+      "a via row of two methods",
+      List.of(
+        sampled("%1$sSrc", "%1$sIn in", "new %1$sSrc(new %1$sIn(\"v\"))"),
+        "public record %1$sIn(String v) {}\n",
+        "public class %1$sHw {\n  public static String forward(final %1$sIn in) { return \"#\" + in.v(); }\n" +
+          "  public static %1$sIn backward(final String s) { return new %1$sIn(s.substring(1)); }\n}\n",
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setIn(\"y\"); return t;", "String in"),
+        plainField(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, %1$sIn, String, String, %1$sIn>via(%1$sSrc::in, %1$sTgt::getIn, %1$sHw::forward," +
+            " %1$sHw::backward)"
+        ),
+        plainRuntime(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, %1$sIn, String, String, %1$sIn>via(%1$sSrc::in, %1$sTgt::getIn, %1$sHw::forward," +
+            " %1$sHw::backward)"
+        )
+      ),
+      "#0(in=\"#v\")",
+      true
+    ),
+    new IntoRow(
+      "a compute row reading the source",
+      intoPair(
+        "public record %1$sSrc(String a, String b) {\n  public String joined() { return a + \"-\" + b; }\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"a\", \"b\"); }\n}\n",
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setA(\"y\"); t.setB(\"z\"); t.setJoined(\"q\"); return t;",
+          "String a",
+          "String b",
+          "String joined"
+        ),
+        MAPPING + "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::getJoined, %1$sSrc::joined)"
+      ),
+      "#0(a=\"a\", b=\"b\", joined=\"a-b\")",
+      true
+    ),
+    new IntoRow(
+      "a constant row",
+      intoPair(
+        INTO_SOURCE,
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setValue(\"y\"); t.setLabel(\"z\"); return t;",
+          "String value",
+          "String label"
+        ),
+        MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::getLabel, \"k\")"
+      ),
+      "#0(label=\"k\", value=\"x\")",
+      true
+    ),
+    new IntoRow(
+      "a toOrElse row over a null source property",
+      intoPair(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(null)"),
+        settersOnlyBean("Tgt"),
+        MAPPING + "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::value, %1$sTgt::getValue, \"d\")"
+      ),
+      "#0(value=\"d\")",
+      true
+    ),
+    new IntoRow(
+      "a drop row",
+      intoPair(
+        sampled("%1$sSrc", "String value, String extra", "new %1$sSrc(\"x\", \"e\")"),
+        settersOnlyBean("Tgt"),
+        MAPPING + "<%1$sSrc, %1$sTgt>drop(%1$sSrc::extra)"
+      ),
+      "#0(value=\"x\")",
+      true
+    ),
+    new IntoRow(
+      "a to row reading through a source path",
+      List.of(
+        sampled("%1$sSrc", "%1$sCust customer", "new %1$sSrc(new %1$sCust(\"c\"))"),
+        "public record %1$sCust(String city) {}\n",
+        sampledBean("%1$sTgt", "final var t = new %1$sTgt(); t.setCity(\"y\"); return t;", "String city"),
+        plainField(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, String>to(" +
+            pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sCust::city") +
+            ", %1$sTgt::getCity)"
+        ),
+        plainRuntime(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, String>to(" +
+            pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sCust::city") +
+            ", %1$sTgt::getCity)"
+        )
+      ),
+      "#0(city=\"c\")",
+      true
+    ),
+    new IntoRow(
+      "a to row writing through a target path",
+      List.of(
+        sampled("%1$sSrc", "String city", "new %1$sSrc(\"c\")"),
+        "public class %1$sMid {\n  private String city;\n  private String tag = \"fresh\";\n  public %1$sMid() {}\n" +
+          "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n" +
+          "  public String getTag() { return tag; }\n  public void mark() { tag = \"old\"; }\n}\n",
+        sampledBean(
+          "%1$sTgt",
+          "final var m = new %1$sMid(); m.setCity(\"old\"); m.mark(); final var t = new %1$sTgt(); t.setCustomer(m);" +
+            " return t;",
+          "%1$sMid customer"
+        ),
+        plainField(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::city, " +
+            pathOf("ofBean", "%1$sTgt", "%1$sTgt::getCustomer", "%1$sMid::getCity") +
+            ")"
+        ),
+        plainRuntime(
+          false,
+          MAPPING +
+            "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::city, " +
+            pathOf("ofBean", "%1$sTgt", "%1$sTgt::getCustomer", "%1$sMid::getCity") +
+            ")"
+        )
+      ),
+      "#0(customer=#1(city=\"c\", tag=\"fresh\"))",
+      true
     )
   );
 
@@ -14102,6 +14458,19 @@ class CrossPathCorpusTest {
           row.name() + ": the field holds " + field.getClass().getName() + ", not the class generated for it"
         );
       }
+      // The field's mapper writes through the bridge's own into exactly where the bridge has one,
+      // and explain() says which.
+      final var bridge = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge");
+      final var hasInto = Arrays.stream(bridge.getMethods()).anyMatch(m -> m.getName().equals("into"));
+      final var why = ((Mapper<?, ?>) field).explain().declared().orElseThrow().why();
+      final var saysGenerated = why.endsWith(
+        "; into writes through " +
+          bridge.getName() +
+          ".into, and a subclass of the target through the setters it looks up at run time"
+      );
+      if (hasInto != row.generated() || saysGenerated != row.generated()) {
+        failures.add(row.name() + ": the bridge " + (hasInto ? "has" : "has no") + " into, and explain() says " + why);
+      }
       final var owed = row.owed().formatted(prefix);
       for (final var side : List.of(
         Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
@@ -14116,10 +14485,107 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  @Test
+  @DisplayName("between two sealed interfaces, into writes the target's own case and refuses another, on both paths")
+  void intoBetweenSealedInterfacesWritesTheTargetsCaseOnBothPaths() throws ReflectiveOperationException {
+    final var prefix = "Is";
+    final var head = "package " + PACKAGE + ";\n";
+    final var caseBean =
+      "final public class %1$sTgt%2$s implements %1$sTgt {\n  private String value;\n  public %1$sTgt%2$s() {}\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n}\n";
+    final var all = List.of(
+      "public sealed interface %1$sSrc permits %1$sSrcA, %1$sSrcB {}\n",
+      "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgtA.class)\n" +
+        "public record %1$sSrcA(String value) implements %1$sSrc {}\n",
+      "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgtB.class)\n" +
+        "public record %1$sSrcB(String value) implements %1$sSrc {}\n",
+      "public sealed interface %1$sTgt permits %1$sTgtA, %1$sTgtB {}\n",
+      caseBean.replace("%2$s", "A"),
+      caseBean.replace("%2$s", "B"),
+      plainField(false),
+      "public class %1$sRuntime {\n  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class);\n  }\n}\n"
+    )
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toArray(JavaFileObject[]::new);
+    final var processed = bridged(all);
+    assertTrue(processed.success(), () -> "the bridges should compile: " + processed.errorMessages());
+    final var loader = new ServicesLoader(processed);
+    final var field = loader.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+    final var runtime = loader.loadClass(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+    final var sourceA = loader.loadClass(PACKAGE + "." + prefix + "SrcA").getConstructor(String.class);
+    final var sourceB = loader.loadClass(PACKAGE + "." + prefix + "SrcB").getConstructor(String.class);
+    final var targetA = loader.loadClass(PACKAGE + "." + prefix + "TgtA").getConstructor();
+    final var owed = List.of(
+      "#0(value=\"x\")",
+      REFUSED +
+        "Mapper.into(target, source): the source converts to " +
+        prefix +
+        "TgtB, and the target is a " +
+        prefix +
+        "TgtA. A value is written into a target of the case it converts to; call forward(source) to change the case."
+    );
+    for (final var mapper : List.of(field, runtime)) {
+      @SuppressWarnings("unchecked")
+      final var into = (Mapper<Object, Object>) mapper;
+      final var gave = new ArrayList<String>();
+      for (final var source : List.of(sourceA.newInstance("x"), sourceB.newInstance("z"))) {
+        final var target = targetA.newInstance();
+        try {
+          gave.add(shape(into.into(target, source), new IdentityHashMap<>()));
+        } catch (final RuntimeException e) {
+          gave.add(REFUSED + e.getMessage());
+        }
+      }
+      assertEquals(owed, gave, mapper == field ? "the @Bridge field's mapper" : "the runtime mapper");
+    }
+  }
+
+  @Test
+  @DisplayName("a @Bridge field's mapper writes into the target through the generated bridge's own into")
+  void theFieldMappersIntoCallsTheGeneratedInto() throws ReflectiveOperationException {
+    final var prefix = "Iw";
+    final var head = "package " + PACKAGE + ";\n";
+    // The setter records, on the instance it writes, the class that called it.
+    final var target =
+      "public class %1$sTgt {\n  private String value;\n  private String writer;\n  public %1$sTgt() {}\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public void setValue(final String v) {\n    value = v;\n" +
+      "    writer = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE).getCallerClass().getName();\n" +
+      "  }\n  public static String writerOf(final %1$sTgt t) { return t.writer; }\n}\n";
+    final var all = List.of(INTO_SOURCE, plainField(false), target)
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toArray(JavaFileObject[]::new);
+    final var processed = bridged(all);
+    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
+    final var loader = new ServicesLoader(processed);
+    @SuppressWarnings("unchecked")
+    final var field = (Mapper<Object, Object>) loader
+      .loadClass(PACKAGE + "." + prefix + "SrcCarrier")
+      .getField("MAPPER")
+      .get(null);
+    final var tgt = loader.loadClass(PACKAGE + "." + prefix + "Tgt");
+    final var written = tgt.getConstructor().newInstance();
+    final var source = loader.loadClass(PACKAGE + "." + prefix + "Src").getMethod("sample").invoke(null);
+    field.into(written, source);
+    assertEquals(
+      PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge",
+      tgt.getMethod("writerOf", tgt).invoke(null, written)
+    );
+    // A null target or source is refused by name, as the runtime mapper refuses it.
+    assertEquals("target", assertThrows(NullPointerException.class, () -> field.into(null, source)).getMessage());
+    assertEquals("source", assertThrows(NullPointerException.class, () -> field.into(written, null)).getMessage());
+  }
+
   /**
    * What {@code mapper}'s {@code into} does with {@code %1$sTgt.sample()} and {@code
    * %1$sSrc.sample()}, the two classes {@code loader} holds: the target's {@link #shape}, or {@link
-   * #REFUSED} and the message it refused with.
+   * #REFUSED}, the message it refused with and the target's shape after the refusal. An {@code
+   * into} that returns another object than the target it was given says so.
    */
   @SuppressWarnings("unchecked")
   private static String intoOutcome(final Object mapper, final ClassLoader loader, final String prefix)
@@ -14129,9 +14595,11 @@ class CrossPathCorpusTest {
     final var target = tgt.getMethod("sample").invoke(null);
     final var source = src.getMethod("sample").invoke(null);
     try {
-      return shape(((Mapper<Object, Object>) mapper).into(target, source), new IdentityHashMap<>());
+      final var written = ((Mapper<Object, Object>) mapper).into(target, source);
+      if (written != target) return "another object than the target: " + shape(written, new IdentityHashMap<>());
+      return shape(target, new IdentityHashMap<>());
     } catch (final RuntimeException e) {
-      return REFUSED + e.getMessage();
+      return REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>());
     }
   }
 

@@ -734,15 +734,34 @@ mapper.into(managed, dto);        // writes dto's mapped fields onto `managed` v
 repository.save(managed);
 // sparse sibling: only non-null fields of a partial target overlay the base
 final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partial B) -> A
+
+// Codegen (@Bridge field) form — the same rows; into is generated with the bridge:
+public final class OrderMappers {
+  @Bridge
+  public static final Mapper<OrderDto, OrderEntity> ORDER = Telescope.mapper(OrderDto.class, OrderEntity.class, to(OrderDto::sku, OrderEntity::getSku));
+}
+OrderMappers.ORDER.into(managed, dto); // one call to OrderDtoToOrderEntityBridge.into: plain setter calls, no reflection
 ```
 
 Deliberate parity feature — the javadoc names @MappingTarget explicitly and the test class pins JPA load-mutate-save
 semantics (identity preserved, only mapped fields written, atomic staging). Bean targets only: records throw
-UnsupportedOperationException (MapStruct can't mutate records in place either). A property the mapper writes that has no
-public setter is refused where MapStruct's @MappingTarget skips it: when the mapper is built, for a bean built through
-its setters, since forward would drop the value as well, and on the first into call, for a bean built by a builder or a
-constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives null-skipping sparse
-update without NullValuePropertyMappingStrategy.IGNORE config.
+UnsupportedOperationException naming the record (MapStruct can't mutate records in place either). A property the mapper
+writes that has no public setter is refused where MapStruct's @MappingTarget skips it: when the mapper is built, for a
+bean built through its setters, since forward would drop the value as well, and on the first into call, for a bean built
+by a builder or a constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives
+null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config.
+
+**Generated path: ✅ full.** A strict `@Bridge` whose target is a bean with a setter for every property it writes gets a
+static `into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
+subclass, whose own setters may take a value differently, goes to the runtime `into`. `explain()` says so. It writes
+what the runtime `into` writes: each property takes the value `forward(source)` gives it, read back through its getter,
+every value read before the first setter runs, each written through the setter the runtime chooses from the property's
+type, and a nested bean is replaced by the new object forward builds rather than updated in place. Every row the field
+form compiles behaves in it as in the runtime `into`. Where the bridge cannot update the target itself (a record, a bean
+without such a setter, a setter that takes the value only after a check of its class, a pair of sealed interfaces), it
+has no `into`, so a direct call does not compile, and the field's mapper runs the runtime `into`, which refuses in the
+same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;
+where `forward` inlines, as on a flat bean, the JIT can remove that object, and `IntoBenchmark` measures what is left.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a
@@ -751,7 +770,12 @@ core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the class 
 source) — the @MappingTarget equivalent'), the tests 'into(managed, dto) mutates target via setters; reference identity
 preserved' and 'Subsequent into(...) calls re-mutate the same instance', 'a paired property without a setter refuses the
 mapper rather than being dropped by forward and into', and 'a builder-built target refuses on into by the property's
-name, and has written nothing'</sub>
+name, and has written nothing'; codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
+`intoStatements` and `emitInto` (the generated `into`); codegen/src/test/java/io/github/eschizoid/telescope/codegen/
+CrossPathCorpusTest.java, the tests 'into updates every property the mapper writes through a setter, and refuses by name
+one it has no setter for, on both paths', 'between two sealed interfaces, into writes the target's own case and refuses
+another, on both paths' and 'a @Bridge field's mapper writes into the target through the generated bridge's own
+into'</sub>
 
 ### Object factories
 

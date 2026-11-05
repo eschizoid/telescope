@@ -274,7 +274,12 @@ public final class DeepMap {
 
   private static final Logger LOGGER = System.getLogger(Telescope.class.getName());
 
-  /** The mapper over the generated bridge {@code declaration} found. */
+  /**
+   * The mapper over the generated bridge {@code declaration} found. Its {@code explain()} also says
+   * which path its {@code into} writes on: the bridge's own {@code into} where the provider says
+   * the bridge has one and the target is of the class the bridge writes, and the setters {@code
+   * Mapper.into} looks up at run time otherwise.
+   */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static <A, B> Mapper<A, B> declaredMapper(
     final Declaration declaration,
@@ -283,13 +288,21 @@ public final class DeepMap {
   ) {
     final var bridge = declaration.provider().bridge();
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
+    final var node = declaration.node();
+    final var bridgeName = declaration.provider().getClass().getName().replaceFirst("Provider$", "");
+    final var into = declaration.provider().writesInto()
+      ? "; into writes through " +
+        bridgeName +
+        ".into, and a subclass of the target through the setters it looks up" +
+        " at run time"
+      : "; into writes through the setters it looks up at run time, since " + bridgeName + " has no into";
     final var built = Mapper.ofGenerated(
       fn,
       source,
       target,
       Telescope.bridgePatch((Telescope) bridge),
       declaration.provider().targetProperties(),
-      List.of(declaration.node())
+      List.of(new OpticNode.Declared(node.declaredBy(), node.runs(), node.why() + into))
     );
     return (Mapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }

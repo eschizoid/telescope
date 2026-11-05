@@ -225,12 +225,13 @@ public class Mapper<A, B> {
   /**
    * Codegen-support seam: the state of {@code built}, a mapper over a generated bridge with no
    * hooks, for the class the {@code @Bridge} processor generates for a field. That class overrides
-   * {@link #forward}, {@link #backward} and {@link #patch} with one static call each into the
-   * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
-   * and inlines; every other method is this class's own, and final. {@code grant} is the {@link
-   * BridgeGrant} the field's provider is handed when the field's factory call is dispatched to it,
-   * which keeps a class written by hand from extending this one by accident; a registered provider
-   * of one's own, or reflection on the class path, can still obtain it.
+   * {@link #forward}, {@link #backward} and {@link #patch}, and {@link #into} where the bridge has
+   * one, with one static call each into the field's bridge, so a call through the field's constant
+   * is a call the JIT resolves to the bridge and inlines; every other method is this class's own,
+   * and final. {@code grant} is the {@link BridgeGrant} the field's provider is handed when the
+   * field's factory call is dispatched to it, which keeps a class written by hand from extending
+   * this one by accident; a registered provider of one's own, or reflection on the class path, can
+   * still obtain it.
    *
    * @throws IllegalArgumentException if {@code grant} is not the one core hands out, or {@code
    *     built} is not a mapper over a generated bridge with no hooks
@@ -703,8 +704,9 @@ public class Mapper<A, B> {
    * the final write step targets {@code target} rather than a fresh allocation.
    *
    * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
-   * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
-   * and discard / replace the receiver, or have the target type be a bean with setters.
+   * mapper throws {@link UnsupportedOperationException}, naming the record, at apply time. Use
+   * {@link #forward(Object)} and discard / replace the receiver, or have the target type be a bean
+   * with setters.
    *
    * <p><b>Setter requirement.</b> Each property it updates is written through a public setter of
    * {@code target.getClass()} that takes a value of the property's type, whatever strategy {@code
@@ -721,6 +723,14 @@ public class Mapper<A, B> {
    * <p><b>Sealed interfaces.</b> Between two sealed interfaces, {@code target} is written by the
    * mapper of its own case, and {@code source} must convert to that case.
    *
+   * <p><b>A {@code @Bridge} field's mapper.</b> Where the bridge generated for the field can update
+   * its target in place, the field's mapper hands a target of exactly the class the bridge writes
+   * to the bridge's {@code into}, which writes the same properties through the same setters with no
+   * reflection; {@link #explain()} says so. A subclass of that class is written here instead, since
+   * its own setters, which the bridge cannot know, decide how it takes a value. The bridge has such
+   * an {@code into} only when the target is a bean with a setter for every property the bridge
+   * writes.
+   *
    * @param target the existing instance to mutate; must not be null and must not be a record
    * @param source the source value to map from
    * @return {@code target} (same reference, mutated in place)
@@ -730,21 +740,21 @@ public class Mapper<A, B> {
    *     mapper writes, or, between two sealed interfaces, if {@code source} converts to a case
    *     other than {@code target}'s
    */
-  public final B into(final B target, final A source) {
+  public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
     if (cases == null) refuseRecordTarget(targetClass);
     return writeInto(target, forward(source));
   }
 
-  private static void refuseRecordTarget(final Class<?> targetClass) {
-    if (targetClass.isRecord()) {
-      throw new UnsupportedOperationException(
-        "Mapper.into(target, source) requires a mutable target — records are immutable. Use" +
-          " Mapper.forward(source) and discard the receiver, or have your target type be a" +
-          " bean with public setters."
-      );
-    }
+  private void refuseRecordTarget(final Class<?> written) {
+    if (written.isRecord()) throw new UnsupportedOperationException(
+      PairingMessages.intoRecordTarget(
+        sourceClass.getSimpleName(),
+        targetClass.getSimpleName(),
+        PairingMessages.className(written)
+      )
+    );
   }
 
   /** Write {@code produced}, which this mapper's forward made, onto {@code target} in place. */
