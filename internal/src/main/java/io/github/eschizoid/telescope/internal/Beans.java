@@ -1014,6 +1014,15 @@ public final class Beans {
     return new SettersWriter<>(pojoClass);
   }
 
+  /** The strategy {@code writer} builds its bean through. */
+  public static BeanWriteStrategy strategyOf(final BeanWriter<?> writer) {
+    return switch (writer) {
+      case BuilderWriter<?> ignored -> BeanWriteStrategy.BUILDER;
+      case ConstructorWriter<?> ignored -> BeanWriteStrategy.CONSTRUCTOR;
+      case SettersWriter<?> ignored -> BeanWriteStrategy.SETTERS;
+    };
+  }
+
   /** The bean's property names (getter-derived), in discovery order. */
   public static String[] propertyNames(final Class<?> beanClass) {
     return getters(beanClass).keySet().toArray(String[]::new);

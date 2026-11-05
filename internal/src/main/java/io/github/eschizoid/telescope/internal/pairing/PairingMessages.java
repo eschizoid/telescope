@@ -684,6 +684,39 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A pair a mapper converts whose side {@code bean} is built through {@code strategy}, as a hint
+   * names it, and that strategy writes no {@code property} into it although the mapper writes a
+   * value there, so the value would be dropped.
+   */
+  public static String beanPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the mapper writes '" +
+      property +
+      "' into " +
+      bean +
+      ", and writeStrategy = " +
+      strategy +
+      " for it writes no '" +
+      property +
+      "' into it, so the value would be dropped. Give " +
+      bean +
+      " a member that writes '" +
+      property +
+      "', or name a strategy that writes it."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

@@ -12557,37 +12557,358 @@ class CrossPathCorpusTest {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : SOURCES_CLAIMED_TWICE) {
-      final var prefix = "Wb" + index++;
-      final var head = "package " + PACKAGE + ";\n";
-      final var all = row
-        .declarations()
-        .stream()
-        .map(declaration -> declaration.formatted(prefix))
-        .map(code -> source(declaredName(code), head + code))
-        .toList();
-      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
-      assertTrue(
-        plain.success(),
-        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      failures.addAll(
+        refusalFailures(
+          "Wb" + index++,
+          row.name(),
+          row.declarations(),
+          row.generated(),
+          ILLEGAL_ARGUMENT,
+          row.runtime()
+        )
       );
-      final var generated = row.generated().formatted(prefix);
-      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
-      if (processed.success() || !processed.hasError(generated)) {
-        failures.add(row.name() + ": the processor owed '" + generated + "', saw " + describe(processed));
-      }
-      final var classes = plain.define(MethodHandles.lookup());
-      String built;
-      try {
-        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
-        built = "a mapper";
-      } catch (final InvocationTargetException e) {
-        built = String.valueOf(e.getCause());
-      }
-      final var runtime = "java.lang.IllegalArgumentException: " + row.runtime().formatted(prefix);
-      if (!runtime.equals(built)) {
-        failures.add(row.name() + ": the runtime owed '" + runtime + "', saw " + built);
-      }
     }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  private static final String ILLEGAL_ARGUMENT = "java.lang.IllegalArgumentException";
+
+  /**
+   * What a row, its {@code declarations} each taking {@code prefix} as {@code %1$s} and the last of
+   * them the runtime row, gave other than refusing on both paths: the processor with a diagnostic
+   * holding {@code generated}, and the runtime's {@code mapper()} with a {@code thrown} saying
+   * {@code runtime}.
+   */
+  private static List<String> refusalFailures(
+    final String prefix,
+    final String name,
+    final List<String> declarations,
+    final String generated,
+    final String thrown,
+    final String runtime
+  ) throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var head = "package " + PACKAGE + ";\n";
+    final var all = declarations
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toList();
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+    assertTrue(plain.success(), () -> name + ": the pair and its runtime row should compile: " + plain.errorMessages());
+    final var owedGenerated = generated.formatted(prefix);
+    final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+    if (processed.success() || !processed.hasError(owedGenerated)) {
+      failures.add(name + ": the processor owed '" + owedGenerated + "', saw " + describe(processed));
+    }
+    final var classes = plain.define(MethodHandles.lookup());
+    String built;
+    try {
+      classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      built = "a mapper";
+    } catch (final InvocationTargetException e) {
+      built = String.valueOf(e.getCause());
+    }
+    final var owedRuntime = thrown + ": " + runtime.formatted(prefix);
+    if (!owedRuntime.equals(built)) failures.add(name + ": the runtime owed '" + owedRuntime + "', saw " + built);
+    return failures;
+  }
+
+  /** A {@code writeBean} hint naming the setters of {@code %1$s<bean>}. */
+  private static String settersFor(final String bean) {
+    return (
+      "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$s" +
+      bean +
+      ".class, io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} built by its builder, with a getter for {@code value} and no setter
+   * for it, and a no-argument constructor of {@code access}.
+   */
+  private static String setterlessBean(final String name, final String access) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n" +
+      "  private String value;\n  " +
+      access +
+      " %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public static Builder builder() { return new Builder(); }\n" +
+      "  public static final class Builder {\n    private String value;\n" +
+      "    public Builder value(final String v) { value = v; return this; }\n" +
+      "    public %1$s" +
+      name +
+      " build() { final var b = new %1$s" +
+      name +
+      "(); b.value = value; return b; }\n  }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return builder().value(\"y\").build(); }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a package-private no-argument constructor and a getter and a
+   * setter for {@code value}, whose {@code sample()} holds {@code "y"}.
+   */
+  private static String settableBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String value;\n  %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var t = new %1$s" +
+      name +
+      "(); t.value = \"y\"; return t; }\n}\n"
+    );
+  }
+
+  /** A source bean with a setter for {@code id} and a getter alone for {@code c}. */
+  private static final String PATH_ROOT_SOURCE =
+    "public class %1$sSrc {\n  private String id;\n  private %1$sNc c;\n  public %1$sSrc() {}\n" +
+    "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+    "  public %1$sNc getC() { return c; }\n}\n";
+
+  /** The bean {@code %1$sSrc.c} holds, with a getter and a setter for {@code city}. */
+  private static final String PATH_ROOT_CITY =
+    "public class %1$sNc {\n  private String city;\n  public %1$sNc() {}\n" +
+    "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n}\n";
+
+  /** A row reading {@code %1$sSrc.c.city} into {@code %1$sTgt.city}, which backward writes back. */
+  private static final String PATH_FROM_ROOT =
+    MAPPING + "to(" + pathOf("ofBean", "%1$sSrc", "%1$sSrc::getC", "%1$sNc::getCity") + ", %1$sTgt::city)";
+
+  /**
+   * A setters strategy a hint names for a bean side of a pair, with no setter for a property the
+   * mapper writes there: the declarations, each taking {@code %1$s} as the row's prefix and the
+   * last of them the runtime row, and the refusal both paths owe, in the runtime's words.
+   */
+  private record SettersDrop(String name, List<String> declarations, String thrown, String refusal) {
+    SettersDrop(final String name, final List<String> declarations, final String refusal) {
+      this(name, declarations, ILLEGAL_ARGUMENT, refusal);
+    }
+  }
+
+  /**
+   * A bean {@code %1$sTgt} with a public no-argument constructor, a getter and a setter for {@code
+   * id}, a getter for {@code value} and {@code setter} as the rest of its body.
+   */
+  private static String partlySettable(final String setter) {
+    return (
+      "public class %1$sTgt {\n  private String id;\n  private String value;\n  public %1$sTgt() {}\n" +
+      "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+      "  public String getValue() { return value; }\n" +
+      setter +
+      "}\n"
+    );
+  }
+
+  private static final List<SettersDrop> SETTERS_DROPS = List.of(
+    new SettersDrop(
+      "a writeBean SETTERS hint keyed to the target, whose constructor is private",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(false, settersFor("Tgt")),
+        setterlessBean("Tgt", "private"),
+        plainRuntime(false, settersFor("Tgt"))
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBean SETTERS hint keyed to the target, whose constructor is public",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(false, settersFor("Tgt")),
+        setterlessBean("Tgt", "public"),
+        plainRuntime(false, settersFor("Tgt"))
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBeans SETTERS default on a pair whose target has no setter for a property",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(false, SETTERS_FOR_EVERY_BEAN),
+        setterlessBean("Tgt", "private"),
+        plainRuntime(false, SETTERS_FOR_EVERY_BEAN)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBean SETTERS hint keyed to the target of a nested pair",
+      List.of(
+        "public record %1$sSrc(%1$sIn in) {}\n",
+        "public record %1$sIn(String value) {}\n",
+        fieldBridge("%1$sIn", "%1$sOut", settersFor("Out")),
+        plainField(false),
+        "public record %1$sTgt(%1$sOut in) {}\n",
+        setterlessBean("Out", "private"),
+        plainRuntime(false, settersFor("Out"))
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sIn", "%1$sOut", "%1$sOut", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBean SETTERS hint keyed to the source of a two-way mapper, which backward writes",
+      List.of(
+        setterlessBean("Src", "private"),
+        plainField(false, settersFor("Src")),
+        "public record %1$sTgt(String value) {}\n",
+        plainRuntime(false, settersFor("Src"))
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sSrc", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a source path of a two-way mapper starting at a property a writeBean SETTERS hint has no setter for",
+      List.of(
+        PATH_ROOT_SOURCE,
+        PATH_ROOT_CITY,
+        plainField(false, settersFor("Src"), PATH_FROM_ROOT),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(false, settersFor("Src"), PATH_FROM_ROOT)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sSrc", "c", "SETTERS")
+    ),
+    new SettersDrop(
+      "a source path of a two-way mapper starting at a property a writeBeans SETTERS default has no setter for",
+      List.of(
+        PATH_ROOT_SOURCE,
+        PATH_ROOT_CITY,
+        plainField(false, SETTERS_FOR_EVERY_BEAN, PATH_FROM_ROOT),
+        "public record %1$sTgt(String id, String city) {}\n",
+        plainRuntime(false, SETTERS_FOR_EVERY_BEAN, PATH_FROM_ROOT)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sSrc", "c", "SETTERS")
+    ),
+    new SettersDrop(
+      "a constant row filling a target property its writeBean SETTERS hint has no setter for",
+      List.of(
+        sampled("%1$sSrc", "String id", "new %1$sSrc(\"x\")"),
+        plainField(true, settersFor("Tgt"), MAPPING + "constant(%1$sTgt::getValue, \"k\")"),
+        partlySettable(""),
+        plainRuntime(true, settersFor("Tgt"), MAPPING + "constant(%1$sTgt::getValue, \"k\")")
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a compute row filling a target property its writeBeans SETTERS default has no setter for",
+      List.of(
+        sampled("%1$sSrc", "String id", "new %1$sSrc(\"x\")"),
+        "public class %1$sHelp {\n  public static String k() { return \"k\"; }\n}\n",
+        plainField(true, SETTERS_FOR_EVERY_BEAN, MAPPING + "compute(%1$sTgt::getValue, %1$sHelp::k)"),
+        partlySettable(""),
+        plainRuntime(true, SETTERS_FOR_EVERY_BEAN, MAPPING + "compute(%1$sTgt::getValue, %1$sHelp::k)")
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBean SETTERS hint on a target whose setter takes another type than the property's",
+      List.of(
+        "public record %1$sSrc(String id, String value) {}\n",
+        plainField(false, settersFor("Tgt")),
+        partlySettable("  public void setValue(final Integer v) {}\n"),
+        plainRuntime(false, settersFor("Tgt"))
+      ),
+      "java.lang.IllegalStateException",
+      PairingMessages.setterCannotTake(
+        "%1$sTgt",
+        "value",
+        "setValue(java.lang.Integer)",
+        "java.lang.String",
+        "java.lang.Integer"
+      )
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a setters strategy a hint names, on a bean with no setter for a property the mapper writes, is refused on both" +
+      " paths"
+  )
+  void aSettersHintThatWouldDropAPropertyIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : SETTERS_DROPS) {
+      failures.addAll(
+        refusalFailures("Hd" + index++, row.name(), row.declarations(), row.refusal(), row.thrown(), row.refusal())
+      );
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * Setters strategies a hint names on beans that have a setter for every property the mapper
+   * writes, which both paths build, in the shape {@link #nestedPathFailures} reads.
+   */
+  private static final List<NestedPath> SETTERS_KEPT = List.of(
+    new NestedPath(
+      "a writeBean SETTERS hint keyed to a target with a package-private constructor and a setter",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false, settersFor("Tgt")),
+        settableBean("Tgt"),
+        plainRuntime(false, settersFor("Tgt"))
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"y\")",
+      null
+    ),
+    new NestedPath(
+      "a writeBean SETTERS hint keyed to a source with a package-private constructor and a setter",
+      false,
+      List.of(
+        settableBean("Src"),
+        plainField(false, settersFor("Src")),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"x\")"),
+        plainRuntime(false, settersFor("Src"))
+      ),
+      "#0(value=\"y\")",
+      "#0(value=\"x\")",
+      null
+    ),
+    new NestedPath(
+      "a writeBean SETTERS hint keyed to the source of a forward-only mapper, which builds no source",
+      true,
+      List.of(
+        setterlessBean("Src", "public"),
+        plainField(true, settersFor("Src")),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"x\")"),
+        plainRuntime(true, settersFor("Src"))
+      ),
+      "#0(value=\"y\")",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a writeBean SETTERS hint on a target whose getter-only property nothing writes",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String id", "new %1$sSrc(\"x\")"),
+        plainField(true, settersFor("Tgt")),
+        partlySettable(""),
+        plainRuntime(true, settersFor("Tgt"))
+      ),
+      "#0(id=\"x\", value=null)",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a setters strategy a hint names, on a bean with a setter for every property written, builds on both paths"
+  )
+  void aSettersHintWithEverySetterBuildsOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(SETTERS_KEPT, "Hk");
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
