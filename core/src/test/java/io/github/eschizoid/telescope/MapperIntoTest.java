@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -230,7 +230,7 @@ class MapperIntoTest {
   }
 
   @Nested
-  @DisplayName("Missing setter — silently skipped to match SettersWriter / MapStruct @MappingTarget")
+  @DisplayName("Missing setter — a property the mapper writes with no setter is refused when the mapper is built")
   class MissingSetter {
 
     record DtoOnly(String id, String missingOnEntity) {}
@@ -256,16 +256,18 @@ class MapperIntoTest {
     }
 
     @Test
-    @DisplayName("property without a setter is silently skipped — matches SettersWriter")
-    void missingSetterIsSilentlySkipped() {
-      // Mapper.into and Mapper.forward both reach the target through Beans setter dispatch;
-      // both paths must silently skip an absent setter to keep the contract symmetric (matches
-      // MapStruct @MappingTarget behaviour). The setId() target is still written; the
-      // missingOnEntity target stays at its JLS default.
-      final var mapper = Telescope.mapper(DtoOnly.class, EntityOnlyId.class);
-      final var target = new EntityOnlyId();
-      assertDoesNotThrow(() -> mapper.into(target, new DtoOnly("a", "b")));
-      assertEquals("a", target.getId());
+    @DisplayName("a paired property without a setter refuses the mapper rather than being dropped by forward and into")
+    void missingSetterRefusesTheMapper() {
+      // The target is built through its setters, the first strategy it offers, and forward and
+      // into both write through them, so a property they would pass a value to and cannot write is
+      // refused where the mapper is built.
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(DtoOnly.class, EntityOnlyId.class)
+      );
+      assertEquals(
+        PairingMessages.beanPropertyUnwritable("DtoOnly", "EntityOnlyId", "EntityOnlyId", "missingOnEntity", null),
+        refused.getMessage()
+      );
     }
   }
 

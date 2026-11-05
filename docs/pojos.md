@@ -57,13 +57,13 @@ for a class the auto path refuses because it offers a write path it will not gue
 compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by
 parameter name when the names are known, from `-parameters` or `-g`, and every one names a property. With no names, or
 with names none of which is a property, it binds by position. A constructor only some of whose known names are
-properties is refused when the mapper is built, or on first conversion under a `writeBeans(...)` default, since by name
-the other parameters would have no value and by position one property's value could land in a parameter named after
-another: name every parameter after a property, or write the class through setters or a builder. Inside a native image
-the names `-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the constructor the
-order would pick anyway binds it the same way. A class whose only write path is its private fields — a no-arg
-constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add public
-setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
+properties is refused when the mapper is built, whether a `writeBean` hint or a `writeBeans(...)` default names it,
+since by name the other parameters would have no value and by position one property's value could land in a parameter
+named after another: name every parameter after a property, or write the class through setters or a builder. Inside a
+native image the names `-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the
+constructor the order would pick anyway binds it the same way. A class whose only write path is its private fields — a
+no-arg constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add
+public setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
 Package-private setters do not count; neither path calls them.
 
 ```java
@@ -81,12 +81,16 @@ final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
 ```
 
 Validation is eager: a misconfigured hint (`BUILDER` on a no-builder class, hint targeting a record, duplicate hint,
-unused hint) throws at `Telescope.map(...)` time — not on the first conversion deep in production. And with
-`telescope-codegen` on the annotation-processor path, the structural rejections that don't need the live classpath — a
-hint targeting a record, a duplicate hint — move up to **compile time**: statically-visible `map(...)` / `mapper(...)`
-call sites are replayed by the verifier and those violations surface as compile errors with the identical diagnostic
-text ([details in `telescope-codegen`](../codegen/README.md#compile-time-mapper-verification)). The builder-feasibility
-and unused-hint checks stay at construction time (both still eager and loud).
+unused hint) throws at `Telescope.map(...)` time — not on the first conversion deep in production. So does a
+`writeBeans(...)` default naming a strategy that cannot build a bean the mapper builds, and a bean built through its
+setters, whether a hint names them or the order picks them, with no setter for a property the mapper writes into it,
+which would otherwise drop the value. A bean the mapper never builds, such as the source of a `mapperForward` mapper,
+and a property nothing writes are not held to either. And with `telescope-codegen` on the annotation-processor path, the
+structural rejections that don't need the live classpath — a hint targeting a record, a duplicate hint — move up to
+**compile time**: statically-visible `map(...)` / `mapper(...)` call sites are replayed by the verifier and those
+violations surface as compile errors with the identical diagnostic text
+([details in `telescope-codegen`](../codegen/README.md#compile-time-mapper-verification)). The builder-feasibility and
+unused-hint checks stay at construction time (both still eager and loud).
 
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one

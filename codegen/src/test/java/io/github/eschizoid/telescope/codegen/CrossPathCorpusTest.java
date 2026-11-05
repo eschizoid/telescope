@@ -11510,8 +11510,8 @@ class CrossPathCorpusTest {
       "  public static Object mapper() {\n" +
       "    return io.github.eschizoid.telescope.Telescope." +
       (forwardOnly ? "mapperForward" : "mapper") +
-      "(%1$sSrc.class, %1$sTgt.class,\n      " +
-      String.join(",\n      ", rows) +
+      "(%1$sSrc.class, %1$sTgt.class" +
+      (rows.length == 0 ? "" : ",\n      " + String.join(",\n      ", rows)) +
       ");\n  }\n}\n"
     );
   }
@@ -12909,6 +12909,411 @@ class CrossPathCorpusTest {
   )
   void aSettersHintWithEverySetterBuildsOnBothPaths() throws ReflectiveOperationException {
     final var failures = nestedPathFailures(SETTERS_KEPT, "Hk");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** A {@code writeBeans} default naming {@code strategy} for every bean the mapper builds. */
+  private static String everyBeanBy(final String strategy) {
+    return (
+      "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
+      "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy." +
+      strategy +
+      ")"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a getter for {@code value}, built by a static builder through a
+   * private constructor taking it, and no no-argument constructor.
+   */
+  private static String builderOnlyBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private final String value;\n  private %1$s" +
+      name +
+      "(final String value) { this.value = value; }\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public static Builder builder() { return new Builder(); }\n" +
+      "  public static final class Builder {\n    private String value;\n" +
+      "    public Builder value(final String v) { value = v; return this; }\n" +
+      "    public %1$s" +
+      name +
+      " build() { return new %1$s" +
+      name +
+      "(value); }\n  }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return builder().value(\"y\").build(); }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a getter for {@code value} and one public constructor, taking
+   * it.
+   */
+  private static String constructorOnlyBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private final String value;\n  public %1$s" +
+      name +
+      "(final String value) { this.value = value; }\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return new %1$s" +
+      name +
+      "(\"y\"); }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a public no-argument constructor and a getter and a setter for
+   * {@code value}, whose {@code sample()} holds {@code "y"}.
+   */
+  private static String settersOnlyBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String value;\n  public %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var t = new %1$s" +
+      name +
+      "(); t.value = \"y\"; return t; }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a public no-argument constructor, a getter and a setter for
+   * {@code id}, and a getter alone for {@code value}, which holds {@code "v"}.
+   */
+  private static String valueUnsettable(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String id;\n  private String value = \"v\";\n  public %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+      "  public String getValue() { return value; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var s = new %1$s" +
+      name +
+      "(); s.id = \"x\"; return s; }\n}\n"
+    );
+  }
+
+  /**
+   * A {@code writeBeans} default naming a strategy a bean side of a pair the mapper builds cannot
+   * build that bean with: the declarations, each taking {@code %1$s} as the row's prefix and the
+   * last of them the runtime row, and the refusal both paths owe.
+   */
+  private static final List<SettersDrop> DEFAULT_UNBUILT = List.of(
+    new SettersDrop(
+      "a writeBeans SETTERS default on a target built only by its builder",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(false, SETTERS_FOR_EVERY_BEAN),
+        builderOnlyBean("Tgt"),
+        plainRuntime(false, SETTERS_FOR_EVERY_BEAN)
+      ),
+      PairingMessages.beanUnbuiltBy("%1$sSrc", "%1$sTgt", "%1$sTgt", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBeans SETTERS default on a target built only by a constructor taking its properties",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(true, SETTERS_FOR_EVERY_BEAN),
+        constructorOnlyBean("Tgt"),
+        plainRuntime(true, SETTERS_FOR_EVERY_BEAN)
+      ),
+      PairingMessages.beanUnbuiltBy("%1$sSrc", "%1$sTgt", "%1$sTgt", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBeans SETTERS default on the source of a two-way mapper, built only by its builder",
+      List.of(
+        builderOnlyBean("Src"),
+        plainField(false, SETTERS_FOR_EVERY_BEAN),
+        "public record %1$sTgt(String value) {}\n",
+        plainRuntime(false, SETTERS_FOR_EVERY_BEAN)
+      ),
+      PairingMessages.beanUnbuiltBy("%1$sSrc", "%1$sTgt", "%1$sSrc", "SETTERS")
+    ),
+    new SettersDrop(
+      "a writeBeans BUILDER default on a target with no builder",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(true, everyBeanBy("BUILDER")),
+        settersOnlyBean("Tgt"),
+        plainRuntime(true, everyBeanBy("BUILDER"))
+      ),
+      PairingMessages.beanUnbuiltBy("%1$sSrc", "%1$sTgt", "%1$sTgt", "BUILDER")
+    ),
+    new SettersDrop(
+      "a writeBeans CONSTRUCTOR default on a target with no constructor taking its properties",
+      List.of(
+        "public record %1$sSrc(String value) {}\n",
+        plainField(true, everyBeanBy("CONSTRUCTOR")),
+        settersOnlyBean("Tgt"),
+        plainRuntime(true, everyBeanBy("CONSTRUCTOR"))
+      ),
+      PairingMessages.beanUnbuiltBy("%1$sSrc", "%1$sTgt", "%1$sTgt", "CONSTRUCTOR")
+    )
+  );
+
+  @Test
+  @DisplayName("a writeBeans default naming a strategy a bean the mapper builds cannot use is refused on both paths")
+  void aDefaultStrategyThatCannotBuildABeanIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : DEFAULT_UNBUILT) {
+      failures.addAll(
+        refusalFailures("Du" + index++, row.name(), row.declarations(), row.refusal(), row.thrown(), row.refusal())
+      );
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * An unhinted bean side of a pair whose write strategy, the first the shared order finds, has no
+   * member for a property the mapper writes there: the declarations and the refusal both paths owe.
+   */
+  private static final List<SettersDrop> AUTO_DROPS = List.of(
+    new SettersDrop(
+      "an unhinted target built through its setters, with no setter for a property paired by name",
+      List.of(
+        "public record %1$sSrc(String id, String value) {}\n",
+        plainField(false),
+        valueUnsettable("Tgt"),
+        plainRuntime(false)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", null)
+    ),
+    new SettersDrop(
+      "an unhinted target of a forward-only mapper with no setter for a property paired by name",
+      List.of(
+        "public record %1$sSrc(String id, String value) {}\n",
+        plainField(true),
+        valueUnsettable("Tgt"),
+        plainRuntime(true)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", null)
+    ),
+    new SettersDrop(
+      "an unhinted target with no setter for a property a constant row fills",
+      List.of(
+        sampled("%1$sSrc", "String id", "new %1$sSrc(\"x\")"),
+        plainField(true, MAPPING + "constant(%1$sTgt::getValue, \"k\")"),
+        valueUnsettable("Tgt"),
+        plainRuntime(true, MAPPING + "constant(%1$sTgt::getValue, \"k\")")
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value", null)
+    ),
+    new SettersDrop(
+      "an unhinted source of a two-way mapper with no setter for a property backward writes",
+      List.of(
+        valueUnsettable("Src"),
+        plainField(false),
+        "public record %1$sTgt(String id, String value) {}\n",
+        plainRuntime(false)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sSrc", "value", null)
+    ),
+    new SettersDrop(
+      "an unhinted target of a nested pair with no setter for a property paired by name",
+      List.of(
+        "public record %1$sSrc(%1$sIn in) {}\n",
+        "public record %1$sIn(String id, String value) {}\n",
+        plainField(true),
+        "public record %1$sTgt(%1$sOut in) {}\n",
+        valueUnsettable("Out"),
+        plainRuntime(true)
+      ),
+      PairingMessages.beanPropertyUnwritable("%1$sIn", "%1$sOut", "%1$sOut", "value", null)
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "an unhinted bean whose chosen strategy has no member for a property the mapper writes is refused on both paths"
+  )
+  void anUnhintedStrategyThatWouldDropAPropertyIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : AUTO_DROPS) {
+      failures.addAll(
+        refusalFailures("Ad" + index++, row.name(), row.declarations(), row.refusal(), row.thrown(), row.refusal())
+      );
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A bean a mapper builds whose write strategy, named by a default or chosen by the shared order,
+   * writes every property the mapper writes there, or a side the mapper never builds, which both
+   * paths build, in the shape {@link #nestedPathFailures} reads.
+   */
+  private static final List<NestedPath> STRATEGIES_KEPT = List.of(
+    new NestedPath(
+      "a writeBeans SETTERS default on a target with a setter for every property",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false, SETTERS_FOR_EVERY_BEAN),
+        settersOnlyBean("Tgt"),
+        plainRuntime(false, SETTERS_FOR_EVERY_BEAN)
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"y\")",
+      null
+    ),
+    new NestedPath(
+      "an unhinted target whose getter-only property nothing writes",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String id", "new %1$sSrc(\"x\")"),
+        plainField(true),
+        valueUnsettable("Tgt"),
+        plainRuntime(true)
+      ),
+      "#0(id=\"x\", value=\"v\")",
+      null,
+      null
+    ),
+    new NestedPath(
+      "an unhinted target with no setter, built by a builder that writes the property",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false),
+        builderOnlyBean("Tgt"),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"y\")",
+      null
+    ),
+    new NestedPath(
+      "an unhinted target with no setter, built by a constructor that takes the property",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false),
+        constructorOnlyBean("Tgt"),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x\")",
+      "#0(value=\"y\")",
+      null
+    ),
+    new NestedPath(
+      "an unhinted source of a forward-only mapper with no setter for a property",
+      true,
+      List.of(
+        valueUnsettable("Src"),
+        plainField(true),
+        "public record %1$sTgt(String id, String value) {}\n",
+        plainRuntime(true)
+      ),
+      "#0(id=\"x\", value=\"v\")",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a bean whose strategy writes every property the mapper writes, or a side never built, builds on both paths"
+  )
+  void aStrategyThatWritesEveryWrittenPropertyBuildsOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(STRATEGIES_KEPT, "Sk");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A constant or compute row filling a target property the source also has. The row fills the
+   * target property, and the source property pairs with its namesake: forward writes the row's
+   * value, and backward reads the target property back into the source.
+   */
+  private static final List<NestedPath> ROW_FILLED_NAMESAKES = List.of(
+    new NestedPath(
+      "a constant row filling a target property the source also has",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String label, int n, String tenant", "new %1$sSrc(\"i\", \"l\", 1, \"t\")"),
+        plainField(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::tenant, \"production\")"),
+        sampled("%1$sTgt", "String id, String label, int n, String tenant", "new %1$sTgt(\"j\", \"m\", 2, \"u\")"),
+        plainRuntime(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::tenant, \"production\")")
+      ),
+      "#0(id=\"i\", label=\"l\", n=1, tenant=\"production\")",
+      "#0(id=\"j\", label=\"m\", n=2, tenant=\"u\")",
+      "#0(id=\"j\", label=\"m\", n=2, tenant=\"u\")"
+    ),
+    new NestedPath(
+      "a compute row filling a target property the source also has",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String id, String tenant", "new %1$sSrc(\"i\", \"t\")"),
+        "public class %1$sHelp {\n  public static String k() { return \"k\"; }\n}\n",
+        plainField(false, MAPPING + "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::tenant, %1$sHelp::k)"),
+        sampled("%1$sTgt", "String id, String tenant", "new %1$sTgt(\"j\", \"u\")"),
+        plainRuntime(false, MAPPING + "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::tenant, %1$sHelp::k)")
+      ),
+      "#0(id=\"i\", tenant=\"k\")",
+      "#0(id=\"j\", tenant=\"u\")",
+      "#0(id=\"j\", tenant=\"u\")"
+    ),
+    new NestedPath(
+      "a constant row filling a bean target property the bean source also has",
+      false,
+      List.of(
+        sampledBean(
+          "%1$sSrc",
+          "final var s = new %1$sSrc(); s.setId(\"i\"); s.setTenant(\"t\"); return s;",
+          "String id",
+          "String tenant"
+        ),
+        plainField(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::getTenant, \"production\")"),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setId(\"j\"); t.setTenant(\"u\"); return t;",
+          "String id",
+          "String tenant"
+        ),
+        plainRuntime(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::getTenant, \"production\")")
+      ),
+      "#0(id=\"i\", tenant=\"production\")",
+      "#0(id=\"j\", tenant=\"u\")",
+      "#0(id=\"j\", tenant=\"u\")"
+    ),
+    new NestedPath(
+      "a constant row filling a target property the source also has, on a forward-only mapper",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String id, String tenant", "new %1$sSrc(\"i\", \"t\")"),
+        plainField(true, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::tenant, \"production\")"),
+        "public record %1$sTgt(String id, String tenant) {}\n",
+        plainRuntime(true, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::tenant, \"production\")")
+      ),
+      "#0(id=\"i\", tenant=\"production\")",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a constant or compute row filling a target property the source also has builds on both paths, and backward" +
+      " reads the property back"
+  )
+  void aRowFilledTargetPropertyPairsWithItsNamesakeOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(ROW_FILLED_NAMESAKES, "Rn");
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 

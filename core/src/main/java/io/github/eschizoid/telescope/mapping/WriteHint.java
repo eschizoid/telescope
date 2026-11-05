@@ -58,9 +58,8 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    *       when the names are known, from {@code -parameters} or from {@code -g}, and every one
    *       names a property; by position when the names are unknown or none names a property. A
    *       constructor only some of whose known names are properties is refused when the mapper is
-   *       built, or on first conversion under a {@code writeBeans(...)} default. Inside a native
-   *       image the names {@code -g} keeps cannot be read, so compile with {@code -parameters} to
-   *       get this check there
+   *       built. Inside a native image the names {@code -g} keeps cannot be read, so compile with
+   *       {@code -parameters} to get this check there
    * </ul>
    */
   enum WriteStrategy {
@@ -94,11 +93,11 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * }</pre>
    *
    * <p>At most one {@code writeBeans(...)} default may appear per {@code Telescope.map(...)} call.
-   * Per-class {@code writeBean(X.class, …)} rows always win for class {@code X}. The default is
-   * resolved lazily — the writer for a given target is constructed the first time the recursion
-   * reaches that target, so a default strategy incompatible with a particular target (e.g., {@code
-   * BUILDER} on a class with no static {@code builder()}) only throws when that target is actually
-   * visited.
+   * Per-class {@code writeBean(X.class, …)} rows always win for class {@code X}. A default strategy
+   * that cannot build a bean the mapper builds (e.g., {@code BUILDER} on a class with no static
+   * {@code builder()}) is refused when the mapper is built, as a {@code writeBean} hint naming one
+   * is. A bean the mapper never builds, such as the source of a mapper that converts forward only,
+   * is not held to it.
    *
    * <p>The default is a mapper-wide runtime-only setting. A mapper-wide runtime-only setting walks
    * every pair, sealed cases included, so the settings of a nested pair's or a case's own bridge do

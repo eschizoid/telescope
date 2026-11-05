@@ -1015,6 +1015,21 @@ class VerifierSilenceAgreementTest {
     }
 
     @Test
+    @DisplayName("not where a constant row fills a target property whose namesake the source has, which pairs with it")
+    void namesakeOfAConstantFilledTarget() {
+      assertBothAccept(
+        verified(
+          "VuW",
+          """
+            record @@Src(String id, String tenant) {}
+            record @@Tgt(String id, String tenant) {}
+            """ +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, constant(@@Tgt::tenant, \"production\"))")
+        )
+      );
+    }
+
+    @Test
     @DisplayName("not on a nested pair no row is keyed to, beside a constant row on the mapper's pair")
     void notOnANestedPair() {
       assertBothAccept(

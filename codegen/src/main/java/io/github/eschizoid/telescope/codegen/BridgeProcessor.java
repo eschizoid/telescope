@@ -2141,9 +2141,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!lenient && !forwardOnlyTransforms.contains(sf.name())) writesSource.add(sf.name());
     }
 
-    // Bijection check: apply forward renames on the source side, then compare to target names —
-    // skipping target names covered by constants/computes (injected; no source counterpart needed).
-    // Dropped sources are excluded from the check entirely.
+    // The source properties the bridge reads by name: every one no drop, path or lenient fill
+    // takes.
     final var nonDroppedSourceFields = effectiveDrops.isEmpty()
       ? sourceFields
       : sourceFields
@@ -2166,17 +2165,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     if (
-      !paired(
-        source,
-        sourceFields,
-        effectiveDrops,
-        target,
-        targetFields,
-        renames,
-        renameFanouts,
-        injectedTargetFields
-      ) ||
-      !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
+      !paired(source, sourceFields, effectiveDrops, target, targetFields, renames, renameFanouts, injectedTargetFields)
     ) return;
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
@@ -2612,6 +2601,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         backwardWritten.add(root.name());
         backwardResults.put(root.name(), given);
       }
+    }
+    // A strategy the field's writeBeans default names that builds no side of the pair the mapper
+    // builds is refused as the runtime refuses it: the target, and the source where backward
+    // rebuilds it.
+    final var targetUnbuilt = defaultUnbuilt(cfg, source, target, target, targetFields, targetRebuild);
+    if (targetUnbuilt != null) {
+      error(source, targetUnbuilt);
+      return;
+    }
+    final var sourceUnbuilt = lenient ? null : defaultUnbuilt(cfg, source, target, source, sourceFields, sourceRebuild);
+    if (sourceUnbuilt != null) {
+      error(source, sourceUnbuilt);
+      return;
     }
     final var builtForward = buildExpr(
       target,
@@ -8590,7 +8592,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) {
       for (final var f : toFields) {
         if (!written.contains(f.name()) || setterName(to, f.name()) != null) continue;
-        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name()));
+        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name(), "SETTERS"));
         return null;
       }
     }
@@ -8667,14 +8669,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var setter = setterName(to, f.name());
-          // A property the bridge writes nothing into is left as the constructor leaves it, as the
-          // runtime writer leaves a property its setters strategy has no setter for.
-          if (setter == null && heldToSetters && !written.contains(f.name())) continue;
+          // A property of a side of the pair the bridge writes nothing into is left as the
+          // constructor leaves it, as the runtime writer leaves a property its setters strategy has
+          // no setter for, whether a hint names the strategy or the shared order takes it.
+          if (setter == null && pairTarget != null && !written.contains(f.name())) continue;
           if (setter == null) {
             error(
               annotationSite,
-              heldToSetters
-                ? settersDropMessage(annotationSite, pairTarget, to, f.name())
+              pairTarget != null
+                ? settersDropMessage(annotationSite, pairTarget, to, f.name(), heldToSetters ? "SETTERS" : null)
                 : "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
             );
             return null;
@@ -9338,21 +9341,59 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The refusal of a setters strategy the bridge of {@code source} and {@code target} is told to
-   * rebuild {@code side} with, which has no setter for {@code property}: the runtime's words.
+   * The refusal of a setters strategy the bridge of {@code source} and {@code target} rebuilds
+   * {@code side} with, which has no setter for {@code property}, in the runtime's words: {@code
+   * strategy} is {@code SETTERS} where the bridge is told to take it, and null where the shared
+   * order takes it.
    */
   private static String settersDropMessage(
     final TypeElement source,
     final TypeElement target,
     final TypeElement side,
-    final String property
+    final String property,
+    final String strategy
   ) {
     return PairingMessages.beanPropertyUnwritable(
       source.getSimpleName().toString(),
       target.getSimpleName().toString(),
       side.getSimpleName().toString(),
       property,
-      "SETTERS"
+      strategy
+    );
+  }
+
+  /**
+   * The refusal of a {@code @Bridge} field's {@code writeBeans} default, in the runtime's words,
+   * where the strategy it names for {@code side}, a side of the pair of {@code source} and {@code
+   * target} with {@code sideFields}, finds no member to build {@code side} with at all; null where
+   * {@code rebuild} reaches a rung, where the pair has no such default, where a {@code writeBean}
+   * row names the strategy for {@code side}, and where the member is there and only the bridge's
+   * package cannot call it, which the runtime calls through a lookup with private access.
+   */
+  private static String defaultUnbuilt(
+    final BridgeConfig cfg,
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement side,
+    final List<Field> sideFields,
+    final Rebuild rebuild
+  ) {
+    if (rebuild.kind() != Rebuild.Kind.NONE || cfg.declaringField() == null || cfg.pathDefault() == null) return null;
+    if (cfg.pathStrategies().containsKey(side.getQualifiedName().toString())) return null;
+    final var constructors = ElementFilter.constructorsIn(side.getEnclosedElements());
+    // The builder() the ladder takes is public, so no rung for BUILDER means no builder the runtime
+    // takes either; a constructor can be there and out of the bridge's reach.
+    final var present = switch (cfg.pathDefault()) {
+      case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
+      case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
+      default -> false;
+    };
+    if (present) return null;
+    return PairingMessages.beanUnbuiltBy(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side.getSimpleName().toString(),
+      cfg.pathDefault()
     );
   }
 
@@ -9881,47 +9922,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     if (refusals.isEmpty()) return true;
     error(source, refusals.getFirst());
-    return false;
-  }
-
-  private boolean sameNames(
-    final TypeElement source,
-    final List<Field> sourceFields,
-    final TypeElement target,
-    final List<Field> targetFields,
-    final Map<String, String> renames,
-    final Map<String, List<String>> renameFanouts,
-    final Set<String> injectedTargetFields
-  ) {
-    final var sn = new TreeSet<String>();
-    for (final var f : sourceFields) {
-      sn.add(renames.getOrDefault(f.name(), f.name()));
-      // Forward-only fan-out: every extra target counts as a source-derived name in the bijection,
-      // since forward writes the source value into every fan-out target slot.
-      final var extras = renameFanouts.get(f.name());
-      if (extras != null) sn.addAll(extras);
-    }
-    final var tn = targetFields
-      .stream()
-      .map(Field::name)
-      .filter(n -> !injectedTargetFields.contains(n))
-      .collect(Collectors.toCollection(TreeSet::new));
-    if (sn.equals(tn)) return true;
-    error(
-      source,
-      "@Bridge: " +
-        source.getSimpleName() +
-        " and " +
-        target.getSimpleName() +
-        " must expose the same field names (a bijection). " +
-        source.getSimpleName() +
-        (renames.isEmpty() ? " has " : " (after renames) has ") +
-        sn +
-        ", " +
-        target.getSimpleName() +
-        " has " +
-        tn
-    );
     return false;
   }
 
