@@ -16718,10 +16718,14 @@ class CrossPathCorpusTest {
       "java.util.List<Integer>",
       REFUSED + "which no instantiation of its type variables"
     ),
-    // A variable the target's property bounds by a wildcard is held to that bound: one bounded
-    // from above is a subtype of it and one bounded from below a supertype, together with what
-    // the argument and the variable's own bounds force on it. Inside a type argument the target
-    // gives exactly, a wildcard is met only by the same wildcard. A result that is the variable
+    // A variable the target's property bounds by a wildcard is held to that bound: one
+    // bounded
+    // from above is a subtype of it and one bounded from below a supertype, together with
+    // what
+    // the argument and the variable's own bounds force on it. Inside a type argument the
+    // target
+    // gives exactly, a wildcard is met only by the same wildcard. A result that is the
+    // variable
     // itself is a subtype of the member's type.
     new GenericResult(
       "<T> java.util.Map<T, T> forward(final T a) { return java.util.Map.of(a, a); }",
