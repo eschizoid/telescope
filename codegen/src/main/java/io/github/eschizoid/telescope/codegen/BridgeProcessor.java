@@ -8918,8 +8918,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
    * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
    * names} has no setter that the runtime writer chooses from the property's type and that takes a
-   * value of that type as it is, or that setter takes the value only spread into a one-element
-   * array. A record has no setter at all, so it never has an {@code into}.
+   * value of that type without a cast. A record has no setter at all, so it never has an {@code
+   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as the
+   * runtime writer does.
    *
    * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
    * forward(source)} gives it, read back through its getter. Every value is read before the first
@@ -8941,7 +8942,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var name : names) {
       final var field = fieldByName(targetFields, name);
       final var choice = setterChoice(target, name);
-      if (field == null || choice.member() == null || choice.spreads()) return null;
+      if (choice.member() == null) return null;
       if (setterRefusal(target, name, false) != null) return null;
       final var local = "__in" + index++;
       reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");

@@ -14145,6 +14145,33 @@ class CrossPathCorpusTest {
       true
     ),
     new IntoRow(
+      "a setter narrower than its getter, which takes the value only after a check of its class",
+      List.of(
+        sampled("%1$sSrc", "Object value", "new %1$sSrc(\"x\")"),
+        "public class %1$sTgt {\n  private Object value;\n  public %1$sTgt(final Object value) { this.value = value; }\n" +
+          "  public Object getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(\"y\"); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x\")",
+      false
+    ),
+    new IntoRow(
+      "a variable-arity setter",
+      List.of(
+        INTO_SOURCE,
+        "public class %1$sTgt {\n  private String value;\n  public %1$sTgt() {}\n" +
+          "  public String getValue() { return value; }\n" +
+          "  public void setValue(final String... v) { value = String.join(\"+\", v) + \"!\"; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.value = \"y\"; return t; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(value=\"x!!\")",
+      true
+    ),
+    new IntoRow(
       "a value whose getter throws on the object forward built, read before any setter runs",
       List.of(
         sampled("%1$sSrc", "String a, String b", "new %1$sSrc(\"x\", \"boom\")"),
