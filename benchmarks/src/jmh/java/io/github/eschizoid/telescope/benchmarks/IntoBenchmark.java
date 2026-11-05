@@ -2,6 +2,8 @@ package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -18,6 +20,12 @@ import org.openjdk.jmh.annotations.State;
  * same way with property count. A ratio that grows with arity means per-property work that belongs
  * at bind time is being redone per call.
  *
+ * <p>{@code intoGenerated} and {@code intoGeneratedWide} call {@code into} on the mapper a
+ * {@code @Bridge} field declares ({@link IntoMappers}), over a source of the same properties and
+ * the same target class. {@code intoHandWritten} and {@code intoHandWrittenWide} write the same
+ * values onto the same target with one setter call per property, which is what the generated path
+ * should cost; they and {@code forwardOnly} are the controls, rows no change to {@code into} moves.
+ *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=IntoBenchmark -Pjmh.profilers=gc
  * }</pre>
@@ -27,261 +35,7 @@ import org.openjdk.jmh.annotations.State;
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class IntoBenchmark {
 
-  /** Five-property bean; the twenty-property shape is {@link IntoWide}. */
-  public static class IntoNarrow {
-
-    private String a;
-    private String b;
-    private String c;
-    private String d;
-    private String e;
-
-    public String getA() {
-      return a;
-    }
-
-    public void setA(final String a) {
-      this.a = a;
-    }
-
-    public String getB() {
-      return b;
-    }
-
-    public void setB(final String b) {
-      this.b = b;
-    }
-
-    public String getC() {
-      return c;
-    }
-
-    public void setC(final String c) {
-      this.c = c;
-    }
-
-    public String getD() {
-      return d;
-    }
-
-    public void setD(final String d) {
-      this.d = d;
-    }
-
-    public String getE() {
-      return e;
-    }
-
-    public void setE(final String e) {
-      this.e = e;
-    }
-  }
-
   public record NarrowRec(String a, String b, String c, String d, String e) {}
-
-  /** Twenty-property bean: the arity at which per-property rebinding becomes visible. */
-  public static class IntoWide {
-
-    private String f0;
-
-    public String getF0() {
-      return f0;
-    }
-
-    public void setF0(final String f0) {
-      this.f0 = f0;
-    }
-
-    private String f1;
-
-    public String getF1() {
-      return f1;
-    }
-
-    public void setF1(final String f1) {
-      this.f1 = f1;
-    }
-
-    private String f2;
-
-    public String getF2() {
-      return f2;
-    }
-
-    public void setF2(final String f2) {
-      this.f2 = f2;
-    }
-
-    private String f3;
-
-    public String getF3() {
-      return f3;
-    }
-
-    public void setF3(final String f3) {
-      this.f3 = f3;
-    }
-
-    private String f4;
-
-    public String getF4() {
-      return f4;
-    }
-
-    public void setF4(final String f4) {
-      this.f4 = f4;
-    }
-
-    private String f5;
-
-    public String getF5() {
-      return f5;
-    }
-
-    public void setF5(final String f5) {
-      this.f5 = f5;
-    }
-
-    private String f6;
-
-    public String getF6() {
-      return f6;
-    }
-
-    public void setF6(final String f6) {
-      this.f6 = f6;
-    }
-
-    private String f7;
-
-    public String getF7() {
-      return f7;
-    }
-
-    public void setF7(final String f7) {
-      this.f7 = f7;
-    }
-
-    private String f8;
-
-    public String getF8() {
-      return f8;
-    }
-
-    public void setF8(final String f8) {
-      this.f8 = f8;
-    }
-
-    private String f9;
-
-    public String getF9() {
-      return f9;
-    }
-
-    public void setF9(final String f9) {
-      this.f9 = f9;
-    }
-
-    private String f10;
-
-    public String getF10() {
-      return f10;
-    }
-
-    public void setF10(final String f10) {
-      this.f10 = f10;
-    }
-
-    private String f11;
-
-    public String getF11() {
-      return f11;
-    }
-
-    public void setF11(final String f11) {
-      this.f11 = f11;
-    }
-
-    private String f12;
-
-    public String getF12() {
-      return f12;
-    }
-
-    public void setF12(final String f12) {
-      this.f12 = f12;
-    }
-
-    private String f13;
-
-    public String getF13() {
-      return f13;
-    }
-
-    public void setF13(final String f13) {
-      this.f13 = f13;
-    }
-
-    private String f14;
-
-    public String getF14() {
-      return f14;
-    }
-
-    public void setF14(final String f14) {
-      this.f14 = f14;
-    }
-
-    private String f15;
-
-    public String getF15() {
-      return f15;
-    }
-
-    public void setF15(final String f15) {
-      this.f15 = f15;
-    }
-
-    private String f16;
-
-    public String getF16() {
-      return f16;
-    }
-
-    public void setF16(final String f16) {
-      this.f16 = f16;
-    }
-
-    private String f17;
-
-    public String getF17() {
-      return f17;
-    }
-
-    public void setF17(final String f17) {
-      this.f17 = f17;
-    }
-
-    private String f18;
-
-    public String getF18() {
-      return f18;
-    }
-
-    public void setF18(final String f18) {
-      this.f18 = f18;
-    }
-
-    private String f19;
-
-    public String getF19() {
-      return f19;
-    }
-
-    public void setF19(final String f19) {
-      this.f19 = f19;
-    }
-  }
 
   public record WideRec(
     String f0,
@@ -312,6 +66,8 @@ public class IntoBenchmark {
   private Mapper<WideRec, IntoWide> wide;
   private WideRec wideSource;
   private IntoWide wideTarget;
+  private IntoFieldSrc narrowFieldSource;
+  private IntoFieldWideSrc wideFieldSource;
 
   @Setup
   public void setup() {
@@ -345,6 +101,39 @@ public class IntoBenchmark {
     );
     wideTarget = new IntoWide();
     wide.into(wideTarget, wideSource);
+
+    narrowFieldSource = new IntoFieldSrc("a", "b", "c", "d", "e");
+    wideFieldSource = new IntoFieldWideSrc(
+      "f0",
+      "f1",
+      "f2",
+      "f3",
+      "f4",
+      "f5",
+      "f6",
+      "f7",
+      "f8",
+      "f9",
+      "f10",
+      "f11",
+      "f12",
+      "f13",
+      "f14",
+      "f15",
+      "f16",
+      "f17",
+      "f18",
+      "f19"
+    );
+    // A generated row measures the generated bridge only while the field's mapper runs it; a
+    // mapper left on the runtime path would measure something else under the same name.
+    for (final var field : List.of(IntoMappers.NARROW.explain(), IntoMappers.WIDE.explain())) {
+      if (field.declared().map(OpticNode.Declared::runs).orElse(null) != OpticNode.Runs.GENERATED) {
+        throw new IllegalStateException("a @Bridge field's mapper runs on the runtime path: " + field);
+      }
+    }
+    IntoMappers.NARROW.into(narrowTarget, narrowFieldSource);
+    IntoMappers.WIDE.into(wideTarget, wideFieldSource);
   }
 
   @Benchmark
@@ -365,5 +154,54 @@ public class IntoBenchmark {
   @Benchmark
   public IntoWide intoExistingWide() {
     return wide.into(wideTarget, wideSource);
+  }
+
+  @Benchmark
+  public IntoNarrow intoGenerated() {
+    return IntoMappers.NARROW.into(narrowTarget, narrowFieldSource);
+  }
+
+  @Benchmark
+  public IntoNarrow intoHandWritten() {
+    final var source = narrowSource;
+    final var target = narrowTarget;
+    target.setA(source.a());
+    target.setB(source.b());
+    target.setC(source.c());
+    target.setD(source.d());
+    target.setE(source.e());
+    return target;
+  }
+
+  @Benchmark
+  public IntoWide intoGeneratedWide() {
+    return IntoMappers.WIDE.into(wideTarget, wideFieldSource);
+  }
+
+  @Benchmark
+  public IntoWide intoHandWrittenWide() {
+    final var source = wideSource;
+    final var target = wideTarget;
+    target.setF0(source.f0());
+    target.setF1(source.f1());
+    target.setF2(source.f2());
+    target.setF3(source.f3());
+    target.setF4(source.f4());
+    target.setF5(source.f5());
+    target.setF6(source.f6());
+    target.setF7(source.f7());
+    target.setF8(source.f8());
+    target.setF9(source.f9());
+    target.setF10(source.f10());
+    target.setF11(source.f11());
+    target.setF12(source.f12());
+    target.setF13(source.f13());
+    target.setF14(source.f14());
+    target.setF15(source.f15());
+    target.setF16(source.f16());
+    target.setF17(source.f17());
+    target.setF18(source.f18());
+    target.setF19(source.f19());
+    return target;
   }
 }
