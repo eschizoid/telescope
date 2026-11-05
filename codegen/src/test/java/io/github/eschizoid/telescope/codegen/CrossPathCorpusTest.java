@@ -14452,6 +14452,64 @@ class CrossPathCorpusTest {
   }
 
   @Test
+  @DisplayName("between two sealed interfaces, into writes the target's own case and refuses another, on both paths")
+  void intoBetweenSealedInterfacesWritesTheTargetsCaseOnBothPaths() throws ReflectiveOperationException {
+    final var prefix = "Is";
+    final var head = "package " + PACKAGE + ";\n";
+    final var caseBean =
+      "final public class %1$sTgt%2$s implements %1$sTgt {\n  private String value;\n  public %1$sTgt%2$s() {}\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n}\n";
+    final var all = List.of(
+      "public sealed interface %1$sSrc permits %1$sSrcA, %1$sSrcB {}\n",
+      "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgtA.class)\n" +
+        "public record %1$sSrcA(String value) implements %1$sSrc {}\n",
+      "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgtB.class)\n" +
+        "public record %1$sSrcB(String value) implements %1$sSrc {}\n",
+      "public sealed interface %1$sTgt permits %1$sTgtA, %1$sTgtB {}\n",
+      caseBean.replace("%2$s", "A"),
+      caseBean.replace("%2$s", "B"),
+      plainField(false),
+      "public class %1$sRuntime {\n  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class);\n  }\n}\n"
+    )
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toArray(JavaFileObject[]::new);
+    final var processed = bridged(all);
+    assertTrue(processed.success(), () -> "the bridges should compile: " + processed.errorMessages());
+    final var loader = new ServicesLoader(processed);
+    final var field = loader.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+    final var runtime = loader.loadClass(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+    final var sourceA = loader.loadClass(PACKAGE + "." + prefix + "SrcA").getConstructor(String.class);
+    final var sourceB = loader.loadClass(PACKAGE + "." + prefix + "SrcB").getConstructor(String.class);
+    final var targetA = loader.loadClass(PACKAGE + "." + prefix + "TgtA").getConstructor();
+    final var owed = List.of(
+      "#0(value=\"x\")",
+      REFUSED +
+        "Mapper.into(target, source): the source converts to " +
+        prefix +
+        "TgtB, and the target is a " +
+        prefix +
+        "TgtA. A value is written into a target of the case it converts to; call forward(source) to change the case."
+    );
+    for (final var mapper : List.of(field, runtime)) {
+      @SuppressWarnings("unchecked")
+      final var into = (Mapper<Object, Object>) mapper;
+      final var gave = new ArrayList<String>();
+      for (final var source : List.of(sourceA.newInstance("x"), sourceB.newInstance("z"))) {
+        final var target = targetA.newInstance();
+        try {
+          gave.add(shape(into.into(target, source), new IdentityHashMap<>()));
+        } catch (final RuntimeException e) {
+          gave.add(REFUSED + e.getMessage());
+        }
+      }
+      assertEquals(owed, gave, mapper == field ? "the @Bridge field's mapper" : "the runtime mapper");
+    }
+  }
+
+  @Test
   @DisplayName("a @Bridge field's mapper writes into the target through the generated bridge's own into")
   void theFieldMappersIntoCallsTheGeneratedInto() throws ReflectiveOperationException {
     final var prefix = "Iw";
