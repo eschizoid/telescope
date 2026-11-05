@@ -715,6 +715,27 @@ class ComputeFromSourceFieldTest {
   }
 
   @Test
+  @DisplayName("a reference with both forms in parentheses or under a cast is refused by the verifier and the runtime")
+  void aReferenceInParenthesesOrACastIsRefusedOnBothPaths() throws Exception {
+    final var words = bothForms("Card", "full", "Names::label", "Names.label(Person)");
+    refusedInShapes("Card", "compute(Card::full, (Names::label))", words);
+    refusedInShapes("Card", "compute(Card::full, ((Mapping.Fresh<String>) (Names::label)))", words);
+  }
+
+  @Test
+  @DisplayName(
+    "a function taking another class than the source, in parentheses or under a cast, is refused by the verifier and" +
+      " the runtime"
+  )
+  void aFunctionOffTheSourceInParenthesesIsRefusedOnBothPaths() throws Exception {
+    final var words =
+      "Deep map Person → Card: compute(...) fills 'full' from Names::foreign, which takes Plain, and the source" +
+      " Person is not one. Name a method taking Person, or a method of Person.";
+    refusedInShapes("Card", "compute(Card::full, (Names::foreign))", words);
+    refusedInShapes("Card", "compute(Card::full, (Mapping.FromSource<Plain, String>) Names::foreign)", words);
+  }
+
+  @Test
   @DisplayName("a protected method of the class's own package is refused on both paths")
   void aProtectedMethodOfTheSamePackageIsRefusedOnBothPaths() throws Exception {
     refusedInShapes(

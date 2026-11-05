@@ -2703,8 +2703,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * Reports a {@code compute} row's function that construction refuses, with the message the
      * bridge processor and the runtime path give: a method reference Java bound as a supplier whose
      * name has a form taking the source too, and a method reference or a lambda given a parameter
-     * type that takes a class the source is not. A target or a function written another way, such
-     * as a field holding it or a call returning it, is left to construction.
+     * type that takes a class the source is not. A function in parentheses or under a cast is read
+     * as the one written inside them, which is the value the row is handed. A target or a function
+     * written another way, such as a field holding it or a call returning it, is left to
+     * construction.
      */
     private void verifyComputeReference(
       final ExecutableElement rowExec,
@@ -2714,10 +2716,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final TypeMirror tgtType
     ) {
       if (tgt == null) return;
+      final var function = ComputeForms.unwrapped(arg);
       final var source = (TypeElement) types.asElement(srcType);
       final var target = (TypeElement) types.asElement(tgtType);
       final var form = ComputeForms.computeForm(rowExec);
-      final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), arg);
+      final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), function);
       final String refusal;
       if (ComputeForms.FRESH_FQN.equals(form)) {
         refusal = ComputeForms.sourceFormRefusal(
@@ -2732,8 +2735,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         );
       } else if (
         ComputeForms.FROM_SOURCE_FQN.equals(form) &&
-        arg instanceof MemberReferenceTree reference &&
-        elementAt(arg) instanceof ExecutableElement method
+        function instanceof MemberReferenceTree reference &&
+        elementAt(function) instanceof ExecutableElement method
       ) {
         refusal = ComputeForms.offSourceRefusal(
           types,
@@ -2744,7 +2747,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           target,
           tgt.name()
         );
-      } else if (ComputeForms.FROM_SOURCE_FQN.equals(form) && arg instanceof LambdaExpressionTree) {
+      } else if (ComputeForms.FROM_SOURCE_FQN.equals(form) && function instanceof LambdaExpressionTree) {
         refusal = ComputeForms.offSourceRefusal(
           types,
           trees.getTypeMirror(path),
