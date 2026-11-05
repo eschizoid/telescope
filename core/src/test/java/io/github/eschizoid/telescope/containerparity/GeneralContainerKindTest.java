@@ -133,15 +133,15 @@ class GeneralContainerKindTest {
   }
 
   @Test
-  @DisplayName("a list and a set are still a mismatch, which is the rule Collection is not an exception to")
-  void listAndSetStillDoNotPair() {
-    // Collection widens because it names no shape. A List and a Set each name one, and they differ,
-    // so nothing here relaxes that.
-    final var thrown = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(ListSrc.class, SetDst.class).forward(new ListSrc(List.of(new Elem("a"))))
-    );
+  @DisplayName("a list and a set convert into each other's kind, the set dropping a duplicate")
+  void listAndSetConvert() {
+    // A List and a Set each name a shape, and each side is built as its own: the set keeps the
+    // first of two equal elements, and the list takes the set's iteration order.
+    final var mapper = Telescope.mapper(ListSrc.class, SetDst.class);
+    final var forward = mapper.forward(new ListSrc(List.of(new Elem("a"), new Elem("b"), new Elem("a"))));
 
-    assertTrue(thrown.getMessage().contains("shapes"), thrown::getMessage);
+    assertEquals(2, forward.items().size(), "the duplicate is dropped by the set that receives it");
+    assertEquals(2, mapper.backward(forward).items().size());
   }
 
   @Test

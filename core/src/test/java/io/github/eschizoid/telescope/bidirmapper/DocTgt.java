@@ -1,17 +1,20 @@
 package io.github.eschizoid.telescope.bidirmapper;
 
-/** Target: numberOfAttempts is a String — renamed AND type-mismatched vs the source's Integer. */
+/**
+ * Target: numberOfAttempts is a Boolean — renamed, and of a type no conversion is built in for
+ * from the source's Integer.
+ */
 public class DocTgt {
 
-  private String numberOfAttempts;
+  private Boolean numberOfAttempts;
 
   public DocTgt() {}
 
-  public String getNumberOfAttempts() {
+  public Boolean getNumberOfAttempts() {
     return numberOfAttempts;
   }
 
-  public void setNumberOfAttempts(final String v) {
+  public void setNumberOfAttempts(final Boolean v) {
     this.numberOfAttempts = v;
   }
 }

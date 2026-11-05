@@ -535,11 +535,27 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("primitive vs a different scalar wrapper is Incompatible with the shape diagnostic")
+    @DisplayName("a primitive against another scalar's wrapper it widens to converts forward only")
+    void primitiveVsWiderWrapperWidensForwardOnly() {
+      final var refused = assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(int.class, Long.class, "count"));
+      assertEquals(PairingMessages.wideningOneWay("count", "int", "java.lang.Long"), refused.message());
+      final var widened = assertInstanceOf(
+        PairDecision.BuiltIn.class,
+        rules.decidePair(int.class, Long.class, "count", true)
+      );
+      assertEquals(Scalar.INT, widened.source());
+      assertEquals(Scalar.LONG, widened.target());
+    }
+
+    @Test
+    @DisplayName("a primitive against a scalar wrapper no conversion is built in for is Incompatible by shape")
     void primitiveVsForeignWrapperIsIncompatible() {
-      final var decision = rules.decidePair(int.class, Long.class, "count");
+      final var decision = rules.decidePair(boolean.class, Integer.class, "count", true);
       final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
-      assertEquals(PairingMessages.incompatibleShapes("count", "int", "java.lang.Long"), incompatible.message());
+      assertEquals(
+        PairingMessages.incompatibleShapes("count", "boolean", "java.lang.Integer"),
+        incompatible.message()
+      );
     }
 
     @Test
@@ -575,11 +591,32 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("a list and a set still do not pair, which Collection widening is not an exception to")
-    void listAndSetStillIncompatible() {
+    @DisplayName("a list and a set lift into each other's kind, each side keeping its own")
+    void aListAndASetLift() {
+      final var forward = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "f")
+      );
+      assertEquals(ContainerView.Kind.LIST, forward.src().kind());
+      assertEquals(ContainerView.Kind.SET, forward.tgt().kind());
+      final var backward = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(typeOf("setOfString"), typeOf("dequeOfString"), "f")
+      );
+      assertEquals(ContainerView.Kind.SET, backward.src().kind());
+      assertEquals(ContainerView.Kind.LIST, backward.tgt().kind());
+    }
+
+    @Test
+    @DisplayName("a container against an Optional or a map still does not pair")
+    void aListAndAnOptionalStillIncompatible() {
       assertInstanceOf(
         PairDecision.Incompatible.class,
-        rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "f")
+        rules.decidePair(typeOf("listOfString"), typeOf("mapStringToString"), "f")
+      );
+      assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(typeOf("setOfString"), typeOf("optionalOfString"), "f")
       );
     }
 
@@ -642,13 +679,11 @@ class PairingRulesTest {
       assertEquals(PointDto.class, map.tgt().elementType());
 
       final var list = assertInstanceOf(
-        PairDecision.Incompatible.class,
+        PairDecision.LiftContainer.class,
         rules.decidePair(PointDtoSet.class, PointDtoList.class, "f")
       );
-      assertEquals(
-        PairingMessages.incompatibleShapes("f", PointDtoSet.class.getName(), PointDtoList.class.getName()),
-        list.message()
-      );
+      assertEquals(ContainerView.Kind.SET, list.src().kind());
+      assertEquals(ContainerView.Kind.LIST, list.tgt().kind());
       assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(SortedPointSet.class, PointDtoMap.class, "f"));
     }
 
@@ -839,15 +874,15 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("List<X> vs Set<X> is Incompatible with the shape diagnostic — container kinds never" + " cross-lift")
+    @DisplayName("List<X> vs Map<K, X> is Incompatible with the shape diagnostic: a map lifts with no collection")
     void crossKindContainersAreIncompatible() {
-      final var decision = rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "tags");
+      final var decision = rules.decidePair(typeOf("listOfString"), typeOf("mapStringToString"), "tags");
       final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
       assertEquals(
         PairingMessages.incompatibleShapes(
           "tags",
           "java.util.List<java.lang.String>",
-          "java.util.Set<java.lang.String>"
+          "java.util.Map<java.lang.String, java.lang.String>"
         ),
         incompatible.message()
       );
@@ -856,10 +891,10 @@ class PairingRulesTest {
     @Test
     @DisplayName("two unrelated scalars are Incompatible with the shape diagnostic verbatim")
     void unrelatedScalarsAreIncompatible() {
-      final var decision = rules.decidePair(String.class, Integer.class, "sorId");
+      final var decision = rules.decidePair(String.class, Character.class, "sorId");
       final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
       assertEquals(
-        PairingMessages.incompatibleShapes("sorId", "java.lang.String", "java.lang.Integer"),
+        PairingMessages.incompatibleShapes("sorId", "java.lang.String", "java.lang.Character"),
         incompatible.message()
       );
     }

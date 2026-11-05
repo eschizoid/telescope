@@ -288,6 +288,16 @@ public final class PairingRules<T> {
   }
 
   /**
+   * The name a value failure gives a class: its name in source without its package, a nested
+   * class's enclosing classes joined to it by dots.
+   */
+  public String nameInMessage(final T type) {
+    final var name = props.sourceName(type);
+    final var pkg = props.packageName(type);
+    return pkg.isEmpty() || !name.startsWith(pkg + ".") ? name : name.substring(pkg.length() + 1);
+  }
+
+  /**
    * The decision for two class types where both are scalars, or where one is a {@code String} and
    * the other a date or time; null for any other pair, which the branches after it decide.
    *
