@@ -98,6 +98,21 @@ class MethodInstantiationTest {
       "Map<CharSequence, Long>",
       REFUSED
     ),
+    new Call("<T> Map<T, T> m(T t)", "String", "Map<String, ? extends Number>", REFUSED),
+    new Call("<T> Optional<T> m(T t)", "int", "Optional<? extends Long>", REFUSED),
+    new Call("<T> List<T> m(List<? super T> t)", "List<Integer>", "List<? extends String>", REFUSED),
+    new Call("<T> List<T[]> m(T t)", "String", "List<Integer[]>", REFUSED),
+    new Call("<T> List<T[]> m(T t)", "String", "List<? extends Integer[]>", REFUSED),
+    new Call("<T> List<List<T>> m(T t)", "String", "List<List<? extends CharSequence>>", REFUSED),
+    new Call("<T> List<List<? extends T>> m(T t)", "Integer", "List<List<? extends CharSequence>>", REFUSED),
+    new Call("<T, U extends T> Map<T, U> m(T t)", "String", "Map<String, Integer>", REFUSED),
+    new Call("<T, U extends T> Map<T, U> m(T t)", "String", "Map<String, ? extends Integer>", REFUSED),
+    new Call("<T extends CharSequence> List<T> m(T t)", "String", "List<? super Integer>", REFUSED),
+    new Call("<T extends Number> T m(String t)", "String", "String", REFUSED),
+    new Call("<T> List<T> m(List<? extends List<T>> t)", "List<? extends List<String>>", "List<CharSequence>", REFUSED),
+    new Call("<T> List<T> m(List<? extends List<T>> t)", "List<? extends List<String>>", "List<String>", "java.util.List<java.lang.String>"),
+    new Call("<T> List<T> m(List<? extends Optional<T>> t)", "List<? extends Optional<String>>", "List<Integer>", REFUSED),
+    new Call("<T> M.RawSub<T> m(T t)", "String", "List<String>", "demo.M.RawSub<java.lang.String>"),
     new Call("<T> Collection<T> m()", null, "List<String>", REFUSED),
     new Call("<T> Collection<T> m(T t)", "String", "List<String>", "java.util.Collection<java.lang.String>"),
     new Call("<T> List<T> m()", null, "int", REFUSED),
@@ -347,7 +362,8 @@ class MethodInstantiationTest {
         "  public interface IB extends Comparable<Integer> {}\n" +
         "  public static class Outer<T> { public class Inner {} }\n" +
         "  @SuppressWarnings(\"rawtypes\") public static class RawNames extends ArrayList {}\n" +
-        "  public static class Names extends ArrayList<String> {}\n"
+        "  public static class Names extends ArrayList<String> {}\n" +
+        "  @SuppressWarnings(\"rawtypes\") public static class RawSub<E> extends ArrayList {}\n"
     );
     for (int i = 0; i < CALLS.size(); i++) {
       final var call = CALLS.get(i);
@@ -410,7 +426,13 @@ class MethodInstantiationTest {
     ProcessorHarness.compile(asking, methods(), takes());
     final var all = new ArrayList<JavaFileObject>(List.of(methods()));
     all.addAll(calls());
-    final var javac = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
+    // javac stops reporting errors after a hundred by default, and every call it rejects has to be
+    // reported to be told from one it accepts.
+    final var javac = ProcessorHarness.compileFully(
+      List.of(),
+      List.of("-Xmaxerrs", String.valueOf(CALLS.size() + 1)),
+      all.toArray(JavaFileObject[]::new)
+    );
     final var rejected = new HashSet<String>();
     for (final var diagnostic : javac.diagnostics()) {
       if (diagnostic.getKind() != Diagnostic.Kind.ERROR || diagnostic.getSource() == null) continue;
