@@ -779,6 +779,26 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A mapper's {@code into} handed a {@code record}, which it cannot update in place: a record's
+   * components are fixed once its canonical constructor has run.
+   */
+  public static String intoRecordTarget(final String source, final String target, final String record) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into updates the object it is given in place, and " +
+      record +
+      " is a record, so it cannot: records are immutable. Call forward(source) for a new " +
+      record +
+      ", or make " +
+      record +
+      " a bean with a setter for each property the mapper writes."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (
