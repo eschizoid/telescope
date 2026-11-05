@@ -2,12 +2,15 @@ package io.github.eschizoid.telescope.codegen;
 
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.MemberReferenceTree;
+import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.util.TreePath;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayDeque;
 import java.util.List;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
@@ -50,6 +53,82 @@ final class ComputeForms {
   }
 
   /**
+   * The refusal of {@code arg}, the second argument of a {@code compute} row bound to the overload
+   * taking a supplier or a function, where it is a method reference to a method or constructor
+   * taking no argument whose name has a form taking {@code source} too; null otherwise. Only a
+   * reference written as the argument names the method the row chose: an argument of another shape,
+   * such as a call returning the supplier, names the method that made the supplier, which the row
+   * never runs. A reference javac compiles into a lambda method of its own names no method at run
+   * time either, since the reference's record there names that lambda method, so it is treated as
+   * the lambda the runtime path reads.
+   */
+  static String sourceFormRefusal(
+    final Trees trees,
+    final Types types,
+    final Elements elements,
+    final CompilationUnitTree unit,
+    final ExpressionTree arg,
+    final TypeElement source,
+    final TypeElement target,
+    final String property
+  ) {
+    if (!(arg instanceof MemberReferenceTree reference)) return null;
+    final var path = TreePath.getPath(unit, reference);
+    if (path == null || !(trees.getElement(path) instanceof ExecutableElement chosen)) return null;
+    final var refusal = formRefusal(
+      types,
+      elements,
+      chosen,
+      boundReceiver(trees, unit, reference, chosen),
+      source,
+      target,
+      property
+    );
+    return refusal == null || compiledAsLambda(trees, elements, path, reference, chosen) ? null : refusal;
+  }
+
+  /**
+   * Whether javac compiles {@code reference}, which names {@code chosen}, into a lambda method of
+   * the class it is written in, which calls {@code chosen}, rather than into a handle on {@code
+   * chosen}. It does so for a reference through {@code super}; for one to a protected member of a
+   * class in another package than the class it is written in; for one to a member of a class that
+   * is not accessible where it is written, though the member is, as a public method a package
+   * private class declares is through a public subclass; and for one to a constructor of an inner
+   * class, of a local class or of a class nested in a local class, whose instance needs what
+   * surrounds it.
+   */
+  private static boolean compiledAsLambda(
+    final Trees trees,
+    final Elements elements,
+    final TreePath path,
+    final MemberReferenceTree reference,
+    final ExecutableElement chosen
+  ) {
+    final var qualifier = reference.getQualifierExpression();
+    if (
+      (qualifier instanceof IdentifierTree name && name.getName().contentEquals("super")) ||
+      (qualifier instanceof MemberSelectTree select && select.getIdentifier().contentEquals("super"))
+    ) {
+      return true;
+    }
+    final var owner = (TypeElement) chosen.getEnclosingElement();
+    final var scope = trees.getScope(path);
+    if (
+      chosen.getModifiers().contains(Modifier.PROTECTED) &&
+      !elements.getPackageOf(chosen).equals(elements.getPackageOf(scope.getEnclosingClass()))
+    ) {
+      return true;
+    }
+    if (!trees.isAccessible(scope, owner)) return true;
+    if (chosen.getKind() != ElementKind.CONSTRUCTOR) return false;
+    if (owner.getNestingKind() == NestingKind.MEMBER && !owner.getModifiers().contains(Modifier.STATIC)) return true;
+    for (Element at = owner; at instanceof TypeElement type; at = type.getEnclosingElement()) {
+      if (type.getNestingKind() == NestingKind.LOCAL || type.getNestingKind() == NestingKind.ANONYMOUS) return true;
+    }
+    return false;
+  }
+
+  /**
    * The refusal of a reference to {@code chosen}, which takes no argument, whose name has a form
    * taking {@code source} too, or null. The form is looked for as the runtime path looks: of the
    * same name and kind, static for a static method and an instance method for a bound one, or a
@@ -64,7 +143,7 @@ final class ComputeForms {
    * written before {@code ::}, as the runtime path must, since the class file records a handle on
    * the declaring class only.
    */
-  static String sourceFormRefusal(
+  private static String formRefusal(
     final Types types,
     final Elements elements,
     final ExecutableElement chosen,
@@ -119,22 +198,20 @@ final class ComputeForms {
   }
 
   /**
-   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen}, an
+   * The type of the receiver {@code reference} is bound to when it names {@code chosen}, an
    * instance method a {@code compute} row binds as a supplier: the type of the expression written
    * before {@code ::}. An instance method taking no argument fits a supplier only through a
    * receiver, since a reference naming it by its class takes the receiver as an argument. Null for
-   * a static method or an argument that is not a method reference; for a constructor it is the
-   * class constructed, which the search for a constructor's form does not read.
+   * a static method; for a constructor it is the class constructed, which the search for a
+   * constructor's form does not read.
    */
-  static TypeMirror boundReceiver(
+  private static TypeMirror boundReceiver(
     final Trees trees,
     final CompilationUnitTree unit,
-    final ExpressionTree arg,
+    final MemberReferenceTree reference,
     final ExecutableElement chosen
   ) {
-    if (!(arg instanceof MemberReferenceTree reference) || chosen.getModifiers().contains(Modifier.STATIC)) {
-      return null;
-    }
+    if (chosen.getModifiers().contains(Modifier.STATIC)) return null;
     return trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
   }
 

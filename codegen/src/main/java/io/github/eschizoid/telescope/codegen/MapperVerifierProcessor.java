@@ -2704,7 +2704,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * bridge processor and the runtime path give: a method reference Java bound as a supplier whose
      * name has a form taking the source too, and a method reference or a lambda given a parameter
      * type that takes a class the source is not. A target or a function written another way, such
-     * as a field holding it, is left to construction.
+     * as a field holding it or a call returning it, is left to construction.
      */
     private void verifyComputeReference(
       final ExecutableElement rowExec,
@@ -2719,12 +2719,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var form = ComputeForms.computeForm(rowExec);
       final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), arg);
       final String refusal;
-      if (ComputeForms.FRESH_FQN.equals(form) && elementAt(arg) instanceof ExecutableElement chosen) {
+      if (ComputeForms.FRESH_FQN.equals(form)) {
         refusal = ComputeForms.sourceFormRefusal(
+          trees,
           types,
           elements,
-          chosen,
-          ComputeForms.boundReceiver(trees, getCurrentPath().getCompilationUnit(), arg, chosen),
+          getCurrentPath().getCompilationUnit(),
+          arg,
           source,
           target,
           tgt.name()
