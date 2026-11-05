@@ -752,11 +752,12 @@ by a builder or a constructor, which forward writes through and into cannot. Bon
 null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config.
 
 **Generated path: ✅ full.** A strict `@Bridge` whose target is a bean with a setter for every property it writes gets a
-static `into(target, source)`, and the mapper a `@Bridge` field declares calls it; `explain()` names it. It writes what
-the runtime `into` writes: each property takes the value `forward(source)` gives it, read back through its getter, every
-value read before the first setter runs, each written through the setter the runtime chooses from the property's type,
-and a nested bean is replaced by the new object forward builds rather than updated in place. Every row the field form
-compiles behaves in it as in the runtime `into`. Where the bridge cannot update the target itself (a record, a bean
+static `into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
+subclass, whose own setters may take a value differently, goes to the runtime `into`. `explain()` says so. It writes
+what the runtime `into` writes: each property takes the value `forward(source)` gives it, read back through its getter,
+every value read before the first setter runs, each written through the setter the runtime chooses from the property's
+type, and a nested bean is replaced by the new object forward builds rather than updated in place. Every row the field
+form compiles behaves in it as in the runtime `into`. Where the bridge cannot update the target itself (a record, a bean
 without such a setter, a setter that takes the value only after a check of its class, a pair of sealed interfaces), it
 has no `into`, so a direct call does not compile, and the field's mapper runs the runtime `into`, which refuses in the
 same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;

@@ -291,7 +291,9 @@ public final class DeepMap {
     final var node = declaration.node();
     final var bridgeName = declaration.provider().getClass().getName().replaceFirst("Provider$", "");
     final var into = declaration.provider().writesInto()
-      ? "; into writes through " + bridgeName + ".into, and a subclass of the target through the setters it looks up" +
+      ? "; into writes through " +
+        bridgeName +
+        ".into, and a subclass of the target through the setters it looks up" +
         " at run time"
       : "; into writes through the setters it looks up at run time, since " + bridgeName + " has no into";
     final var built = Mapper.ofGenerated(

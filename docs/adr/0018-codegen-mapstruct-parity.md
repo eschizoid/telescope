@@ -106,4 +106,7 @@ gap is visible and each step above updates it.
 > property's type chooses. A nested bean is written whole, as the new object `forward` builds. A bridge whose target is
 > a record, or a bean without such a setter, builder-only and constructor-only beans included, has no `into`: a call to
 > the bridge's own `into` does not compile, and the field's mapper runs the runtime `into`, which refuses by name in the
-> same words. `explain()` on the field's mapper says which of the two writes.
+> same words. The field's mapper calls the bridge's `into` only for a target of exactly the class the bridge writes, or
+> of a final one: the bridge binds each setter on that class, and a subclass's own setter can take a value the base
+> class's would have taken differently, so a subclass is written by the runtime `into`, which binds the setter on the
+> class it is handed. `explain()` on the field's mapper says which of the two writes.

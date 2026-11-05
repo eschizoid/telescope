@@ -14463,7 +14463,11 @@ class CrossPathCorpusTest {
       final var bridge = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge");
       final var hasInto = Arrays.stream(bridge.getMethods()).anyMatch(m -> m.getName().equals("into"));
       final var why = ((Mapper<?, ?>) field).explain().declared().orElseThrow().why();
-      final var saysGenerated = why.endsWith("; into writes through " + bridge.getName() + ".into, and a subclass of the target through the setters it looks up at run time");
+      final var saysGenerated = why.endsWith(
+        "; into writes through " +
+          bridge.getName() +
+          ".into, and a subclass of the target through the setters it looks up at run time"
+      );
       if (hasInto != row.generated() || saysGenerated != row.generated()) {
         failures.add(row.name() + ": the bridge " + (hasInto ? "has" : "has no") + " into, and explain() says " + why);
       }

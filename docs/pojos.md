@@ -105,7 +105,8 @@ comes on the first `into` call for a target of that class rather than when the m
 through `forward` needs no setters.
 
 On a `@Bridge` field's mapper, `into` is generated with the bridge when the target class has a setter for every property
-the bridge writes: plain setter calls, no reflection, with the same result. Otherwise the field's mapper runs the
+the bridge writes: plain setter calls, no reflection, with the same result, for a target of exactly that class. A
+subclass, whose own setters may take a value differently, and a target class without such setters are written by the
 runtime `into` above, and `explain()` says which of the two writes.
 
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same

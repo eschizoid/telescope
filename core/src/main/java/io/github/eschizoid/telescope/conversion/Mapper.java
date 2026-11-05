@@ -724,10 +724,12 @@ public class Mapper<A, B> {
    * mapper of its own case, and {@code source} must convert to that case.
    *
    * <p><b>A {@code @Bridge} field's mapper.</b> Where the bridge generated for the field can update
-   * its target in place, the field's mapper overrides this method with one call to the bridge's
-   * {@code into}, which writes the same properties through the same setters with no reflection;
-   * {@link #explain()} says which of the two writes. The bridge has such an {@code into} only when
-   * the target is a bean with a setter for every property the bridge writes.
+   * its target in place, the field's mapper hands a target of exactly the class the bridge writes
+   * to the bridge's {@code into}, which writes the same properties through the same setters with no
+   * reflection; {@link #explain()} says so. A subclass of that class is written here instead, since
+   * its own setters, which the bridge cannot know, decide how it takes a value. The bridge has such
+   * an {@code into} only when the target is a bean with a setter for every property the bridge
+   * writes.
    *
    * @param target the existing instance to mutate; must not be null and must not be a record
    * @param source the source value to map from
