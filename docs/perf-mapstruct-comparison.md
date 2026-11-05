@@ -10,8 +10,8 @@ measured.** Separate runs land on runners of different speeds, so a ratio built 
 hence the two columns below, read as the caption describes.
 
 The latest full run, with four forks on every row, is
-[Run 9](#run-9-2026-10-09-after-the-generated-mapper-converts-constructor-arguments-first). The README's figures come
-from it.
+[Run 9](#run-9-2026-10-09-after-the-generated-mapper-converts-constructor-arguments-first). The README's figures came
+from it until Actions run 41877328599.
 
 | Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation        |
 | ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------- |
@@ -401,7 +401,7 @@ the footnote under the headline table describes.
 GitHub Actions run 38008688244 measured every row of `MapStructComparisonBenchmark` on `main` at `35caef83`. It used
 `ubuntu-latest`, 4 forks, 4 warmup and 8 measured iterations of 2 s each, and `-Pjmh.profilers=gc`. It is the first full
 run after #551, which makes a generated mapper convert each constructor argument into a local before the outer `new`,
-and after #550, which adds the cycle guard. The README's figures come from it.
+and after #550, which adds the cycle guard. The README's figures came from it until Actions run 41877328599.
 
 #551 is what moved the nested, deep and container rows. Its A/B pair ran the same filter and configuration on the commit
 before it (Actions 38003229015, `46bcf048`) and on its branch (Actions 38003226380, `bbbf90bf`). Nested `static forward`

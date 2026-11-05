@@ -13,7 +13,7 @@
 
 Telescope maps and updates Java records and POJOs with method references instead of strings. You write a mapper as an
 ordinary Java expression, the compiler checks every field it names, and an annotation processor turns it into plain Java
-that runs as fast as code you would write by hand.
+that runs in about MapStruct's time on the benchmarks below.
 
 ```java
 public record Invoice(String id, Customer customer, long totalCents, String internalNote) {
@@ -64,17 +64,18 @@ You name only what differs between the two types. Each kind of difference has on
 | a source field is left out                  | `drop(Order::internalNote)`                                 |
 
 `IsoDate` is a class implementing `BridgeFn<LocalDate, String>`, `Labels.of(Order)` is any static method taking the
-source, and `LineMapper` is a hand-written class with `forward` and `backward` methods. A nested path also works as a
-target, so `to(Order::city, path(OrderDto::shipping, Shipping::city))` builds the `shipping` object it writes into.
+source, and `LineMapper` is a hand-written class with static `forward` and `backward` methods. A nested path also works
+as a target, so `to(Order::city, path(OrderDto::shipping, Shipping::city))` builds the `shipping` object it writes into.
 
 A read through a nested path gives the property's null value when an object on the way is null: `null` for a reference
 and zero for a primitive. A write through one builds a missing object on the way, unless the value written is null. A
-`compute` row names no source property, so every source field still maps by name beside it. On `backward`, `constant`
-and `compute` rows write nothing, so a reference comes back `null` and a primitive as zero or `false`.
+`compute` row names no source property, so every source field still maps by name beside it. `constant` and `compute`
+rows run on `forward` only, and `backward` and `patch` skip them.
 
 `Telescope.mapper(...)` returns a two-way `Mapper` with `forward`, `backward` and `patch`. Its rows run in reverse on
-`backward`, and it refuses, when it is built, any field it can't map in both directions. `Telescope.mapperForward(...)`
-returns a one-way `ForwardMapper`, which leaves a target field it can't fill at its null value. Both take the same rows.
+`backward`, and it refuses, when it is built, a source or target field that no row accounts for and no field of the same
+name pairs with. `Telescope.mapperForward(...)` returns a one-way `ForwardMapper`, which leaves a target field it can't
+fill at its null value. Both take the same rows.
 
 ```java
 Mapper<Company, CompanyDto> dtoMapper = Telescope.mapper(
@@ -90,9 +91,10 @@ CompanyDto dto = dtoMapper.forward(company);
 Company back = dtoMapper.backward(dto); // the same rows, run in reverse
 ```
 
-A mapper is a value you can hold, pass around and ask questions of. `dtoMapper.explain()` prints every field it maps,
-converts or skips, and whether it runs generated code or the runtime engine. `dtoMapper.trace(company)` shows the same
-for one input, with its values. [docs/introspection.md](docs/introspection.md) covers both.
+A mapper is a value you can hold, pass around and ask questions of. `dtoMapper.explain()` lists the top-level fields it
+pairs, converts or skips, and for a mapper a `@Bridge` field declares it also says whether the field runs the generated
+bridge. `dtoMapper.trace(company)` shows the same for one input, with its values.
+[docs/introspection.md](docs/introspection.md) covers both.
 
 ## Typed paths
 
@@ -111,11 +113,11 @@ Company lowered = EMAILS.update(company, String::toLowerCase); // a new Company,
 
 List<String> all = EMAILS.toList(company);
 
-int howMany = EMAILS.count(company);
+long howMany = EMAILS.count(company);
 ```
 
-Without telescope, the same update is about 25 lines of nested `stream().map(...)` calls and constructors that pass
-every untouched field through by hand. Several edits on the same structure fold into one pass:
+Without telescope, the same update rebuilds every record on the way down, with nested `stream().map(...)` calls and
+constructors that pass every untouched field through by hand. Several edits on the same structure fold into one pass:
 
 ```java
 Telescope<Company, Company> normalize = Telescope.all(
@@ -140,8 +142,8 @@ The same mapper runs two ways, and the call site is the same either way.
   loads. Nothing is generated and no build step is needed.
 
 You can start with the runtime mapper and add `@Bridge` where a hot loop needs the speed. A test suite runs the same
-inputs through both and fails when they give different results, and a compile-time verifier reports a mapper the runtime
-would refuse before the program runs.
+inputs through both and fails when they give different results, and a compile-time verifier reports the refusals the
+runtime would raise, for each `Telescope.mapper(...)` call whose types it can read.
 [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md#runtime-and-generated-mappers-are-tested-to-give-the-same-result)
 explains how the two are held together and the few shapes one refuses and the other accepts.
 
@@ -149,9 +151,10 @@ explains how the two are held together and the few shapes one refuses and the ot
 
 <!-- metrics: from MapStructComparisonBenchmark, Actions run 41877328599 -->
 
-On the latest run, a generated mapper took between 0.88 and 1.02 times MapStruct's time on every shape, and allocated
-the same bytes per call or fewer. The runtime mapper, which needs no build step, took 1.15 to 3.0 times MapStruct's
-time: a fixed cost of 6 to 7 ns per call dominates small objects and fades as the work per call grows.
+On the latest run, a generated mapper took between 0.88 and 1.02 times MapStruct's time on every shape in the table, and
+allocated the same bytes per call or fewer. The runtime mapper, which needs no build step, took 1.15 to 3.0 times
+MapStruct's time. On the flat and nested shapes it adds 4.5 to 6.7 ns per call, which is most of a small call's time,
+and on the deeper and container shapes it adds more time in total but less as a share of the call.
 
 | Shape                             | MapStruct | telescope, generated | telescope, runtime | bytes per call, all three |
 | --------------------------------- | --------: | -------------------: | -----------------: | ------------------------- |
@@ -167,10 +170,11 @@ time: a fixed cost of 6 to 7 ns per call dominates small objects and fades as th
 The flat and nested rows run a `@Bridge` mapper field; the deeper rows run a class-level `@Bridge`, which generates the
 same kind of code. The run is GitHub Actions run 41877328599 on `main` at `75867893`, with MapStruct 1.6.3 on JDK 25, 4
 forks of 8 measured iterations and the allocation profiler. MapStruct's rows are the control, so each ratio is read
-within the one run. MapStruct's Map row varied by ±80 ns across forks, so read that ratio as a near tie.
+within the one run. One of MapStruct's four forks on the Map row ran at about 1,550 ns and the other three at 1,256 to
+1,277 ns, so read that ratio as a near tie.
 
-[docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) has the method, every fork and the earlier runs,
-and the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action reproduces any of it.
+[docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) has the method and the per-fork figures of
+earlier runs, and the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action reproduces any of it.
 
 ## Coming from MapStruct
 
@@ -188,14 +192,14 @@ and the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action reproduc
 | `unmappedTargetPolicy = ReportingPolicy.ERROR`           | the default for `Telescope.mapper(...)`                     |
 
 A MapStruct mapper names its fields in strings inside annotations, because Java annotations only accept constants. Its
-processor checks those strings when it compiles, but an IDE rename doesn't update them. Telescope keeps the mapping out
-of the annotation, so every field is a method reference the compiler checks. The two tools land in the same performance
-class on the generated path.
+processor checks those strings when it compiles, but a plain IDE rename doesn't update them; only the MapStruct IDE
+plugin does. Telescope keeps the mapping out of the annotation, so every field is a method reference the compiler
+checks. The two tools land in the same performance class on the generated path.
 
 MapStruct still covers a few cases telescope doesn't, such as `@SubclassMapping` across an open class hierarchy rather
 than a sealed one. The [full comparison](docs/mapstruct-comparison.md) and the
 [migration guide](docs/mapstruct-migration.md) cover both tools in detail, and
-[docs/mapstruct-parity.md](docs/mapstruct-parity.md) lists every MapStruct feature with telescope's equivalent.
+[docs/mapstruct-parity.md](docs/mapstruct-parity.md) scores 29 MapStruct features against telescope's equivalents.
 
 ---
 
@@ -218,12 +222,14 @@ dependencies {
 </dependency>
 ```
 
-On Maven, the processor goes in the compiler plugin's `annotationProcessorPaths`. [docs/codegen.md](docs/codegen.md) has
-that setup, Lombok on the processor path, and JPMS.
+Release 2.0.0 predates `path(...)`, `compute` rows that read the source, `to` and `via` rows that name a class,
+`@TelescopeGetMapping` and `@Bridge` on a mapper field. Those ship in the next release. On Maven, the processor goes in
+the compiler plugin's `annotationProcessorPaths`. [docs/codegen.md](docs/codegen.md) has that setup, Lombok on the
+processor path, and JPMS.
 
 ## Quick start
 
-This example is complete, so you can paste it into a `main` and run it.
+The records and statements below run as written inside a `main` method, with the import at the top of the file.
 
 ```java
 import io.github.eschizoid.telescope.Telescope;
@@ -257,9 +263,9 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
 - **Quarkus.** `telescope-quarkus` adds the same registry as a CDI bean. See the [Quarkus guide](quarkus/README.md).
 - **Lombok.** `telescope-lombok` generates typed navigators for `@Data`, `@Value` and `@Builder` classes. See the
   [Lombok guide](lombok/README.md).
-- **GraalVM native image.** Runtime mappers, typed paths and generated code all run in a native image. Generated code
-  needs no configuration, and the runtime path needs your own types registered as in any GraalVM application. See
-  [docs/native-image.md](docs/native-image.md).
+- **GraalVM native image.** Runtime mappers, typed paths and generated code all run in a native image. Generated
+  `@Bridge` and `@FromMap` code needs no reflection configuration, while generated navigators and the runtime path need
+  your own types registered, as in any GraalVM application. See [docs/native-image.md](docs/native-image.md).
 
 ## Examples
 
@@ -307,7 +313,8 @@ Everything is on Maven Central under `io.github.eschizoid`.
   lambda carries no field name. `.fieldByName(String)` is the late-bound escape hatch, and its name says so.
 - **Exact matching.** Fields pair by exact name, recursively, with no fuzzy matching. Without a row, a field converts
   only between the same type, a primitive and its wrapper, an `Optional` and a nullable value, two records or beans that
-  map, two containers whose elements convert, or two enums with the same constant names.
+  map, two containers whose elements convert, two enums with the same constant names, or two sealed interfaces whose
+  cases map.
 - **Records and JavaBeans-style POJOs.** Records rebuild through the canonical constructor. POJOs rebuild through a
   builder, an all-args constructor or setters, in that order, and `WriteHint.writeBean(...)` picks one.
 - **Nulls are uniform.** A null in the middle of a path focuses nothing, and a mapper maps `null` to `null`.
@@ -317,11 +324,11 @@ Everything is on Maven Central under `io.github.eschizoid`.
 
 ```bash
 ./gradlew build          # every module, the starters and the examples
-./gradlew check          # what CI runs: every test suite, the formatting gate and the native-image suites
+./gradlew check          # what CI runs: every test suite, the formatting gate and the suites rerun on the native-image code path
 ./gradlew :benchmarks:jmh -Pjmh.includes=MapStructComparisonBenchmark   # the head-to-head numbers
 ```
 
-Java 21 or later runs telescope. The build uses a newer toolchain, and CI builds every module on JDK 25. The design
+Telescope's classes target Java 21. The build uses a newer toolchain, and CI builds every module on JDK 25. The design
 decisions are recorded in [docs/adr/](docs/adr/).
 
 ## License

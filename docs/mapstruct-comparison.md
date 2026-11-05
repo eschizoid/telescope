@@ -28,8 +28,10 @@ default `unmappedTargetPolicy = WARN` it only produces a warning, and the field 
 fields when the mapper is built, so telescope differs here only in its default.
 
 Nested targets stay typed too. MapStruct writes `@Mapping(source = "flat", target = "a.b.c")` with a dotted string.
-Telescope accepts a navigator as the target of a row. The `@Focus` annotation processor generates such a navigator for a
-record, and each of its steps is a method call that `javac` checks.
+Telescope accepts a typed path as the target of a row, written with method references, as in
+`to(Cart::customerName, path(CartDto::shipping, Shipping::recipient, Recipient::fullName))`, which needs no processor. A
+navigator the `@Focus` annotation processor generates works too, and each of its steps is a method call that `javac`
+checks.
 
 ```java
 Telescope.mapper(Cart.class, CartDto.class,
@@ -167,14 +169,15 @@ field at its default value, which is `null`, zero, or `false`. `Telescope.fromMa
 from a default for its type. `Mapper.into(...)` writes onto an existing bean and skips a property with no public setter.
 
 Same-typed JDK collections are copied rather than shared, so changing the target's list never changes the source's.
-[Mapping](#mapping) has the details.
+[docs/type-conversion.md](type-conversion.md) has the details.
 
 ## Measured performance
 
-On the latest run, each call shape of the generated mapper ran close to MapStruct's time on every tier.
+The README's [Measured performance](../README.md#measured-performance) table has the current figures. On Actions run
+38008688244, an earlier run, each call shape of the generated mapper ran close to MapStruct's time on every tier.
 
-- Forward, from the source bean to the target record, the `BRIDGE_FN` constant that the `@Bridge` sample above calls
-  took 1.00 to 1.01 times MapStruct's time on flat, 1.02 on nested, and 0.99 on deep.
+- Forward, from the source bean to the target record, the `BRIDGE_FN` constant a class-level `@Bridge` generates took
+  1.00 to 1.01 times MapStruct's time on flat, 1.02 on nested, and 0.99 on deep.
 - Forward, the composable `BRIDGE.read` value took 1.08 times MapStruct's time on flat, 1.06 on nested, 0.99 to 1.00 on
   deep, 1.05 on the Set field, and 0.99 to 1.11 on the Map field.
 - Backward, from the record to the bean, `BRIDGE.set` took 1.05 times MapStruct's time on flat and 1.09 on the Map
@@ -264,7 +267,8 @@ it. The [migration guide](mapstruct-migration.md) turns the matrix into steps yo
 ### When MapStruct is the right pick
 
 - You need mapping bodies written in an embedded expression language, such as `@Mapping(expression = "java(...)")` or
-  qualifier dispatch. Telescope takes plain Java mappers passed to `Mapping.via(...)` instead.
+  qualifier dispatch. Telescope takes a method reference in a `compute(...)` row, or a mapper passed to
+  `Mapping.via(...)`, instead.
 - You need `@SubclassMapping` across hierarchies that are open rather than sealed. Telescope's `Match` covers sealed
   roots, and the [coverage matrix](mapstruct-parity.md) scores the gap.
 - Conversion is the whole job, with no path reuse or deep updates. Your team also treats readable generated mapper
