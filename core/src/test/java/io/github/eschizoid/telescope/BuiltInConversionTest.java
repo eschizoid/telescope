@@ -43,7 +43,10 @@ class BuiltInConversionTest {
     void stringsConvertBothWays() {
       final var mapper = Telescope.mapper(Order.class, OrderDto.class);
       final var dto = mapper.forward(new Order("42", "12.50", "CLOSED", "TRUE", List.of("3", "1", "3")));
-      assertEquals(new OrderDto(42L, new BigDecimal("12.50"), Status.CLOSED, true, new LinkedHashSet<>(List.of(3L, 1L))), dto);
+      assertEquals(
+        new OrderDto(42L, new BigDecimal("12.50"), Status.CLOSED, true, new LinkedHashSet<>(List.of(3L, 1L))),
+        dto
+      );
       assertEquals(new Order("42", "12.50", "CLOSED", "true", List.of("3", "1")), mapper.backward(dto));
     }
 
@@ -112,7 +115,10 @@ class BuiltInConversionTest {
         mapper.forward(new Counts("300", "1", "1"))
       );
       assertEquals("'small' got \"300\", not a byte", failure.getMessage());
-      assertEquals(new Counts("-3", "9", "0.25"), mapper.backward(new CountDtos((byte) -3, BigInteger.valueOf(9), 0.25)));
+      assertEquals(
+        new Counts("-3", "9", "0.25"),
+        mapper.backward(new CountDtos((byte) -3, BigInteger.valueOf(9), 0.25))
+      );
     }
 
     record Renamed(String code) {}
@@ -197,7 +203,10 @@ class BuiltInConversionTest {
     @DisplayName("a two-way mapper refuses a widening pair, naming the row to write")
     void twoWayRefusesWidening() {
       final var failure = assertThrows(RuntimeException.class, () -> Telescope.mapper(Count.class, CountDto.class));
-      assertTrue(failure.getMessage().contains("'n' widens int to long, which converts forward only"), failure::getMessage);
+      assertTrue(
+        failure.getMessage().contains("'n' widens int to long, which converts forward only"),
+        failure::getMessage
+      );
       assertTrue(failure.getMessage().contains("to(source, target, forward, backward)"), failure::getMessage);
     }
 

@@ -15,9 +15,9 @@ import io.github.eschizoid.telescope.internal.pairing.KeptNames;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
-import io.github.eschizoid.telescope.internal.pairing.Scalar;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.Scalar;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -5224,7 +5224,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return name;
   }
 
-  /** Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a set. */
+  /**
+   * Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a
+   * set.
+   */
   private static boolean reshapes(final FieldPlan.Kind from, final FieldPlan.Kind to) {
     return (
       (from == FieldPlan.Kind.LIST && to == FieldPlan.Kind.SET) ||
@@ -5260,8 +5263,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Plan a list against a set, either way round, as a nested class whose {@code forward} rebuilds
-   * the source as the target's kind and {@code backward} the reverse, each element converted as
-   * the element pair is planned. Returns the class's name, or null after refusing the pair.
+   * the source as the target's kind and {@code backward} the reverse, each element converted as the
+   * element pair is planned. Returns the class's name, or null after refusing the pair.
    */
   private String planReshape(
     final TypeElement source,
@@ -5590,11 +5593,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * One direction of a built-in conversion from a value of {@code from} to one of {@code to}: a
    * null converts to null, or to the default of a primitive it is written into; a {@code String} is
    * parsed by the JDK call the runtime makes, and a value it does not name fails with the property
-   * and the value in the shared spec's words; a value is written as text by {@code
-   * String.valueOf}, an enum constant by its name; and a number is widened as Java widens it. The
-   * backward direction of a widening, which only a forward-only bridge has, refuses, as the
-   * runtime's does. {@code backward} is true for that direction, whose {@code from} is the pair's
-   * target.
+   * and the value in the shared spec's words; a value is written as text by {@code String.valueOf},
+   * an enum constant by its name; and a number is widened as Java widens it. The backward direction
+   * of a widening, which only a forward-only bridge has, refuses, as the runtime's does. {@code
+   * backward} is true for that direction, whose {@code from} is the pair's target.
    */
   private void emitConvertDirection(
     final PrintWriter out,
@@ -5652,7 +5654,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    }");
   }
 
-  /** The JDK call that parses the {@code String} {@code in} into {@code scalar}, held as {@code to}. */
+  /**
+   * The JDK call that parses the {@code String} {@code in} into {@code scalar}, held as {@code to}.
+   */
   private static String parseExpression(final Scalar scalar, final TypeMirror to) {
     return switch (scalar) {
       case BYTE -> "java.lang.Byte.parseByte(in)";
@@ -5682,7 +5686,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     };
   }
 
-  /** A scalar's type as generated code writes it: a primitive's name, or a class's qualified name. */
+  /**
+   * A scalar's type as generated code writes it: a primitive's name, or a class's qualified name.
+   */
   private static String scalarTypeName(final TypeMirror type) {
     return type.getKind().isPrimitive() ? type.getKind().name().toLowerCase(Locale.ROOT) : qualifiedName(type);
   }

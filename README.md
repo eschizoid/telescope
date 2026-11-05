@@ -314,7 +314,9 @@ Everything is on Maven Central under `io.github.eschizoid`.
 - **Exact matching.** Fields pair by exact name, recursively, with no fuzzy matching. Without a row, a field converts
   only between the same type, a primitive and its wrapper, an `Optional` and a nullable value, two records or beans that
   map, two containers whose elements convert, two enums with the same constant names, or two sealed interfaces whose
-  cases map.
+  cases map. It also converts a `String` to and from a number, an enum by constant name and a boolean, a list and a set
+  into each other's kind, and, on a forward-only mapper, a number to one it widens to. Narrowing, and text against a
+  date or time, take a row.
 - **Records and JavaBeans-style POJOs.** Records rebuild through the canonical constructor. POJOs rebuild through a
   builder, an all-args constructor or setters, in that order, and `WriteHint.writeBean(...)` picks one.
 - **Nulls are uniform.** A null in the middle of a path focuses nothing, and a mapper maps `null` to `null`.

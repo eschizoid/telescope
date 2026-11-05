@@ -537,7 +537,10 @@ class PairingRulesTest {
     @Test
     @DisplayName("a primitive against another scalar's wrapper it widens to converts forward only")
     void primitiveVsWiderWrapperWidensForwardOnly() {
-      final var refused = assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(int.class, Long.class, "count"));
+      final var refused = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(int.class, Long.class, "count")
+      );
       assertEquals(PairingMessages.wideningOneWay("count", "int", "java.lang.Long"), refused.message());
       final var widened = assertInstanceOf(
         PairDecision.BuiltIn.class,
@@ -552,10 +555,7 @@ class PairingRulesTest {
     void primitiveVsForeignWrapperIsIncompatible() {
       final var decision = rules.decidePair(boolean.class, Integer.class, "count", true);
       final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
-      assertEquals(
-        PairingMessages.incompatibleShapes("count", "boolean", "java.lang.Integer"),
-        incompatible.message()
-      );
+      assertEquals(PairingMessages.incompatibleShapes("count", "boolean", "java.lang.Integer"), incompatible.message());
     }
 
     @Test

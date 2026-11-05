@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope.bidirmapper;
 
 /**
- * Target: numberOfAttempts is a Boolean — renamed, and of a type no conversion is built in for
- * from the source's Integer.
+ * Target: numberOfAttempts is a Boolean — renamed, and of a type no conversion is built in for from
+ * the source's Integer.
  */
 public class DocTgt {
 

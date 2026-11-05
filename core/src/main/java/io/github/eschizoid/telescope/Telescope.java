@@ -1076,6 +1076,18 @@ public sealed class Telescope<
    * walked strictly, as the pair a mapper is built for is, and {@code patch} and {@code into}
    * dispatch to them the same way.
    *
+   * <p><b>Built-in conversions.</b> A property paired by exact name, or by a plain {@code to(src,
+   * tgt)} row, converts without a row between a {@code String} and a number other than {@code
+   * char}, an enum by constant name or a boolean, in both directions, each direction the JDK's own
+   * parse or {@code String.valueOf}. A {@code String} that names no such value fails on that value
+   * with an {@code IllegalArgumentException} naming the property and the value. A number converts
+   * to one it widens to only on {@link #mapperForward mapperForward}; a mapper that converts both
+   * ways refuses the pair when it is built, since the way back would narrow. A list and a set
+   * convert into each other's kind: into a set, elements that are equal collapse to the first, and
+   * into a list, the elements take the order the set iterates them in. Narrowing, and a {@code
+   * String} against a date or time, are refused when the mapper is built, naming the row that
+   * converts them.
+   *
    * <p><b>One target per source property.</b> A mapper that converts both ways rebuilds each source
    * property from one target, so it refuses by name, when it is built, a source property written
    * into a second target, whichever order the rows come in. A write of a property is a row reading

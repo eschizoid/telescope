@@ -267,7 +267,10 @@ public final class PairingRules<T> {
     );
   }
 
-  /** Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a set. */
+  /**
+   * Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a
+   * set.
+   */
   private static boolean reshapes(final ContainerView.Kind from, final ContainerView.Kind to) {
     return (
       (from == ContainerView.Kind.LIST && to == ContainerView.Kind.SET) ||

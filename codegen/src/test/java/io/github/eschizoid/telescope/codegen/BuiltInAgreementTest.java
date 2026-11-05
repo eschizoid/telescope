@@ -45,7 +45,10 @@ class BuiltInAgreementTest {
     record @@OuterDto(@@Wide inner) {}
     """;
 
-  /** The verifier's warnings and construction's refusal, or null, for {@code call} under {@code prefix}. */
+  /**
+   * The verifier's warnings and construction's refusal, or null, for {@code call} under {@code
+   * prefix}.
+   */
   private record Outcome(List<String> warnings, String refusal) {}
 
   private static Outcome outcome(final String prefix, final String call) {

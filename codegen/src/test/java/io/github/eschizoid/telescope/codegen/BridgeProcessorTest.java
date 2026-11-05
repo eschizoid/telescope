@@ -108,7 +108,15 @@ class BridgeProcessorTest {
     @DisplayName("each converted property is read once forward and once backward")
     void eachPropertyIsReadOnce() {
       final var bridge = orderBridge().generated().get("demo.SrcBridge");
-      for (final var read : List.of("s.id()", "s.total()", "s.status()", "s.tags()", "t.id()", "t.total()", "t.tags()")) {
+      for (final var read : List.of(
+        "s.id()",
+        "s.total()",
+        "s.status()",
+        "s.tags()",
+        "t.id()",
+        "t.total()",
+        "t.tags()"
+      )) {
         assertEquals(1, occurrences(bridge, read), () -> read + " in\n" + bridge);
       }
     }
@@ -152,10 +160,7 @@ class BridgeProcessorTest {
         source("demo.Dst", "package demo;\npublic record Dst(long n) {}\n")
       );
       assertFalse(compilation.success());
-      assertTrue(
-        compilation.hasError(PairingMessages.wideningOneWay("n", "int", "long")),
-        compilation::errorMessages
-      );
+      assertTrue(compilation.hasError(PairingMessages.wideningOneWay("n", "int", "long")), compilation::errorMessages);
     }
   }
 
@@ -2076,9 +2081,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName(
-      "a List-subtype against a Set-subtype is rebuilt as each other's kind, never bean-introspected"
-    )
+    @DisplayName("a List-subtype against a Set-subtype is rebuilt as each other's kind, never bean-introspected")
     void kindMismatchedCollectionSubtypesAreNotBeanIntrospected() {
       // Both classes clear the qualified-name prefix filter, so a planner that recursed into one as
       // a bean would surface ArrayList's synthesized `isEmpty()` → property `empty` → no

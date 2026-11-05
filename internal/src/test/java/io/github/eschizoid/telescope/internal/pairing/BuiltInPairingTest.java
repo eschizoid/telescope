@@ -46,8 +46,10 @@ class BuiltInPairingTest {
   }
 
   private String refusal(final Type source, final Type target, final boolean forwardOnly) {
-    return assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(source, target, "p", forwardOnly))
-      .message();
+    return assertInstanceOf(
+      PairDecision.Incompatible.class,
+      rules.decidePair(source, target, "p", forwardOnly)
+    ).message();
   }
 
   @Nested
@@ -108,7 +110,10 @@ class BuiltInPairingTest {
     @Test
     @DisplayName("a String and a char are left to the shape refusal")
     void charIsNotText() {
-      assertEquals(PairingMessages.incompatibleShapes("p", "java.lang.String", "char"), refusal(String.class, char.class, true));
+      assertEquals(
+        PairingMessages.incompatibleShapes("p", "java.lang.String", "char"),
+        refusal(String.class, char.class, true)
+      );
     }
 
     @Test

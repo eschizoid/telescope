@@ -9,14 +9,14 @@ import java.util.function.Function;
 
 /**
  * The runtime side of the conversions the shared pairing spec builds in between two scalars: the
- * {@code Iso} a property of one scalar takes into a property of another, each direction calling
- * the JDK method the generated bridge calls for the same pair, so both paths parse, write and widen
- * a value alike and fail on the same values with the same message.
+ * {@code Iso} a property of one scalar takes into a property of another, each direction calling the
+ * JDK method the generated bridge calls for the same pair, so both paths parse, write and widen a
+ * value alike and fail on the same values with the same message.
  *
- * <p>A null converts to null, or to the default of a primitive it is written into. A {@code
- * String} is parsed by the number's own {@code parseX} or {@code String} constructor, an enum's
- * {@code valueOf}, and for a boolean as {@code true} or {@code false} in any case; a {@code String}
- * none of these accepts fails with the property and the value named. A value is written as text by
+ * <p>A null converts to null, or to the default of a primitive it is written into. A {@code String}
+ * is parsed by the number's own {@code parseX} or {@code String} constructor, an enum's {@code
+ * valueOf}, and for a boolean as {@code true} or {@code false} in any case; a {@code String} none
+ * of these accepts fails with the property and the value named. A value is written as text by
  * {@code String.valueOf}, which for an enum constant is its name.
  */
 final class BuiltIns {

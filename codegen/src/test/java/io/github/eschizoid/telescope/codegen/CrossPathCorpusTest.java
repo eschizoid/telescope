@@ -2350,7 +2350,9 @@ class CrossPathCorpusTest {
   private static final String LIST_KEYED_DTOS = "{[k1]=%1$sLeafDto[v=b], [k2]=%1$sLeafDto[v=a]}";
   private static final String REFUSED = "refused: ";
 
-  /** The prefix of an operation a cell owes a failure on, followed by words the failure contains. */
+  /**
+   * The prefix of an operation a cell owes a failure on, followed by words the failure contains.
+   */
   private static final String FAILS = "fails: ";
 
   /**
@@ -9533,7 +9535,11 @@ class CrossPathCorpusTest {
       Directions.BOTH,
       List.of(
         bridgedSrc(BRIDGE_TO_TGT, "String status, String paid, String flag", "new %1$sSrc(\"CLOSED\", \"TRUE\", null)"),
-        sampled("%1$sTgt", "%1$sStatus status, boolean paid, Boolean flag", "new %1$sTgt(%1$sStatus.OPEN, false, null)"),
+        sampled(
+          "%1$sTgt",
+          "%1$sStatus status, boolean paid, Boolean flag",
+          "new %1$sTgt(%1$sStatus.OPEN, false, null)"
+        ),
         enumOf("%1$sStatus", "OPEN, CLOSED")
       ),
       "#0(status=Status.CLOSED, paid=true, flag=null)",
@@ -9632,7 +9638,11 @@ class CrossPathCorpusTest {
           "java.util.List<%1$sLeaf> leaves",
           "new %1$sSrc(java.util.List.of(new %1$sLeaf(\"a\"), new %1$sLeaf(\"a\")))"
         ),
-        sampled("%1$sTgt", "java.util.Set<%1$sLeafDto> leaves", "new %1$sTgt(java.util.Set.of(new %1$sLeafDto(\"b\")))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.Set<%1$sLeafDto> leaves",
+          "new %1$sTgt(java.util.Set.of(new %1$sLeafDto(\"b\")))"
+        ),
         "public record %1$sLeaf(String v) {}\n",
         "public record %1$sLeafDto(String v) {}\n"
       ),
@@ -9693,10 +9703,7 @@ class CrossPathCorpusTest {
     new EnumCell(
       "a widening on a mapper that converts both ways",
       Directions.BOTH,
-      List.of(
-        bridgedSrc(BRIDGE_TO_TGT, "int n", "new %1$sSrc(1)"),
-        sampled("%1$sTgt", "long n", "new %1$sTgt(2L)")
-      ),
+      List.of(bridgedSrc(BRIDGE_TO_TGT, "int n", "new %1$sSrc(1)"), sampled("%1$sTgt", "long n", "new %1$sTgt(2L)")),
       REFUSED + "widens int to long, which converts forward only",
       null,
       null
@@ -9711,6 +9718,20 @@ class CrossPathCorpusTest {
       REFUSED + "widens java.lang.Integer to java.lang.Long, which converts forward only",
       null,
       null
+    ),
+    new EnumCell(
+      "a widening below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "%1$sInner i", "new %1$sSrc(new %1$sInner(1))"),
+        sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(2L))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, lenient = true)\n" +
+          "public record %1$sInner(int n) {}\n",
+        "public record %1$sInnerDto(long n) {}\n"
+      ),
+      "#0(i=#1(n=1))",
+      FAILS + "'n' widens int to long, which converts forward only",
+      FAILS + "'n' widens int to long, which converts forward only"
     ),
     new EnumCell(
       "a narrowing on a forward-only mapper",
@@ -9752,7 +9773,8 @@ class CrossPathCorpusTest {
         bridgedSrc(BRIDGE_TO_TGT, "String at", "new %1$sSrc(null)"),
         sampled("%1$sTgt", "java.time.Instant at", "new %1$sTgt(null)")
       ),
-      REFUSED + "pairs java.lang.String with java.time.Instant, and text converts to and from a date or time only in a format",
+      REFUSED +
+        "pairs java.lang.String with java.time.Instant, and text converts to and from a date or time only in a format",
       null,
       null
     ),
@@ -9850,9 +9872,9 @@ class CrossPathCorpusTest {
   /**
    * Runs each cell through both paths and returns what failed. A cell's prefix is {@code
    * prefixBase} and its index. An operation owed as {@link #FAILS} and a message is held to that
-   * message on both paths: the generated method and the runtime mapper each have to throw, with
-   * the message containing it. {@code runtimeRefusals} holds the cells whose runtime owes a
-   * refusal, and {@code exercised} collects those a cell reached.
+   * message on both paths: the generated method and the runtime mapper each have to throw, with the
+   * message containing it. {@code runtimeRefusals} holds the cells whose runtime owes a refusal,
+   * and {@code exercised} collects those a cell reached.
    */
   private static List<String> crossCells(
     final List<EnumCell> cells,
