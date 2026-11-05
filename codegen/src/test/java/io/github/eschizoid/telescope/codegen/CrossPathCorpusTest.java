@@ -16322,6 +16322,22 @@ class CrossPathCorpusTest {
    */
   private record GenericResult(String forward, String source, String sample, String target, String owed) {}
 
+  /** A forward taking a list of any subtype of its variable, which it copies. */
+  private static final String EXTENDING_LIST =
+    "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }";
+
+  /** A list class of a self-bounded variable, declared inside a row's mapper. */
+  private static final String ENUM_LIST =
+    "\n  public static final class EnumList<E extends Enum<E>> extends java.util.ArrayList<E> {" +
+    " public EnumList(final java.util.List<E> e) { super(e); } }";
+
+  private static final String ENUM_LIST_TYPE = "%1$sChMap.EnumList<?>";
+
+  private static final String ENUM_LIST_SAMPLE =
+    "new %1$sChMap.EnumList<>(java.util.List.of(java.util.concurrent.TimeUnit.SECONDS))";
+
+  private static final String SECONDS = "#0(child=[TimeUnit.SECONDS])";
+
   private static final List<GenericResult> GENERIC_RESULTS = List.of(
     // javac accepts each of these calls written by hand, the raw ones with an unchecked
     // warning.
@@ -16406,6 +16422,176 @@ class CrossPathCorpusTest {
       "java.util.Optional<Integer>",
       REFUSED + "which no instantiation of its type variables"
     ),
+    // A variable that is the parameter's whole type, or that bounds a wildcard of it
+    // from above, is a supertype of what the property holds; one that bounds a wildcard
+    // from below is a subtype of it; and one the parameter names inside a type argument
+    // where the property has a wildcard is that wildcard's capture. One in a type
+    // argument of the result where the target's property has a type is that type
+    // exactly, which has to admit the property and satisfy the variable's bound, and a
+    // generic class there is that type's class. A result of a class the target's class
+    // is not is seen as the target's class, and one of a class no subtype of it fits
+    // under no instantiation. One the target's property bounds by a wildcard from below
+    // is as high as that wildcard needs.
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<CharSequence>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return new java.util.ArrayList<>(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? super Integer>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<? extends Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      "#0(child=[7])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Optional<T> forward(final T a) { return java.util.Optional.of(a); }",
+      "int",
+      "7",
+      "java.util.Optional<Long>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Map<T, T> forward(final T a) { return java.util.Map.of(a, a); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, CharSequence>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T extends Comparable<T>> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "java.sql.Timestamp",
+      "new java.sql.Timestamp(0L)",
+      "java.util.List<java.sql.Timestamp>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<T> a) { return a; }",
+      "java.util.List<? extends Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<? extends Number>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }",
+      "java.util.List<?>",
+      "java.util.List.of(7)",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? super T> a) { return java.util.List.of(); }",
+      "java.util.List<String>",
+      "java.util.List.of(\"x\")",
+      "java.util.List<CharSequence>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<java.util.List<T>> a) { return a.get(0); }",
+      "java.util.List<? extends java.util.List<String>>",
+      "java.util.List.of(java.util.List.of(\"x\"))",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "Comparable<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.ArrayList<T> forward(final T a) { return new java.util.ArrayList<>(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<java.util.List<T>> forward(final T a) { return java.util.List.of(java.util.List.of(a)); }",
+      "String",
+      "\"x\"",
+      "java.util.List<java.util.Set<String>>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.ArrayList<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Collection<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    // A wildcard argument of a subclass stands in for the subclass's own variable, so its
+    // capture
+    // is bounded by that variable's bound, not by the bound the superclass declares.
+    new GenericResult(EXTENDING_LIST + ENUM_LIST, ENUM_LIST_TYPE, ENUM_LIST_SAMPLE, "java.util.List<Enum<?>>", SECONDS),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<Comparable<?>>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<java.io.Serializable>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<java.lang.constant.Constable>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      EXTENDING_LIST +
+        "\n  public static final class NodeList<N extends Comparable<N>> extends java.util.ArrayList<N> {" +
+        " public NodeList(final java.util.List<N> n) { super(n); } }",
+      "%1$sChMap.NodeList<?>",
+      "new %1$sChMap.NodeList<>(java.util.List.of(\"x\"))",
+      "java.util.List<Comparable<?>>",
+      "#0(child=[\"x\"])"
+    ),
     // No value of the class the method returns is one the target's property takes.
     new GenericResult(
       "Integer forward(final String a) { return a.length(); }",
@@ -16436,7 +16622,9 @@ class CrossPathCorpusTest {
           row.source() +
           " backward(final " +
           row.target() +
-          " b) { return null; }\n}\n",
+          " b) { return " +
+          (row.source().equals("int") ? "0" : "null") +
+          "; }\n}\n",
         sampled("%1$sSrc", row.source() + " child", "new %1$sSrc(" + row.sample() + ")"),
         forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::child, %1$sChMap.class)"),
         sampled("%1$sTgt", row.target() + " child", "new %1$sTgt(" + targetSample + ")"),
