@@ -16,9 +16,17 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
+import java.net.URLStreamHandler;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.AbstractSet;
@@ -29,6 +37,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -12573,6 +12582,8 @@ class CrossPathCorpusTest {
 
   private static final String ILLEGAL_ARGUMENT = "java.lang.IllegalArgumentException";
 
+  private static final String ILLEGAL_STATE = "java.lang.IllegalStateException";
+
   /**
    * What a row, its {@code declarations} each taking {@code prefix} as {@code %1$s} and the last of
    * them the runtime row, gave other than refusing on both paths: the processor with a diagnostic
@@ -13680,6 +13691,510 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a public no-argument constructor, a getter and a setter for
+   * {@code first} and {@code last}, and a getter alone for {@code full}, which it derives from the
+   * two and no member writes. Its {@code sample()} holds {@code "c"} and {@code "d"}.
+   */
+  private static String derivedBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String first;\n  private String last;\n  public %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getFirst() { return first; }\n  public void setFirst(final String v) { first = v; }\n" +
+      "  public String getLast() { return last; }\n  public void setLast(final String v) { last = v; }\n" +
+      "  public String getFull() { return first + \" \" + last; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { final var b = new %1$s" +
+      name +
+      "(); b.first = \"c\"; b.last = \"d\"; return b; }\n}\n"
+    );
+  }
+
+  /**
+   * As {@link #derivedBean}, built only by a static builder with a member for {@code first} and for
+   * {@code last}, through a private constructor taking the two.
+   */
+  private static String derivedBuilderBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private final String first;\n  private final String last;\n" +
+      "  private %1$s" +
+      name +
+      "(final String first, final String last) { this.first = first; this.last = last; }\n" +
+      "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n" +
+      "  public String getFull() { return first + \" \" + last; }\n" +
+      "  public static Builder builder() { return new Builder(); }\n" +
+      "  public static final class Builder {\n    private String first;\n    private String last;\n" +
+      "    public Builder first(final String v) { first = v; return this; }\n" +
+      "    public Builder last(final String v) { last = v; return this; }\n" +
+      "    public %1$s" +
+      name +
+      " build() { return new %1$s" +
+      name +
+      "(first, last); }\n  }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return builder().first(\"c\").last(\"d\").build(); }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a getter alone for {@code value} and for {@code extra}, built
+   * only by a static builder with a member for each, whose {@code sample()} holds {@code "y"} and
+   * {@code "e"}.
+   */
+  private static String getterOnlyBuilderBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private final String value;\n  private final String extra;\n" +
+      "  private %1$s" +
+      name +
+      "(final String value, final String extra) { this.value = value; this.extra = extra; }\n" +
+      "  public String getValue() { return value; }\n  public String getExtra() { return extra; }\n" +
+      "  public static Builder builder() { return new Builder(); }\n" +
+      "  public static final class Builder {\n    private String value;\n    private String extra;\n" +
+      "    public Builder value(final String v) { value = v; return this; }\n" +
+      "    public Builder extra(final String v) { extra = v; return this; }\n" +
+      "    public %1$s" +
+      name +
+      " build() { return new %1$s" +
+      name +
+      "(value, extra); }\n  }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return builder().value(\"y\").extra(\"e\").build(); }\n}\n"
+    );
+  }
+
+  /**
+   * A bean {@code %1$s<name>} with a getter alone for {@code value} and for {@code extra}, and one
+   * public constructor, taking both.
+   */
+  private static String getterOnlyConstructorBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private final String value;\n  private final String extra;\n  public %1$s" +
+      name +
+      "(final String value, final String extra) { this.value = value; this.extra = extra; }\n" +
+      "  public String getValue() { return value; }\n  public String getExtra() { return extra; }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return new %1$s" +
+      name +
+      "(\"y\", \"e\"); }\n}\n"
+    );
+  }
+
+  /**
+   * A getter-only property no row writes or reads, whose class has no member that writes it: a
+   * strict mapper has nothing to pair it with and nothing it could write into it, so both paths
+   * leave it out of the pairing and build the mapper, in the shape {@link #nestedPathFailures}
+   * reads.
+   */
+  private static final List<NestedPath> DERIVED_UNPAIRED = List.of(
+    new NestedPath(
+      "a target bean's derived getter",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String first, String last", "new %1$sSrc(\"a\", \"b\")"),
+        plainField(false),
+        derivedBean("Tgt"),
+        plainRuntime(false)
+      ),
+      "#0(first=\"a\", full=\"a b\", last=\"b\")",
+      "#0(first=\"c\", last=\"d\")",
+      "#0(first=\"c\", last=\"d\")"
+    ),
+    new NestedPath(
+      "a target bean's derived getter, the bean built by a builder with no member for it",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String first, String last", "new %1$sSrc(\"a\", \"b\")"),
+        plainField(false),
+        derivedBuilderBean("Tgt"),
+        plainRuntime(false)
+      ),
+      "#0(first=\"a\", full=\"a b\", last=\"b\")",
+      "#0(first=\"c\", last=\"d\")",
+      "#0(first=\"c\", last=\"d\")"
+    ),
+    new NestedPath(
+      "a target bean's derived getter beside a constant row",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String first", "new %1$sSrc(\"a\")"),
+        plainField(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::getLast, \"k\")"),
+        derivedBean("Tgt"),
+        plainRuntime(false, MAPPING + "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::getLast, \"k\")")
+      ),
+      "#0(first=\"a\", full=\"a k\", last=\"k\")",
+      "#0(first=\"c\")",
+      "#0(first=\"c\")"
+    ),
+    new NestedPath(
+      "a source bean's derived getter",
+      false,
+      List.of(
+        derivedBean("Src"),
+        plainField(false),
+        sampled("%1$sTgt", "String first, String last", "new %1$sTgt(\"a\", \"b\")"),
+        plainRuntime(false)
+      ),
+      "#0(first=\"c\", last=\"d\")",
+      "#0(first=\"a\", full=\"a b\", last=\"b\")",
+      "#0(first=\"a\", full=\"a b\", last=\"b\")"
+    ),
+    new NestedPath(
+      "a source bean's derived getter whose namesake a rename of another property fills",
+      false,
+      List.of(
+        derivedBean("Src"),
+        plainField(false, MAPPING + "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::getLast, %1$sTgt::full)"),
+        sampled("%1$sTgt", "String first, String full", "new %1$sTgt(\"a\", \"b\")"),
+        plainRuntime(false, MAPPING + "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::getLast, %1$sTgt::full)")
+      ),
+      "#0(first=\"c\", full=\"d\")",
+      "#0(first=\"a\", full=\"a b\", last=\"b\")",
+      "#0(first=\"a\", full=\"a b\", last=\"b\")"
+    )
+  );
+
+  /**
+   * An object a path steps through, built through its setters, with a getter alone for a property
+   * the path does not write: both paths build it and leave that property as the constructor leaves
+   * it, in the shape {@link #nestedPathFailures} reads.
+   */
+  private static final List<NestedPath> PATH_OBJECT_UNWRITTEN = List.of(
+    new NestedPath(
+      "a path through a bean with no setter for a property the path does not write",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String name, int qty", "new %1$sSrc(\"n\", 3)"),
+        "public class %1$sMid {\n  private String name;\n  private String code = \"c\";\n  public %1$sMid() {}\n" +
+          "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
+          "  public String getCode() { return code; }\n}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::name, " + pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::getName") + ")"
+        ),
+        "public record %1$sTgt(%1$sMid customer, int qty) {\n  public static %1$sTgt sample() {\n" +
+          "    final var m = new %1$sMid();\n    m.setName(\"m\");\n    return new %1$sTgt(m, 1);\n  }\n}\n",
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::name, " + pathOf("of", "%1$sTgt", "%1$sTgt::customer", "%1$sMid::getName") + ")"
+        )
+      ),
+      "#0(customer=#1(code=\"c\", name=\"n\"), qty=3)",
+      "#0(name=\"m\", qty=1)",
+      "#0(name=\"m\", qty=1)"
+    )
+  );
+
+  @Test
+  @DisplayName("a path through a bean with no setter for a property it does not write builds on both paths")
+  void aPathObjectsUnwrittenSetterlessPropertyIsLeftAloneOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(PATH_OBJECT_UNWRITTEN, "Pu");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a strict mapper leaves out a derived getter no row writes and no member writes, on both paths")
+  void aDerivedGetterNothingWritesIsLeftOutOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(DERIVED_UNPAIRED, "Dv");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A getter-only property no row writes or reads that a member of its class does write, which a
+   * strict mapper still refuses by name, as it refuses a property with a setter: the declarations,
+   * each taking {@code %1$s} as the row's prefix and the last of them the runtime row, and the
+   * refusal both paths owe.
+   */
+  private static final List<SettersDrop> WRITABLE_UNPAIRED = List.of(
+    new SettersDrop(
+      "a target bean's getter-only property its builder writes",
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false),
+        getterOnlyBuilderBean("Tgt"),
+        plainRuntime(false)
+      ),
+      ILLEGAL_STATE,
+      PairingMessages.noSameNameSource("%1$sSrc", "%1$sTgt", "property", "field", "extra")
+    ),
+    new SettersDrop(
+      "a target bean's getter-only property its constructor takes",
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false),
+        getterOnlyConstructorBean("Tgt"),
+        plainRuntime(false)
+      ),
+      ILLEGAL_STATE,
+      PairingMessages.noSameNameSource("%1$sSrc", "%1$sTgt", "property", "field", "extra")
+    ),
+    new SettersDrop(
+      "a target bean's property with a setter",
+      List.of(
+        sampled("%1$sSrc", "String value", "new %1$sSrc(\"x\")"),
+        plainField(false),
+        sampledBean("%1$sTgt", "return new %1$sTgt();", "String value", "String extra"),
+        plainRuntime(false)
+      ),
+      ILLEGAL_STATE,
+      PairingMessages.noSameNameSource("%1$sSrc", "%1$sTgt", "property", "field", "extra")
+    ),
+    new SettersDrop(
+      "a source bean's getter-only property its builder writes",
+      List.of(
+        getterOnlyBuilderBean("Src"),
+        plainField(false),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"x\")"),
+        plainRuntime(false)
+      ),
+      ILLEGAL_STATE,
+      PairingMessages.noSameNameTarget("%1$sSrc", "%1$sTgt", "property", "field", "extra")
+    ),
+    new SettersDrop(
+      "a source bean's property with a setter",
+      List.of(
+        sampledBean("%1$sSrc", "return new %1$sSrc();", "String value", "String extra"),
+        plainField(false),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"x\")"),
+        plainRuntime(false)
+      ),
+      ILLEGAL_STATE,
+      PairingMessages.noSameNameTarget("%1$sSrc", "%1$sTgt", "property", "field", "extra")
+    )
+  );
+
+  @Test
+  @DisplayName("a strict mapper refuses a getter-only property nothing fills that a member writes, on both paths")
+  void aWritableGetterOnlyPropertyNothingFillsIsRefusedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : WRITABLE_UNPAIRED) {
+      failures.addAll(
+        refusalFailures("Wg" + index++, row.name(), row.declarations(), row.refusal(), row.thrown(), row.refusal())
+      );
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A mapper's {@code into} handed {@code %1$sTgt.sample()} and {@code %1$sSrc.sample()}: the
+   * declarations, each taking {@code %1$s} as the row's prefix and the last of them the runtime
+   * row, and what both paths owe, the target's {@link #shape} after the call or the message {@code
+   * into} refuses with.
+   */
+  private record IntoRow(String name, List<String> declarations, String owed) {}
+
+  /**
+   * A bean {@code %1$s<name>} built by a static builder with a member for {@code value}, with a
+   * getter and a public setter for it, whose {@code sample()} holds {@code "y"}.
+   */
+  private static String builderAndSetterBean(final String name) {
+    return (
+      "public class %1$s" +
+      name +
+      " {\n  private String value;\n  private %1$s" +
+      name +
+      "() {}\n" +
+      "  public String getValue() { return value; }\n  public void setValue(final String v) { value = v; }\n" +
+      "  public static Builder builder() { return new Builder(); }\n" +
+      "  public static final class Builder {\n    private String value;\n" +
+      "    public Builder value(final String v) { value = v; return this; }\n" +
+      "    public %1$s" +
+      name +
+      " build() { final var b = new %1$s" +
+      name +
+      "(); b.value = value; return b; }\n  }\n" +
+      "  public static %1$s" +
+      name +
+      " sample() { return builder().value(\"y\").build(); }\n}\n"
+    );
+  }
+
+  private static final String INTO_SOURCE =
+    "public record %1$sSrc(String value) {\n" + "  public static %1$sSrc sample() { return new %1$sSrc(\"x\"); }\n}\n";
+
+  private static final List<IntoRow> INTO_ROWS = List.of(
+    new IntoRow(
+      "a target built by its builder, with no setter for a property the mapper writes",
+      List.of(INTO_SOURCE, plainField(false), builderOnlyBean("Tgt"), plainRuntime(false)),
+      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value")
+    ),
+    new IntoRow(
+      "a target built by a constructor, with no setter for a property the mapper writes",
+      List.of(INTO_SOURCE, plainField(false), constructorOnlyBean("Tgt"), plainRuntime(false)),
+      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value")
+    ),
+    new IntoRow(
+      "a target built through its setters",
+      List.of(INTO_SOURCE, plainField(false), settersOnlyBean("Tgt"), plainRuntime(false)),
+      "#0(value=\"x\")"
+    ),
+    new IntoRow(
+      "a target built by its builder, with a setter for every property the mapper writes",
+      List.of(INTO_SOURCE, plainField(false), builderAndSetterBean("Tgt"), plainRuntime(false)),
+      "#0(value=\"x\")"
+    ),
+    new IntoRow(
+      "a target with a derived getter nothing writes",
+      List.of(
+        sampled("%1$sSrc", "String first, String last", "new %1$sSrc(\"a\", \"b\")"),
+        plainField(false),
+        derivedBean("Tgt"),
+        plainRuntime(false)
+      ),
+      "#0(first=\"a\", full=\"a b\", last=\"b\")"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "into updates every property the mapper writes through a setter, and refuses by name one it has no setter for," +
+      " on both paths"
+  )
+  void intoRefusesAPropertyItCannotWriteInPlaceOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : INTO_ROWS) {
+      final var prefix = "Ip" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var generatedClasses = new ServicesLoader(processed);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      // The class generated for the field is the one the provider registered for it hands back.
+      if (field.getClass().getClassLoader() != generatedClasses) {
+        failures.add(
+          row.name() + ": the field holds " + field.getClass().getName() + ", not the class generated for it"
+        );
+      }
+      final var owed = row.owed().formatted(prefix);
+      for (final var side : List.of(
+        Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
+        Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
+      )) {
+        final var mapper = side.getValue().getKey();
+        final var loader = side.getValue().getValue();
+        final var into = intoOutcome(mapper, loader, prefix);
+        if (!into.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + into + ", owed " + owed);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code mapper}'s {@code into} does with {@code %1$sTgt.sample()} and {@code
+   * %1$sSrc.sample()}, the two classes {@code loader} holds: the target's {@link #shape}, or {@link
+   * #REFUSED} and the message it refused with.
+   */
+  @SuppressWarnings("unchecked")
+  private static String intoOutcome(final Object mapper, final ClassLoader loader, final String prefix)
+    throws ReflectiveOperationException {
+    final var src = Class.forName(PACKAGE + "." + prefix + "Src", true, loader);
+    final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader);
+    final var target = tgt.getMethod("sample").invoke(null);
+    final var source = src.getMethod("sample").invoke(null);
+    try {
+      return shape(((Mapper<Object, Object>) mapper).into(target, source), new IdentityHashMap<>());
+    } catch (final RuntimeException e) {
+      return REFUSED + e.getMessage();
+    }
+  }
+
+  /**
+   * A loader of every class {@code compilation} produced, which also serves the resources its
+   * processors wrote, so a {@code @Bridge} field's mapper finds the provider registered for it.
+   */
+  private static final class ServicesLoader extends ClassLoader {
+
+    private final Map<String, byte[]> classes;
+    private final Map<String, String> resources;
+
+    ServicesLoader(final ProcessorHarness.Compilation compilation) {
+      super(CrossPathCorpusTest.class.getClassLoader());
+      this.classes = Map.copyOf(compilation.classes());
+      this.resources = Map.copyOf(compilation.resources());
+    }
+
+    // A class of the compilation is defined here before the parent is asked, since the classes the
+    // same sources compiled without the processor are defined in the parent under the same names.
+    @Override
+    protected Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
+      synchronized (getClassLoadingLock(name)) {
+        final var bytes = classes.get(name);
+        if (bytes == null) return super.loadClass(name, resolve);
+        final var loaded = findLoadedClass(name);
+        return loaded != null ? loaded : defineClass(name, bytes, 0, bytes.length);
+      }
+    }
+
+    @Override
+    protected URL findResource(final String name) {
+      final var text = resources.get(name);
+      if (text == null) return null;
+      final var bytes = text.getBytes(StandardCharsets.UTF_8);
+      try {
+        return URL.of(
+          URI.create("mem:/" + name),
+          new URLStreamHandler() {
+            @Override
+            protected URLConnection openConnection(final URL url) {
+              return new URLConnection(url) {
+                @Override
+                public void connect() {}
+
+                @Override
+                public InputStream getInputStream() {
+                  return new ByteArrayInputStream(bytes);
+                }
+              };
+            }
+          }
+        );
+      } catch (final MalformedURLException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+
+    @Override
+    protected Enumeration<URL> findResources(final String name) {
+      final var url = findResource(name);
+      return url == null ? Collections.emptyEnumeration() : Collections.enumeration(List.of(url));
+    }
   }
 
   @Test

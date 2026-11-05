@@ -575,20 +575,20 @@ public final class Beans {
    * require a no-arg constructor: the caller supplies the already-constructed target, so only the
    * setters need to be public.
    *
-   * <p>Unlike {@link #capturedReader}, a name with no matching setter is <em>not</em> an error: it
-   * yields a no-op writer, so a getter-only or computed property is skipped rather than throwing.
-   * That asymmetry is deliberate and matches both what the rebuild strategies do for an unwritable
-   * property and MapStruct's {@code @MappingTarget} semantics, so such a property never breaks an
-   * otherwise valid mapping. Callers wanting a name checked must check it themselves.
+   * <p>Null where {@code beanClass} has no setter that takes a value of the property's own type, so
+   * the property cannot be written in place. Unlike {@link #capturedReader} this does not throw:
+   * the caller names the property in its own refusal.
    *
-   * <p>Pass the class the write will actually target. Binding to a declared supertype silently
-   * skips a property whose setter exists only on the concrete subclass, which is the ordinary shape
-   * for an entity hierarchy.
+   * <p>Pass the class the write will actually target. Binding to a declared supertype misses a
+   * property whose setter exists only on the concrete subclass, which is the ordinary shape for an
+   * entity hierarchy.
    *
    * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
    *     declaring class lives in a closed-package module without an {@code opens} directive
    */
   public static BiConsumer<Object, Object> capturedWriter(final Class<?> beanClass, final String name) {
+    final var choice = setterChoice(beanClass, name);
+    if (choice.method() == null || !choice.fit().reflects()) return null;
     return SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
   }
 
@@ -640,10 +640,6 @@ public final class Beans {
   private static BiConsumer<Object, Object> setterInvoker(final Class<?> cls, final String name, final boolean anyFit) {
     final var choice = setterChoice(cls, name);
     final var setter = choice.method() != null && (anyFit || choice.fit().reflects()) ? choice.method() : null;
-    // Getter-only / computed / immutable properties are silently skipped — without this,
-    // Mapper.into(target, source) would throw on the same property pair that Mapper.forward
-    // (via SettersWriter) silently skipped, producing an asymmetric same-mapper contract.
-    // MapStruct's @MappingTarget ignores unwritable target fields too; match.
     if (setter == null) return (pojo, value) -> {};
     final var declaringClass = setter.getDeclaringClass();
     final var lookup = privateLookupOrThrow(declaringClass, cls, "setter");
@@ -676,6 +672,27 @@ public final class Beans {
     } catch (final Throwable t) {
       throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
     }
+  }
+
+  /**
+   * Whether bean {@code cls} has no member that writes property {@code name}: no public setter of
+   * its name, no member answering to it on the builder a static {@code builder()} returns, and no
+   * public constructor with a parameter of its name. A constructor whose parameter names are not
+   * known writes every property when it takes one parameter per property, by position, and none
+   * otherwise. Such a property is a getter the class derives from its other state. False for a
+   * record, whose canonical constructor writes every component.
+   */
+  public static boolean noWriteMember(final Class<?> cls, final String name) {
+    if (cls.isRecord()) return false;
+    if (!setterChoice(cls, name).candidates().isEmpty()) return false;
+    final var builderType = builderTypeOf(cls);
+    if (builderType != null && builderSetterFor(cls, builderType, name) != null) return false;
+    final var arity = propertyNames(cls).length;
+    for (final var ctor : cls.getConstructors()) {
+      final var names = ParameterNames.of(ctor);
+      if (names == null ? ctor.getParameterCount() == arity : Arrays.asList(names).contains(name)) return false;
+    }
+    return true;
   }
 
   /**

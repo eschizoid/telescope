@@ -2060,7 +2060,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         kept.add(sf.name());
       }
     }
-    final var taken = KeptNames.taken(kept, renameTargetNames);
+    final var taken = KeptNames.taken(kept, renameTargetNames, name -> false);
     for (final var name : taken) {
       if (!transforms.containsKey(name) && !viaMappers.containsKey(name)) continue;
       error(
@@ -2069,9 +2069,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       return;
     }
+    // A kept property a strict bridge refuses is one the source class has a member to write; one it
+    // has none for is a derived getter, which the bridge leaves unread as a drop leaves it.
+    final var refusedTaken = KeptNames.taken(kept, renameTargetNames, name -> noWriteMember(source, name));
     final var effectiveDrops = new LinkedHashSet<>(drops);
     effectiveDrops.addAll(pathConsumed);
     effectiveDrops.addAll(targetPathSources);
+    if (!lenient) {
+      for (final var name : taken) if (!refusedTaken.contains(name)) effectiveDrops.add(name);
+    }
     if (lenient) {
       final var targetFieldNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
       for (final var sf : sourceFields) {
@@ -2122,6 +2128,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
+    // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
+    // mapper does, by the property's name.
+    if (!lenient && !refusedTaken.isEmpty()) {
+      error(
+        source,
+        PairingMessages.noSameNameTarget(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          slotWord(source),
+          slotWord(target),
+          refusedTaken.getFirst()
+        )
+      );
+      return;
+    }
+    // A derived getter nothing pairs with is left out: on the source as a drop, unread forward and
+    // unwritten backward, and on the target as a property nothing fills.
+    final var unwritten = paired(
+      source,
+      sourceFields,
+      effectiveDrops,
+      target,
+      targetFields,
+      renames,
+      renameFanouts,
+      injectedTargetFields
+    );
+    if (unwritten == null) return;
+    effectiveDrops.addAll(unwritten.sources());
+
     // The properties the bridge writes a value into, which a setters strategy it is told to take
     // has to have a setter for: on the target, each a kept source property is written into and each
     // a row fills; on the source, which only a mapper that converts backward writes, each kept
@@ -2141,32 +2177,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!lenient && !forwardOnlyTransforms.contains(sf.name())) writesSource.add(sf.name());
     }
 
-    // The source properties the bridge reads by name: every one no drop, path or lenient fill
-    // takes.
+    // The source properties the bridge reads by name: every one no drop, path, lenient fill or
+    // derived getter takes.
     final var nonDroppedSourceFields = effectiveDrops.isEmpty()
       ? sourceFields
       : sourceFields
           .stream()
           .filter(f -> !effectiveDrops.contains(f.name()))
           .toList();
-    // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
-    // mapper does, by the property's name.
-    if (!lenient && !taken.isEmpty()) {
-      error(
-        source,
-        PairingMessages.noSameNameTarget(
-          source.getSimpleName().toString(),
-          target.getSimpleName().toString(),
-          slotWord(source),
-          slotWord(target),
-          taken.getFirst()
-        )
-      );
-      return;
-    }
-    if (
-      !paired(source, sourceFields, effectiveDrops, target, targetFields, renames, renameFanouts, injectedTargetFields)
-    ) return;
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
     ) return;
@@ -2851,7 +2869,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
     if (carrierEl != null) {
-      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission);
+      final var intoNames = new ArrayList<String>();
+      for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
+      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission, intoNames);
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
 
@@ -3509,7 +3529,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         gives,
         referenceValued,
         null,
-        null
+        Set.of(property)
       );
       if (body == null) return null;
       final var text = new StringWriter();
@@ -3710,7 +3730,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form umbrella lives beside its carrier like any carrier-form bridge, so it is
     // registered for the same ServiceLoader lookup.
     if (configsByPair.getOrDefault(new TypePair(sourceFq, targetFq), BridgeConfig.EMPTY).carrierFq() != null) {
-      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY);
+      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of());
     }
 
     writeClass(
@@ -7701,14 +7721,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * lets {@code mapperForward} look it up by {@code (source, target)} through {@link
    * java.util.ServiceLoader}. The public class has an implicit no-arg constructor for {@code
    * ServiceLoader}; source/target are imported and referenced by simple name like the bridge
-   * itself.
+   * itself. {@code intoNames} are the target properties the bridge writes, which a field-declared
+   * mapper's {@code into} updates; a derived getter the bridge leaves out is not among them.
    */
   private void emitBridgeProvider(
     final TypeElement source,
     final TypeElement target,
     final String bridgeName,
     final String pkg,
-    final BridgeConfig cfg
+    final BridgeConfig cfg,
+    final List<String> intoNames
   ) {
     final var providerName = bridgeName + "Provider";
     final var carrier =
@@ -7764,7 +7786,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println();
           out.println("  @Override");
           out.println("  public List<String> targetProperties() {");
-          out.println("    return List.of(" + quotedList(fieldsOf(target).stream().map(Field::name).toList()) + ");");
+          out.println("    return List.of(" + quotedList(intoNames) + ");");
           out.println("  }");
           out.println();
           emitFieldMapper(out, source, target, bridgeName, cfg);
@@ -8555,8 +8577,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * refuse a setters strategy asked for with no setter for a property in {@code written}, the
    * properties the bridge writes into {@code to}. The ladder itself, and records always taking
    * their canonical constructor whatever the strategy, are {@link #rebuildFor}'s. {@code
-   * pairTarget} and {@code written} are null where {@code to} is an object a path steps through,
-   * which the path's plan has already held to its strategy.
+   * pairTarget} is null where {@code to} is an object a path steps through, which the path's plan
+   * has already held to its strategy, and {@code written} then holds the one property the path
+   * writes into it. Built through setters, a property in no {@code written} that has no setter is
+   * left as the constructor leaves it, as the runtime writer leaves it.
    *
    * <p>The choice is made once, by {@link #rebuildFor}, and handed here rather than made again. A
    * transform is checked against the member this will write through, so a second run of the ladder
@@ -8669,10 +8693,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var setter = setterName(to, f.name());
-          // A property of a side of the pair the bridge writes nothing into is left as the
-          // constructor leaves it, as the runtime writer leaves a property its setters strategy has
-          // no setter for, whether a hint names the strategy or the shared order takes it.
-          if (setter == null && pairTarget != null && !written.contains(f.name())) continue;
+          // A property the bridge writes nothing into, of a side of the pair or of an object a path
+          // steps through, is left as the constructor leaves it, as the runtime writer leaves a
+          // property its setters strategy has no setter for, whether a hint names the strategy or
+          // the shared order takes it.
+          if (setter == null && !written.contains(f.name())) continue;
           if (setter == null) {
             error(
               annotationSite,
@@ -9882,12 +9907,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether every property of the pair has something to pair it with, as the shared spec decides
-   * for a strict mapper, refusing the first that has not by name: a target property no row writes,
-   * no {@code constant} or {@code compute} fills and no source property of its name pairs with, or
-   * a source property no row reads or drops and no target property of its name pairs with.
+   * The derived getters of a pair nothing pairs with, which a strict bridge leaves out, once every
+   * other property of the pair has something to pair it with, as the shared spec decides for a
+   * strict mapper; null after refusing the first that has not by name: a target property no row
+   * writes, no {@code constant} or {@code compute} fills and no source property of its name pairs
+   * with, or a source property no row reads or drops and no target property of its name pairs with,
+   * where its class has a member to write it.
    */
-  private boolean paired(
+  private Unwritten paired(
     final TypeElement source,
     final List<Field> sourceFields,
     final Set<String> drops,
@@ -9918,11 +9945,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceNames,
       match,
       injectedTargetFields,
-      Set.of()
+      Set.of(),
+      name -> noWriteMember(target, name),
+      name -> noWriteMember(source, name)
     );
-    if (refusals.isEmpty()) return true;
-    error(source, refusals.getFirst());
-    return false;
+    if (!refusals.isEmpty()) {
+      error(source, refusals.getFirst());
+      return null;
+    }
+    final var sources = new LinkedHashSet<String>();
+    for (final var name : match.unmatchedSources()) if (noWriteMember(source, name)) sources.add(name);
+    final var targets = new LinkedHashSet<String>();
+    for (final var name : match.unmatchedTargets()) {
+      if (!injectedTargetFields.contains(name) && noWriteMember(target, name)) targets.add(name);
+    }
+    return new Unwritten(sources, targets);
+  }
+
+  /** The derived getters of each side of a pair that nothing pairs with. */
+  private record Unwritten(Set<String> sources, Set<String> targets) {}
+
+  /** Whether bean {@code type} has no member that writes {@code property}, a derived getter. */
+  private boolean noWriteMember(final TypeElement type, final String property) {
+    return WriteMembers.noWriteMember(processingEnv.getElementUtils(), type, property);
   }
 
   /**

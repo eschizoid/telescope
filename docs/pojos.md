@@ -92,6 +92,18 @@ violations surface as compile errors with the identical diagnostic text
 ([details in `telescope-codegen`](../codegen/README.md#compile-time-mapper-verification)). The builder-feasibility and
 unused-hint checks stay at construction time (both still eager and loud).
 
+A getter the class derives from its other state, such as a `getFull()` joining two names, has no setter, no builder
+member and no constructor parameter of its name. A strict two-way mapper leaves it out of the pairing on either side, on
+both paths and in the verifier: nothing could write it, so the mapper asks for no row that fills or reads it. A
+getter-only property that a builder member or a constructor parameter writes is refused like any other property nothing
+pairs with.
+
+`Mapper.into(target, source)` updates, in place, the properties the mapper writes, through the setters of the object it
+is handed, whatever strategy `forward` builds a new one with. A bean built by a builder or a constructor may have no
+setter for one of them, and `into` then refuses the call by the property's name before it writes anything. The refusal
+comes on the first `into` call for a target of that class rather than when the mapper is built, since a mapper used only
+through `forward` needs no setters.
+
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one
 `writeBeans(SETTERS)` row replaces N per-class enumerations. Per-class `writeBean(X.class, ...)` still wins for class
