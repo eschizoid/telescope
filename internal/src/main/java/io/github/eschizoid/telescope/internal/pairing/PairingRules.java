@@ -124,6 +124,11 @@ public final class PairingRules<T> {
         );
       }
 
+      // (a.1c) Two different scalars a built-in conversion takes between, or the refusal of a
+      // pair of scalars no conversion is built in for, naming the row that converts it.
+      final var builtIn = builtIn(srcType, tgtType, componentName, forwardOnly);
+      if (builtIn != null) return builtIn;
+
       // (a.2) Same-kind Collection / Map pair written without type arguments on both sides:
       // element copy, which converts nothing. It is right only where the elements can be shown to
       // need no conversion. Both sides fix the same element types, and the same key type for a
@@ -213,12 +218,13 @@ public final class PairingRules<T> {
     // A Collection-declared side takes the other's shape before anything else looks at the pair,
     // so the lift and the allocator are chosen by what is actually being built. Two of them settle
     // on a list, which is what a Collection guarantees on its own: iteration, and nothing about
-    // duplicates. List against Set stays a mismatch -- those are different shapes, not one shape
-    // named loosely.
+    // duplicates. A list and a set convert into each other's kind, each element converted as the
+    // pair of element types decides: into a set, an element equal to one already added is
+    // dropped, and into a list, the elements keep the order the set iterates them in.
     final var src = settledAgainst(srcView, tgtView);
     final var tgt = settledAgainst(tgtView, srcView);
 
-    if (src != null && tgt != null && src.kind() == tgt.kind()) {
+    if (src != null && tgt != null && (src.kind() == tgt.kind() || reshapes(src.kind(), tgt.kind()))) {
       // Map<K, X> ↔ Map<K, Y>: keys must match exactly; lifting preserves the source keys.
       if (src.kind() == ContainerView.Kind.MAP_VALUES && !props.sameType(src.keyType(), tgt.keyType())) {
         return new PairDecision.Incompatible<>(
@@ -258,6 +264,72 @@ public final class PairingRules<T> {
 
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
+    );
+  }
+
+  /** Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a set. */
+  private static boolean reshapes(final ContainerView.Kind from, final ContainerView.Kind to) {
+    return (
+      (from == ContainerView.Kind.LIST && to == ContainerView.Kind.SET) ||
+      (from == ContainerView.Kind.SET && to == ContainerView.Kind.LIST)
+    );
+  }
+
+  /**
+   * The scalar {@code type} is, or null: a primitive, a wrapper, {@code BigInteger}, {@code
+   * BigDecimal} or {@code String} by its exact class, and any enum. A subclass of one of the two
+   * arbitrary-precision classes is none of them, since what it adds to its parent is unknown.
+   */
+  public Scalar scalarOf(final T type) {
+    if (!props.isClassType(type)) return null;
+    if (props.isPrimitive(type)) return Scalar.ofPrimitive(props.typeName(type));
+    if (props.isEnumType(type)) return Scalar.ENUM;
+    return Scalar.ofClass(props.typeName(type));
+  }
+
+  /**
+   * The decision for two class types where both are scalars, or where one is a {@code String} and
+   * the other a date or time; null for any other pair, which the branches after it decide.
+   *
+   * <p>A {@code String} converts to and from a number other than {@code char}, an enum by constant
+   * name, and a boolean, in both directions. A number converts forward to one it widens to ({@link
+   * Scalar#widensTo}), so a mapper converting both ways refuses the pair, since the way back would
+   * narrow. Every other pair of numbers would narrow forward and is refused, as is a {@code String}
+   * against a date or time, whose text needs a format. Each refusal names the row that converts the
+   * pair. A pair of one scalar is decided before this, as the same type or a primitive against its
+   * wrapper, and so is a pair of enums.
+   */
+  private PairDecision<T> builtIn(
+    final T srcType,
+    final T tgtType,
+    final String componentName,
+    final boolean forwardOnly
+  ) {
+    final var source = scalarOf(srcType);
+    final var target = scalarOf(tgtType);
+    if (source == null || target == null) {
+      final var text =
+        (source == Scalar.STRING && props.isSubtypeOf(tgtType, WellKnown.TEMPORAL)) ||
+        (target == Scalar.STRING && props.isSubtypeOf(srcType, WellKnown.TEMPORAL));
+      if (!text) return null;
+      return new PairDecision.Incompatible<>(
+        PairingMessages.textNeedsFormat(componentName, props.typeName(srcType), props.typeName(tgtType))
+      );
+    }
+    if (source == target) return null;
+    if (source == Scalar.STRING || target == Scalar.STRING) {
+      final var other = source == Scalar.STRING ? target : source;
+      return other == Scalar.CHAR ? null : new PairDecision.BuiltIn<>(source, target);
+    }
+    if (!source.widens() || !target.widens()) return null;
+    if (source.widensTo(target)) {
+      if (forwardOnly) return new PairDecision.BuiltIn<>(source, target);
+      return new PairDecision.Incompatible<>(
+        PairingMessages.wideningOneWay(componentName, props.typeName(srcType), props.typeName(tgtType))
+      );
+    }
+    return new PairDecision.Incompatible<>(
+      PairingMessages.narrowing(componentName, props.typeName(srcType), props.typeName(tgtType))
     );
   }
 
@@ -1135,7 +1207,7 @@ public final class PairingRules<T> {
     if (props.sameType(props.boxed(read), props.boxed(write))) return SetterFit.SAME;
     if (props.isPrimitive(write)) {
       final var scalar = props.isPrimitive(read) ? props.typeName(read) : UNBOXED.get(props.typeName(read));
-      if (scalar != null && WIDENS.getOrDefault(scalar, Set.of()).contains(props.typeName(write))) {
+      if (scalar != null && Scalar.ofPrimitive(scalar).widensTo(Scalar.ofPrimitive(props.typeName(write)))) {
         return SetterFit.CONVERTS;
       }
       // A reference read type that a boxed value of the parameter's type is an instance of, such
@@ -1241,7 +1313,7 @@ public final class PairingRules<T> {
     if (props.sameType(from, to)) return true;
     if (props.isPrimitive(from) != props.isPrimitive(to)) return false;
     if (props.isPrimitive(from)) {
-      return WIDENS.getOrDefault(props.typeName(from), Set.of()).contains(props.typeName(to));
+      return Scalar.ofPrimitive(props.typeName(from)).widensTo(Scalar.ofPrimitive(props.typeName(to)));
     }
     return props.isAssignable(from, to);
   }
@@ -1264,22 +1336,6 @@ public final class PairingRules<T> {
     "float",
     "java.lang.Double",
     "double"
-  );
-
-  /** The widening primitive conversions, by type name. */
-  private static final Map<String, Set<String>> WIDENS = Map.of(
-    "byte",
-    Set.of("short", "int", "long", "float", "double"),
-    "short",
-    Set.of("int", "long", "float", "double"),
-    "char",
-    Set.of("int", "long", "float", "double"),
-    "int",
-    Set.of("long", "float", "double"),
-    "long",
-    Set.of("float", "double"),
-    "float",
-    Set.of("double")
   );
 
   /** Primitive ↔ wrapper pair over the same scalar, in either direction. */

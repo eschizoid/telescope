@@ -1466,6 +1466,103 @@ public final class PairingMessages {
     return sb.append(".").toString();
   }
 
+  /** The row that converts a pair both ways, as a refusal names it. */
+  private static final String TWO_WAY_ROW = "to(source, target, forward, backward)";
+
+  /** The row that converts a pair forward only, as a refusal names it. */
+  private static final String ONE_WAY_ROW = "toOneWay(source, target, forward)";
+
+  /**
+   * A number widened to a type that holds each of its values, on a mapper that also converts back,
+   * where the way back would narrow.
+   */
+  public static String wideningOneWay(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' widens " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which converts forward only: the way back would narrow " +
+      tgtType +
+      " to " +
+      srcType +
+      " and can lose the value. Convert it both ways with a " +
+      TWO_WAY_ROW +
+      " row, or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))."
+    );
+  }
+
+  /** A number converted to a type that does not hold each of its values. */
+  public static String narrowing(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' would narrow " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which can lose the value, so it is not converted without a row. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /** A {@code String} paired with a date or time, whose text has no one format. */
+  public static String textNeedsFormat(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", and text converts to and from a date or time only in a format, which nothing here names. " +
+      "Convert it with a " +
+      TWO_WAY_ROW +
+      " row that parses and formats in the format the text uses, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A value a built-in conversion cannot convert: a {@code String} that is no {@code what}, read
+   * from {@code componentName}. {@code what} is the phrase {@link #scalarPhrase} gives, and the
+   * message reads {@code 'total' got "12x", not a BigDecimal}. An element of a container is named
+   * by the property holding it.
+   */
+  public static String notAValue(final String componentName, final String value, final String what) {
+    return notAValueHead(componentName) + value + notAValueTail(what);
+  }
+
+  /** The text {@link #notAValue} puts before the value, which generated code writes as is. */
+  public static String notAValueHead(final String componentName) {
+    final var bracket = componentName.indexOf('[');
+    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket)) + "' got \"";
+  }
+
+  /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
+  public static String notAValueTail(final String what) {
+    return "\", not " + what;
+  }
+
+  /**
+   * What a value converted to {@code scalar} has to be, with its article: {@code an int}, {@code a
+   * Long}, {@code a BigDecimal}, {@code a boolean}, or for an enum {@code a constant of Status}, by
+   * {@code enumName}, the enum's name in source.
+   */
+  public static String scalarPhrase(final Scalar scalar, final boolean primitive, final String enumName) {
+    final String noun;
+    if (scalar == Scalar.ENUM) noun = "constant of " + enumName;
+    else if (primitive) noun = scalar.primitive();
+    else noun = scalar.className().substring(scalar.className().lastIndexOf('.') + 1);
+    return ("aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ") + noun;
+  }
+
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (
