@@ -16624,6 +16624,223 @@ class CrossPathCorpusTest {
       "java.util.List<Integer>",
       REFUSED + "which no instantiation of its type variables"
     ),
+    // A variable the target's property bounds by a wildcard is held to that bound: one bounded
+    // from above is a subtype of it and one bounded from below a supertype, together with what
+    // the argument and the variable's own bounds force on it. Inside a type argument the target
+    // gives exactly, a wildcard is met only by the same wildcard. A result that is the variable
+    // itself is a subtype of the member's type.
+    new GenericResult(
+      "<T> java.util.Map<T, T> forward(final T a) { return java.util.Map.of(a, a); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, ? extends Number>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Map<T, T> forward(final T a) { return java.util.Map.of(a, a); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, ? extends CharSequence>",
+      "#0(child={x=\"x\"})"
+    ),
+    new GenericResult(
+      "<T> java.util.Optional<T> forward(final T a) { return java.util.Optional.of(a); }",
+      "int",
+      "7",
+      "java.util.Optional<? extends Long>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Optional<T> forward(final T a) { return java.util.Optional.of(a); }",
+      "int",
+      "7",
+      "java.util.Optional<? extends Number>",
+      "#0(child=of 7)"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? super T> a) { return java.util.List.of(); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? super T> a) { return java.util.List.of(); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<? extends String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? super T> a) { return java.util.List.of(); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "java.util.List<? extends Number>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T[]> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer[]>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T[]> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? extends Integer[]>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T[]> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<String[]>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T[]> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? extends CharSequence[]>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T[]> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? super Integer[]>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<java.util.List<T>> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<java.util.List<? extends CharSequence>>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<java.util.List<? extends T>> forward(final T a) { return java.util.List.of(); }",
+      "Integer",
+      "7",
+      "java.util.List<java.util.List<? extends CharSequence>>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<java.util.List<? extends T>> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<java.util.List<? extends CharSequence>>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T, U extends T> java.util.Map<T, U> forward(final T a) { return java.util.Map.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T, U extends T> java.util.Map<T, U> forward(final T a) { return java.util.Map.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.Map<String, ? extends Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T, U extends T> java.util.List<U> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? extends Integer>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T, U extends T> java.util.List<U> forward(final T a) { return java.util.List.of(); }",
+      "String",
+      "\"x\"",
+      "java.util.List<Integer>",
+      "#0(child=[])"
+    ),
+    new GenericResult(
+      "<T extends CharSequence> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? super Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T extends CharSequence> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? super String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<? extends T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<? extends T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<? extends CharSequence>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T extends Number> T forward(final String a) { return null; }",
+      "String",
+      "\"x\"",
+      "String",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    // A parameter's wildcard bounded from above by a generic class the property's argument is
+    // or extends gives that class the argument's type arguments, so a variable inside it is
+    // fixed as it is where the parameter names the class directly.
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends java.util.List<T>> a) { return a.get(0); }",
+      "java.util.List<? extends java.util.List<String>>",
+      "java.util.List.of(java.util.List.of(\"x\"))",
+      "java.util.List<CharSequence>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends java.util.List<T>> a) { return a.get(0); }",
+      "java.util.List<? extends java.util.List<String>>",
+      "java.util.List.of(java.util.List.of(\"x\"))",
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends java.util.Optional<T>> a) {" +
+        " return java.util.List.of(); }",
+      "java.util.List<? extends java.util.Optional<String>>",
+      "java.util.List.of(java.util.Optional.of(\"x\"))",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<? extends java.util.Optional<T>> a) {" +
+        " return java.util.List.of(); }",
+      "java.util.List<? extends java.util.Optional<String>>",
+      "java.util.List.of(java.util.Optional.of(\"x\"))",
+      "java.util.List<String>",
+      "#0(child=[])"
+    ),
+    // A result of a generic class extending another raw reaches the other's parameterizations
+    // only through an unchecked conversion, which javac allows.
+    new GenericResult(
+      "<T> %1$sChMap.RawSub<T> forward(final T a) { return new %1$sChMap.RawSub<T>(a); }" +
+        "\n  @SuppressWarnings({\"rawtypes\", \"unchecked\"}) public static final class RawSub<E> extends" +
+        " java.util.ArrayList { public RawSub(final Object e) { add(e); } }",
+      "String",
+      "\"x\"",
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
     // No value of the class the method returns is one the target's property takes.
     new GenericResult(
       "Integer forward(final String a) { return a.length(); }",
