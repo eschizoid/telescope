@@ -174,7 +174,13 @@ the existing emitter without a second one.
 > instance of, which that binding never reaches. That one is refused by name: on the row at compile time, and when the
 > runtime path builds the mapper, except inside a native image, where the reference is not decoded and runs as the
 > supplier. A form whose parameter is `Object`, which a type variable with no bound erases to, takes any value rather
-> than the source, so `List::of` and `AtomicReference::new` run as suppliers as before. In a `@Bridge` mapper the
+> than the source, so `List::of` and `AtomicReference::new` run as suppliers as before. The form is looked for from the
+> class a reference names its method through, then in each class and interface that class extends. For a reference bound
+> to a receiver that is the type of the expression before `::`, on both paths. For a static reference it is the class
+> declaring the method, whatever class is written before `::`: the class file records a handle on the declaring class
+> and no trace of the class written, so the runtime path cannot see a form only that subclass declares, and the
+> processor and the verifier look where it does. `Sub::full`, with `full()` on `Base` and `full(User)` on `Sub`, runs
+> `Base.full()` as the supplier on both paths. In a `@Bridge` mapper the
 > function is a reference to a static method taking the source, to an instance method of the source or of a type it
 > extends, to a constructor taking the source, or to a method of a `static final` field, or a `static final` field
 > holding the function, and the generated bridge calls it directly on the source. The row names no source property, so
