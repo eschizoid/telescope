@@ -747,6 +747,38 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A mapper's {@code into} handed a {@code bean} with no setter that takes {@code property}, a
+   * property the mapper writes. {@code into} updates the object it is given through its setters, so
+   * it cannot update that property in place.
+   */
+  public static String intoPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into writes '" +
+      property +
+      "' into the " +
+      bean +
+      " it is given through a setter, and " +
+      bean +
+      " has no setter that takes it, so into cannot update it in place. Give " +
+      bean +
+      " a setter for '" +
+      property +
+      "', or call forward(source) for a new " +
+      bean +
+      "."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

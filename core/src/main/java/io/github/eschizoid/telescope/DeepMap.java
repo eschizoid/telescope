@@ -1850,7 +1850,7 @@ public final class DeepMap {
         for (final var name : srcNames) {
           if (!claimedSrc.contains(name) && !telescopeReadsSrc.contains(name)) kept.add(name);
         }
-        final var taken = KeptNames.taken(kept, claimedTgt);
+        final var taken = KeptNames.taken(kept, claimedTgt, name -> Beans.noWriteMember(source, name));
         if (!taken.isEmpty()) {
           final var dropped = topLevelDrop(overrides, source, srcRefl, taken.getFirst());
           throw new IllegalStateException(
@@ -1901,7 +1901,9 @@ public final class DeepMap {
           List.of(srcNames),
           match,
           filled,
-          unknownSrcRead ? null : telescopeReadsSrc
+          unknownSrcRead ? null : telescopeReadsSrc,
+          name -> Beans.noWriteMember(target, name),
+          name -> Beans.noWriteMember(source, name)
         );
         if (!unpaired.isEmpty()) throw new IllegalStateException(unpaired.getFirst());
       }
@@ -1913,6 +1915,17 @@ public final class DeepMap {
         // hop on the target. Elsewhere a field no row fills stays at its default, except a field
         // whose same-named source a row reads, which only a row naming that field lets through.
         if (!byName.contains(name)) {
+          // A getter no member of the target writes is derived from the target's other state. A
+          // strict mapper leaves it out where no row writes it: nothing fills it and nothing could,
+          // so it takes no step, and into, which writes the steps' properties, leaves it alone too.
+          if (
+            !lenient &&
+            !forwardOnly &&
+            !telescopeWritesTgt.contains(name) &&
+            !unknownTgtWrite &&
+            !writtenThroughPath(overrides, target, name) &&
+            Beans.noWriteMember(target, name)
+          ) continue;
           // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
           // topStepsOut) was never explicitly configured by the user — it was visited because a
           // parent field's genericType is reflectable. An unmatched target field there should stay
@@ -2041,6 +2054,12 @@ public final class DeepMap {
               Placeholders.placeholderIsoFor(rawClassOf(srcRefl.genericType(source, name)), false)
             )
           );
+          continue;
+        }
+        // A getter no member of the source writes is derived from the source's other state, so
+        // backward has nothing to write into it and forward nothing to read it for.
+        if (Beans.noWriteMember(source, name)) {
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           continue;
         }
         // A source field nothing reads falls back to a NULLING placeholder on a nested

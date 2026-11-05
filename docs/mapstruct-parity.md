@@ -739,17 +739,19 @@ final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partia
 Deliberate parity feature — the javadoc names @MappingTarget explicitly and the test class pins JPA load-mutate-save
 semantics (identity preserved, only mapped fields written, atomic staging). Bean targets only: records throw
 UnsupportedOperationException (MapStruct can't mutate records in place either). A property the mapper writes that has no
-public setter is refused when the mapper is built, where MapStruct's @MappingTarget skips it, since forward would drop
-the value as well. Bonus over MapStruct: patch() gives null-skipping sparse update without
-NullValuePropertyMappingStrategy.IGNORE config.
+public setter is refused where MapStruct's @MappingTarget skips it: when the mapper is built, for a bean built through
+its setters, since forward would drop the value as well, and on the first into call, for a bean built by a builder or a
+constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives null-skipping sparse
+update without NullValuePropertyMappingStrategy.IGNORE config.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a
 record target is rejected with UnsupportedOperationException) and `patch(Object, Object)` (sparse overlay);
 core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the class javadoc ('Pins Mapper.into(target,
 source) — the @MappingTarget equivalent'), the tests 'into(managed, dto) mutates target via setters; reference identity
-preserved' and 'Subsequent into(...) calls re-mutate the same instance', and 'a paired property without a setter refuses
-the mapper rather than being dropped by forward and into'</sub>
+preserved' and 'Subsequent into(...) calls re-mutate the same instance', 'a paired property without a setter refuses the
+mapper rather than being dropped by forward and into', and 'a builder-built target refuses on into by the property's
+name, and has written nothing'</sub>
 
 ### Object factories
 

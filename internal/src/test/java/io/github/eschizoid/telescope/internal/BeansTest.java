@@ -1449,17 +1449,11 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("getter-only / no-setter property silently no-ops (matches MapStruct's @MappingTarget" + " contract)")
-    void getterOnlyPropertyIsSilentNoOp() {
-      // Documented contract on Beans.capturedWriter: a property with no setX(value) method
-      // gets a no-op BiConsumer rather than throwing — Mapper.into(target, source) would
-      // otherwise blow up on a property pair that Mapper.forward (via SettersWriter) silently
-      // skipped, producing an asymmetric same-mapper contract. NoArgFields has a `name` field
-      // and getter but no setter; the write must succeed silently and leave the field at its JLS
-      // default (here: null).
-      final var pojo = new NoArgFields();
-      Beans.capturedWriter(NoArgFields.class, "name").accept(pojo, "ignored");
-      assertNull(pojo.name);
+    @DisplayName("a getter-only property has no writer, which leaves its refusal to the caller")
+    void getterOnlyPropertyHasNoWriter() {
+      // NoArgFields has a `name` field and a getter but no setter, so nothing can write it in
+      // place.
+      assertNull(Beans.capturedWriter(NoArgFields.class, "name"));
     }
 
     @Test

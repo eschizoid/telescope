@@ -272,6 +272,143 @@ class MapperIntoTest {
   }
 
   @Nested
+  @DisplayName("A target built by a builder or a constructor — into refuses a property it has no setter for")
+  class SetterlessBuiltTarget {
+
+    record Dto(String id, String label) {}
+
+    /** Built by its builder; a setter for {@code id} and none for {@code label}. */
+    public static class Built {
+
+      private String id;
+      private String label;
+
+      private Built() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getLabel() {
+        return label;
+      }
+
+      public static Builder builder() {
+        return new Builder();
+      }
+
+      public static final class Builder {
+
+        private final Built built = new Built();
+
+        public Builder id(final String id) {
+          built.id = id;
+          return this;
+        }
+
+        public Builder label(final String label) {
+          built.label = label;
+          return this;
+        }
+
+        public Built build() {
+          return built;
+        }
+      }
+    }
+
+    /** Built by a constructor taking both properties; no setter for either. */
+    public static class Constructed {
+
+      private final String id;
+      private final String label;
+
+      public Constructed(final String id, final String label) {
+        this.id = id;
+        this.label = label;
+      }
+
+      public String getId() {
+        return id;
+      }
+
+      public String getLabel() {
+        return label;
+      }
+    }
+
+    /** A subclass of {@link Built} that declares the setter its superclass lacks. */
+    public static class Labelled extends Built {
+
+      private String written;
+
+      public void setLabel(final String label) {
+        written = label;
+      }
+
+      String written() {
+        return written;
+      }
+    }
+
+    @Test
+    @DisplayName("a builder-built target refuses on into by the property's name, and has written nothing")
+    void builderBuiltTargetRefusesBeforeWriting() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class);
+      final var target = Built.builder().id("old").label("kept").build();
+      final var refused = assertThrows(IllegalArgumentException.class, () -> mapper.into(target, new Dto("new", "x")));
+      assertEquals(
+        PairingMessages.intoPropertyUnwritable("Dto", "Built", PairingMessages.className(Built.class), "label"),
+        refused.getMessage()
+      );
+      assertEquals("old", target.getId(), "every writer is bound before the first write");
+      assertEquals("kept", target.getLabel());
+    }
+
+    @Test
+    @DisplayName("a constructor-built target refuses on into, though forward builds it")
+    void constructorBuiltTargetRefusesOnInto() {
+      final var mapper = Telescope.mapper(Dto.class, Constructed.class);
+      assertEquals("x", mapper.forward(new Dto("a", "x")).getLabel());
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        mapper.into(new Constructed("old", "kept"), new Dto("a", "x"))
+      );
+      assertEquals(
+        PairingMessages.intoPropertyUnwritable(
+          "Dto",
+          "Constructed",
+          PairingMessages.className(Constructed.class),
+          "id"
+        ),
+        refused.getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a forward hook that produces nothing is refused the same way before any null is written")
+    void nullProductRefusesBeforeWriting() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class).afterForward((dto, built) -> null);
+      final var target = Built.builder().id("old").label("kept").build();
+      assertThrows(IllegalArgumentException.class, () -> mapper.into(target, new Dto("new", "x")));
+      assertEquals("old", target.getId());
+    }
+
+    @Test
+    @DisplayName("a subclass handed to into that declares the missing setter is updated in full")
+    void aSubclassWithTheSetterIsUpdated() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class);
+      final var target = new Labelled();
+      assertSame(target, mapper.into(target, new Dto("new", "x")));
+      assertEquals("new", target.getId());
+      assertEquals("x", target.written());
+    }
+  }
+
+  @Nested
   @DisplayName("Bean → bean — both sides POJO; into() works in both forward direction senses")
   class BeanToBean {
 

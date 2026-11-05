@@ -187,6 +187,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private boolean notedUnavailable;
   private String unavailableReason;
 
+  /**
+   * Whether bean {@code type} has no member that writes {@code property}, a derived getter a strict
+   * mapper leaves unpaired.
+   */
+  private boolean noWriteMember(final TypeElement type, final String property) {
+    return WriteMembers.noWriteMember(elements, type, property);
+  }
+
   @Override
   public synchronized void init(final ProcessingEnvironment processingEnv) {
     super.init(processingEnv);
@@ -816,7 +824,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           if (read == null) {
             final var kept = new ArrayList<String>();
             for (final var name : srcProps.keySet()) if (!claimedSrc.contains(name)) kept.add(name);
-            final var taken = KeptNames.taken(kept, claimedTgt);
+            final var taken = KeptNames.taken(kept, claimedTgt, name -> noWriteMember(srcEl, name));
             if (!taken.isEmpty()) {
               report(node, PairingMessages.noSameNameTarget(srcSimple, tgtSimple, srcSlot, tgtSlot, taken.getFirst()));
             }
@@ -826,7 +834,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             List.copyOf(srcProps.keySet()),
             match,
             filled,
-            read
+            read,
+            name -> noWriteMember(tgtEl, name),
+            name -> noWriteMember(srcEl, name)
           );
           for (final var refusal : refusals) report(node, refusal);
         }
@@ -2441,7 +2451,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var read = sourceClaimsAt(srcEl, tgtEl);
           final var kept = new ArrayList<String>();
           for (final var name : sides.source().keySet()) if (!read.contains(name)) kept.add(name);
-          final var taken = KeptNames.taken(kept, claimed);
+          final var taken = KeptNames.taken(kept, claimed, name -> noWriteMember(srcEl, name));
           if (!taken.isEmpty()) {
             report(at, keptRefusal(srcEl, tgtEl, taken.getFirst()));
             return;
@@ -2614,7 +2624,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!forwardOnly) {
         final var kept = new ArrayList<String>();
         for (final var name : sides.source().keySet()) if (!read.contains(name)) kept.add(name);
-        final var taken = KeptNames.taken(kept, claimed);
+        final var taken = KeptNames.taken(kept, claimed, name -> noWriteMember(srcEl, name));
         if (!taken.isEmpty()) {
           report(at, keptRefusal(srcEl, tgtEl, taken.getFirst()));
           return;
@@ -2632,7 +2642,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           List.copyOf(sides.source().keySet()),
           match,
           !pathRows ? Set.of() : callTargetPathsPlain && callRowsComplete ? pathWritesAt(srcEl, tgtEl) : null,
-          !pathRows || callPathReadsKnown ? read : null
+          !pathRows || callPathReadsKnown ? read : null,
+          name -> noWriteMember(tgtEl, name),
+          name -> noWriteMember(srcEl, name)
         );
         if (!refusals.isEmpty()) {
           report(at, refusals.getFirst());

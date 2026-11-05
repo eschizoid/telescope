@@ -166,7 +166,8 @@ reports the same message as a compile error. It checks each `Telescope.mapper(..
 
 Some entry points are lenient on purpose. `mapperForward(...)` and `@Bridge(lenient = true)` leave an unmatched target
 field at its default value, which is `null`, zero, or `false`. `Telescope.fromMap(...)` fills a component with no value
-from a default for its type. `Mapper.into(...)` writes onto an existing bean and skips a property with no public setter.
+from a default for its type. `Mapper.into(...)` is not lenient: it writes onto an existing bean through its setters, and
+refuses by name a property the mapper writes that the bean has no setter for.
 
 Same-typed JDK collections are copied rather than shared, so changing the target's list never changes the source's.
 [docs/type-conversion.md](type-conversion.md) has the details.
