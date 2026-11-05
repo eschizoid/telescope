@@ -11,6 +11,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -92,8 +93,10 @@ final class ViaClasses {
       tgtElement != null &&
       !(convertsWhole(forwards, srcType, tgtType) && convertsWhole(backwards, tgtType, srcType))
     ) {
-      final var forward = elementMethods(forwards, srcElement, srcType);
-      final var backward = elementMethods(backwards, tgtElement, tgtType);
+      final var srcHeld = heldElement(srcElement);
+      final var tgtHeld = heldElement(tgtElement);
+      final var forward = elementMethods(forwards, srcHeld, srcType);
+      final var backward = elementMethods(backwards, tgtHeld, tgtType);
       if (!forward.isEmpty() && !backward.isEmpty()) {
         if (forward.size() > 1 || backward.size() > 1) {
           final var method = forward.size() > 1 ? "forward" : "backward";
@@ -114,8 +117,8 @@ final class ViaClasses {
             row,
             forward.getFirst(),
             backward.getFirst(),
-            elementClass(srcElement, forward.getFirst()),
-            elementClass(tgtElement, backward.getFirst())
+            elementClass(srcHeld, forward.getFirst()),
+            elementClass(tgtHeld, backward.getFirst())
           ),
           null,
           null
@@ -270,6 +273,14 @@ final class ViaClasses {
       .filter(m -> boxed(m.getParameterTypes()[0]).isAssignableFrom(held))
       .filter(m -> !m.getParameterTypes()[0].isAssignableFrom(containerClass))
       .toList();
+  }
+
+  /**
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is {@code
+   * Object} for one bounded from below or not at all, and any other type itself.
+   */
+  private static Type heldElement(final Type element) {
+    return element instanceof WildcardType wildcard ? wildcard.getUpperBounds()[0] : element;
   }
 
   /**

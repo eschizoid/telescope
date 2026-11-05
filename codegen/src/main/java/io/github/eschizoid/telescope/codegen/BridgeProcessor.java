@@ -5244,11 +5244,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var direction = method.getSimpleName().toString();
     out.println(
       "    static " +
-        to +
+        heldElement(to) +
         " " +
         direction +
         "(final " +
-        from +
+        heldElement(from) +
         " in) { return in == null ? null : " +
         mapper +
         "." +
@@ -5257,6 +5257,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         handed +
         "); }"
     );
+  }
+
+  /**
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is
+   * {@code Object} for one bounded from below or not at all, and any other type itself.
+   */
+  private TypeMirror heldElement(final TypeMirror element) {
+    if (!(element instanceof WildcardType wildcard)) return element;
+    return wildcard.getExtendsBound() == null ? mirrorProps().objectType() : wildcard.getExtendsBound();
   }
 
   /** The erasure of the type {@code method}'s one parameter takes. */

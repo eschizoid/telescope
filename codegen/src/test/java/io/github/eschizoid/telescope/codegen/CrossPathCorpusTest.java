@@ -14742,8 +14742,23 @@ class CrossPathCorpusTest {
     String forward,
     String backward,
     String generatedForward,
-    String generatedBackward
+    String generatedBackward,
+    String runtime
   ) {
+    /** A row whose runtime mapper converts through a child mapper, as {@code %1$sChMap} does. */
+    ViaContainer(
+      final String name,
+      final String mapper,
+      final String source,
+      final String target,
+      final String forward,
+      final String backward,
+      final String generatedForward,
+      final String generatedBackward
+    ) {
+      this(name, mapper, source, target, forward, backward, generatedForward, generatedBackward, viaRow("children"));
+    }
+
     /** A row both paths owe the same results for, through the child pair's own mapper. */
     ViaContainer(
       final String name,
@@ -14794,6 +14809,24 @@ class CrossPathCorpusTest {
     " return l.stream().map(c -> new %1$sChDto(\"W\" + c.name())).toList(); }\n" +
     "  public static <R> R backward(final java.util.List<%1$sChDto> l) {" +
     " return (R) l.stream().map(d -> new %1$sCh(\"GWB\" + d.name())).toList(); }\n}\n";
+
+  /**
+   * {@code %1$sRuntime}, whose {@code mapper()} builds the runtime mapper for the pair with a
+   * {@code via} row reading {@code accessor} on both sides through the methods of {@code
+   * %1$sChMap}.
+   */
+  private static String viaClassRow(final String accessor) {
+    return (
+      "public class %1$sRuntime {\n" +
+      "  public static Object mapper() {\n" +
+      "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::" +
+      accessor +
+      ", %1$sTgt::" +
+      accessor +
+      ", %1$sChMap.class));\n  }\n}\n"
+    );
+  }
 
   /** A container row's source, generic over its element or not, holding {@code sample}. */
   private static String containerSource(final boolean generic, final String declared, final String sample) {
@@ -14948,6 +14981,42 @@ class CrossPathCorpusTest {
         "children=[Ch:GWBQ]"
       )
     );
+    // An element a wildcard bounded from above types is held as the wildcard's bound, which
+    // chooses the element method on both paths as an element of that class does.
+    rows.add(
+      new ViaContainer(
+        "a List property whose source element is ? extends Ch, through the mapper class",
+        null,
+        containerSource(false, "java.util.List<? extends %1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<%1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        viaClassRow("children")
+      )
+    );
+    rows.add(
+      new ViaContainer(
+        "a List property whose target element is ? extends ChDto, through the mapper class",
+        null,
+        containerSource(false, "java.util.List<%1$sCh>", "java.util.List.of(new %1$sCh(\"a\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<? extends %1$sChDto> children",
+          "new %1$sTgt(java.util.List.of(new %1$sChDto(\"Q\")))"
+        ),
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        "children=[ChDto:A]",
+        "children=[Ch:q]",
+        viaClassRow("children")
+      )
+    );
     // A null element is not handed to the mapper on either path: it stays null.
     rows.add(
       new ViaContainer(
@@ -14976,7 +15045,7 @@ class CrossPathCorpusTest {
       final var prefix = "Vc" + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var pair = row.mapper() == null ? CHILD_PAIR : List.of(CHILD_PAIR.get(0), CHILD_PAIR.get(1), row.mapper());
-      final var all = concat(pair, row.source(), viaChild("children"), row.target(), viaRow("children"))
+      final var all = concat(pair, row.source(), viaChild("children"), row.target(), row.runtime())
         .stream()
         .map(declaration -> declaration.formatted(prefix))
         .map(code -> source(declaredName(code), head + code))
@@ -15177,6 +15246,31 @@ class CrossPathCorpusTest {
           " child));\n  }\n}\n"
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "child", "%1$sOther")
+    ),
+    // An element a wildcard types is held as the wildcard's upper bound, so where no element
+    // method takes that, the class's methods are handed the whole property.
+    new ViaNeverFits(
+      "a List source whose element is ? extends Ch, into a mapper class whose backward takes any object",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static %1$sChDto forward(final %1$sCh c) { return new %1$sChDto(c.name()); }\n" +
+          "  public static %1$sCh backward(final Object d) { return new %1$sCh(((%1$sChDto) d).name()); }\n}\n",
+        "public record %1$sSrc(java.util.List<? extends %1$sCh> children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
+    ),
+    new ViaNeverFits(
+      "a List source whose element is ? super Ch, through the mapper class",
+      List.of(
+        "public record %1$sSrc(java.util.List<? super %1$sCh> children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(java.util.List<%1$sChDto> children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
     ),
     new ViaNeverFits(
       "a child source into a List target",

@@ -60,6 +60,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -3148,9 +3149,10 @@ public final class DeepMap {
   /**
    * Whether a container's {@code elementType} is what the element mapper converts: the mapper's own
    * class, or a type variable whose bound admits it, since such a container may hold the mapper's
-   * class.
+   * class. An element a wildcard types is held as the wildcard's upper bound.
    */
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
+    if (elementType instanceof WildcardType wildcard) return elementTypeMatches(wildcard.getUpperBounds()[0], mapperClass);
     if (elementType instanceof Class<?> cls) return cls.equals(mapperClass);
     return elementType instanceof TypeVariable<?> variable && boundOf(variable).isAssignableFrom(mapperClass);
   }
