@@ -361,10 +361,18 @@ public final class LambdaIntrospection {
    * method when it is, or a constructor of the same class; not private; whose one parameter {@code
    * argument} is an instance of, a primitive parameter compared as its wrapper. A parameter of
    * class {@code Object}, which a type variable with no bound erases to, takes any value rather
-   * than {@code argument}, so it is no such form. The class declaring the referenced method is
-   * searched first, then each class and interface it extends, superclass before interfaces, and the
-   * first that declares a form gives it; of several there, the one whose parameter's class name
-   * sorts first.
+   * than {@code argument}, so it is no such form. The search starts at the class the reference
+   * names the method through, then takes each class and interface it extends, superclass before
+   * interfaces, and the first that declares a form gives it; of several there, the one whose
+   * parameter's class name sorts first.
+   *
+   * <p>A reference bound to a receiver names the method through the type of the expression written
+   * before {@code ::}, which the class defined for the reference holds the receiver as. A static
+   * reference names it through the
+   * class declaring the method: the class file records a handle on that class and no trace of the
+   * class written before {@code ::}, so a form only a subclass written there declares is not found,
+   * and {@code Sub::label} with {@code label()} on {@code Base} and {@code label(Person)} on {@code
+   * Sub} answers null.
    *
    * <p>Java binds such a reference to the overload taking no argument whenever one overload takes a
    * supplier and another a function, so the form returned here is the one the call did not reach.
@@ -389,7 +397,7 @@ public final class LambdaIntrospection {
     }
     final var wantStatic = kind == MethodHandleInfo.REF_invokeStatic;
     final var pending = new ArrayDeque<Class<?>>();
-    pending.add(owner);
+    pending.add(bound ? receiverHeldAs(reference, owner) : owner);
     while (!pending.isEmpty()) {
       final var type = pending.poll();
       final var form = firstByParameter(
@@ -403,6 +411,24 @@ public final class LambdaIntrospection {
       pending.addAll(Arrays.asList(type.getInterfaces()));
     }
     return null;
+  }
+
+  /**
+   * The class a reference bound to a receiver holds it as, where that is {@code declaring}, the
+   * class declaring the referenced method, or a subtype of it; {@code declaring} otherwise. The
+   * class the JDK's metafactory defines for a bound reference keeps the receiver in its one instance
+   * field, typed as the type of the expression written before {@code ::} rather than as the class of
+   * the value it holds, so {@code base::label} on a {@code Base} variable holding a {@code Sub}
+   * answers {@code Base}, the type Java resolved the name against.
+   */
+  private static Class<?> receiverHeldAs(final Serializable reference, final Class<?> declaring) {
+    Class<?> held = null;
+    for (final var field : reference.getClass().getDeclaredFields()) {
+      if (Modifier.isStatic(field.getModifiers())) continue;
+      if (held != null) return declaring;
+      held = field.getType();
+    }
+    return held != null && declaring.isAssignableFrom(held) ? held : declaring;
   }
 
   /**

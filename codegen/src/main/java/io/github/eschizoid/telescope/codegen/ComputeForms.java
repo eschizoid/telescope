@@ -1,5 +1,10 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.MemberReferenceTree;
+import com.sun.source.util.TreePath;
+import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -48,14 +53,19 @@ final class ComputeForms {
    * same name and kind, static for a static method and an instance method for a bound one, or a
    * constructor of the same class; not private; whose one parameter the source is an instance of, a
    * primitive parameter compared as its wrapper, and is not {@code Object}, which a type variable
-   * with no bound erases to and which takes any value rather than the source. The class declaring
-   * {@code chosen} is searched first, then each class and interface it extends, superclass before
-   * interfaces, and the first that declares a form gives it; of several there, the one whose
-   * parameter's class name sorts first.
+   * with no bound erases to and which takes any value rather than the source. The search starts at
+   * {@code receiver}, the type of the receiver a reference is bound to, where it is the class
+   * declaring {@code chosen} or a subtype of it, and otherwise at the class declaring {@code
+   * chosen}, then takes each class and interface it extends, superclass before interfaces, and the
+   * first that declares a form gives it; of several there, the one whose parameter's class name
+   * sorts first. A static reference starts at the class declaring the method whatever class is
+   * written before {@code ::}, as the runtime path must, since the class file records a handle on
+   * the declaring class only.
    */
   static String sourceFormRefusal(
     final Types types,
     final ExecutableElement chosen,
+    final TypeMirror receiver,
     final TypeElement source,
     final TypeElement target,
     final String property
@@ -76,7 +86,7 @@ final class ComputeForms {
     } else {
       final var wantStatic = chosen.getModifiers().contains(Modifier.STATIC);
       final var pending = new ArrayDeque<TypeElement>();
-      pending.add(owner);
+      pending.add(searchedFirst(types, owner, receiver));
       while (form == null && !pending.isEmpty()) {
         final var type = pending.poll();
         form = firstByParameter(
@@ -103,6 +113,40 @@ final class ComputeForms {
         ? "new " + formOwner + "(" + parameter + ")"
         : formOwner + "." + form.getSimpleName() + "(" + parameter + ")"
     );
+  }
+
+  /**
+   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen} of the
+   * form {@code receiver::method}: the type of the expression written before {@code ::}. Null for a
+   * static reference, a constructor, an unbound reference or anything that is not a reference.
+   */
+  static TypeMirror boundReceiver(
+    final Trees trees,
+    final CompilationUnitTree unit,
+    final ExpressionTree arg,
+    final ExecutableElement chosen
+  ) {
+    if (
+      !(arg instanceof MemberReferenceTree reference) ||
+      reference.getMode() != MemberReferenceTree.ReferenceMode.INVOKE ||
+      chosen.getModifiers().contains(Modifier.STATIC)
+    ) {
+      return null;
+    }
+    final var qualifier = TreePath.getPath(unit, reference.getQualifierExpression());
+    if (qualifier == null || trees.getElement(qualifier) instanceof TypeElement) return null;
+    return trees.getTypeMirror(qualifier);
+  }
+
+  /**
+   * The class a search for a form starts at: the erasure of {@code receiver} where it is {@code
+   * owner} or a subtype of it, and {@code owner} otherwise.
+   */
+  private static TypeElement searchedFirst(final Types types, final TypeElement owner, final TypeMirror receiver) {
+    if (receiver == null) return owner;
+    final var erased = types.erasure(receiver);
+    if (!(types.asElement(erased) instanceof TypeElement held)) return owner;
+    return types.isSubtype(erased, types.erasure(owner.asType())) ? held : owner;
   }
 
   /**
