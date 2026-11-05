@@ -151,7 +151,7 @@ class ComputeReferenceDecodeTest {
   static final class HeldAsLower implements Serializable {
 
     private static final long serialVersionUID = 1L;
-    private final Lower held = Lower.LOWER;
+    private final transient Lower held = Lower.LOWER;
 
     private Object writeReplace() {
       return boundToUpperIi(HeldAsLower.class);
@@ -162,8 +162,8 @@ class ComputeReferenceDecodeTest {
   static final class HeldTwice implements Serializable {
 
     private static final long serialVersionUID = 1L;
-    private final Lower first = Lower.LOWER;
-    private final Lower second = Lower.LOWER;
+    private final transient Lower first = Lower.LOWER;
+    private final transient Lower second = Lower.LOWER;
 
     private Object writeReplace() {
       return boundToUpperIi(HeldTwice.class);
@@ -174,7 +174,7 @@ class ComputeReferenceDecodeTest {
   static final class HeldAsStranger implements Serializable {
 
     private static final long serialVersionUID = 1L;
-    private final Stranger held = new Stranger();
+    private final transient Stranger held = new Stranger();
 
     private Object writeReplace() {
       return boundToUpperIi(HeldAsStranger.class);
