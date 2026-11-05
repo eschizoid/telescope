@@ -11,11 +11,13 @@ import java.util.List;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
 /**
@@ -64,6 +66,7 @@ final class ComputeForms {
    */
   static String sourceFormRefusal(
     final Types types,
+    final Elements elements,
     final ExecutableElement chosen,
     final TypeMirror receiver,
     final TypeElement source,
@@ -102,13 +105,13 @@ final class ComputeForms {
       }
     }
     if (form == null) return null;
-    final var formOwner = form.getEnclosingElement().getSimpleName();
+    final var formOwner = shownClass(elements, (TypeElement) form.getEnclosingElement());
     final var parameter = shownName(types, types.erasure(form.getParameters().get(0).asType()));
     return PairingMessages.computeSupplierHasASourceForm(
       source.getSimpleName().toString(),
       target.getSimpleName().toString(),
       property,
-      owner.getSimpleName() + "::" + (constructor ? "new" : chosen.getSimpleName()),
+      shownClass(elements, owner) + "::" + (constructor ? "new" : chosen.getSimpleName()),
       constructor
         ? "new " + formOwner + "(" + parameter + ")"
         : formOwner + "." + form.getSimpleName() + "(" + parameter + ")"
@@ -116,10 +119,11 @@ final class ComputeForms {
   }
 
   /**
-   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen} of
-   * the form {@code receiver::method}: the type of the expression written before {@code ::}. Null
-   * for a static reference, a constructor, an unbound reference or anything that is not a
-   * reference.
+   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen}, an
+   * instance method a {@code compute} row binds as a supplier: the type of the expression written
+   * before {@code ::}. An instance method taking no argument fits a supplier only through a
+   * receiver, since a reference naming it by its class takes the receiver as an argument. Null for
+   * a static method, a constructor, or an argument that is not a method reference.
    */
   static TypeMirror boundReceiver(
     final Trees trees,
@@ -129,14 +133,22 @@ final class ComputeForms {
   ) {
     if (
       !(arg instanceof MemberReferenceTree reference) ||
-      reference.getMode() != MemberReferenceTree.ReferenceMode.INVOKE ||
+      chosen.getKind() != ElementKind.METHOD ||
       chosen.getModifiers().contains(Modifier.STATIC)
     ) {
       return null;
     }
-    final var qualifier = TreePath.getPath(unit, reference.getQualifierExpression());
-    if (qualifier == null || trees.getElement(qualifier) instanceof TypeElement) return null;
-    return trees.getTypeMirror(qualifier);
+    return trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
+  }
+
+  /**
+   * A class as a refusal names it: by its simple name, or by its binary name where it has none, as
+   * an anonymous class has not, which is how the runtime path names a class.
+   */
+  private static String shownClass(final Elements elements, final TypeElement type) {
+    return type.getNestingKind() == NestingKind.ANONYMOUS
+      ? elements.getBinaryName(type).toString()
+      : type.getSimpleName().toString();
   }
 
   /**

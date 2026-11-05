@@ -2722,6 +2722,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (ComputeForms.FRESH_FQN.equals(form) && elementAt(arg) instanceof ExecutableElement chosen) {
         refusal = ComputeForms.sourceFormRefusal(
           types,
+          elements,
           chosen,
           ComputeForms.boundReceiver(trees, getCurrentPath().getCompilationUnit(), arg, chosen),
           source,
