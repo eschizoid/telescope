@@ -123,7 +123,8 @@ public record Conditional<A, B>(Predicate<? super A> predicate, Mapping<A, B> in
       m instanceof FromTelescopeTo<?, ?, ?> ||
       m instanceof TelescopeToTelescope<?, ?, ?> ||
       m instanceof Constant<?, ?, ?> ||
-      m instanceof Compute<?, ?, ?>
+      m instanceof Compute<?, ?, ?> ||
+      m instanceof ComputeFromSource<?, ?, ?>
     );
   }
 

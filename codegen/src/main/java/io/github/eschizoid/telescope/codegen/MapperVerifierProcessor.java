@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.codegen;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.LambdaExpressionTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
@@ -426,7 +427,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         parsed.drops(),
         parsed.transforms().keySet(),
         parsed.viaMappers().keySet(),
-        parsed.computes().keySet(),
+        parsed.computedTargets(),
         renamedTo
       );
       final var pair = pairKey(parsed.source(), parsed.target());
@@ -2292,6 +2293,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var tgt = accessorProp(arg);
           if (tgt != null) verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
           else verifyTargetPath(row, rowName, arg, tgtType, srcSimple, tgtSimple);
+          if ("compute".equals(rowName)) {
+            verifyComputeReference(rowExec, rowArgs.get(1), tgt, srcType, tgtType);
+          }
           return true;
         }
         case "zip" -> {
@@ -2693,6 +2697,70 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!(arg instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("class")) return null;
       final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), select.getExpression());
       return path == null ? null : trees.getTypeMirror(path);
+    }
+
+    /**
+     * Reports a {@code compute} row's function that construction refuses, with the message the
+     * bridge processor and the runtime path give: a method reference Java bound as a supplier whose
+     * name has a form taking the source too, and a method reference or a lambda given a parameter
+     * type that takes a class the source is not. A target or a function written another way, such
+     * as a field holding it, is left to construction.
+     */
+    private void verifyComputeReference(
+      final ExecutableElement rowExec,
+      final ExpressionTree arg,
+      final Prop tgt,
+      final TypeMirror srcType,
+      final TypeMirror tgtType
+    ) {
+      if (tgt == null) return;
+      final var source = (TypeElement) types.asElement(srcType);
+      final var target = (TypeElement) types.asElement(tgtType);
+      final var form = ComputeForms.computeForm(rowExec);
+      final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), arg);
+      final String refusal;
+      if (ComputeForms.FRESH_FQN.equals(form) && elementAt(arg) instanceof ExecutableElement chosen) {
+        refusal = ComputeForms.sourceFormRefusal(types, chosen, source, target, tgt.name());
+      } else if (
+        ComputeForms.FROM_SOURCE_FQN.equals(form) &&
+        arg instanceof MemberReferenceTree reference &&
+        elementAt(arg) instanceof ExecutableElement method
+      ) {
+        refusal = ComputeForms.offSourceRefusal(
+          types,
+          trees.getTypeMirror(path),
+          method,
+          unbound(reference, method),
+          source,
+          target,
+          tgt.name()
+        );
+      } else if (ComputeForms.FROM_SOURCE_FQN.equals(form) && arg instanceof LambdaExpressionTree) {
+        refusal = ComputeForms.offSourceRefusal(
+          types,
+          trees.getTypeMirror(path),
+          null,
+          false,
+          source,
+          target,
+          tgt.name()
+        );
+      } else {
+        refusal = null;
+      }
+      if (refusal != null) report(arg, refusal);
+    }
+
+    /**
+     * Whether {@code reference} names {@code method} as an instance method of the value it is
+     * handed.
+     */
+    private boolean unbound(final MemberReferenceTree reference, final ExecutableElement method) {
+      return (
+        reference.getMode() == MemberReferenceTree.ReferenceMode.INVOKE &&
+        !method.getModifiers().contains(Modifier.STATIC) &&
+        elementAt(reference.getQualifierExpression()) instanceof TypeElement
+      );
     }
 
     /**

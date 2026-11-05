@@ -4,10 +4,14 @@ import java.io.Serializable;
 import java.lang.invoke.MethodHandleInfo;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SerializedLambda;
+import java.lang.reflect.Executable;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.TypeVariable;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Reflective extraction of method-reference metadata via {@link SerializedLambda}. The runtime
@@ -78,21 +82,7 @@ public final class LambdaIntrospection {
 
   private static Metadata decode(final Serializable lambda) {
     try {
-      final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
-      try {
-        writeReplace.setAccessible(true);
-      } catch (final InaccessibleObjectException e) {
-        // The method reference is compiled into the class that wrote it, so reading it back needs
-        // that class's package open to this module, the same opens every accessor needs.
-        throw new IllegalStateException(
-          "Cannot read the method reference " +
-            lambda.getClass().getName() +
-            ". " +
-            ModuleAccess.opensRemedy(lambda.getClass()),
-          e
-        );
-      }
-      final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
+      final var serialized = serializedOf(lambda);
       final var name = serialized.getImplMethodName();
       if (name.startsWith("lambda$")) throw new IllegalArgumentException(
         "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " + name
@@ -112,6 +102,75 @@ public final class LambdaIntrospection {
         e
       );
     }
+  }
+
+  /** The {@code SerializedLambda} a Serializable lambda or method reference writes itself as. */
+  private static SerializedLambda serializedOf(final Serializable lambda) throws ReflectiveOperationException {
+    final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
+    try {
+      writeReplace.setAccessible(true);
+    } catch (final InaccessibleObjectException e) {
+      // The method reference is compiled into the class that wrote it, so reading it back needs
+      // that class's package open to this module, the same opens every accessor needs.
+      throw new IllegalStateException(
+        "Cannot read the method reference " +
+          lambda.getClass().getName() +
+          ". " +
+          ModuleAccess.opensRemedy(lambda.getClass()),
+        e
+      );
+    }
+    return (SerializedLambda) writeReplace.invoke(lambda);
+  }
+
+  /**
+   * The class a Serializable lambda or method reference taking one value takes it as, and how a
+   * message names the function, as {@link #argumentOf} reads them.
+   *
+   * @param taken the class the call site's instantiation types the argument as: an unbound instance
+   *     method's receiver, the parameter of a static method, a constructor or a held receiver's
+   *     method as inference narrowed it, or a lambda's declared parameter
+   * @param name {@code Owner::method} or {@code Owner::new}, naming an unbound instance method by
+   *     the class it is applied to and any other reference by the class declaring its method; null
+   *     for a lambda
+   */
+  public record Argument(Class<?> taken, String name) {}
+
+  /**
+   * What a function written as a lambda or method reference whose functional interface is
+   * Serializable takes, read from its {@code SerializedLambda}; null for any other function, and
+   * for one whose argument is primitive. The class is loaded by name through the function's class
+   * loader.
+   *
+   * @throws IllegalStateException if the class cannot be loaded
+   */
+  public static Argument argumentOf(final Serializable function) {
+    if (!function.getClass().isHidden()) return null;
+    final SerializedLambda serialized;
+    try {
+      serialized = serializedOf(function);
+    } catch (final ReflectiveOperationException e) {
+      return null;
+    }
+    final var takenName = receiverNameOf(serialized.getInstantiatedMethodType());
+    if (takenName == null) return null;
+    final Class<?> taken;
+    try {
+      taken = Class.forName(takenName, false, function.getClass().getClassLoader());
+    } catch (final ClassNotFoundException e) {
+      throw new IllegalStateException("Cannot load " + takenName + ", the class a function is typed to take.", e);
+    }
+    final var method = serialized.getImplMethodName();
+    if (method.startsWith("lambda$")) return new Argument(taken, null);
+    final var kind = serialized.getImplMethodKind();
+    final var unbound =
+      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
+      serialized.getCapturedArgCount() == 0;
+    final var implClass = serialized.getImplClass();
+    final var owner = unbound
+      ? taken.getSimpleName()
+      : implClass.substring(Math.max(implClass.lastIndexOf('/'), implClass.lastIndexOf('$')) + 1);
+    return new Argument(taken, owner + "::" + (kind == MethodHandleInfo.REF_newInvokeSpecial ? "new" : method));
   }
 
   // The binary name of the first parameter in a method descriptor, or null when it is not a class.
@@ -290,6 +349,93 @@ public final class LambdaIntrospection {
         e
       );
     }
+  }
+
+  /**
+   * The form taking one {@code argument} of the method or constructor a Serializable reference
+   * names, where the reference calls it with no argument, or null when there is none, when the
+   * reference takes an argument, or when it is a lambda, which names no method a caller chose by
+   * name.
+   *
+   * <p>A form is a method of the same name, static when the referenced one is and an instance
+   * method when it is, or a constructor of the same class; not private; whose one parameter {@code
+   * argument} is an instance of, a primitive parameter compared as its wrapper. A parameter of
+   * class {@code Object}, which a type variable with no bound erases to, takes any value rather
+   * than {@code argument}, so it is no such form. The class declaring the referenced method is
+   * searched first, then each class and interface it extends, superclass before interfaces, and the
+   * first that declares a form gives it; of several there, the one whose parameter's class name
+   * sorts first.
+   *
+   * <p>Java binds such a reference to the overload taking no argument whenever one overload takes a
+   * supplier and another a function, so the form returned here is the one the call did not reach.
+   */
+  public static Executable oneArgumentFormTaking(final Serializable reference, final Class<?> argument) {
+    final Metadata metadata;
+    try {
+      metadata = CACHE.get(reference.getClass()).get(reference);
+    } catch (final IllegalArgumentException notAMethodReference) {
+      return null;
+    }
+    final var kind = metadata.implKind();
+    final var bound = (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface);
+    final var given = MethodType.fromMethodDescriptorString(
+      metadata.implSignature(),
+      reference.getClass().getClassLoader()
+    ).parameterCount();
+    if (given != 0 || (bound && metadata.capturedArgs() != 1)) return null;
+    final Class<?> owner = implClassOf(reference);
+    if (kind == MethodHandleInfo.REF_newInvokeSpecial) {
+      return firstByParameter(Arrays.asList(owner.getDeclaredConstructors()), argument, null, false);
+    }
+    final var wantStatic = kind == MethodHandleInfo.REF_invokeStatic;
+    final var pending = new ArrayDeque<Class<?>>();
+    pending.add(owner);
+    while (!pending.isEmpty()) {
+      final var type = pending.poll();
+      final var form = firstByParameter(
+        Arrays.asList(type.getDeclaredMethods()),
+        argument,
+        metadata.methodName(),
+        wantStatic
+      );
+      if (form != null) return form;
+      if (type.getSuperclass() != null) pending.add(type.getSuperclass());
+      pending.addAll(Arrays.asList(type.getInterfaces()));
+    }
+    return null;
+  }
+
+  /**
+   * Of {@code candidates} named {@code name}, or of any name when it is null, static exactly when
+   * {@code wantStatic} for a method, the one not private whose one parameter, not {@code Object},
+   * {@code argument} is an instance of, whose parameter's class name sorts first; or null.
+   */
+  private static Executable firstByParameter(
+    final List<? extends Executable> candidates,
+    final Class<?> argument,
+    final String name,
+    final boolean wantStatic
+  ) {
+    Executable first = null;
+    for (final var candidate : candidates) {
+      if (candidate.getParameterCount() != 1 || Modifier.isPrivate(candidate.getModifiers())) continue;
+      if (
+        name != null && (!candidate.getName().equals(name) || Modifier.isStatic(candidate.getModifiers()) != wantStatic)
+      ) {
+        continue;
+      }
+      final var declared = candidate.getParameterTypes()[0];
+      final var parameter = MethodType.methodType(declared).wrap().returnType();
+      if (parameter == Object.class || !parameter.isAssignableFrom(argument)) continue;
+      if (first == null || sortName(declared).compareTo(sortName(first.getParameterTypes()[0])) < 0) first = candidate;
+    }
+    return first;
+  }
+
+  /** The name a class sorts by: its canonical name, or its binary name where it has none. */
+  private static String sortName(final Class<?> type) {
+    final var canonical = type.getCanonicalName();
+    return canonical == null ? type.getName() : canonical;
   }
 
   /**

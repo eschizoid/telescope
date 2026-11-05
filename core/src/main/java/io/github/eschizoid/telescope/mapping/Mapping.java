@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import java.io.Serializable;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -56,6 +57,7 @@ public sealed interface Mapping<A, B>
     TelescopeToTelescope,
     Constant,
     Compute,
+    ComputeFromSource,
     Conditional
 {
   /**
@@ -706,6 +708,114 @@ public sealed interface Mapping<A, B>
   static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
     final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
     return new Compute<>(Telescope.of(tgtClass).field(tgt), supplier);
+  }
+
+  /**
+   * The same row as {@link #compute(Accessor, Supplier)}, for a method reference or lambda that
+   * takes no argument. Java binds such an argument here rather than to the {@code Supplier} form,
+   * since {@link Fresh} extends both {@code Supplier} and {@link FromSource}; the row then calls
+   * {@link Fresh#get()} on every forward call.
+   *
+   * <p>A reference whose name also has a form taking one argument the mapper's source is an
+   * instance of, as {@code Names::full} does when {@code Names} declares both {@code full()} and
+   * {@code full(User)}, binds here as the supplier too, which is rarely what was meant, so it is
+   * refused by name: in a {@code @Bridge} mapper at compile time, and otherwise when the mapper is
+   * built. A form whose parameter is {@code Object} or a type variable erasing to it, as {@code
+   * List.of(E)} and {@code new AtomicReference<>(V)} are, takes any value rather than the source,
+   * so {@code List::of} and {@code AtomicReference::new} run as suppliers. Hold the one meant in a
+   * {@code static final} {@code Supplier} or {@code FromSource} field, or give the form taking the
+   * source a name of its own.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Fresh<? extends X> supplier) {
+    final Supplier<? extends X> asSupplier = supplier;
+    return compute(tgt, asSupplier);
+  }
+
+  /**
+   * Fill a target property, on every forward call, with what {@code function} makes of the source.
+   * Closes MapStruct's {@code @Mapping(target = "fullName", expression = "java(Names.full(user))")}
+   * in plain typed Java: a target value built from several source properties, with no string body.
+   *
+   * <pre>{@code
+   * Telescope.mapper(User.class, UserDto.class,
+   *     compute(UserDto::fullName, Names::full),        // static String full(User user)
+   *     compute(UserDto::initials, User::initials));    // String initials() on User
+   * }</pre>
+   *
+   * <p>{@code function} is handed the source the mapper converts, never null: a mapper hands a null
+   * source back as null without calling it. What it returns is written into the target property as
+   * a value of {@link #constant(Accessor, Object)} is, a null included, and a null written into a
+   * primitive property writes the primitive's default.
+   *
+   * <p><b>Reads the whole source.</b> The row names no source property, so every source property
+   * still pairs with the target property of its name, or is refused by a strict mapper when it has
+   * none, as it would be without the row; the target property the row fills needs no source
+   * property of its name.
+   *
+   * <p><b>Forward-only.</b> A computed value has no inverse, so {@code backward} and {@code patch}
+   * skip the property, as they skip a {@link #compute(Accessor, Supplier)} row's, and a strict
+   * {@code Telescope.mapper} accepts the row.
+   *
+   * <p><b>Takes the source.</b> The class {@code function} takes must be the mapper's source or a
+   * type it extends. Building the mapper refuses any other by name, and in a {@code @Bridge}
+   * mapper, or under the compile-time verifier, so does the compiler. Inside a native image the
+   * function is not decoded, and one taking another class fails on its first call.
+   *
+   * <p><b>Inference.</b> Nothing in the call fixes the source class, so {@code function} must say
+   * which class it takes: a reference to a method with one form of its name, or a lambda whose
+   * parameter is given a type, {@code (User user) -> ...}. An overloaded helper, such as {@code
+   * Names.full(User)} beside {@code Names.full(Admin)}, cannot be resolved, and a lambda with an
+   * inferred parameter takes {@code Object}, so its body can use only what {@code Object} has; hold
+   * the one meant in a {@code static final FromSource<User, String>} field and pass the field, or
+   * {@code FULL::apply}. A function already held as a plain {@code Function} is passed as {@code
+   * function::apply}.
+   *
+   * <p>In a {@code @Bridge} mapper the processor calls {@code function} directly from the generated
+   * bridge: it must be a reference to a static method taking the source ({@code Names::full}), to
+   * an instance method of the source or of a type it extends ({@code User::initials}), to a
+   * constructor taking the source, or to a method of a {@code static final} field ({@code
+   * FULL::apply}), or else a {@code static final} field holding the function. An inline lambda is
+   * refused by name.
+   *
+   * <p>Written on the mapper's target class, through a getter a superclass or interface of it
+   * declares if need be, as for {@link #constant(Accessor, Object)}.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final FromSource<? super A, ? extends X> function) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    return new ComputeFromSource<>(Telescope.of(tgtClass).field(tgt), Objects.requireNonNull(function, "function"));
+  }
+
+  /**
+   * A function of the source a {@link #compute(Accessor, FromSource) compute} row fills its target
+   * property with, written as a method reference or a lambda: {@code Names::full}, {@code
+   * User::initials}, {@code (User user) -> ...}. It is {@code Serializable} so that building the
+   * mapper can read the class it takes and refuse one the source is not.
+   *
+   * @param <A> the class taken, the mapper's source or a type it extends
+   * @param <X> the value given
+   */
+  @FunctionalInterface
+  interface FromSource<A, X> extends Function<A, X>, Serializable {}
+
+  /**
+   * The parameter type of {@link #compute(Accessor, Fresh)}, which exists only so that {@code
+   * compute(OrderDto::createdAt, Instant::now)} resolves. Users never write it.
+   *
+   * <p>A method reference such as {@code Instant::now} or {@code HashMap::new}, whose name has both
+   * a form taking no argument and a form taking one, fits both {@link Supplier} and {@link
+   * FromSource}, and Java chooses between two overloads taking those only when one of the two types
+   * extends the other. This type extends both, so Java binds such a reference to it, as the
+   * supplier.
+   *
+   * @param <X> the value supplied
+   */
+  @FunctionalInterface
+  interface Fresh<X> extends Supplier<X>, FromSource<Object, X> {
+    /** Returns {@link #get()}, ignoring {@code ignored}; the {@code compute} row never calls it. */
+    @Override
+    default X apply(final Object ignored) {
+      return get();
+    }
   }
 
   /**

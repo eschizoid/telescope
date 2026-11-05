@@ -27,7 +27,8 @@ import java.util.Objects;
  * forward function, or the {@code via} mapper, receives a {@code null} source value unchanged, and
  * whatever it returns lands on the target, even when the target's leaf type has a table default.
  * Telescope-based rows ({@link TelescopeTo}, {@link FromTelescopeTo}, {@link TelescopeToTelescope},
- * {@link Constant}, {@link Compute}, {@link Conditional}) are not wrapped either.
+ * {@link Constant}, {@link Compute}, {@link ComputeFromSource}, {@link Conditional}) are not
+ * wrapped either.
  *
  * <p><b>Strategy applies on forward direction only.</b> Backward direction is unchanged. Same
  * retraction posture as the existing {@link Constant} / {@link Compute} rows, which are also

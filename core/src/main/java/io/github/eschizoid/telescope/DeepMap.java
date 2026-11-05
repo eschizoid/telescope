@@ -32,6 +32,7 @@ import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
+import io.github.eschizoid.telescope.mapping.ComputeFromSource;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
@@ -52,6 +53,7 @@ import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
@@ -767,6 +769,7 @@ public final class DeepMap {
       case TelescopeToTelescope<?, ?, ?> t -> t.targetTelescope().firstHopName();
       case Constant<?, ?, ?> c -> c.targetTelescope().firstHopName();
       case Compute<?, ?, ?> c -> c.targetTelescope().firstHopName();
+      case ComputeFromSource<?, ?, ?> c -> c.targetTelescope().firstHopName();
       default -> null;
     };
     return new PairWalk.KeyedRow<>(
@@ -828,6 +831,7 @@ public final class DeepMap {
           case TelescopeToTelescope<?, ?, ?> t -> t.targetTelescope();
           case Constant<?, ?, ?> t -> t.targetTelescope();
           case Compute<?, ?, ?> t -> t.targetTelescope();
+          case ComputeFromSource<?, ?, ?> t -> t.targetTelescope();
           default -> null;
         };
         if (path == null) continue;
@@ -894,6 +898,7 @@ public final class DeepMap {
       case TelescopeToTelescope<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case Constant<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case Compute<?, ?, ?> __ -> PairWalk.RowKind.PATH;
+      case ComputeFromSource<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case Conditional<?, ?> __ -> PairWalk.RowKind.PATH;
     };
   }
@@ -991,10 +996,21 @@ public final class DeepMap {
         targetRooted(c.targetTelescope(), "constant", topSource, topTarget, true, c.value()),
         (Object) c.value()
       );
-      case Compute<?, ?, ?> c -> new Compute<>(
-        targetRooted(c.targetTelescope(), "compute", topSource, topTarget, false, null),
-        c.supplier()
-      );
+      case Compute<?, ?, ?> c -> {
+        refuseSupplierNamingASourceForm(c, topSource, topTarget);
+        yield new Compute<>(
+          targetRooted(c.targetTelescope(), "compute", topSource, topTarget, false, null),
+          c.supplier()
+        );
+      }
+      case ComputeFromSource<?, ?, ?> c -> {
+        final var path = targetRooted(c.targetTelescope(), "compute", topSource, topTarget, false, null);
+        refuseFunctionOffSource(c, path, topSource, topTarget);
+        yield new ComputeFromSource<>(
+          path,
+          intoProperty((Mapping.FromSource<Object, Object>) c.function(), topTarget, path)
+        );
+      }
       case TelescopeTo<?, ?, ?> t -> new TelescopeTo<>(
         (Telescope.Accessor<Object, Object>) t.srcAccessor(),
         targetRooted(t.targetTelescope(), "to", topSource, topTarget, false, null)
@@ -1032,6 +1048,84 @@ public final class DeepMap {
       }
       default -> row;
     };
+  }
+
+  /**
+   * Refuses a {@code compute} row whose supplier is a reference Java bound as taking no argument
+   * while its name has a form taking {@code topSource} too, as {@code Names::full} has where {@code
+   * Names} declares both {@code full()} and {@code full(User)}. Only a reference bound to {@link
+   * Mapping.Fresh} can be one, since that is the type Java chooses for a reference fitting both a
+   * supplier and a function. Inside a native image the reference is not decoded, since decoding
+   * needs it registered for serialization, and the row runs as the supplier it was bound to.
+   */
+  private static void refuseSupplierNamingASourceForm(
+    final Compute<?, ?, ?> row,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    if (NativeImage.IN_IMAGE || !(row.supplier() instanceof Mapping.Fresh<?> reference)) return;
+    final var sourceForm = LambdaIntrospection.oneArgumentFormTaking(reference, topSource);
+    if (sourceForm == null) return;
+    final var owner = PairingMessages.className(LambdaIntrospection.implClassOf(reference));
+    final var formOwner = PairingMessages.className(sourceForm.getDeclaringClass());
+    final var parameter = PairingMessages.className(sourceForm.getParameterTypes()[0]);
+    final var constructor = sourceForm instanceof Constructor<?>;
+    throw new IllegalArgumentException(
+      PairingMessages.computeSupplierHasASourceForm(
+        topSource.getSimpleName(),
+        topTarget.getSimpleName(),
+        Reflective.of(topTarget).normalize(row.targetTelescope().firstHopName()),
+        owner + "::" + (constructor ? "new" : sourceForm.getName()),
+        constructor
+          ? "new " + formOwner + "(" + parameter + ")"
+          : formOwner + "." + sourceForm.getName() + "(" + parameter + ")"
+      )
+    );
+  }
+
+  /**
+   * Refuses a {@code compute} row whose function takes a class {@code topSource} is not an instance
+   * of, read from the class the function's instantiation at the call site types its argument as. A
+   * function that is neither a lambda nor a method reference carries no such record and is kept,
+   * and inside a native image the function is not decoded, since decoding needs it registered for
+   * serialization.
+   */
+  private static void refuseFunctionOffSource(
+    final ComputeFromSource<?, ?, ?> row,
+    final Telescope<?, ?> path,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    if (NativeImage.IN_IMAGE) return;
+    final var argument = LambdaIntrospection.argumentOf(row.function());
+    if (argument == null || argument.taken().isAssignableFrom(topSource)) return;
+    throw new IllegalArgumentException(
+      PairingMessages.computeFunctionOffSource(
+        topSource.getSimpleName(),
+        topTarget.getSimpleName(),
+        Reflective.of(topTarget).normalize(path.firstHopName()),
+        argument.name() == null ? "a lambda" : argument.name(),
+        PairingMessages.className(argument.taken())
+      )
+    );
+  }
+
+  /**
+   * {@code function}, its result written into the property of {@code target} that {@code path}'s
+   * first hop names: through the primitive-wrapper iso where that property holds a primitive, so a
+   * null result writes the primitive's default, as a conversion's result does; as it is otherwise.
+   */
+  private static Mapping.FromSource<Object, Object> intoProperty(
+    final Mapping.FromSource<Object, Object> function,
+    final Class<?> target,
+    final Telescope<?, ?> path
+  ) {
+    final var refl = Reflective.of(target);
+    final var type = refl.genericType(target, refl.normalize(path.firstHopName()));
+    if (!(type instanceof Class<?> leaf) || !leaf.isPrimitive()) return function;
+    final var primitive = primitiveWrapperIso(MethodType.methodType(leaf).wrap().returnType(), leaf);
+    final var written = function.andThen(primitive::to);
+    return written::apply;
   }
 
   /**
@@ -1610,6 +1704,14 @@ public final class DeepMap {
             if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
             else unknownTgtWrite = true;
             if (firstTgtHop != null) defaultTreeTgt.add(tgtRefl.normalize(firstTgtHop));
+            telescopeFixups.add(rawRow);
+            yield false;
+          }
+          // Reads the whole source rather than one property of it, so it claims no source
+          // property: each still pairs by name, as beside a Compute row.
+          case ComputeFromSource<?, ?, ?> cfRow -> {
+            // Built from an accessor alone, so its target path always names its first property.
+            telescopeWritesTgt.add(tgtRefl.normalize(cfRow.targetTelescope().firstHopName()));
             telescopeFixups.add(rawRow);
             yield false;
           }
@@ -2742,6 +2844,9 @@ public final class DeepMap {
       );
       case Constant<?, ?, ?> __ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
       case Compute<?, ?, ?> __ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
+      case ComputeFromSource<?, ?, ?> __ -> throw new IllegalStateException(
+        "ComputeFromSource row should not reach fieldIsoOf"
+      );
       case Conditional<?, ?> __ -> throw new IllegalStateException(
         "Conditional row should be unwrapped by populateIso before fieldIsoOf"
       );
