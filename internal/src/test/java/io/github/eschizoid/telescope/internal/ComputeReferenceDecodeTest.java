@@ -329,7 +329,10 @@ class ComputeReferenceDecodeTest {
     @Test
     @DisplayName("of a bound reference, is looked for from the class its one instance field holds the receiver as")
     void aBoundReferenceStartsAtItsOneInstanceField() {
-      assertEquals("Lower.ii(Person)", shown(LambdaIntrospection.oneArgumentFormTaking(new HeldAsLower(), Person.class)));
+      assertEquals(
+        "Lower.ii(Person)",
+        shown(LambdaIntrospection.oneArgumentFormTaking(new HeldAsLower(), Person.class))
+      );
     }
 
     @Test
