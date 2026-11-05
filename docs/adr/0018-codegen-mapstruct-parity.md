@@ -98,3 +98,12 @@ gap is visible and each step above updates it.
 - The annotation shape for a nested source path, and whether it reuses `@Rename` or needs its own attribute.
 - Whether `into(target, source)` should also exist for builder and constructor targets, where writing in place is not
   possible.
+
+> **Amendment: update in place.** A strict bridge whose target is a bean with a setter for every property it writes,
+> whatever strategy builds the target, gets a static `into(target, source)`, and the mapper a `@Bridge` field declares
+> calls it. It writes what the runtime `into` writes: each property the bridge writes takes the value `forward(source)`
+> gives it, read back through the getter, every value read before the first setter runs, through the setter the
+> property's type chooses. A nested bean is written whole, as the new object `forward` builds. A bridge whose target is
+> a record, or a bean without such a setter, builder-only and constructor-only beans included, has no `into`: a call to
+> the bridge's own `into` does not compile, and the field's mapper runs the runtime `into`, which refuses by name in the
+> same words. `explain()` on the field's mapper says which of the two writes.

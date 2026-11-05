@@ -138,7 +138,11 @@ class DeclaredBridgeTest {
   void explainSaysWhichPathIntoWritesOn() {
     final var bridge = HintedMappers.class.getPackageName() + ".HintedToHintedBeanBridge";
     assertTrue(
-      HintedMappers.HINTED.explain().declared().orElseThrow().why().endsWith("; into writes through " + bridge + ".into"),
+      HintedMappers.HINTED.explain()
+        .declared()
+        .orElseThrow()
+        .why()
+        .endsWith("; into writes through " + bridge + ".into"),
       () -> HintedMappers.HINTED.explain().toString()
     );
     final var bean = new HintedBean();
@@ -149,7 +153,9 @@ class DeclaredBridgeTest {
         .declared()
         .orElseThrow()
         .why()
-        .endsWith("; into writes through the setters it looks up at run time, since " + Point.class.getName() + " has no into"),
+        .endsWith(
+          "; into writes through the setters it looks up at run time, since " + Point.class.getName() + " has no into"
+        ),
       () -> PointMappers.POINT.explain().toString()
     );
   }

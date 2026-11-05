@@ -553,7 +553,7 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `SameTypedContainerBenchmark`                                    | same-typed List, Set and Map copies by mapper and bridge, against two controls     |
 | `CycleGuardBenchmark`                                            | a self-referencing type by bridge and mapper, chain and ring, against a plain copy |
 | `ContainerWriteBenchmark`                                        | `.each()` / `.eachValue()` rebuilds across cardinality                             |
-| `IntoBenchmark`                                                  | `Mapper.into` against `forward`, at five and twenty properties                     |
+| `IntoBenchmark`                                                  | `Mapper.into` runtime and generated, against `forward` and a setter sequence       |
 | `LmfBenchmark`                                                   | the dispatch substrate: LMF vs reflection vs hand-rolled                           |
 | `EffectfulTraversalBenchmark`                                    | `updateOptional` and `updateValidated` against a pure update                       |
 | `MergeBenchmark`, `FromMapBenchmark`, `MultiEditBenchmark`       | the positional-bind and fusion engines                                             |

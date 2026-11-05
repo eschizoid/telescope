@@ -13995,8 +13995,9 @@ class CrossPathCorpusTest {
   /**
    * A mapper's {@code into} handed {@code %1$sTgt.sample()} and {@code %1$sSrc.sample()}: the
    * declarations, each taking {@code %1$s} as the row's prefix and the last of them the runtime
-   * row, what both paths owe, the target's {@link #shape} after the call or the message {@code into}
-   * refuses with, and whether the field's mapper writes through the bridge's own {@code into}.
+   * row, what both paths owe, the target's {@link #shape} after the call or the message {@code
+   * into} refuses with, and whether the field's mapper writes through the bridge's own {@code
+   * into}.
    */
   private record IntoRow(String name, List<String> declarations, String owed, boolean generated) {}
 
@@ -14055,8 +14056,8 @@ class CrossPathCorpusTest {
   /**
    * A bean {@code %1$sTgtIn} with a getter and a setter for {@code x}, and a getter alone for
    * {@code tag}, which a new instance holds as {@code "fresh"} and {@code mark()} sets to {@code
-   * "old"}: a property neither path writes, so its value tells a new nested object from the one
-   * the target held.
+   * "old"}: a property neither path writes, so its value tells a new nested object from the one the
+   * target held.
    */
   private static final String NESTED_TARGET =
     "public class %1$sTgtIn {\n  private String x;\n  private String tag = \"fresh\";\n" +
@@ -14070,7 +14071,9 @@ class CrossPathCorpusTest {
     "  public void setValue(final Object v) { value = \"object \" + v; }\n" +
     "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.setValue(\"y\"); return t; }\n}\n";
 
-  /** {@code rows}, each written in full, on the {@code @Bridge} field and the runtime mapper alike. */
+  /**
+   * {@code rows}, each written in full, on the {@code @Bridge} field and the runtime mapper alike.
+   */
   private static List<String> intoPair(final String source, final String target, final String... rows) {
     return List.of(source, target, plainField(false, rows), plainRuntime(false, rows));
   }
@@ -14079,18 +14082,29 @@ class CrossPathCorpusTest {
     new IntoRow(
       "a target built by its builder, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), builderOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") + LEFT + "#0(value=\"y\")",
+      REFUSED +
+        PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") +
+        LEFT +
+        "#0(value=\"y\")",
       false
     ),
     new IntoRow(
       "a target built by a constructor, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), constructorOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") + LEFT + "#0(value=\"y\")",
+      REFUSED +
+        PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") +
+        LEFT +
+        "#0(value=\"y\")",
       false
     ),
     new IntoRow(
       "a record target",
-      List.of(INTO_SOURCE, plainField(false), sampled("%1$sTgt", "String value", "new %1$sTgt(\"y\")"), plainRuntime(false)),
+      List.of(
+        INTO_SOURCE,
+        plainField(false),
+        sampled("%1$sTgt", "String value", "new %1$sTgt(\"y\")"),
+        plainRuntime(false)
+      ),
       REFUSED + PairingMessages.intoRecordTarget("%1$sSrc", "%1$sTgt", "%1$sTgt") + LEFT + "#0(value=\"y\")",
       false
     ),
@@ -14433,9 +14447,7 @@ class CrossPathCorpusTest {
       final var why = ((Mapper<?, ?>) field).explain().declared().orElseThrow().why();
       final var saysGenerated = why.endsWith("; into writes through " + bridge.getName() + ".into");
       if (hasInto != row.generated() || saysGenerated != row.generated()) {
-        failures.add(
-          row.name() + ": the bridge " + (hasInto ? "has" : "has no") + " into, and explain() says " + why
-        );
+        failures.add(row.name() + ": the bridge " + (hasInto ? "has" : "has no") + " into, and explain() says " + why);
       }
       final var owed = row.owed().formatted(prefix);
       for (final var side : List.of(

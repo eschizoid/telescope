@@ -8382,7 +8382,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("   * writes, through the setter the property's type chooses, and returns {@code target}.");
     out.println("   */");
     out.print(suppression);
-    out.println("  public static " + targetFq + " into(final " + targetFq + " target, final " + sourceFq + " source) {");
+    out.println(
+      "  public static " + targetFq + " into(final " + targetFq + " target, final " + sourceFq + " source) {"
+    );
     out.println("    if (target == null) throw new NullPointerException(\"target\");");
     out.println("    if (source == null) throw new NullPointerException(\"source\");");
     for (final var statement : statements) out.println("    " + statement);
@@ -8919,16 +8921,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
    * names} has no setter that the runtime writer chooses from the property's type and that takes a
    * value of that type without a cast. A record has no setter at all, so it never has an {@code
-   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as the
-   * runtime writer does.
+   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as
+   * the runtime writer does.
    *
    * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
    * forward(source)} gives it, read back through its getter. Every value is read before the first
    * setter runs, so a getter that throws leaves {@code target} as it was. Each is written through
    * the setter the property's type chooses, the rule the runtime writer applies; where the name has
    * overloads the value is first assigned to a local of that setter's parameter type, which binds
-   * that method whatever javac would bind for the value's own type. A value of a wrapper class bound
-   * for a primitive parameter is skipped when null, as the runtime writer skips it.
+   * that method whatever javac would bind for the value's own type. A value of a wrapper class
+   * bound for a primitive parameter is skipped when null, as the runtime writer skips it.
    */
   private List<String> intoStatements(
     final TypeElement target,
@@ -8947,9 +8949,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var local = "__in" + index++;
       reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");
       final var setter = choice.member().getSimpleName();
-      final var write = choice.argumentType() == null
-        ? "target." + setter + "(" + local + ");"
-        : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
+      final var write =
+        choice.argumentType() == null
+          ? "target." + setter + "(" + local + ");"
+          : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
       final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
       writes.add(guarded ? "if (" + local + " != null) " + write : write);
     }

@@ -276,8 +276,8 @@ public final class DeepMap {
 
   /**
    * The mapper over the generated bridge {@code declaration} found. Its {@code explain()} also says
-   * which path its {@code into} writes on: the bridge's own {@code into} where the provider says the
-   * bridge has one, and the setters {@code Mapper.into} looks up at run time otherwise.
+   * which path its {@code into} writes on: the bridge's own {@code into} where the provider says
+   * the bridge has one, and the setters {@code Mapper.into} looks up at run time otherwise.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static <A, B> Mapper<A, B> declaredMapper(

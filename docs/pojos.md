@@ -104,6 +104,10 @@ setter for one of them, and `into` then refuses the call by the property's name 
 comes on the first `into` call for a target of that class rather than when the mapper is built, since a mapper used only
 through `forward` needs no setters.
 
+On a `@Bridge` field's mapper, `into` is generated with the bridge when the target class has a setter for every property
+the bridge writes: plain setter calls, no reflection, with the same result. Otherwise the field's mapper runs the
+runtime `into` above, and `explain()` says which of the two writes.
+
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one
 `writeBeans(SETTERS)` row replaces N per-class enumerations. Per-class `writeBean(X.class, ...)` still wins for class
