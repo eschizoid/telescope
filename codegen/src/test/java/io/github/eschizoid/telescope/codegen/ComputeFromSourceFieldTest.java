@@ -485,13 +485,13 @@ class ComputeFromSourceFieldTest {
   }
 
   @Test
-  @DisplayName("an unbound reference to the subclass takes the subclass, and is refused on both paths as off the source")
-  void anUnboundReferenceToTheSubclassIsOffTheSource() throws Exception {
-    refusedOnBothPaths(
-      "compute(Card::full, Lower::ii)",
-      "Deep map Person → Card: compute(...) fills 'full' from Lower::ii, which takes Lower, and the source" +
-        " Person is not one. Name a method taking Person, or a method of Person."
-    );
+  @DisplayName("an unbound reference to a name the subclass overloads reaches neither path, since javac cannot infer it")
+  void anUnboundReferenceToTheSubclassDoesNotCompile() {
+    final var row = "compute(Card::full, Lower::ii)";
+    final var generated = compile(sources(withRow(row)));
+    assertTrue(generated.hasError("invalid method reference"), generated::errorMessages);
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources(withRow(row)));
+    assertTrue(plain.hasError("invalid method reference"), plain::errorMessages);
   }
 
   @Test
