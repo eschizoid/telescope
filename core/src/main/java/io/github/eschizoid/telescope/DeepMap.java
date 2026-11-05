@@ -407,7 +407,11 @@ public final class DeepMap {
     final var beanRefl =
       hintMap.isEmpty() && defaultWriterFactory == null
         ? Reflective.BEANS
-        : Reflective.beansWithHints(hintMap, defaultWriterFactory);
+        : Reflective.beansWithHints(
+            hintMap,
+            defaultStrategy == null ? null : BeanWriteStrategy.valueOf(defaultStrategy.name()),
+            defaultWriterFactory
+          );
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
@@ -2059,9 +2063,10 @@ public final class DeepMap {
         );
       }
 
-      // A value converted for a bean property's own type is written through its setter, so a
-      // setter that cannot take that type, or a setters strategy a hint names with no setter for
-      // the property, refuses the pair here, on the side each direction the mapper runs writes.
+      // Each side a direction the mapper runs builds is refused here when the strategy it is built
+      // through cannot build it, or would not write a property the mapper writes: a strategy the
+      // writeBeans default names that does not apply, a setter that cannot take a value of the
+      // property's own type, and a setters strategy, hinted or taken, with no setter for it.
       refuseUnwritableSetters(source, target, target, tgtRefl, byTargetName, telescopeWritesTgt, true);
       if (!forwardOnly) refuseUnwritableSetters(source, target, source, srcRefl, bySourceName, pathWritesSrc, false);
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
@@ -3922,13 +3927,17 @@ public final class DeepMap {
   }
 
   /**
-   * Refuses a bean side, {@code cls} of the pair of {@code source} and {@code target}, for every
-   * property of it the mapper writes: each a step fills from the other side, the target's
-   * properties when {@code isTarget} is true and otherwise the source's, which the backward
-   * direction writes, and each in {@code rowWritten}, which a row writes through a path, a constant
-   * or a computed value. A setter that cannot take a value of the property's own type is refused
-   * for a property a step fills, and then a setters strategy a hint names for {@code cls} that has
-   * no setter for a property the mapper writes, which would drop the value.
+   * Refuses a bean side, {@code cls} of the pair of {@code source} and {@code target}, that the
+   * mapper builds and cannot build as it writes it. A strategy the {@code writeBeans} default names
+   * for {@code cls} that does not build it is refused, as a {@code writeBean} hint naming one is
+   * refused when the hint is built. Then, for every property of {@code cls} the mapper writes, each
+   * a step fills from the other side, the target's properties when {@code isTarget} is true and
+   * otherwise the source's, which the backward direction writes, and each in {@code rowWritten},
+   * which a row writes through a path, a constant or a computed value: a setter that cannot take a
+   * value of the property's own type is refused for a property a step fills, and then a setters
+   * strategy, named by a hint or taken by the shared order, that has no setter for a property the
+   * mapper writes, which would drop the value. A property nothing writes is left as the strategy
+   * leaves it.
    */
   private static void refuseUnwritableSetters(
     final Class<?> source,
@@ -3940,7 +3949,18 @@ public final class DeepMap {
     final boolean isTarget
   ) {
     final var writer = refl.writerFor(cls);
-    if (writer == null) return;
+    final var named = refl.namedStrategyFor(cls);
+    if (writer == null) {
+      if (named == null) return;
+      throw new IllegalArgumentException(
+        PairingMessages.beanUnbuiltBy(
+          source.getSimpleName(),
+          target.getSimpleName(),
+          PairingMessages.className(cls),
+          named.name()
+        )
+      );
+    }
     final var written = new LinkedHashSet<String>();
     for (final var step : steps.values()) {
       final var name = isTarget ? step.targetName() : step.sourceName();
@@ -3951,17 +3971,16 @@ public final class DeepMap {
       written.add(name);
     }
     written.addAll(rowWritten);
-    final var named = refl.namedWriterFor(cls);
-    if (named == null || Beans.strategyOf(named) != BeanWriteStrategy.SETTERS) return;
+    if (Beans.strategyOf(writer) != BeanWriteStrategy.SETTERS) return;
     for (final var name : written) {
-      if (!named.writes(name)) {
+      if (!writer.writes(name)) {
         throw new IllegalArgumentException(
           PairingMessages.beanPropertyUnwritable(
             source.getSimpleName(),
             target.getSimpleName(),
             PairingMessages.className(cls),
             name,
-            BeanWriteStrategy.SETTERS.name()
+            named == null ? null : named.name()
           )
         );
       }

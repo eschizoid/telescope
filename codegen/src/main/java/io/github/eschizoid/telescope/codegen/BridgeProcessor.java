@@ -2613,6 +2613,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         backwardResults.put(root.name(), given);
       }
     }
+    // A strategy the field's writeBeans default names that builds no side of the pair the mapper
+    // builds is refused as the runtime refuses it: the target, and the source where backward
+    // rebuilds it.
+    final var targetUnbuilt = defaultUnbuilt(cfg, source, target, target, targetFields, targetRebuild);
+    if (targetUnbuilt != null) {
+      error(source, targetUnbuilt);
+      return;
+    }
+    final var sourceUnbuilt = lenient ? null : defaultUnbuilt(cfg, source, target, source, sourceFields, sourceRebuild);
+    if (sourceUnbuilt != null) {
+      error(source, sourceUnbuilt);
+      return;
+    }
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -8590,7 +8603,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) {
       for (final var f : toFields) {
         if (!written.contains(f.name()) || setterName(to, f.name()) != null) continue;
-        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name()));
+        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name(), "SETTERS"));
         return null;
       }
     }
@@ -8667,14 +8680,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var setter = setterName(to, f.name());
-          // A property the bridge writes nothing into is left as the constructor leaves it, as the
-          // runtime writer leaves a property its setters strategy has no setter for.
-          if (setter == null && heldToSetters && !written.contains(f.name())) continue;
+          // A property of a side of the pair the bridge writes nothing into is left as the
+          // constructor leaves it, as the runtime writer leaves a property its setters strategy has
+          // no setter for, whether a hint names the strategy or the shared order takes it.
+          if (setter == null && pairTarget != null && !written.contains(f.name())) continue;
           if (setter == null) {
             error(
               annotationSite,
-              heldToSetters
-                ? settersDropMessage(annotationSite, pairTarget, to, f.name())
+              pairTarget != null
+                ? settersDropMessage(annotationSite, pairTarget, to, f.name(), heldToSetters ? "SETTERS" : null)
                 : "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
             );
             return null;
@@ -9338,21 +9352,57 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The refusal of a setters strategy the bridge of {@code source} and {@code target} is told to
-   * rebuild {@code side} with, which has no setter for {@code property}: the runtime's words.
+   * The refusal of a setters strategy the bridge of {@code source} and {@code target} rebuilds
+   * {@code side} with, which has no setter for {@code property}, in the runtime's words: {@code
+   * strategy} is {@code SETTERS} where the bridge is told to take it, and null where the shared
+   * order takes it.
    */
   private static String settersDropMessage(
     final TypeElement source,
     final TypeElement target,
     final TypeElement side,
-    final String property
+    final String property,
+    final String strategy
   ) {
     return PairingMessages.beanPropertyUnwritable(
       source.getSimpleName().toString(),
       target.getSimpleName().toString(),
       side.getSimpleName().toString(),
       property,
-      "SETTERS"
+      strategy
+    );
+  }
+
+  /**
+   * The refusal of a {@code @Bridge} field's {@code writeBeans} default, in the runtime's words,
+   * where the strategy it names for {@code side}, a side of the pair of {@code source} and {@code
+   * target} with {@code sideFields}, finds no member to build {@code side} with at all; null where
+   * {@code rebuild} reaches a rung, where the pair has no such default, where a {@code writeBean}
+   * row names the strategy for {@code side}, and where the member is there and only the bridge's
+   * package cannot call it, which the runtime calls through a lookup with private access.
+   */
+  private static String defaultUnbuilt(
+    final BridgeConfig cfg,
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement side,
+    final List<Field> sideFields,
+    final Rebuild rebuild
+  ) {
+    if (rebuild.kind() != Rebuild.Kind.NONE || cfg.declaringField() == null || cfg.pathDefault() == null) return null;
+    if (cfg.pathStrategies().containsKey(side.getQualifiedName().toString())) return null;
+    final var constructors = ElementFilter.constructorsIn(side.getEnclosedElements());
+    final var present = switch (cfg.pathDefault()) {
+      case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
+      case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
+      default -> staticBuilderMethod(side) != null;
+    };
+    if (present) return null;
+    return PairingMessages.beanUnbuiltBy(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side.getSimpleName().toString(),
+      cfg.pathDefault()
     );
   }
 
@@ -9884,6 +9934,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return false;
   }
 
+  /**
+   * Whether the names the emission walks line up: every target property no row fills is written
+   * from a source property, and every source property the bridge keeps, under its rename, is
+   * written into a target property, refusing the first that is not by name in the shared spec's
+   * words. A source property whose namesake a row fills pairs with that namesake, which forward
+   * leaves to the row and backward reads back. {@link #paired} has already decided the pair by
+   * name, so this holds the emission to what it decided.
+   */
   private boolean sameNames(
     final TypeElement source,
     final List<Field> sourceFields,
@@ -9896,33 +9954,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sn = new TreeSet<String>();
     for (final var f : sourceFields) {
       sn.add(renames.getOrDefault(f.name(), f.name()));
-      // Forward-only fan-out: every extra target counts as a source-derived name in the bijection,
-      // since forward writes the source value into every fan-out target slot.
+      // Forward-only fan-out: forward writes the source value into every fan-out target slot.
       final var extras = renameFanouts.get(f.name());
       if (extras != null) sn.addAll(extras);
     }
+    sn.removeAll(injectedTargetFields);
     final var tn = targetFields
       .stream()
       .map(Field::name)
       .filter(n -> !injectedTargetFields.contains(n))
       .collect(Collectors.toCollection(TreeSet::new));
-    if (sn.equals(tn)) return true;
-    error(
-      source,
-      "@Bridge: " +
-        source.getSimpleName() +
-        " and " +
-        target.getSimpleName() +
-        " must expose the same field names (a bijection). " +
-        source.getSimpleName() +
-        (renames.isEmpty() ? " has " : " (after renames) has ") +
-        sn +
-        ", " +
-        target.getSimpleName() +
-        " has " +
-        tn
-    );
-    return false;
+    final var sourceName = source.getSimpleName().toString();
+    final var targetName = target.getSimpleName().toString();
+    for (final var name : tn) {
+      if (sn.contains(name)) continue;
+      error(source, PairingMessages.noSameNameSource(sourceName, targetName, slotWord(target), slotWord(source), name));
+      return false;
+    }
+    for (final var name : sn) {
+      if (tn.contains(name)) continue;
+      error(source, PairingMessages.noSameNameTarget(sourceName, targetName, slotWord(source), slotWord(target), name));
+      return false;
+    }
+    return true;
   }
 
   /**

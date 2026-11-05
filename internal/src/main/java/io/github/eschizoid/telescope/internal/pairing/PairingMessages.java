@@ -626,14 +626,6 @@ public final class PairingMessages {
     final String intermediate,
     final String strategy
   ) {
-    final var reason = switch (strategy) {
-      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
-      " BUILDER, or SETTERS, or add a name-matched constructor.";
-      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
-      " SETTERS, or add a builder().";
-      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
-      " no-argument constructor the mapper's package can call.";
-    };
     return (
       "Deep map " +
       source +
@@ -646,8 +638,45 @@ public final class PairingMessages {
       ", which a write through the path builds where it is null, and writeStrategy = " +
       strategy +
       " for it finds " +
-      reason
+      unbuiltReason(strategy)
     );
+  }
+
+  /**
+   * A pair a mapper converts whose side {@code bean} the mapper builds, and the write strategy the
+   * mapper's {@code writeBeans} default names, {@code strategy} ({@code CONSTRUCTOR}, {@code
+   * BUILDER} or {@code SETTERS}), does not build it.
+   */
+  public static String beanUnbuiltBy(
+    final String source,
+    final String target,
+    final String bean,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the mapper builds " +
+      bean +
+      ", and writeStrategy = " +
+      strategy +
+      ", which the mapper's writeBeans default names for it, finds " +
+      unbuiltReason(strategy)
+    );
+  }
+
+  /** What {@code strategy} finds missing on a class it does not build, and what to do instead. */
+  private static String unbuiltReason(final String strategy) {
+    return switch (strategy) {
+      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
+      " BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
+      " SETTERS, or add a builder().";
+      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
+      " no-argument constructor the mapper's package can call.";
+    };
   }
 
   /**
@@ -685,9 +714,10 @@ public final class PairingMessages {
   }
 
   /**
-   * A pair a mapper converts whose side {@code bean} is built through {@code strategy}, as a hint
-   * names it, and that strategy writes no {@code property} into it although the mapper writes a
-   * value there, so the value would be dropped.
+   * A pair a mapper converts whose side {@code bean} is built through {@code strategy} as a hint
+   * names it, or, where {@code strategy} is null, through the one the shared order takes for it,
+   * and that strategy writes no {@code property} into it although the mapper writes a value there,
+   * so the value would be dropped.
    */
   public static String beanPropertyUnwritable(
     final String source,
@@ -705,9 +735,9 @@ public final class PairingMessages {
       property +
       "' into " +
       bean +
-      ", and writeStrategy = " +
-      strategy +
-      " for it writes no '" +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
       property +
       "' into it, so the value would be dropped. Give " +
       bean +

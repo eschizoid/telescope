@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
@@ -47,7 +48,7 @@ public record Reflective(
   BiFunction<Class<?>, Function<String, Object>, Object> construct,
   Function<String, String> normalize,
   Function<Class<?>, Beans.BeanWriter<?>> chosenWriter,
-  Function<Class<?>, Beans.BeanWriter<?>> namedWriter
+  Function<Class<?>, BeanWriteStrategy> namedStrategy
 ) {
   private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
 
@@ -84,14 +85,17 @@ public record Reflective(
    * (when non-null) and ultimately to {@link Beans#autoWriter}. Used by {@code DeepMap} when the
    * user supplies {@code writeBean(targetClass, strategy)} rows and/or a single {@code
    * writeBeans(strategy)} default. The per-class hint map is keyed on target class and holds a
-   * pre-instantiated {@link Beans.BeanWriter}. The default factory is consulted for every class no
-   * hint names: once when the mapper is planned, to decide whether a composed build may stand in
-   * for the writer it picks, and again on construction, which is where a default strategy that
-   * cannot apply to a target throws. Per-class LMF reuse happens one layer down in {@link
-   * Beans#autoWriter} and its invoker caches, so this layer holds no state of its own.
+   * pre-instantiated {@link Beans.BeanWriter}. {@code defaultStrategy} is the strategy the default
+   * names, which {@code defaultWriterFactory} builds a writer of, and both are null without one.
+   * The default factory is consulted for every class no hint names: once when the mapper is
+   * planned, to decide whether a composed build may stand in for the writer it picks, and again on
+   * construction, where a default strategy that cannot apply to a class throws. Per-class LMF reuse
+   * happens one layer down in {@link Beans#autoWriter} and its invoker caches, so this layer holds
+   * no state of its own.
    */
   public static Reflective beansWithHints(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final BeanWriteStrategy defaultStrategy,
     final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory
   ) {
     return new Reflective(
@@ -101,7 +105,7 @@ public record Reflective(
       (cls, valueByName) -> constructBeanWithHints(hints, defaultWriterFactory, cls, valueByName),
       BEANS.normalize,
       cls -> hintedWriter(hints, defaultWriterFactory, cls),
-      cls -> hintNamedWriter(hints, defaultWriterFactory, cls)
+      cls -> namedStrategy(hints, defaultStrategy, cls)
     );
   }
 
@@ -159,12 +163,12 @@ public record Reflective(
   }
 
   /**
-   * The writer a {@code writeBean} hint or the {@code writeBeans} default names for bean {@code
-   * cls}, which is the one {@link #writerFor} answers with, or {@code null} where no hint names one
-   * and the shared order picks it, for a record, and for a bean the named strategy cannot build.
+   * The strategy a {@code writeBean} hint or the {@code writeBeans} default names for bean {@code
+   * cls}, whether or not it can build {@code cls}, or {@code null} where no hint names one, so the
+   * shared order picks the writer {@link #writerFor} answers with, and for a record.
    */
-  public Beans.BeanWriter<?> namedWriterFor(final Class<?> cls) {
-    return namedWriter.apply(cls);
+  public BeanWriteStrategy namedStrategyFor(final Class<?> cls) {
+    return namedStrategy.apply(cls);
   }
 
   /** Read a value by name. */
@@ -420,6 +424,20 @@ public record Reflective(
     final var named = hintNamedWriter(hints, defaultWriterFactory, cls);
     if (named != null || defaultWriterFactory != null || cls.isRecord()) return named;
     return BEANS.writerFor(cls);
+  }
+
+  /**
+   * The strategy a hint names for {@code cls}: the hint naming {@code cls}, else {@code
+   * defaultStrategy}. {@code null} for a record and for a class no hint names.
+   */
+  private static BeanWriteStrategy namedStrategy(
+    final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final BeanWriteStrategy defaultStrategy,
+    final Class<?> cls
+  ) {
+    if (cls.isRecord()) return null;
+    final var hinted = hints.get(cls);
+    return hinted != null ? Beans.strategyOf(hinted) : defaultStrategy;
   }
 
   /**

@@ -12,14 +12,17 @@ import org.junit.jupiter.api.Test;
 /**
  * {@code into} writes onto the object it was handed, whatever its runtime shape, and survives a
  * forward hook that produces nothing. Both are properties of the accessors it resolves: a writer
- * bound to a declared supertype cannot reach a setter that a subclass introduces, and a reader is
- * only safe to invoke on something that exists.
+ * bound to a declared supertype cannot reach a setter overload that a subclass introduces, and a
+ * reader is only safe to invoke on something that exists.
  */
 class IntoTargetShapeTest {
 
   record Dto(String id, String label) {}
 
-  /** Declared target: {@code label} is readable here but only writable on the subclass. */
+  /**
+   * Declared target: {@code label} is written here through a setter taking any {@link
+   * CharSequence}, and the subclass adds the overload taking the property's own type.
+   */
   public static class Base {
 
     private String id;
@@ -35,6 +38,10 @@ class IntoTargetShapeTest {
 
     public String getLabel() {
       return label;
+    }
+
+    public void setLabel(final CharSequence label) {
+      this.label = label == null ? null : label.toString();
     }
   }
 
@@ -68,11 +75,11 @@ class IntoTargetShapeTest {
     mapper.into(target, new Dto("ORD-1", "mapped"));
 
     assertEquals("ORD-1", target.getId(), "the base setter still runs");
-    // The declared target has no setter for `label`, so the value that reaches the subclass is
-    // whatever the produced instance carried. Whether the subclass setter is invoked at all is the
-    // property: a writer bound to the declared type would not find it and the write would vanish.
+    // On the subclass a String binds its own overload, which the declared target does not have: a
+    // writer bound to the declared type calls the CharSequence setter and the subclass never sees
+    // the write.
     assertTrue(target.labelWritten(), "the subclass setter is reachable from a base-typed mapper");
-    assertEquals("from-declared-target", target.getLabel(), "and it receives what the declared target carried");
+    assertEquals("mapped", target.getLabel(), "and it receives the mapped value");
   }
 
   @Test

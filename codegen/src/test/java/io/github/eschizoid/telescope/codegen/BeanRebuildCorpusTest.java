@@ -133,7 +133,7 @@ class BeanRebuildCorpusTest {
   // Neither path writes a private field, so a target whose only write path is its fields offers
   // both of them nothing to call.
   private static final Refusal NO_WRITE_SURFACE = new Refusal(
-    "has a no-arg constructor but no setter for 'p'",
+    "the write strategy it takes writes no 'p' into it",
     "does not write private fields"
   );
 

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -104,6 +105,7 @@ class ReflectiveWriterForTest {
   void hintsNamingNothingFallBackToTheAutoOrder() {
     final var other = Reflective.beansWithHints(
       Map.of(SettersOnly.class, Beans.settersWriter(SettersOnly.class)),
+      null,
       null
     );
     assertInstanceOf(Beans.BuilderWriter.class, other.writerFor(Both.class), "no hint names Both");
@@ -116,20 +118,24 @@ class ReflectiveWriterForTest {
   void perClassHintDecides() {
     final var builder = Beans.builderWriter(Both.class);
     final var setters = Beans.settersWriter(Both.class);
-    assertSameWriter(builder, Reflective.beansWithHints(Map.of(Both.class, builder), null).writerFor(Both.class));
-    assertSameWriter(setters, Reflective.beansWithHints(Map.of(Both.class, setters), null).writerFor(Both.class));
+    assertSameWriter(builder, Reflective.beansWithHints(Map.of(Both.class, builder), null, null).writerFor(Both.class));
+    assertSameWriter(setters, Reflective.beansWithHints(Map.of(Both.class, setters), null, null).writerFor(Both.class));
   }
 
   @Test
   @DisplayName("a default strategy decides the writer where it applies, and none where it cannot")
   void defaultStrategyDecides() {
-    final var builders = Reflective.beansWithHints(Map.of(), cls -> Beans.builderWriter(cls));
+    final var builders = Reflective.beansWithHints(Map.of(), BeanWriteStrategy.BUILDER, cls ->
+      Beans.builderWriter(cls)
+    );
     assertInstanceOf(Beans.BuilderWriter.class, builders.writerFor(Both.class));
     assertNull(builders.writerFor(SettersOnly.class), "no builder() to apply, so the construction refuses");
     assertNull(builders.writerFor(Plain.class), "records are not written by bean strategies");
     assertInstanceOf(
       Beans.SettersWriter.class,
-      Reflective.beansWithHints(Map.of(), cls -> Beans.settersWriter(cls)).writerFor(Both.class)
+      Reflective.beansWithHints(Map.of(), BeanWriteStrategy.SETTERS, cls -> Beans.settersWriter(cls)).writerFor(
+        Both.class
+      )
     );
   }
 
