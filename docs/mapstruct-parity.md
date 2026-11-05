@@ -759,8 +759,8 @@ and a nested bean is replaced by the new object forward builds rather than updat
 compiles behaves in it as in the runtime `into`. Where the bridge cannot update the target itself (a record, a bean
 without such a setter, a setter that takes the value only after a check of its class, a pair of sealed interfaces), it
 has no `into`, so a direct call does not compile, and the field's mapper runs the runtime `into`, which refuses in the
-same words or writes the same result. A generated `into` still builds the new object `forward` builds and copies it
-across, which a hand-written setter sequence does not.
+same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;
+where `forward` inlines, as on a flat bean, the JIT can remove that object, and `IntoBenchmark` measures what is left.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a
