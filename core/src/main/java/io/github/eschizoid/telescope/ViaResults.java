@@ -34,9 +34,10 @@ import java.util.function.Function;
  * that gives the class type arguments, reaches it through an unchecked conversion, and the call's
  * result is then the erasure of the one the method declares. A property a class's own variable
  * types fixes nothing. A result that still names a variable the property does not fix is held to
- * the member's type where its type arguments are invariant: a variable in an argument the member
- * gives a type has to be that type, which has to admit the property, and is refused where none can
- * be; anything else it names is left to the checks each call makes.
+ * the member's type: each type argument it gives the member's class is that type where the member
+ * gives a type there, and lies within the bound where the member gives a wildcard. A variable so
+ * held, together with what the property and its own bounds force on it, has to admit some type, and
+ * is refused where none can be; anything else it names is left to the checks each call makes.
  */
 final class ViaResults {
 
@@ -337,7 +338,12 @@ final class ViaResults {
    * the types each is exactly, the types each is a subtype of, and the lists of types each is a
    * supertype of at least one of.
    */
-  private record Met(List<Type> variables, List<List<Type>> exact, List<List<Type>> uppers, List<List<List<Type>>> lowers) {
+  private record Met(
+    List<Type> variables,
+    List<List<Type>> exact,
+    List<List<Type>> uppers,
+    List<List<List<Type>>> lowers
+  ) {
     Met(final List<Type> variables) {
       this(variables, lists(variables.size()), lists(variables.size()), lists(variables.size()));
     }
@@ -444,10 +450,10 @@ final class ViaResults {
    * for it to be a subtype of {@code taken}; false where no instantiation makes it one. A generic
    * class is one where its class is a subclass of {@code taken}'s, and the arguments it gives that
    * class are contained in {@code taken}'s; one reaching {@code taken}'s class only raw, or with
-   * another count of arguments, is left as it is. An array is a subtype of an array whose
-   * component its component is a subtype of, a primitive one only of its own, and of the classes
-   * every array extends. At the result's top, {@code top}, a class no instantiation makes a
-   * subtype is left to the check of the result's class that writes it.
+   * another count of arguments, is left as it is. An array is a subtype of an array whose component
+   * its component is a subtype of, a primitive one only of its own, and of the classes every array
+   * extends. At the result's top, {@code top}, a class no instantiation makes a subtype is left to
+   * the check of the result's class that writes it.
    */
   private static boolean below(final Type given, final Type taken, final Met met, final boolean top) {
     if (!names(given, met.variables())) return true;
@@ -459,7 +465,9 @@ final class ViaResults {
       final var takenClass = DeepMap.heldClassOf(taken);
       if (!takenClass.isArray()) return takenClass.isAssignableFrom(Object[].class);
       final var component = componentOf(taken);
-      return !takenClass.getComponentType().isPrimitive() && below(array.getGenericComponentType(), component, met, false);
+      return (
+        !takenClass.getComponentType().isPrimitive() && below(array.getGenericComponentType(), component, met, false)
+      );
     }
     if (!(given instanceof ParameterizedType parameterized)) return true;
     final var cls = (Class<?>) parameterized.getRawType();
@@ -503,9 +511,10 @@ final class ViaResults {
       if (!(argument instanceof WildcardType wildcard)) {
         if (!exactly(argument, held, met)) return false;
       } else if (!(held instanceof WildcardType)) {
-        final var fits = wildcard.getLowerBounds().length > 0
-          ? below(wildcard.getLowerBounds()[0], held, met, false)
-          : above(wildcard.getUpperBounds()[0], held, met);
+        final var fits =
+          wildcard.getLowerBounds().length > 0
+            ? below(wildcard.getLowerBounds()[0], held, met, false)
+            : above(wildcard.getUpperBounds()[0], held, met);
         if (!fits) return false;
       }
     }

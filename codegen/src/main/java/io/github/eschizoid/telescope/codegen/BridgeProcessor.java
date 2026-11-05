@@ -5260,8 +5260,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The type an element {@code element} types is held as: a wildcard's upper bound, which is
-   * {@code Object} for one bounded from below or not at all, and any other type itself.
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is {@code
+   * Object} for one bounded from below or not at all, and any other type itself.
    */
   private TypeMirror heldElement(final TypeMirror element) {
     if (!(element instanceof WildcardType wildcard)) return element;
@@ -6322,9 +6322,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
     // A result of a generic class used raw, or of a class extending it raw, is written where the
     // class takes type arguments through an unchecked conversion, as Java's assignment writes it.
-    if (
-      (usedRaw(gives) || instantiation().reachesOnlyRaw(gives, chosen)) && types.isAssignable(gives, chosen)
-    ) {
+    if ((usedRaw(gives) || instantiation().reachesOnlyRaw(gives, chosen)) && types.isAssignable(gives, chosen)) {
       return new ViaResult(written, null, true);
     }
     if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);

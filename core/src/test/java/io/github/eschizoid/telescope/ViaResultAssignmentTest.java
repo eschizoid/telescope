@@ -2238,8 +2238,7 @@ class ViaResultAssignmentTest {
     );
     assertEquals(new Supers(List.of("x")), sequenced.forward(new Text("x")));
     assertNoInstantiation(
-      () ->
-        Telescope.mapperForward(Text.class, Text.class, Mapping.<Text, Text>via(Text::v, Text::v, Numeric.class)),
+      () -> Telescope.mapperForward(Text.class, Text.class, Mapping.<Text, Text>via(Text::v, Text::v, Numeric.class)),
       "T",
       "java.lang.String"
     );
@@ -2552,7 +2551,11 @@ class ViaResultAssignmentTest {
     );
     assertNoInstantiation(
       () ->
-        Telescope.mapperForward(Text.class, Strings.class, Mapping.<Text, Strings>via(Text::v, Strings::v, Below.class)),
+        Telescope.mapperForward(
+          Text.class,
+          Strings.class,
+          Mapping.<Text, Strings>via(Text::v, Strings::v, Below.class)
+        ),
       "java.util.List<? extends T>",
       "java.util.List<java.lang.String>"
     );

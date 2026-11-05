@@ -110,8 +110,18 @@ class MethodInstantiationTest {
     new Call("<T extends CharSequence> List<T> m(T t)", "String", "List<? super Integer>", REFUSED),
     new Call("<T extends Number> T m(String t)", "String", "String", REFUSED),
     new Call("<T> List<T> m(List<? extends List<T>> t)", "List<? extends List<String>>", "List<CharSequence>", REFUSED),
-    new Call("<T> List<T> m(List<? extends List<T>> t)", "List<? extends List<String>>", "List<String>", "java.util.List<java.lang.String>"),
-    new Call("<T> List<T> m(List<? extends Optional<T>> t)", "List<? extends Optional<String>>", "List<Integer>", REFUSED),
+    new Call(
+      "<T> List<T> m(List<? extends List<T>> t)",
+      "List<? extends List<String>>",
+      "List<String>",
+      "java.util.List<java.lang.String>"
+    ),
+    new Call(
+      "<T> List<T> m(List<? extends Optional<T>> t)",
+      "List<? extends Optional<String>>",
+      "List<Integer>",
+      REFUSED
+    ),
     new Call("<T> M.RawSub<T> m(T t)", "String", "List<String>", "demo.M.RawSub<java.lang.String>"),
     new Call("<T> Collection<T> m()", null, "List<String>", REFUSED),
     new Call("<T> Collection<T> m(T t)", "String", "List<String>", "java.util.Collection<java.lang.String>"),

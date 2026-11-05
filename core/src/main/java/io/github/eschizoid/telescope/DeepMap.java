@@ -3152,7 +3152,10 @@ public final class DeepMap {
    * class. An element a wildcard types is held as the wildcard's upper bound.
    */
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
-    if (elementType instanceof WildcardType wildcard) return elementTypeMatches(wildcard.getUpperBounds()[0], mapperClass);
+    if (elementType instanceof WildcardType wildcard) return elementTypeMatches(
+      wildcard.getUpperBounds()[0],
+      mapperClass
+    );
     if (elementType instanceof Class<?> cls) return cls.equals(mapperClass);
     return elementType instanceof TypeVariable<?> variable && boundOf(variable).isAssignableFrom(mapperClass);
   }
