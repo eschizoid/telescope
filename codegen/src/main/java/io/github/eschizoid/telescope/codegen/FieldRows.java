@@ -1436,15 +1436,13 @@ final class FieldRows {
           value = read;
         } else {
           final var rowExec = (ExecutableElement) elementAt(unit, row.getMethodSelect());
-          if (
-            ComputeForms.FRESH_FQN.equals(ComputeForms.computeForm(rowExec)) &&
-            elementAt(unit, args.get(1)) instanceof ExecutableElement chosen
-          ) {
+          if (ComputeForms.FRESH_FQN.equals(ComputeForms.computeForm(rowExec))) {
             final var bothForms = ComputeForms.sourceFormRefusal(
+              trees,
               env.getTypeUtils(),
               env.getElementUtils(),
-              chosen,
-              ComputeForms.boundReceiver(trees, unit, args.get(1), chosen),
+              unit,
+              args.get(1),
               source,
               target,
               t.property()

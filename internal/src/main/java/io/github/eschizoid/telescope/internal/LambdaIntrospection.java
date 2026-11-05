@@ -355,7 +355,9 @@ public final class LambdaIntrospection {
    * The form taking one {@code argument} of the method or constructor a Serializable reference
    * names, where the reference calls it with no argument, or null when there is none, when the
    * reference takes an argument, or when it is a lambda, which names no method a caller chose by
-   * name.
+   * name. A reference javac compiles into a lambda method of its own, as it does one through {@code
+   * super} or one to a protected method of a class in another package, records that lambda method
+   * rather than the method it calls, and reads as a lambda.
    *
    * <p>A form is a method of the same name, static when the referenced one is and an instance
    * method when it is, or a constructor of the same class; not private; whose one parameter {@code

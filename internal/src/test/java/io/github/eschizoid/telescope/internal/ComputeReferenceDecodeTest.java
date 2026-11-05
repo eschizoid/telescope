@@ -127,6 +127,21 @@ class ComputeReferenceDecodeTest {
     }
   }
 
+  static final class Through extends Upper {
+
+    String ii(final Person person) {
+      return person.first();
+    }
+
+    Fresh<String> viaThis() {
+      return this::ii;
+    }
+
+    Fresh<String> viaSuper() {
+      return super::ii;
+    }
+  }
+
   /**
    * The {@code SerializedLambda} of a reference bound to a {@code Lower} receiver naming {@code
    * Upper.ii()}, as written by {@code capturing}, a class standing in for the one the metafactory
@@ -361,6 +376,17 @@ class ComputeReferenceDecodeTest {
     void noneForALambdaOrAOneArgumentReference() {
       assertNull(LambdaIntrospection.oneArgumentFormTaking(fresh(() -> "x"), Person.class));
       assertNull(LambdaIntrospection.oneArgumentFormTaking(from(ComputeReferenceDecodeTest::full), Person.class));
+    }
+
+    @Test
+    @DisplayName("is none for a reference javac compiles into a lambda method of its own, as it does one through super")
+    void noneForAReferenceCompiledIntoALambda() {
+      final var through = new Through();
+      assertEquals(
+        "Through.ii(Person)",
+        shown(LambdaIntrospection.oneArgumentFormTaking(through.viaThis(), Person.class))
+      );
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(through.viaSuper(), Person.class));
     }
   }
 

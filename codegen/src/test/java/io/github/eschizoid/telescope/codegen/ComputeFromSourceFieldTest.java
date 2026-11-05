@@ -120,6 +120,42 @@ class ComputeFromSourceFieldTest {
         "  public String ii(final Person p) { return \"lower \" + p.first(); }\n" +
         "}\n"
     ),
+    ProcessorHarness.source("cf.Boxed", "package cf; public record Boxed(String first, Object made) {}"),
+    ProcessorHarness.source(
+      "cf.Make",
+      "package cf; public final class Make {\n" +
+        "  public static io.github.eschizoid.telescope.mapping.Mapping.Fresh<String> fresh() { return () -> \"made\"; }\n" +
+        "  public static String fresh(final Person p) { return \"from \" + p.first(); }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
+      "cf.Members",
+      "package cf; public final class Members {\n" +
+        "  public record Nested(String from) {\n" +
+        "    public Nested() { this(\"nested\"); }\n" +
+        "    public Nested(final Person p) { this(p.first()); }\n" +
+        "  }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
+      "cg.Base",
+      "package cg; public class Base {\n" +
+        "  protected String pp() { return \"protected\"; }\n" +
+        "  public String tt() { return \"plain\"; }\n" +
+        "  public String tt(final cf.Person p) { return \"from \" + p.first(); }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
+      "cg.Shut",
+      "package cg; class Shut {\n" +
+        "  public String ll() { return \"plain\"; }\n" +
+        "  public String ll(final cf.Person p) { return \"from \" + p.first(); }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
+      "cg.Open",
+      "package cg; public final class Open extends Shut { public static final Open INSTANCE = new Open(); }"
+    ),
     ProcessorHarness.source(
       "cf.Names",
       "package cf;\n" +
@@ -326,14 +362,120 @@ class ComputeFromSourceFieldTest {
 
   /** The message the runtime path refuses {@code row} with when the mapper is built, or null. */
   private static String runtimeRefusal(final String row) throws Exception {
-    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources(withRow(row)));
+    return refusalBuilding("cf.OddRuntime", withRow(row));
+  }
+
+  /**
+   * The message the runtime path refuses the mapper {@code holder}'s static {@code runtime()}
+   * builds with, compiled with {@code extra} and no processor, or null.
+   */
+  private static String refusalBuilding(final String holder, final String... extra) throws Exception {
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources(extra));
     assertTrue(plain.success(), plain::errorMessages);
     try (final var loader = load(plain)) {
-      loader.loadClass("cf.OddRuntime").getMethod("runtime").invoke(null);
+      loader.loadClass(holder).getMethod("runtime").invoke(null);
       return null;
     } catch (final InvocationTargetException e) {
       return e.getCause().getMessage();
     }
+  }
+
+  /**
+   * {@code cf.Shapes}, a subclass of {@code cg.Base}, which is in another package, whose static
+   * {@code runtime()} returns a mapper of Person to {@code target} with {@code row}. The mapper is
+   * built in an instance method, where the inner class {@code Inner}, the local class {@code Local}
+   * and its member record {@code Member} each have a constructor taking nothing and one taking the
+   * source.
+   */
+  private static String[] inShapes(final String target, final String row) {
+    return new String[] {
+      "cf.Shapes",
+      HEADER +
+      "public final class Shapes extends cg.Base {\n" +
+      "  protected String qq() { return \"protected\"; }\n" +
+      "  public String qq(final Person p) { return \"from \" + p.first(); }\n" +
+      "  public String pp(final Person p) { return \"from \" + p.first(); }\n" +
+      "  public final class Inner {\n" +
+      "    public Inner() {}\n" +
+      "    public Inner(final Person p) {}\n" +
+      "    @Override public String toString() { return \"inner\"; }\n" +
+      "  }\n" +
+      "  public static Object runtime() { return new Shapes().mapper(); }\n" +
+      "  private Object mapper() {\n" +
+      "    class Local {\n" +
+      "      record Member(String from) {\n" +
+      "        Member() { this(\"member\"); }\n" +
+      "        Member(final Person p) { this(p.first()); }\n" +
+      "      }\n" +
+      "      Local() {}\n" +
+      "      Local(final Person p) {}\n" +
+      "      @Override public String toString() { return \"local\"; }\n" +
+      "    }\n" +
+      "    return Telescope.mapperForward(Person.class, " +
+      target +
+      ".class, " +
+      row +
+      ");\n" +
+      "  }\n" +
+      "}\n",
+    };
+  }
+
+  /**
+   * What Ada converts to through the mapper {@link #inShapes} builds with {@code row}, on the
+   * runtime path, once the verifier has accepted the row.
+   */
+  private static String verifiedAndRun(final String target, final String row) throws Exception {
+    return verifiedAndRun("cf.Shapes", inShapes(target, row));
+  }
+
+  /**
+   * What Ada converts to through the mapper {@code holder}'s static {@code runtime()} builds, on
+   * the runtime path, once the verifier has accepted {@code extra}.
+   */
+  @SuppressWarnings("unchecked")
+  private static String verifiedAndRun(final String holder, final String... extra) throws Exception {
+    final var compilation = compile(sources(extra));
+    assertTrue(compilation.success(), compilation::errorMessages);
+    try (final var loader = load(compilation)) {
+      final var mapper = (ForwardMapper<Object, Object>) loader.loadClass(holder).getMethod("runtime").invoke(null);
+      return mapper.forward(person(loader, "ada", "lovelace", 36)).toString();
+    }
+  }
+
+  /** Ada as a Bag whose label is {@code label} and whose other computed properties are unset. */
+  private static String bag(final String label) {
+    return (
+      "Bag[first=ada, last=lovelace, age=36, tags=null, slot=null, label=" + label + ", flag=false, made=null, count=0]"
+    );
+  }
+
+  /** The refusal of a supplier {@code reference} whose name has the form {@code form} too. */
+  private static String bothForms(
+    final String target,
+    final String property,
+    final String reference,
+    final String form
+  ) {
+    return (
+      "Deep map Person → " +
+      target +
+      ": compute(...) fills '" +
+      property +
+      "' from " +
+      reference +
+      ", which Java binds as a supplier taking no argument, though " +
+      form +
+      " takes the source Person. Hold the one meant in a static final Supplier or FromSource field," +
+      " or give the form taking the source a name of its own."
+    );
+  }
+
+  /** Holds {@code row} in {@link #inShapes} to one refusal, {@code words}, on both paths. */
+  private static void refusedInShapes(final String target, final String row, final String words) throws Exception {
+    final var compilation = compile(sources(inShapes(target, row)));
+    assertTrue(compilation.hasError(words), compilation::errorMessages);
+    assertEquals(words, refusalBuilding("cf.Shapes", inShapes(target, row)));
   }
 
   /**
@@ -561,5 +703,99 @@ class ComputeFromSourceFieldTest {
       generated.hasError("Names::doubled gives int, which the java.lang.String property 'full'"),
       generated::errorMessages
     );
+  }
+
+  @Test
+  @DisplayName(
+    "a protected method of a class in another package, which javac calls from a lambda of its own, runs as the" +
+      " supplier on both paths"
+  )
+  void aProtectedMethodOfAnotherPackageRunsAsTheSupplier() throws Exception {
+    assertEquals(bag("protected"), verifiedAndRun("Bag", "compute(Bag::label, this::pp)"));
+  }
+
+  @Test
+  @DisplayName("a protected method of the class's own package is refused on both paths")
+  void aProtectedMethodOfTheSamePackageIsRefusedOnBothPaths() throws Exception {
+    refusedInShapes(
+      "Bag",
+      "compute(Bag::label, this::qq)",
+      bothForms("Bag", "label", "Shapes::qq", "Shapes.qq(Person)")
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a reference through super, which javac calls from a lambda of its own, runs as the supplier on both paths"
+  )
+  void aReferenceThroughSuperRunsAsTheSupplier() throws Exception {
+    assertEquals(bag("plain"), verifiedAndRun("Bag", "compute(Bag::label, super::tt)"));
+  }
+
+  @Test
+  @DisplayName(
+    "a method a class not accessible from the row declares, which javac calls from a lambda of its own, runs as the" +
+      " supplier on both paths"
+  )
+  void aMethodOfAnInaccessibleClassRunsAsTheSupplier() throws Exception {
+    assertEquals(bag("plain"), verifiedAndRun("Bag", "compute(Bag::label, cg.Open.INSTANCE::ll)"));
+  }
+
+  @Test
+  @DisplayName(
+    "a constructor of an inner or a local class, which javac calls from a lambda of its own, runs as the supplier on" +
+      " both paths"
+  )
+  void aConstructorOfAnInnerOrLocalClassRunsAsTheSupplier() throws Exception {
+    assertEquals("Boxed[first=ada, made=inner]", verifiedAndRun("Boxed", "compute(Boxed::made, Inner::new)"));
+    assertEquals("Boxed[first=ada, made=local]", verifiedAndRun("Boxed", "compute(Boxed::made, Local::new)"));
+    assertEquals(
+      "Boxed[first=ada, made=Member[from=member]]",
+      verifiedAndRun("Boxed", "compute(Boxed::made, Local.Member::new)")
+    );
+    assertEquals(
+      "Boxed[first=ada, made=Kept[from=kept]]",
+      verifiedAndRun(
+        "cf.Anonymous",
+        "cf.Anonymous",
+        HEADER +
+          "public final class Anonymous {\n" +
+          "  public static Object runtime() {\n" +
+          "    return new java.util.function.Supplier<Object>() {\n" +
+          "      record Kept(String from) {\n" +
+          "        Kept() { this(\"kept\"); }\n" +
+          "        Kept(final Person p) { this(p.first()); }\n" +
+          "      }\n" +
+          "      @Override public Object get() {\n" +
+          "        return Telescope.mapperForward(Person.class, Boxed.class, compute(Boxed::made, Kept::new));\n" +
+          "      }\n" +
+          "    }.get();\n" +
+          "  }\n" +
+          "}\n"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a constructor of a static member class is refused on both paths")
+  void aConstructorOfAStaticMemberClassIsRefusedOnBothPaths() throws Exception {
+    refusedInShapes(
+      "Boxed",
+      "compute(Boxed::made, Members.Nested::new)",
+      bothForms("Boxed", "made", "Nested::new", "new Nested(Person)")
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a supplier a call returns runs on the verified and the runtime path, and a @Bridge field refuses it only as" +
+      " no method reference"
+  )
+  void aSupplierACallReturnsRunsAsTheSupplier() throws Exception {
+    final var row = "compute(Bag::label, Make.fresh())";
+    assertEquals(bag("made"), verifiedAndRun("Bag", row));
+    final var generated = compile(sources(withRow("Bag", row)));
+    assertTrue(generated.hasError("this argument is not one"), generated::errorMessages);
+    assertFalse(generated.hasError("which Java binds as a supplier"), generated::errorMessages);
   }
 }
