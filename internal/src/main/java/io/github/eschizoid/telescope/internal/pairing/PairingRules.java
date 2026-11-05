@@ -309,7 +309,7 @@ public final class PairingRules<T> {
    * pair. A pair of one scalar is decided before this, as the same type or a primitive against its
    * wrapper, and so is a pair of enums.
    */
-  private PairDecision<T> builtIn(
+  public PairDecision<T> builtIn(
     final T srcType,
     final T tgtType,
     final String componentName,
