@@ -725,6 +725,14 @@ public sealed interface Mapping<A, B>
    * so {@code List::of} and {@code AtomicReference::new} run as suppliers. Hold the one meant in a
    * {@code static final} {@code Supplier} or {@code FromSource} field, or give the form taking the
    * source a name of its own.
+   *
+   * <p>The form is looked for in the class the reference names the method through and in each class
+   * and interface that class extends. For a reference bound to a receiver that class is the type of
+   * the expression before {@code ::}. For a static reference it is the class declaring the method,
+   * whatever class is written before {@code ::}, because the compiled reference names only the
+   * declaring class. So where {@code Base} declares {@code full()} and its subclass {@code Sub}
+   * declares {@code full(User)}, a bound {@code Sub.INSTANCE::full} is refused, while a static
+   * {@code Sub::full} runs {@code Base.full()} as the supplier on both paths.
    */
   static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Fresh<? extends X> supplier) {
     final Supplier<? extends X> asSupplier = supplier;

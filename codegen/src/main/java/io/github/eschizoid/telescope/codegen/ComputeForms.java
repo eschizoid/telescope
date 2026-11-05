@@ -1,16 +1,23 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.MemberReferenceTree;
+import com.sun.source.util.TreePath;
+import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayDeque;
 import java.util.List;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
 /**
@@ -48,14 +55,20 @@ final class ComputeForms {
    * same name and kind, static for a static method and an instance method for a bound one, or a
    * constructor of the same class; not private; whose one parameter the source is an instance of, a
    * primitive parameter compared as its wrapper, and is not {@code Object}, which a type variable
-   * with no bound erases to and which takes any value rather than the source. The class declaring
-   * {@code chosen} is searched first, then each class and interface it extends, superclass before
-   * interfaces, and the first that declares a form gives it; of several there, the one whose
-   * parameter's class name sorts first.
+   * with no bound erases to and which takes any value rather than the source. The search starts at
+   * {@code receiver}, the type of the receiver a reference is bound to, where it is the class
+   * declaring {@code chosen} or a subtype of it, and otherwise at the class declaring {@code
+   * chosen}, then takes each class and interface it extends, superclass before interfaces, and the
+   * first that declares a form gives it; of several there, the one whose parameter's class name
+   * sorts first. A static reference starts at the class declaring the method whatever class is
+   * written before {@code ::}, as the runtime path must, since the class file records a handle on
+   * the declaring class only.
    */
   static String sourceFormRefusal(
     final Types types,
+    final Elements elements,
     final ExecutableElement chosen,
+    final TypeMirror receiver,
     final TypeElement source,
     final TypeElement target,
     final String property
@@ -76,7 +89,7 @@ final class ComputeForms {
     } else {
       final var wantStatic = chosen.getModifiers().contains(Modifier.STATIC);
       final var pending = new ArrayDeque<TypeElement>();
-      pending.add(owner);
+      pending.add(searchedFirst(types, owner, receiver));
       while (form == null && !pending.isEmpty()) {
         final var type = pending.poll();
         form = firstByParameter(
@@ -92,17 +105,58 @@ final class ComputeForms {
       }
     }
     if (form == null) return null;
-    final var formOwner = form.getEnclosingElement().getSimpleName();
+    final var formOwner = shownClass(elements, (TypeElement) form.getEnclosingElement());
     final var parameter = shownName(types, types.erasure(form.getParameters().get(0).asType()));
     return PairingMessages.computeSupplierHasASourceForm(
       source.getSimpleName().toString(),
       target.getSimpleName().toString(),
       property,
-      owner.getSimpleName() + "::" + (constructor ? "new" : chosen.getSimpleName()),
+      shownClass(elements, owner) + "::" + (constructor ? "new" : chosen.getSimpleName()),
       constructor
         ? "new " + formOwner + "(" + parameter + ")"
         : formOwner + "." + form.getSimpleName() + "(" + parameter + ")"
     );
+  }
+
+  /**
+   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen}, an
+   * instance method a {@code compute} row binds as a supplier: the type of the expression written
+   * before {@code ::}. An instance method taking no argument fits a supplier only through a
+   * receiver, since a reference naming it by its class takes the receiver as an argument. Null for
+   * a static method or an argument that is not a method reference; for a constructor it is the
+   * class constructed, which the search for a constructor's form does not read.
+   */
+  static TypeMirror boundReceiver(
+    final Trees trees,
+    final CompilationUnitTree unit,
+    final ExpressionTree arg,
+    final ExecutableElement chosen
+  ) {
+    if (!(arg instanceof MemberReferenceTree reference) || chosen.getModifiers().contains(Modifier.STATIC)) {
+      return null;
+    }
+    return trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
+  }
+
+  /**
+   * A class as a refusal names it: by its simple name, or by its binary name where it has none, as
+   * an anonymous class has not, which is how the runtime path names a class.
+   */
+  private static String shownClass(final Elements elements, final TypeElement type) {
+    return type.getNestingKind() == NestingKind.ANONYMOUS
+      ? elements.getBinaryName(type).toString()
+      : type.getSimpleName().toString();
+  }
+
+  /**
+   * The class a search for a form starts at: the erasure of {@code receiver} where it is {@code
+   * owner} or a subtype of it, and {@code owner} otherwise, as for a receiver typed by an
+   * intersection, which erases to its first bound, or an array.
+   */
+  private static TypeElement searchedFirst(final Types types, final TypeElement owner, final TypeMirror receiver) {
+    if (receiver == null) return owner;
+    final var erased = types.erasure(receiver);
+    return types.isSubtype(erased, types.erasure(owner.asType())) ? (TypeElement) types.asElement(erased) : owner;
   }
 
   /**

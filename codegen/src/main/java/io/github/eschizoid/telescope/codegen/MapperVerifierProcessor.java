@@ -2720,7 +2720,15 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), arg);
       final String refusal;
       if (ComputeForms.FRESH_FQN.equals(form) && elementAt(arg) instanceof ExecutableElement chosen) {
-        refusal = ComputeForms.sourceFormRefusal(types, chosen, source, target, tgt.name());
+        refusal = ComputeForms.sourceFormRefusal(
+          types,
+          elements,
+          chosen,
+          ComputeForms.boundReceiver(trees, getCurrentPath().getCompilationUnit(), arg, chosen),
+          source,
+          target,
+          tgt.name()
+        );
       } else if (
         ComputeForms.FROM_SOURCE_FQN.equals(form) &&
         arg instanceof MemberReferenceTree reference &&

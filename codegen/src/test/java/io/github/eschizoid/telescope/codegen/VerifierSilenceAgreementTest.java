@@ -1049,6 +1049,23 @@ class VerifierSilenceAgreementTest {
     record @@Bag(String first, String last, List<String> tags) {}
     """;
 
+  /**
+   * A class whose methods take nothing, and a subclass declaring forms of the same names taking the
+   * source of {@link #SPLIT}, with a field of each type holding the subclass.
+   */
+  private static final String SUBCLASS = """
+    class @@Upper {
+      static String zz() { return "upper"; }
+      String ii() { return "upper"; }
+    }
+    final class @@Lower extends @@Upper {
+      static final @@Lower LOWER = new @@Lower();
+      static final @@Upper AS_UPPER = new @@Lower();
+      static String zz(final @@Src s) { return s.first(); }
+      String ii(final @@Src s) { return s.first(); }
+    }
+    """;
+
   @Nested
   @DisplayName("A compute row reading the source names no source property, for both")
   class ComputedFromTheSource {
@@ -1102,6 +1119,125 @@ class VerifierSilenceAgreementTest {
       assertBothRefuse(outcome);
       assertTrue(
         outcome.construction().contains("from VcDNames::label, which Java binds as a supplier"),
+        outcome::construction
+      );
+    }
+
+    @Test
+    @DisplayName("and a bound reference whose receiver's subclass declares the form is refused by both, in one message")
+    void aBoundReferenceWithASubclassFormIsRefused() {
+      final var outcome = verified(
+        "VcH",
+        SPLIT + SUBCLASS + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower.LOWER::ii))")
+      );
+      assertBothRefuse(outcome);
+      assertTrue(
+        outcome.construction().contains("from VcHUpper::ii, which Java binds as a supplier"),
+        outcome::construction
+      );
+    }
+
+    @Test
+    @DisplayName("and a static reference, or a bound one written through the superclass, is accepted by both")
+    void aSubclassFormOutOfSightIsAccepted() {
+      assertBothAccept(
+        verified(
+          "VcI",
+          SPLIT + SUBCLASS + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower::zz))")
+        )
+      );
+      assertBothAccept(
+        verified(
+          "VcJ",
+          SPLIT +
+            SUBCLASS +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower.AS_UPPER::ii))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("and a receiver typed by an intersection is looked through at the class declaring the method, by both")
+    void anIntersectionReceiverStartsAtTheDeclaringClass() {
+      final var outcome = verified(
+        "VcK",
+        SPLIT +
+          """
+          interface @@Named {
+            default String ii() { return "named"; }
+            default String ii(final @@Src s) { return s.first(); }
+          }
+          final class @@Impl implements @@Named {}
+          class @@Holder {
+            static Object build() { return with(new @@Impl()); }
+            static <T extends Object & @@Named> Object with(final T t) {
+              return Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, t::ii));
+            }
+          }
+          """
+      );
+      assertBothRefuse(outcome);
+      assertTrue(outcome.construction().contains("though VcKNamed.ii(VcKSrc) takes the source"), outcome::construction);
+    }
+
+    @Test
+    @DisplayName("and a supplier from an array's clone or returned by a method is accepted by both")
+    void anArrayCloneOrAReturnedSupplierIsAccepted() {
+      assertBothAccept(
+        verified(
+          "VcL",
+          SPLIT +
+            """
+            record @@Box(String first, String last, Object any) {}
+            class @@Holder {
+              static final int[] ARR = { 1 };
+              static Object build() {
+                return Telescope.mapperForward(@@Src.class, @@Box.class, compute(@@Box::any, ARR::clone));
+              }
+            }
+            """
+        )
+      );
+      assertBothAccept(
+        verified(
+          "VcM",
+          SPLIT +
+            """
+            class @@Make {
+              static Fresh<String> fresh() { return () -> "made"; }
+            }
+            """ +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Make.fresh()))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("and an anonymous class declaring both forms is named by its binary name, by both")
+    void anAnonymousClassIsNamedByItsBinaryName() {
+      final var outcome = verified(
+        "VcN",
+        SPLIT +
+          """
+          class @@Holder {
+            static Object build() {
+              final var anon = new Object() {
+                String ii() { return "anon"; }
+                String ii(final @@Src s) { return s.first(); }
+              };
+              return Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, anon::ii));
+            }
+          }
+          """
+      );
+      assertBothRefuse(outcome);
+      final var anonymous = PACKAGE + ".VcNHolder$1";
+      assertTrue(
+        outcome.construction().contains("from " + anonymous + "::ii, which Java binds as a supplier"),
+        outcome::construction
+      );
+      assertTrue(
+        outcome.construction().contains("though " + anonymous + ".ii(VcNSrc) takes the source"),
         outcome::construction
       );
     }

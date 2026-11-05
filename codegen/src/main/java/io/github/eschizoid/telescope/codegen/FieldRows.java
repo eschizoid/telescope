@@ -1442,7 +1442,9 @@ final class FieldRows {
           ) {
             final var bothForms = ComputeForms.sourceFormRefusal(
               env.getTypeUtils(),
+              env.getElementUtils(),
               chosen,
+              ComputeForms.boundReceiver(trees, unit, args.get(1), chosen),
               source,
               target,
               t.property()

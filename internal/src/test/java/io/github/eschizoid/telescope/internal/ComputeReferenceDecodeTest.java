@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.Serializable;
+import java.lang.invoke.MethodHandleInfo;
+import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
@@ -89,6 +91,102 @@ class ComputeReferenceDecodeTest {
 
     static String label() {
       return "plain";
+    }
+  }
+
+  static class Upper {
+
+    static String zz() {
+      return "upper";
+    }
+
+    String ii() {
+      return "upper";
+    }
+  }
+
+  static final class Lower extends Upper {
+
+    static final Lower LOWER = new Lower();
+
+    static final Upper AS_UPPER = new Lower();
+
+    static String zz(final Person person) {
+      return person.first();
+    }
+
+    String ii(final Person person) {
+      return person.first();
+    }
+  }
+
+  static final class Stranger {
+
+    String ii(final Person person) {
+      return person.first();
+    }
+  }
+
+  /**
+   * The {@code SerializedLambda} of a reference bound to a {@code Lower} receiver naming {@code
+   * Upper.ii()}, as written by {@code capturing}, a class standing in for the one the metafactory
+   * defines, which holds the receiver in whatever fields it declares.
+   */
+  private static SerializedLambda boundToUpperIi(final Class<?> capturing) {
+    return new SerializedLambda(
+      capturing,
+      "java/util/function/Supplier",
+      "get",
+      "()Ljava/lang/Object;",
+      MethodHandleInfo.REF_invokeVirtual,
+      Upper.class.getName().replace('.', '/'),
+      "ii",
+      "()Ljava/lang/String;",
+      "()Ljava/lang/String;",
+      new Object[] { Lower.LOWER }
+    );
+  }
+
+  @SuppressWarnings("unused")
+  static final class HeldAsLower implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+    private final transient Lower held = Lower.LOWER;
+
+    private Object writeReplace() {
+      return boundToUpperIi(HeldAsLower.class);
+    }
+  }
+
+  @SuppressWarnings("unused")
+  static final class HeldTwice implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+    private final transient Lower first = Lower.LOWER;
+    private final transient Lower second = Lower.LOWER;
+
+    private Object writeReplace() {
+      return boundToUpperIi(HeldTwice.class);
+    }
+  }
+
+  @SuppressWarnings("unused")
+  static final class HeldAsStranger implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+    private final transient Stranger held = new Stranger();
+
+    private Object writeReplace() {
+      return boundToUpperIi(HeldAsStranger.class);
+    }
+  }
+
+  static final class HeldNowhere implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private Object writeReplace() {
+      return boundToUpperIi(HeldNowhere.class);
     }
   }
 
@@ -210,6 +308,42 @@ class ComputeReferenceDecodeTest {
       );
       final Method inherited = (Method) LambdaIntrospection.oneArgumentFormTaking(fresh(Derived::label), Person.class);
       assertEquals("Base.label(Person)", shown(inherited));
+    }
+
+    @Test
+    @DisplayName("of a bound reference, is looked for from the type the receiver is written as, a subclass included")
+    void aBoundReferenceStartsAtItsReceiversType() {
+      assertEquals(
+        "Lower.ii(Person)",
+        shown(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower.LOWER::ii), Person.class))
+      );
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower.AS_UPPER::ii), Person.class));
+    }
+
+    @Test
+    @DisplayName("of a static reference, is looked for from the class declaring the method, not the one written")
+    void aStaticReferenceStartsAtTheDeclaringClass() {
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower::zz), Person.class));
+    }
+
+    @Test
+    @DisplayName("of a bound reference, is looked for from the class its one instance field holds the receiver as")
+    void aBoundReferenceStartsAtItsOneInstanceField() {
+      assertEquals(
+        "Lower.ii(Person)",
+        shown(LambdaIntrospection.oneArgumentFormTaking(new HeldAsLower(), Person.class))
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "of a bound reference holding its receiver in no instance field, in several, or as a class off the declaring" +
+        " one, is looked for from the declaring class"
+    )
+    void aBoundReferenceHeldOtherwiseStartsAtTheDeclaringClass() {
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(new HeldNowhere(), Person.class));
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(new HeldTwice(), Person.class));
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(new HeldAsStranger(), Person.class));
     }
 
     @Test
