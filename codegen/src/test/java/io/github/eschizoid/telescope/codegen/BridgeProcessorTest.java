@@ -59,6 +59,107 @@ class BridgeProcessorTest {
   }
 
   @Nested
+  @DisplayName("Built-in conversions — the JDK call, each property read once")
+  class BuiltInConversions {
+
+    private Compilation orderBridge() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(String id, String total, String status, String paid, java.util.List<String> tags) {}
+          """
+        ),
+        source(
+          "demo.Dst",
+          """
+          package demo;
+          public record Dst(long id, java.math.BigDecimal total, demo.Status status, Boolean paid, java.util.Set<Long> tags) {}
+          """
+        ),
+        source("demo.Status", "package demo;\npublic enum Status { OPEN, CLOSED }\n")
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+      return compilation;
+    }
+
+    @Test
+    @DisplayName("text is parsed by the JDK's own parse, valueOf or String constructor, and written by String.valueOf")
+    void theJdkCallIsGenerated() {
+      final var bridge = orderBridge().generated().get("demo.SrcBridge");
+      for (final var call : List.of(
+        "java.lang.Long.parseLong(in)",
+        "new java.math.BigDecimal(in)",
+        "demo.Status.valueOf(in)",
+        "in.equalsIgnoreCase(\"true\")",
+        "java.lang.String.valueOf(in)",
+        "in.name()",
+        "out.add(__Nested"
+      )) {
+        assertTrue(bridge.contains(call), () -> call + " missing from\n" + bridge);
+      }
+      assertTrue(bridge.contains("'total' got \\\"\" + in + \"\\\", not a BigDecimal"), bridge);
+    }
+
+    @Test
+    @DisplayName("each converted property is read once forward and once backward")
+    void eachPropertyIsReadOnce() {
+      final var bridge = orderBridge().generated().get("demo.SrcBridge");
+      for (final var read : List.of("s.id()", "s.total()", "s.status()", "s.tags()", "t.id()", "t.total()", "t.tags()")) {
+        assertEquals(1, occurrences(bridge, read), () -> read + " in\n" + bridge);
+      }
+    }
+
+    @Test
+    @DisplayName("a widening is written as Java widens it, and its backward on a lenient bridge refuses")
+    void aWideningIsAJavaWidening() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.Dst.class, lenient = true)
+          public record Src(Integer n, long big) {}
+          """
+        ),
+        source("demo.Dst", "package demo;\npublic record Dst(long n, java.math.BigDecimal big) {}\n")
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+      final var bridge = compilation.generated().get("demo.SrcBridge");
+      assertTrue(bridge.contains("if (in == null) return 0L;"), bridge);
+      assertTrue(bridge.contains("return (long) in;"), bridge);
+      assertTrue(bridge.contains("java.math.BigDecimal.valueOf(in)"), bridge);
+      assertTrue(bridge.contains("throw new java.lang.UnsupportedOperationException("), bridge);
+    }
+
+    @Test
+    @DisplayName("a strict bridge over a widening is refused in the shared spec's words")
+    void aStrictWideningIsRefused() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(int n) {}
+          """
+        ),
+        source("demo.Dst", "package demo;\npublic record Dst(long n) {}\n")
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.wideningOneWay("n", "int", "long")),
+        compilation::errorMessages
+      );
+    }
+  }
+
+  @Nested
   @DisplayName("Enum pairs — constant to constant by name")
   class EnumPairs {
 
@@ -1976,17 +2077,13 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a kind-mismatched Collection-subtype pair (List subtype vs Set subtype) is not" +
-        " bean-introspected — clean diagnostic, not 'no setter for empty'"
+      "a List-subtype against a Set-subtype is rebuilt as each other's kind, never bean-introspected"
     )
     void kindMismatchedCollectionSubtypesAreNotBeanIntrospected() {
-      // Same-kind Collection/Map subtype pairs are element-bridged (see DeepRecursion). A
-      // kind-mismatched pair (List subtype vs Set subtype) cannot be — but both still clear the
-      // qualified-name prefix filter, so without the guard the planner would recurse into one as a
-      // bean and surface ArrayList's synthesized `isEmpty()` → property `empty` → no `setEmpty` →
-      // the
-      // misleading "no setter for 'empty'" error. The isReflectableDeclared exclusion makes it fall
-      // to the accurate "no auto-bridge" diagnostic instead.
+      // Both classes clear the qualified-name prefix filter, so a planner that recursed into one as
+      // a bean would surface ArrayList's synthesized `isEmpty()` → property `empty` → no
+      // `setEmpty`, the misleading "no setter for 'empty'" error. A list and a set convert into
+      // each other's kind, element by element, so the pair compiles.
       final var compilation = compile(
         source(
           "demo.Src",
@@ -2022,14 +2119,10 @@ class BridgeProcessorTest {
         )
       );
 
-      assertFalse(compilation.success(), "a kind-mismatched Collection-subtype pair should fail");
+      assertTrue(compilation.success(), () -> "a list and a set convert; saw " + compilation.errorMessages());
       assertFalse(
-        compilation.hasError("no setter for 'empty'"),
-        () -> "must not leak the bean-introspection error; saw " + compilation.errorMessages()
-      );
-      assertTrue(
-        compilation.hasError("no auto-bridge could be derived"),
-        () -> "expected the clean no-auto-bridge diagnostic; saw " + compilation.errorMessages()
+        compilation.generated().get("demo.SrcBridge").contains("Empty"),
+        "no bean property of the containers is read or written"
       );
     }
 

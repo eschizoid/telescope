@@ -2678,8 +2678,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         forwardOnly
       );
       if (elements instanceof PairDecision.Identity || elements instanceof PairDecision.Incompatible) return null;
-      for (final var side : List.of(srcType, tgtType)) {
-        if (allocation.allocate(side, kind, null) instanceof Allocation.Refuse refuse && !declaresStaticBuilder(side)) {
+      // Each side is built as its own kind, which differs between a list and a set.
+      final var sides = List.of(Map.entry(srcType, kind), Map.entry(tgtType, lift.tgt().kind()));
+      for (final var side : sides) {
+        if (
+          allocation.allocate(side.getKey(), side.getValue(), null) instanceof Allocation.Refuse refuse &&
+          !declaresStaticBuilder(side.getKey())
+        ) {
           return refuse.reason();
         }
       }

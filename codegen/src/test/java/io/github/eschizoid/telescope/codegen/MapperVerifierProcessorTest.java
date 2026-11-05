@@ -1261,7 +1261,7 @@ class MapperVerifierProcessorTest {
         import io.github.eschizoid.telescope.conversion.Mapper;
         import io.github.eschizoid.telescope.mapping.Mapping;
         record Src(Integer count) {}
-        record Tgt(String label) {}
+        record Tgt(Boolean label) {}
         class Holder {
           static final Mapper<Src, Tgt> M = Telescope.mapper(
             Src.class, Tgt.class, Mapping.to(Src::count, Tgt::label));
@@ -1282,7 +1282,7 @@ class MapperVerifierProcessorTest {
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.conversion.Mapper;
         record SrcIn(Integer v) {}
-        record TgtIn(String v) {}
+        record TgtIn(Boolean v) {}
         record Src(SrcIn in) {}
         record Tgt(TgtIn in) {}
         class Holder {
@@ -1295,7 +1295,7 @@ class MapperVerifierProcessorTest {
     }
 
     @Test
-    @DisplayName("container elements are shape-checked through the lift — List<Integer> vs List<String>")
+    @DisplayName("container elements are shape-checked through the lift — List<Integer> vs List<Boolean>")
     void liftedElementIncompatibleErrors() {
       final var compilation = verify(
         """
@@ -1304,7 +1304,7 @@ class MapperVerifierProcessorTest {
         import io.github.eschizoid.telescope.conversion.Mapper;
         import java.util.List;
         record Src(List<Integer> xs) {}
-        record Tgt(List<String> xs) {}
+        record Tgt(List<Boolean> xs) {}
         class Holder {
           static final Mapper<Src, Tgt> M = Telescope.mapper(Src.class, Tgt.class);
         }
@@ -1350,7 +1350,7 @@ class MapperVerifierProcessorTest {
         import io.github.eschizoid.telescope.conversion.Mapper;
         import io.github.eschizoid.telescope.mapping.Mapping;
         record Src(Integer count, String orphan) {}
-        record Tgt(String label) {}
+        record Tgt(Boolean label) {}
         class Holder {
           static Mapping<Src, Tgt> helperRow() { return null; }
           static final Mapper<Src, Tgt> M = Telescope.mapper(
