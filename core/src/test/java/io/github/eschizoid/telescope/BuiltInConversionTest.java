@@ -127,6 +127,30 @@ class BuiltInConversionTest {
       assertEquals(new Renamed("5"), mapper.backward(new RenamedDto(5)));
     }
 
+    record Line(String qty) {}
+
+    static final class LineBean {
+
+      private long qty;
+
+      public long getQty() {
+        return qty;
+      }
+
+      public void setQty(final long qty) {
+        this.qty = qty;
+      }
+    }
+
+    @Test
+    @DisplayName("into writes the converted value into an existing target")
+    void intoConverts() {
+      final var mapper = Telescope.mapper(Line.class, LineBean.class);
+      final var target = new LineBean();
+      assertEquals(target, mapper.into(target, new Line("12")));
+      assertEquals(12L, target.getQty());
+    }
+
     record Maybe(Optional<String> count) {}
 
     record MaybeDto(Optional<Integer> count) {}
