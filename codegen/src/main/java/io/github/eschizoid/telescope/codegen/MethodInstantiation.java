@@ -45,15 +45,21 @@ import javax.lang.model.util.Types;
  * </ul>
  *
  * <p>A variable fixed so has to satisfy every bound it declares, read with the fixed variables in
- * place, and every bound a wildcard puts on it. A variable nothing fixes is left to javac, which
- * rejects the call, as this does, where two of the types it has to be a subtype of are two classes
- * neither of which extends the other, an array type and a class every array does not extend, or two
- * types that reach one generic class with different types for its arguments, or where a type it has
- * to be a supertype of is no subtype of one of them. Where a bound and a type the variable has to
- * be a subtype of give one generic class a wildcard and a type for an argument, javac draws no
- * bound from them, and the call fits only where the wildcard contains the type once the variables
- * have the instantiations javac gives them. A result whose class is no subtype of the taken type's,
- * and which still names a variable, is passed as it is and fits under no instantiation.
+ * place, and every bound a wildcard puts on it. A type it is fixed to exactly is a subtype of each
+ * of its bounds, so a bound naming another variable fixes that one as a type the variable has to be
+ * a supertype of does. A variable nothing fixes is left to javac, which rejects the call, as this
+ * does, where two of the types it has to be a subtype of are two classes neither of which extends
+ * the other, an array type and a class every array does not extend, or two types that reach one
+ * generic class with different types for its arguments, or where a type it has to be a supertype of
+ * is no subtype of one of them. Where a bound and a type the variable has to be a subtype of give
+ * one generic class a wildcard and a type for an argument, javac draws no bound from them, and the
+ * call fits only where the wildcard contains the type once the variables have the instantiations
+ * javac gives them. A result whose class is no subtype of the taken type's, and which still names a
+ * variable, is passed as it is and fits under no instantiation.
+ *
+ * <p>An argument of a generic class used raw, or of a class extending it raw, handed to a parameter
+ * that gives the class type arguments, reaches it only through an unchecked conversion, and javac
+ * then gives the call the erasure of the method's result, whatever the variables would be.
  */
 final class MethodInstantiation {
 
@@ -94,6 +100,7 @@ final class MethodInstantiation {
     final var declared = member.getReturnType();
     final var variables = List.copyOf(member.getTypeVariables());
     if (variables.isEmpty()) return declared;
+    if (erasesResult(member, argument)) return types.erasure(declared);
     final var facts = new ArrayList<Facts>();
     for (int i = 0; i < variables.size(); i++) facts.add(new Facts());
     final var gathered = new Gathered(variables, facts);
@@ -188,6 +195,23 @@ final class MethodInstantiation {
   }
 
   /**
+   * Whether a call handed {@code argument} reaches {@code member}'s one parameter only through an
+   * unchecked conversion: the parameter gives a generic class type arguments, and the argument is
+   * that class used raw, or a class that extends it raw. Java then gives the call the erasure of
+   * the method's result.
+   */
+  boolean erasesResult(final ExecutableType member, final TypeMirror argument) {
+    // A call handed an argument is a call to the method's one parameter.
+    if (argument == null) return false;
+    final var parameter = member.getParameterTypes().getFirst();
+    if (!(parameter instanceof DeclaredType declared) || declared.getTypeArguments().isEmpty()) return false;
+    if (!(boxed(argument) instanceof DeclaredType given)) return false;
+    if (!types.isSubtype(types.erasure(given), types.erasure(parameter))) return false;
+    final var view = viewAs(given, (TypeElement) declared.asElement());
+    return view != null && view.getTypeArguments().isEmpty();
+  }
+
+  /**
    * Records what {@code argument}, the value handed to {@code member}'s one parameter, asks of the
    * variables the parameter names where it is not a variable on its own: the parameter is a
    * supertype of the argument's type. The argument's type is read after capture conversion, as
@@ -214,8 +238,9 @@ final class MethodInstantiation {
    * bound from the pair, so the pair is kept to be checked once each variable has the instantiation
    * javac gives it.
    *
-   * <p>A type the variable has to be a supertype of is a subtype of each of its bounds: it reaches
-   * each bound's class, and each argument its supertype of that class gives is contained in the
+   * <p>A type the variable has to be a supertype of, or that it is exactly, is a subtype of each of
+   * its bounds: it reaches each bound's class, which an array reaches only as one of the classes
+   * every array extends, and each argument its supertype of that class gives is contained in the
    * bound's argument there. A bound's type argument is that type exactly, and a bound's wildcard
    * bounds the variables it names, as {@code ? super T} containing {@code Integer} makes {@code T}
    * a subtype of {@code Integer}. So two such types that give the bound's class different types for
@@ -224,10 +249,14 @@ final class MethodInstantiation {
   private boolean sharedSupertypes(final Gathered into) {
     for (int i = 0; i < into.variables.size(); i++) {
       final var uppers = List.copyOf(into.facts.get(i).uppers());
-      final var lowers = List.copyOf(into.facts.get(i).lower);
+      final var lowers = new ArrayList<TypeMirror>(into.facts.get(i).lower);
+      lowers.addAll(into.facts.get(i).exact);
       for (final var bound : boundsOf(into.variables.get(i))) {
         if (!(bound instanceof DeclaredType declared) || !names(bound, into.variables)) continue;
         for (final var lower : lowers) {
+          // An array is a subtype of no generic class or interface, which a bound naming a variable
+          // is.
+          if (lower instanceof ArrayType) return false;
           if (!(lower instanceof DeclaredType given)) continue;
           if (!types.isSubtype(types.erasure(lower), types.erasure(bound))) return false;
           if (!containing(declared, viewAs(given, (TypeElement) declared.asElement()), into)) return false;

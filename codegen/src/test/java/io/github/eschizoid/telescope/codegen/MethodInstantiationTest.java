@@ -238,6 +238,37 @@ class MethodInstantiationTest {
       null,
       "List<List<?>>",
       "java.util.List<java.util.List<? extends java.lang.Object>>"
+    ),
+    new Call("<T extends Comparable<U>, U extends Number> List<T> m()", null, "List<String>", REFUSED),
+    new Call(
+      "<T extends Comparable<U>, U extends Number> List<T> m()",
+      null,
+      "List<Integer>",
+      "java.util.List<java.lang.Integer>"
+    ),
+    new Call("<T extends Comparable<U>, U> List<T> m()", null, "List<String>", "java.util.List<java.lang.String>"),
+    new Call("<T extends Comparable<T>> List<T> m()", null, "List<? super String[]>", REFUSED),
+    new Call("<T> T m(List<T> t)", "List", "String", "java.lang.Object"),
+    new Call("<T> T m(List<T> t)", "List", "Object", "java.lang.Object"),
+    new Call("<T> T m(List<T> t)", "M.RawNames", "String", "java.lang.Object"),
+    new Call("<T> T m(List<T> t)", "M.RawNames", "Object", "java.lang.Object"),
+    new Call("<T> T m(List<T> t)", "M.Names", "String", "java.lang.String"),
+    new Call("<T> T m(List<String> t)", "List", "String", "java.lang.Object"),
+    new Call("<T> T m(Object t)", "List", "String", "java.lang.String"),
+    new Call("<T> T m(List<String> t)", "List<String>", "String", "java.lang.String"),
+    new Call("<T> List<T> m(List<T> t)", "List", "List<String>", "java.util.List"),
+    new Call("<T> T m(T t)", "List", "List<String>", "java.util.List"),
+    new Call("<T> T m(List<T> t)", "List<? extends String>", "Comparable<String>", OPEN),
+    new Call("<T extends Number> T m(List<T> t)", "List<Integer>", "Comparable<Integer>", "java.lang.Integer"),
+    new Call("<T> T m(List<T> t)", "List<Integer>", "long", "java.lang.Integer"),
+    new Call("<T> T m(List<T> t)", "List<Integer>", "Long", "java.lang.Integer"),
+    new Call("<T> List<T> m(List<T> t)", "List<String>", "List<Integer>", REFUSED),
+    new Call("<T> List<T> m(Map<String, T> t)", "Map<String, String>", "List<Integer>", REFUSED),
+    new Call(
+      "<T> Optional<T> m(java.util.function.Supplier<T> t)",
+      "java.util.function.Supplier<String>",
+      "Optional<Integer>",
+      REFUSED
     )
   );
 
@@ -293,7 +324,9 @@ class MethodInstantiationTest {
         "public class M {\n" +
         "  public interface IA extends Comparable<String> {}\n" +
         "  public interface IB extends Comparable<Integer> {}\n" +
-        "  public static class Outer<T> { public class Inner {} }\n"
+        "  public static class Outer<T> { public class Inner {} }\n" +
+        "  @SuppressWarnings(\"rawtypes\") public static class RawNames extends ArrayList {}\n" +
+        "  public static class Names extends ArrayList<String> {}\n"
     );
     for (int i = 0; i < CALLS.size(); i++) {
       final var call = CALLS.get(i);

@@ -48,6 +48,12 @@ final class ViaClasses {
   );
 
   /**
+   * The via row a class's methods make, and what each of the two methods returns where it converts
+   * the whole property, or null where the row converts element by element.
+   */
+  record Resolved(Via<?, ?> row, ViaResults.Given forward, ViaResults.Given backward) {}
+
+  /**
    * The via row {@code row} makes for a property the source declares as {@code srcType} and the
    * target as {@code tgtType}; {@code srcElement} and {@code tgtElement} are the elements of those
    * properties when they are containers of one kind, and null otherwise.
@@ -55,7 +61,7 @@ final class ViaClasses {
    * @throws IllegalArgumentException if the class has no method of a name to call, or several the
    *     element's class could call for
    */
-  static Via<?, ?> resolve(
+  static Resolved resolve(
     final ViaClass<?, ?> row,
     final Type srcType,
     final Type tgtType,
@@ -103,12 +109,16 @@ final class ViaClasses {
             )
           );
         }
-        return via(
-          row,
-          forward.getFirst(),
-          backward.getFirst(),
-          elementClass(srcElement, forward.getFirst()),
-          elementClass(tgtElement, backward.getFirst())
+        return new Resolved(
+          via(
+            row,
+            forward.getFirst(),
+            backward.getFirst(),
+            elementClass(srcElement, forward.getFirst()),
+            elementClass(tgtElement, backward.getFirst())
+          ),
+          null,
+          null
         );
       }
     }
@@ -135,7 +145,29 @@ final class ViaClasses {
         )
       );
     }
-    return via(row, forward, backward, boxed(forward.getParameterTypes()[0]), boxed(backward.getParameterTypes()[0]));
+    return new Resolved(
+      via(row, forward, backward, boxed(forward.getParameterTypes()[0]), boxed(backward.getParameterTypes()[0])),
+      given(forward, srcType, srcHeld, name),
+      given(backward, tgtType, tgtHeld, name)
+    );
+  }
+
+  /**
+   * What {@code method} returns when the call is handed a value of {@code own}, held as {@code
+   * held}, as a row naming {@code using} calls it. A value the method's parameter does not take as
+   * it is reaches it after a cast to the parameter's erasure, so the call's result is the erasure
+   * of the one the method declares.
+   */
+  private static ViaResults.Given given(final Method method, final Type own, final Class<?> held, final String using) {
+    if (assignable(held, method.getParameterTypes()[0])) return ViaResults.of(method, own, using);
+    return new ViaResults.Given(
+      method.getGenericReturnType(),
+      method.getReturnType(),
+      false,
+      null,
+      using,
+      method.getName()
+    );
   }
 
   @SuppressWarnings({ "unchecked", "rawtypes" })

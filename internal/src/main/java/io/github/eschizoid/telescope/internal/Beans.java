@@ -1757,6 +1757,16 @@ public final class Beans {
     return taken != null && taken.isPrimitive() ? jlsDefault(taken) : null;
   }
 
+  /**
+   * The class the member {@code writer} writes property {@code name} of {@code cls} through takes,
+   * as it declares it, a primitive kept primitive: a record component's class, a constructor
+   * parameter's, a builder member's, or the parameter of the setter a single value is passed to.
+   * Null where no member takes it.
+   */
+  public static Class<?> writtenMemberClass(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    return writtenMember(writer, cls, name);
+  }
+
   /** The class the member {@link #writtenClass} names takes, as declared, or null. */
   private static Class<?> writtenMember(final BeanWriter<?> writer, final Class<?> cls, final String name) {
     return switch (writer) {

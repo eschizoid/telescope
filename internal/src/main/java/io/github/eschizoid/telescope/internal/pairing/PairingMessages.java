@@ -348,8 +348,8 @@ public final class PairingMessages {
       source +
       " → " +
       target +
-      ": via row writes its mapper's result, a " +
-      resultClass +
+      ": via row writes its mapper's result, " +
+      withArticle(resultClass) +
       ", into the " +
       side +
       "'s '" +
@@ -358,9 +358,95 @@ public final class PairingMessages {
       takenClass +
       ", and no " +
       resultClass +
-      " is a " +
-      takenClass +
+      " is " +
+      withArticle(takenClass) +
       ". Give the row a mapper whose result is of the class the property takes."
+    );
+  }
+
+  /**
+   * {@code name}, a class's simple name, which a declared type always has, after the indefinite
+   * article its first letter takes in speech.
+   */
+  private static String withArticle(final String name) {
+    return ("aeiouAEIOU".indexOf(name.charAt(0)) >= 0 ? "an " : "a ") + name;
+  }
+
+  /**
+   * Why a {@code via} row's method cannot convert: it returns {@code returned}, which the member
+   * {@code owner} writes {@code property} through, taking {@code taken}, does not take. The end of
+   * a {@link #viaClassRefused} sentence.
+   */
+  public static String viaResultNotTaken(
+    final String returned,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      returned +
+      ", which the member " +
+      owner +
+      " writes " +
+      property +
+      " through does not take: it takes " +
+      taken
+    );
+  }
+
+  /**
+   * Why a generic {@code via} method cannot convert: it returns {@code declared}, and no
+   * instantiation of its type variables within their bounds lets the member {@code owner} writes
+   * {@code property} through, taking {@code taken}, take the result. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaResultNoInstantiation(
+    final String declared,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      declared +
+      ", which no instantiation of its type variables lets the member " +
+      owner +
+      " writes " +
+      property +
+      " through take: it takes " +
+      taken
+    );
+  }
+
+  /**
+   * Why a generic {@code via} method cannot convert: it is handed a value of {@code raw}, a generic
+   * class used raw, where its parameter gives its type variables type arguments, so the call's
+   * result is the erasure of {@code declared}, {@code erased}, which the member {@code owner}
+   * writes {@code property} through, taking {@code taken}, does not take. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaResultErased(
+    final String declared,
+    final String raw,
+    final String erased,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      declared +
+      ", which a call handed a raw " +
+      raw +
+      " erases to " +
+      erased +
+      ", and the member " +
+      owner +
+      " writes " +
+      property +
+      " through does not take that: it takes " +
+      taken
     );
   }
 
