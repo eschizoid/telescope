@@ -2141,9 +2141,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!lenient && !forwardOnlyTransforms.contains(sf.name())) writesSource.add(sf.name());
     }
 
-    // Bijection check: apply forward renames on the source side, then compare to target names —
-    // skipping target names covered by constants/computes (injected; no source counterpart needed).
-    // Dropped sources are excluded from the check entirely.
+    // The source properties the bridge reads by name: every one no drop, path or lenient fill
+    // takes.
     final var nonDroppedSourceFields = effectiveDrops.isEmpty()
       ? sourceFields
       : sourceFields
@@ -2166,17 +2165,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     if (
-      !paired(
-        source,
-        sourceFields,
-        effectiveDrops,
-        target,
-        targetFields,
-        renames,
-        renameFanouts,
-        injectedTargetFields
-      ) ||
-      !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
+      !paired(source, sourceFields, effectiveDrops, target, targetFields, renames, renameFanouts, injectedTargetFields)
     ) return;
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
@@ -9392,10 +9381,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (rebuild.kind() != Rebuild.Kind.NONE || cfg.declaringField() == null || cfg.pathDefault() == null) return null;
     if (cfg.pathStrategies().containsKey(side.getQualifiedName().toString())) return null;
     final var constructors = ElementFilter.constructorsIn(side.getEnclosedElements());
+    // The builder() the ladder takes is public, so no rung for BUILDER means no builder the runtime
+    // takes either; a constructor can be there and out of the bridge's reach.
     final var present = switch (cfg.pathDefault()) {
       case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
       case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
-      default -> staticBuilderMethod(side) != null;
+      default -> false;
     };
     if (present) return null;
     return PairingMessages.beanUnbuiltBy(
@@ -9932,51 +9923,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (refusals.isEmpty()) return true;
     error(source, refusals.getFirst());
     return false;
-  }
-
-  /**
-   * Whether the names the emission walks line up: every target property no row fills is written
-   * from a source property, and every source property the bridge keeps, under its rename, is
-   * written into a target property, refusing the first that is not by name in the shared spec's
-   * words. A source property whose namesake a row fills pairs with that namesake, which forward
-   * leaves to the row and backward reads back. {@link #paired} has already decided the pair by
-   * name, so this holds the emission to what it decided.
-   */
-  private boolean sameNames(
-    final TypeElement source,
-    final List<Field> sourceFields,
-    final TypeElement target,
-    final List<Field> targetFields,
-    final Map<String, String> renames,
-    final Map<String, List<String>> renameFanouts,
-    final Set<String> injectedTargetFields
-  ) {
-    final var sn = new TreeSet<String>();
-    for (final var f : sourceFields) {
-      sn.add(renames.getOrDefault(f.name(), f.name()));
-      // Forward-only fan-out: forward writes the source value into every fan-out target slot.
-      final var extras = renameFanouts.get(f.name());
-      if (extras != null) sn.addAll(extras);
-    }
-    sn.removeAll(injectedTargetFields);
-    final var tn = targetFields
-      .stream()
-      .map(Field::name)
-      .filter(n -> !injectedTargetFields.contains(n))
-      .collect(Collectors.toCollection(TreeSet::new));
-    final var sourceName = source.getSimpleName().toString();
-    final var targetName = target.getSimpleName().toString();
-    for (final var name : tn) {
-      if (sn.contains(name)) continue;
-      error(source, PairingMessages.noSameNameSource(sourceName, targetName, slotWord(target), slotWord(source), name));
-      return false;
-    }
-    for (final var name : sn) {
-      if (tn.contains(name)) continue;
-      error(source, PairingMessages.noSameNameTarget(sourceName, targetName, slotWord(source), slotWord(target), name));
-      return false;
-    }
-    return true;
   }
 
   /**
