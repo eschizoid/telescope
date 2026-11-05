@@ -92,6 +92,32 @@ class ComputeReferenceDecodeTest {
     }
   }
 
+  static class Upper {
+
+    static String zz() {
+      return "upper";
+    }
+
+    String ii() {
+      return "upper";
+    }
+  }
+
+  static final class Lower extends Upper {
+
+    static final Lower LOWER = new Lower();
+
+    static final Upper AS_UPPER = new Lower();
+
+    static String zz(final Person person) {
+      return person.first();
+    }
+
+    String ii(final Person person) {
+      return person.first();
+    }
+  }
+
   static final class Hidden {
 
     static String label() {
@@ -210,6 +236,22 @@ class ComputeReferenceDecodeTest {
       );
       final Method inherited = (Method) LambdaIntrospection.oneArgumentFormTaking(fresh(Derived::label), Person.class);
       assertEquals("Base.label(Person)", shown(inherited));
+    }
+
+    @Test
+    @DisplayName("of a bound reference, is looked for from the type the receiver is written as, a subclass included")
+    void aBoundReferenceStartsAtItsReceiversType() {
+      assertEquals(
+        "Lower.ii(Person)",
+        shown(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower.LOWER::ii), Person.class))
+      );
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower.AS_UPPER::ii), Person.class));
+    }
+
+    @Test
+    @DisplayName("of a static reference, is looked for from the class declaring the method, not the one written")
+    void aStaticReferenceStartsAtTheDeclaringClass() {
+      assertNull(LambdaIntrospection.oneArgumentFormTaking(fresh(Lower::zz), Person.class));
     }
 
     @Test

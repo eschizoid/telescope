@@ -1049,6 +1049,23 @@ class VerifierSilenceAgreementTest {
     record @@Bag(String first, String last, List<String> tags) {}
     """;
 
+  /**
+   * A class whose methods take nothing, and a subclass declaring forms of the same names taking the
+   * source of {@link #SPLIT}, with a field of each type holding the subclass.
+   */
+  private static final String SUBCLASS = """
+    class @@Upper {
+      static String zz() { return "upper"; }
+      String ii() { return "upper"; }
+    }
+    final class @@Lower extends @@Upper {
+      static final @@Lower LOWER = new @@Lower();
+      static final @@Upper AS_UPPER = new @@Lower();
+      static String zz(final @@Src s) { return s.first(); }
+      String ii(final @@Src s) { return s.first(); }
+    }
+    """;
+
   @Nested
   @DisplayName("A compute row reading the source names no source property, for both")
   class ComputedFromTheSource {
@@ -1103,6 +1120,39 @@ class VerifierSilenceAgreementTest {
       assertTrue(
         outcome.construction().contains("from VcDNames::label, which Java binds as a supplier"),
         outcome::construction
+      );
+    }
+
+    @Test
+    @DisplayName("and a bound reference whose receiver's subclass declares the form is refused by both, in one message")
+    void aBoundReferenceWithASubclassFormIsRefused() {
+      final var outcome = verified(
+        "VcH",
+        SPLIT + SUBCLASS + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower.LOWER::ii))")
+      );
+      assertBothRefuse(outcome);
+      assertTrue(
+        outcome.construction().contains("from VcHUpper::ii, which Java binds as a supplier"),
+        outcome::construction
+      );
+    }
+
+    @Test
+    @DisplayName("and a static reference, or a bound one written through the superclass, is accepted by both")
+    void aSubclassFormOutOfSightIsAccepted() {
+      assertBothAccept(
+        verified(
+          "VcI",
+          SPLIT + SUBCLASS + holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower::zz))")
+        )
+      );
+      assertBothAccept(
+        verified(
+          "VcJ",
+          SPLIT +
+            SUBCLASS +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, compute(@@Tgt::full, @@Lower.AS_UPPER::ii))")
+        )
       );
     }
 

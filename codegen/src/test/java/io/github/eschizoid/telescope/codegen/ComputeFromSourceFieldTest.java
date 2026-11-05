@@ -105,6 +105,22 @@ class ComputeFromSourceFieldTest {
       "package cf; public final class Derived extends Base { public static String label() { return \"plain\"; } }"
     ),
     ProcessorHarness.source(
+      "cf.Upper",
+      "package cf; public class Upper {\n" +
+        "  public static String zz() { return \"upper\"; }\n" +
+        "  public String ii() { return \"upper\"; }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
+      "cf.Lower",
+      "package cf; public final class Lower extends Upper {\n" +
+        "  public static final Lower LOWER = new Lower();\n" +
+        "  public static final Upper AS_UPPER = new Lower();\n" +
+        "  public static String zz(final Person p) { return \"lower \" + p.first(); }\n" +
+        "  public String ii(final Person p) { return \"lower \" + p.first(); }\n" +
+        "}\n"
+    ),
+    ProcessorHarness.source(
       "cf.Names",
       "package cf;\n" +
         "public final class Names {\n" +
@@ -438,6 +454,43 @@ class ComputeFromSourceFieldTest {
       "Deep map Person → Card: compute(...) fills 'full' from Derived::label, which Java binds as a supplier taking" +
         " no argument, though Base.label(Person) takes the source Person. Hold the one meant in a static final" +
         " Supplier or FromSource field, or give the form taking the source a name of its own."
+    );
+  }
+
+  @Test
+  @DisplayName("a bound reference whose receiver's subclass declares the form taking the source is refused on both paths")
+  void aBoundReferenceWithASubclassFormIsRefusedOnBothPaths() throws Exception {
+    refusedOnBothPaths(
+      "compute(Card::full, Lower.LOWER::ii)",
+      "Deep map Person → Card: compute(...) fills 'full' from Upper::ii, which Java binds as a supplier taking" +
+        " no argument, though Lower.ii(Person) takes the source Person. Hold the one meant in a static final" +
+        " Supplier or FromSource field, or give the form taking the source a name of its own."
+    );
+  }
+
+  @Test
+  @DisplayName("a bound reference written through a superclass runs as the supplier on both paths, whatever it holds")
+  void aBoundReferenceThroughASuperclassRunsAsTheSupplier() throws Exception {
+    final var owed =
+      "Bag[first=ada, last=lovelace, age=36, tags=null, slot=null, label=upper, flag=false, made=null, count=0]";
+    assertEquals(List.of(owed, owed), forwardOnBothPaths("Bag", "compute(Bag::label, Lower.AS_UPPER::ii)"));
+  }
+
+  @Test
+  @DisplayName("a static reference whose subclass declares the form taking the source runs as the supplier on both paths")
+  void aStaticReferenceWithASubclassFormRunsAsTheSupplier() throws Exception {
+    final var owed =
+      "Bag[first=ada, last=lovelace, age=36, tags=null, slot=null, label=upper, flag=false, made=null, count=0]";
+    assertEquals(List.of(owed, owed), forwardOnBothPaths("Bag", "compute(Bag::label, Lower::zz)"));
+  }
+
+  @Test
+  @DisplayName("an unbound reference to the subclass takes the subclass, and is refused on both paths as off the source")
+  void anUnboundReferenceToTheSubclassIsOffTheSource() throws Exception {
+    refusedOnBothPaths(
+      "compute(Card::full, Lower::ii)",
+      "Deep map Person → Card: compute(...) fills 'full' from Lower::ii, which takes Lower, and the source" +
+        " Person is not one. Name a method taking Person, or a method of Person."
     );
   }
 
