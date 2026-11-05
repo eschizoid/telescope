@@ -2424,6 +2424,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // chooses, after a check of its class where the mapper's method returns a wider type, and only
     // where its type arguments can be shown to fit that member's; any other result is refused by
     // the mapper's name. One whose mapper converts each element of a container is left as it is.
+    // A primitive result is written as Java's assignment converts it, and refused by name where no
+    // assignment conversion takes it.
     //
     // A method returning a primitive is called behind the null gate of a property of a reference
     // type, so the value the bridge writes is that primitive's wrapper, null for a null property,
@@ -2432,6 +2434,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // value it has tested for null, so what it writes stays the primitive.
     final var gatedForward = new HashMap<String, TypeMirror>();
     final var gatedBackward = new HashMap<String, TypeMirror>();
+    // The directions in which a via row's call is unchecked: a result of a generic class used raw
+    // written where the class takes type arguments, or a call handed such a value where its
+    // parameter gives the class type arguments.
+    final var uncheckedVia = new HashSet<String>();
     for (final var v : viaMappers.keySet()) {
       if (viaLifts.containsKey(v) || !hasField(sourceFields, v)) continue;
       final var mapper = processingEnv.getElementUtils().getTypeElement(viaMappers.get(v));
@@ -2469,12 +2475,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             error(source, result.refusal());
             return;
           }
+          if (result.unchecked()) uncheckedVia.add("forward");
           forwardGives.put(written, result.gives());
           transformedTargets.add(written);
         }
-      } else if (forward instanceof Resolution.Bound bound && !handed.getKind().isPrimitive()) {
-        final var wrapper = boxedResult(bound.member().getReturnType());
-        for (final var written : targetsOf.apply(v)) gatedForward.put(written, wrapper);
+      } else if (forward instanceof Resolution.Bound bound) {
+        final var returned = bound.member().getReturnType();
+        for (final var written : targetsOf.apply(v)) {
+          final var refusal = primitiveResultRefusal(
+            source,
+            target,
+            "target",
+            target,
+            targetRebuild,
+            written,
+            returned,
+            bridgePackage
+          );
+          if (refusal != null) {
+            error(source, refusal);
+            return;
+          }
+        }
+        if (!handed.getKind().isPrimitive()) {
+          final var wrapper = boxedResult(returned);
+          for (final var written : targetsOf.apply(v)) gatedForward.put(written, wrapper);
+        }
       }
       if (tf == null) continue;
       final var given = heldAs(tf.type());
@@ -2500,10 +2526,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(source, result.refusal());
           return;
         }
+        if (result.unchecked()) uncheckedVia.add("backward");
         backwardGives.put(v, result.gives());
         transformedSources.add(v);
-      } else if (backward instanceof Resolution.Bound bound && !given.getKind().isPrimitive()) {
-        gatedBackward.put(v, boxedResult(bound.member().getReturnType()));
+      } else if (backward instanceof Resolution.Bound bound) {
+        final var returned = bound.member().getReturnType();
+        final var refusal = primitiveResultRefusal(
+          source,
+          target,
+          "source",
+          source,
+          sourceRebuild,
+          v,
+          returned,
+          bridgePackage
+        );
+        if (refusal != null) {
+          error(source, refusal);
+          return;
+        }
+        if (!given.getKind().isPrimitive()) gatedBackward.put(v, boxedResult(returned));
       }
     }
     final var forwardWritten = new HashSet<>(transformedTargets);
@@ -2887,8 +2929,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // A transform handed a property's value after a check of its class alone takes the type
         // arguments of the class it is cast to unchecked, in the direction that reads the value:
         // forward for the source's, and backward and patch for the target's.
-        final var forwardSuppression = uncheckedIn(forwardArguments, suppressRaw);
-        final var backwardSuppression = uncheckedIn(backwardArguments, suppressRaw);
+        final var forwardSuppression = uncheckedIn(forwardArguments, suppressRaw, uncheckedVia.contains("forward"));
+        final var backwardSuppression = uncheckedIn(backwardArguments, suppressRaw, uncheckedVia.contains("backward"));
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
@@ -4195,11 +4237,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * {@code suppression}, the line a bridge's method carries, widened to {@code unchecked} where one
-   * of {@code checks} casts to a class given type arguments. A line that suppresses anything
-   * already suppresses {@code rawtypes}, so a widened one suppresses both.
+   * of {@code checks} casts to a class given type arguments, or where a {@code via} row's call is
+   * unchecked, {@code via}. A line that suppresses anything already suppresses {@code rawtypes}, so
+   * a widened one suppresses both.
    */
-  private static String uncheckedIn(final Map<String, ArgumentCheck> checks, final String suppression) {
-    if (checks.values().stream().noneMatch(ArgumentCheck::unchecked)) return suppression;
+  private static String uncheckedIn(
+    final Map<String, ArgumentCheck> checks,
+    final String suppression,
+    final boolean via
+  ) {
+    if (!via && checks.values().stream().noneMatch(ArgumentCheck::unchecked)) return suppression;
     return suppression.isEmpty() ? "  @SuppressWarnings(\"unchecked\")\n" : RAW_SUPPRESSION + "\n";
   }
 
@@ -5990,12 +6037,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (reached.size() != 1) return null;
     final var parameter = parameterOf(reached.getFirst());
     // A parameter the held type is assignable to takes the value as it is; a cast to it would be
-    // one
-    // javac reports as redundant.
+    // one javac reports as redundant. A generic method handed the value as it is infers its result,
+    // which is held to the member where it is written; one handed it through a cast to its
+    // parameter's erasure returns the erasure of its result.
     final var cast = types.isAssignable(types.erasure(held), parameter) ? null : parameter.toString();
+    final var generic = !reached.getFirst().getTypeParameters().isEmpty();
     return new ViaCall(
       cast,
-      types.erasure(reached.getFirst().getReturnType()),
+      generic && cast == null ? null : types.erasure(reached.getFirst().getReturnType()),
       (ExecutableType) reached.getFirst().asType()
     );
   }
@@ -6106,22 +6155,49 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return site.refused(
       mapper,
       name,
-      "returns " +
-        gives +
-        ", which the member " +
-        owner.getSimpleName() +
-        " writes " +
-        property +
-        " through does not take: it takes " +
-        stores
+      PairingMessages.viaResultNotTaken(gives.toString(), owner.getSimpleName().toString(), property, stores.toString())
     );
   }
 
   /**
-   * A {@code via} row's call result as the bridge writes it, and why it cannot be written, or null
-   * where it can.
+   * The refusal of a {@code via} row whose method returns {@code returned}, a primitive, into
+   * {@code property} of {@code owner}, the {@code side} it writes, where no assignment conversion
+   * takes it into the member the property's type chooses; null where one does. A primitive is
+   * widened, or boxed to its wrapper and to any class that wrapper is, and nothing else.
    */
-  private record ViaResult(TypeMirror gives, String refusal) {}
+  private String primitiveResultRefusal(
+    final TypeElement source,
+    final TypeElement target,
+    final String side,
+    final TypeElement owner,
+    final Rebuild rebuild,
+    final String property,
+    final TypeMirror returned,
+    final PackageElement bridgePackage
+  ) {
+    final var slot = heldAs(writeSlotType(owner, rebuild, property, returned, bridgePackage));
+    final var chosen = chosenParameter(owner, rebuild, property, slot);
+    if (chosen == null || mirrorProps().mentionsTypeVariable(chosen)) return null;
+    if (processingEnv.getTypeUtils().isAssignable(returned, chosen)) return null;
+    return PairingMessages.viaResultNeverFits(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side,
+      property,
+      simpleNameOf(boxedErasure(returned)),
+      simpleNameOf(boxedErasure(chosen))
+    );
+  }
+
+  /**
+   * A {@code via} row's call result as the bridge writes it, why it cannot be written, or null
+   * where it can, and whether the call is unchecked.
+   */
+  private record ViaResult(TypeMirror gives, String refusal, boolean unchecked) {
+    ViaResult(final TypeMirror gives, final String refusal) {
+      this(gives, refusal, false);
+    }
+  }
 
   /**
    * How a {@code via} row's {@code name} result is written into {@code property} of {@code owner}:
@@ -6147,46 +6223,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var chosen = chosenParameter(owner, rebuild, property, slot);
     if (chosen == null || mirrorProps().mentionsTypeVariable(chosen)) return new ViaResult(declared, null);
     final var generic = !member.getTypeVariables().isEmpty();
+    final var types = processingEnv.getTypeUtils();
+    final var ownerName = owner.getSimpleName().toString();
+    // A call handed a generic class used raw where the parameter gives it type arguments reaches
+    // the method through an unchecked conversion, and its result is the erasure of the declared
+    // one, written as Java's assignment takes it or refused.
+    if (generic && instantiation().erasesResult(member, argument)) {
+      final var erased = types.erasure(declared);
+      if (types.isAssignable(erased, chosen)) return new ViaResult(erased, null, true);
+      return new ViaResult(
+        declared,
+        site.refused(
+          mapper,
+          name,
+          PairingMessages.viaResultErased(
+            declared.toString(),
+            argument.toString(),
+            erased.toString(),
+            ownerName,
+            property,
+            chosen.toString()
+          )
+        )
+      );
+    }
     final var gives = instantiation().result(member, argument, chosen);
     if (gives == null) {
       return new ViaResult(
         declared,
-        site.refused(mapper, name, "returns " + declared + unfixedTail(owner, property, chosen))
+        site.refused(
+          mapper,
+          name,
+          PairingMessages.viaResultNoInstantiation(declared.toString(), ownerName, property, chosen.toString())
+        )
       );
     }
     if (mirrorProps().mentionsTypeVariable(gives)) return new ViaResult(declared, null);
-    final var types = processingEnv.getTypeUtils();
     // A call whose result is inferred stays a generic call where it is unboxed into a primitive, so
-    // it is written as the declared result, through a check its inference cannot fail.
-    final var written = generic && chosen.getKind().isPrimitive() ? declared : gives;
+    // it is written as the declared result, through a check its inference cannot fail. One
+    // inferred as the wrapper of a primitive that widens to the member's is written as that
+    // wrapper, which the assignment unboxes and widens.
+    final var widens = wrapperIntoPrimitive(gives, chosen) && !types.isSameType(types.unboxedType(gives), chosen);
+    final var written = generic && chosen.getKind().isPrimitive() && !widens ? declared : gives;
     if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
+    // A result of a generic class used raw is written where the class takes type arguments
+    // through an unchecked conversion, as Java's assignment writes it.
+    if (usedRaw(gives) && types.isAssignable(gives, chosen)) return new ViaResult(written, null, true);
     if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);
+    if (!generic && !mayShareInstance(boxedErasure(gives), boxedErasure(chosen))) {
+      return new ViaResult(
+        declared,
+        PairingMessages.viaResultNeverFits(
+          site.source(),
+          site.target(),
+          name.equals("forward") ? "target" : "source",
+          property,
+          simpleNameOf(boxedErasure(gives)),
+          simpleNameOf(boxedErasure(chosen))
+        )
+      );
+    }
     final var why = generic
-      ? "returns " + declared + unfixedTail(owner, property, chosen)
-      : "returns " +
-        gives +
-        ", which the member " +
-        owner.getSimpleName() +
-        " writes " +
-        property +
-        " through does not take: it takes " +
-        chosen;
+      ? PairingMessages.viaResultNoInstantiation(declared.toString(), ownerName, property, chosen.toString())
+      : PairingMessages.viaResultNotTaken(gives.toString(), ownerName, property, chosen.toString());
     return new ViaResult(declared, site.refused(mapper, name, why));
-  }
-
-  /**
-   * The end of the refusal of a generic method's result that no instantiation of its variables lets
-   * {@code owner} write into {@code property} through a member taking {@code chosen}.
-   */
-  private static String unfixedTail(final TypeElement owner, final String property, final TypeMirror chosen) {
-    return (
-      ", which no instantiation of its type variables lets the member " +
-      owner.getSimpleName() +
-      " writes " +
-      property +
-      " through take: it takes " +
-      chosen
-    );
   }
 
   /** The instantiations of a generic method's type variables its result's shape fixes. */

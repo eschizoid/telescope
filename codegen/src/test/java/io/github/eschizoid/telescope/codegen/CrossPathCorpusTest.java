@@ -6921,9 +6921,12 @@ class CrossPathCorpusTest {
     // its bound is unrelated to; a variable that appears only in an inner class's enclosing type;
     // a variable two lower bounds give its own bound's class two different arguments for, by a
     // type argument and by a wildcard bounded from below; a wildcard bounded from below where the
-    // property's is bounded from above by a class other than Object; and a wildcard inside a type
-    // argument the property fixes, which has to be the property's wildcard exactly. A row that
-    // needs a declaration of its own carries it as a sixth entry.
+    // property's is bounded from above by a class other than Object; a wildcard inside a type
+    // argument the property fixes, which has to be the property's wildcard exactly; a variable
+    // bounded by a class of another variable, which the property's type argument fixes through
+    // that bound to a class the other's bound does not admit; and a variable a wildcard bounds from
+    // below by an array, which no array satisfies a bound of a class other than those every array
+    // extends for. A row that needs a declaration of its own carries it as a sixth entry.
     final var rows = List.of(
       List.of(
         "Uej",
@@ -7092,6 +7095,19 @@ class CrossPathCorpusTest {
         "new java.util.ArrayList<java.util.List<? extends T>>()",
         "which no instantiation of its type variables",
         "java.util.List<java.util.List<? extends CharSequence>>"
+      ),
+      List.of(
+        "Vbu",
+        "<T extends Comparable<U>, U extends Number> java.util.List<T> forward(final %1$sCh c)",
+        "new java.util.ArrayList<T>()",
+        "which no instantiation of its type variables"
+      ),
+      List.of(
+        "Vay",
+        "<T extends Comparable<T>> java.util.List<T> forward(final %1$sCh c)",
+        "new java.util.ArrayList<T>()",
+        "which no instantiation of its type variables",
+        "java.util.List<? super String[]>"
       )
     );
     final var failures = new ArrayList<String>();
@@ -15722,16 +15738,457 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
+  /**
+   * A member a {@code via} row's result is written through: its declaration, with {@code %1$s} the
+   * class's name and {@code %2$s} the property's type, the accessor a row names it by, and whether
+   * the runtime writes the result into a bean already built, through {@code Mapper.into}, which is
+   * the forward conversion's result written through the bean's setters.
+   */
+  private enum ResultMember {
+    RECORD("public record %1$s(%2$s v) {\n" + "  public static %1$s sample() { return new %1$s(%3$s); }\n}\n", "v"),
+    CONSTRUCTOR(
+      "public class %1$s {\n" +
+        "  private final %2$s v;\n" +
+        "  public %1$s(final %2$s v) { this.v = v; }\n" +
+        "  public %2$s getV() { return v; }\n" +
+        "  public static %1$s sample() { return new %1$s(%3$s); }\n}\n",
+      "getV"
+    ),
+    BUILDER(
+      "public class %1$s {\n" +
+        "  private final %2$s v;\n" +
+        "  private %1$s(final %2$s v) { this.v = v; }\n" +
+        "  public %2$s getV() { return v; }\n" +
+        "  public static Builder builder() { return new Builder(); }\n" +
+        "  public static final class Builder {\n" +
+        "    private %2$s v;\n" +
+        "    public Builder v(final %2$s v) { this.v = v; return this; }\n" +
+        "    public %1$s build() { return new %1$s(v); }\n  }\n" +
+        "  public static %1$s sample() { return new %1$s(%3$s); }\n}\n",
+      "getV"
+    ),
+    SETTER(
+      "public class %1$s {\n" +
+        "  private %2$s v;\n" +
+        "  public %1$s() {}\n" +
+        "  public %2$s getV() { return v; }\n" +
+        "  public void setV(final %2$s v) { this.v = v; }\n" +
+        "  public static %1$s sample() { final var s = new %1$s(); s.setV(%3$s); return s; }\n}\n",
+      "getV"
+    ),
+    INTO(SETTER.declaration, "getV");
+
+    private final String declaration;
+    private final String accessor;
+
+    ResultMember(final String declaration, final String accessor) {
+      this.declaration = declaration;
+      this.accessor = accessor;
+    }
+  }
+
+  /**
+   * A {@code via} result written into a member: the type the mapper's method returns, the
+   * expression it returns for the {@code Integer} 5 it is handed, the member's type, a sample of
+   * it, and what both paths owe, the member's rendering or, where Java's assignment converts no
+   * value of the result into the member, the named refusal's result and member classes.
+   */
+  private record ResultFit(String result, String returned, String member, String sample, String owed) {}
+
+  private static final List<ResultFit> RESULT_FITS = List.of(
+    new ResultFit("int", "w + 1", "long", "0L", "6"),
+    new ResultFit("int", "w + 1", "float", "0f", "6.0"),
+    new ResultFit("int", "w + 1", "double", "0d", "6.0"),
+    new ResultFit("Integer", "w + 1", "long", "0L", "6"),
+    new ResultFit("short", "(short) (w + 1)", "int", "0", "6"),
+    new ResultFit("char", "(char) ('a' + w)", "int", "0", "102"),
+    new ResultFit("int", "w + 1", "Integer", "0", "6"),
+    new ResultFit("Integer", "w + 1", "int", "0", "6"),
+    new ResultFit("int", "w + 1", "Number", "0", "6"),
+    new ResultFit("int", "w + 1", "Object", "0", "6"),
+    new ResultFit("int", "w + 1", "short", "(short) 0", REFUSED + "Integer Short"),
+    new ResultFit("int", "w + 1", "Long", "0L", REFUSED + "Integer Long"),
+    new ResultFit("int", "w + 1", "Double", "0d", REFUSED + "Integer Double"),
+    new ResultFit("Integer", "w + 1", "Long", "0L", REFUSED + "Integer Long"),
+    new ResultFit("short", "(short) (w + 1)", "Integer", "0", REFUSED + "Short Integer"),
+    new ResultFit("long", "w + 1L", "int", "0", REFUSED + "Long Integer")
+  );
+
+  /**
+   * One cell of the grid below: its prefix, the fit, the member written, whether the result is
+   * written back into the source, and whether the row names the mapper's two methods rather than
+   * its class.
+   */
+  private record ResultCell(String prefix, ResultFit fit, ResultMember member, boolean backward, boolean methods) {
+    String side() {
+      return backward ? "source" : "target";
+    }
+  }
+
+  /**
+   * The declarations of {@code cell}: the side written holds {@code v} as the fit's member type,
+   * through the cell's member, and the other side is a record holding an {@code Integer}; the
+   * mapper returns the fit's result into the side written and an {@code Integer} out of it; a field
+   * declaring the row; and a class building the runtime mapper from the same row.
+   */
+  private static List<String> resultCellDeclarations(final ResultCell cell) {
+    final var fit = cell.fit();
+    final var written = cell
+      .member()
+      .declaration.formatted("%1$s" + (cell.backward() ? "Src" : "Tgt"), fit.member(), fit.sample());
+    final var other = ResultMember.RECORD.declaration.formatted(
+      "%1$s" + (cell.backward() ? "Tgt" : "Src"),
+      "Integer",
+      "5"
+    );
+    final var into = "  public static " + fit.result() + " %2$s(final Integer w) { return " + fit.returned() + "; }\n";
+    final var outOf = "  public static Integer %2$s(final " + fit.member() + " x) { return 0; }\n";
+    final var mapper =
+      "public class %1$sHw {\n" +
+      (cell.backward()
+        ? outOf.formatted("", "forward") + into.formatted("", "backward")
+        : into.formatted("", "forward") + outOf.formatted("", "backward")) +
+      "}\n";
+    final var srcAccessor = cell.backward() ? cell.member().accessor : "v";
+    final var tgtAccessor = cell.backward() ? "v" : cell.member().accessor;
+    final var row = cell.methods()
+      ? "via(%1$sSrc::" + srcAccessor + ", %1$sTgt::" + tgtAccessor + ", %1$sHw::forward, %1$sHw::backward)"
+      : "via(%1$sSrc::" + srcAccessor + ", %1$sTgt::" + tgtAccessor + ", %1$sHw.class)";
+    return List.of(
+      cell.backward() ? written : other,
+      cell.backward() ? other : written,
+      mapper,
+      fieldBridge("%1$sSrc", "%1$sTgt", row),
+      "public class %1$sRuntime {\n" +
+        "  public static io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sTgt> mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+        "      io.github.eschizoid.telescope.mapping.Mapping." +
+        row +
+        ");\n  }\n}\n"
+    );
+  }
+
+  /** {@code declarations} of the cell with {@code prefix}, as sources of this test's package. */
+  private static List<JavaFileObject> cellSources(final String prefix, final List<String> declarations) {
+    final var head = "package " + PACKAGE + ";\n";
+    return declarations
+      .stream()
+      .map(declaration -> declaration.formatted(prefix))
+      .map(code -> source(declaredName(code), head + code))
+      .toList();
+  }
+
+  @Test
+  @DisplayName(
+    "a via method's primitive or wrapper result is written into a wider member as Java's assignment converts it, on" +
+      " both paths, and one no assignment converts is refused by name on both"
+  )
+  void aViaResultIsWrittenAsJavasAssignmentConvertsIt() throws ReflectiveOperationException {
+    // Every member kind, in each direction it writes, through a row naming the mapper's class and
+    // one naming its two methods. Two method references name the backward's result as the class
+    // the forward takes, so a row of methods writing into the source cannot widen and is left out.
+    final var cells = new ArrayList<ResultCell>();
+    var index = 0;
+    for (final var fit : RESULT_FITS) {
+      for (final var member : ResultMember.values()) {
+        for (final var backward : List.of(false, true)) {
+          if (backward && member == ResultMember.INTO) continue;
+          for (final var methods : List.of(false, true)) {
+            if (backward && methods) continue;
+            cells.add(new ResultCell("Nw" + index++, fit, member, backward, methods));
+          }
+        }
+      }
+    }
+    final var converting = new ArrayList<JavaFileObject>();
+    final var refusing = new ArrayList<JavaFileObject>();
+    final var all = new ArrayList<JavaFileObject>();
+    for (final var cell : cells) {
+      final var sources = cellSources(cell.prefix(), resultCellDeclarations(cell));
+      final var withoutRuntime = sources.subList(0, sources.size() - 1);
+      (cell.fit().owed().startsWith(REFUSED) ? refusing : converting).addAll(withoutRuntime);
+      all.addAll(sources);
+    }
+    final var options = List.of("-parameters");
+    final var plain = ProcessorHarness.compileFully(List.of(), options, all.toArray(JavaFileObject[]::new));
+    assertTrue(plain.success(), () -> "the cells should compile without the processor: " + plain.errorMessages());
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      options,
+      converting.toArray(JavaFileObject[]::new)
+    );
+    assertTrue(processed.success(), () -> "the converting cells' bridges should compile: " + processed.errorMessages());
+    assertEquals(List.of(), processed.warningsInGenerated());
+    final var refused = ProcessorHarness.compile(
+      List.of(new BridgeProcessor()),
+      options,
+      refusing.toArray(JavaFileObject[]::new)
+    );
+    final var classes = plain.define(MethodHandles.lookup());
+    final var bridges = defineAdded(processed, plain, name -> true);
+    final var failures = new ArrayList<String>();
+    for (final var cell : cells) {
+      final var prefix = cell.prefix();
+      final var what =
+        prefix +
+        " " +
+        cell.fit().result() +
+        " into " +
+        cell.fit().member() +
+        " " +
+        cell.member() +
+        (cell.backward() ? " backward" : " forward") +
+        (cell.methods() ? " methods" : " class");
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final Attempt mapper = () -> classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var owed = cell.fit().owed();
+      if (owed.startsWith(REFUSED)) {
+        final var named = owed.substring(REFUSED.length()).split(" ");
+        final var message = PairingMessages.viaResultNeverFits(
+          prefix + "Src",
+          prefix + "Tgt",
+          cell.side(),
+          "v",
+          named[0],
+          named[1]
+        );
+        final var runtime = refusalOf(mapper);
+        if (runtime == null || !runtime.contains(message)) {
+          failures.add(what + ": the runtime owed the refusal " + message + ", saw " + runtime);
+        }
+        if (!refused.hasError(message)) failures.add(what + ": the processor owed the refusal " + message);
+        if (
+          refused
+            .generated()
+            .keySet()
+            .stream()
+            .anyMatch(name -> name.contains(prefix + "SrcTo"))
+        ) {
+          failures.add(what + ": and no bridge");
+        }
+        continue;
+      }
+      @SuppressWarnings("unchecked")
+      final Attempt runtime = () -> {
+        final var built = (Mapper<Object, Object>) mapper.get();
+        if (cell.backward()) return built.backward(tgt.getMethod("sample").invoke(null));
+        if (cell.member() == ResultMember.INTO) {
+          return built.into(tgt.getConstructor().newInstance(), src.getMethod("sample").invoke(null));
+        }
+        return built.forward(src.getMethod("sample").invoke(null));
+      };
+      final var bridge = bridges.get(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge");
+      final Attempt generated = cell.backward()
+        ? () -> bridge.getMethod("backward", tgt).invoke(null, tgt.getMethod("sample").invoke(null))
+        : () -> bridge.getMethod("forward", src).invoke(null, src.getMethod("sample").invoke(null));
+      final var rendered = "#0(v=" + owed + ")";
+      final var generatedShape = shapeOf(generated);
+      final var runtimeShape = shapeOf(runtime);
+      if (!generatedShape.equals(rendered) || !runtimeShape.equals(rendered)) {
+        failures.add(
+          what + ": both paths owed " + rendered + ", generated " + generatedShape + ", runtime " + runtimeShape
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A generic or raw {@code via} result: the mapper's forward as declared, the source's property
+   * type and a sample of it, the target's property type, and what both paths owe, the target's
+   * rendering or {@link #REFUSED} and a fragment of the refusal both paths name the row with.
+   */
+  private record GenericResult(String forward, String source, String sample, String target, String owed) {}
+
+  private static final List<GenericResult> GENERIC_RESULTS = List.of(
+    // javac accepts each of these calls written by hand, the raw ones with an unchecked
+    // warning.
+    new GenericResult(
+      "<T> T forward(final T a) { return a; }",
+      "java.util.List",
+      "java.util.List.of(\"x\")",
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "java.util.List forward(final java.util.List<String> a) { return a; }",
+      "java.util.List<String>",
+      "java.util.List.of(\"x\")",
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<T> a) { return a; }",
+      "java.util.List",
+      "java.util.List.of(\"x\")",
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      "<T> T forward(final java.util.List<T> a) { return a.get(0); }",
+      "java.util.List<? extends String>",
+      "java.util.List.of(\"x\")",
+      "Comparable<String>",
+      "#0(child=\"x\")"
+    ),
+    new GenericResult(
+      "<T extends Number> T forward(final java.util.List<T> a) { return a.get(0); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "Comparable<Integer>",
+      "#0(child=7)"
+    ),
+    new GenericResult(
+      "<T> T forward(final java.util.List<T> a) { return a.get(0); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "long",
+      "#0(child=7)"
+    ),
+    new GenericResult(
+      "<T> T forward(final java.util.List<T> a) { return a.get(0); }",
+      "java.util.List<Integer>",
+      "java.util.List.of(7)",
+      "Long",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    // javac rejects each of these: the parameter fixes the variable, or a raw argument erases
+    // the
+    // result, and the result it then gives is not one the target's property takes.
+    new GenericResult(
+      "<T> T forward(final java.util.List<T> a) { return a.get(0); }",
+      "java.util.List",
+      "java.util.List.of(\"x\")",
+      "String",
+      REFUSED + "erases to java.lang.Object"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.List<T> a) { return a; }",
+      "java.util.List<String>",
+      "java.util.List.of(\"x\")",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final java.util.Map<String, T> a) { return new java.util.ArrayList<>(a.values()); }",
+      "java.util.Map<String, String>",
+      "java.util.Map.of(\"k\", \"x\")",
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Optional<T> forward(final java.util.function.Supplier<T> a) {" +
+        " return java.util.Optional.ofNullable(a.get()); }",
+      "java.util.function.Supplier<String>",
+      "() -> \"x\"",
+      "java.util.Optional<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    // No value of the class the method returns is one the target's property takes.
+    new GenericResult(
+      "Integer forward(final String a) { return a.length(); }",
+      "String",
+      "\"x\"",
+      "String",
+      REFUSED + "and no Integer is a String"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a generic or raw via result converts on both paths where javac accepts the call written by hand, and is refused" +
+      " by name on both where it does not or where no value of it fits"
+  )
+  void aGenericOrRawViaResultAgreesWithJavacOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : GENERIC_RESULTS) {
+      final var prefix = "Xg" + index++;
+      final var what = prefix + " " + row.forward() + " from " + row.source() + " into " + row.target();
+      final var targetSample = row.target().equals("long") ? "0L" : "null";
+      final var declarations = List.of(
+        "public class %1$sChMap {\n" +
+          "  public static " +
+          row.forward() +
+          "\n  public static " +
+          row.source() +
+          " backward(final " +
+          row.target() +
+          " b) { return null; }\n}\n",
+        sampled("%1$sSrc", row.source() + " child", "new %1$sSrc(" + row.sample() + ")"),
+        forwardFieldBridge("%1$sSrc", "%1$sTgt", "via(%1$sSrc::child, %1$sTgt::child, %1$sChMap.class)"),
+        sampled("%1$sTgt", row.target() + " child", "new %1$sTgt(" + targetSample + ")"),
+        "public class %1$sRuntime {\n" +
+          "  public static Object mapper() {\n" +
+          "    return io.github.eschizoid.telescope.Telescope.mapperForward(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::child," +
+          " %1$sTgt::child, %1$sChMap.class));\n  }\n}\n"
+      );
+      final var all = cellSources(prefix, declarations).toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all);
+      if (!plain.success()) {
+        failures.add(what + ": the pair should compile without the processor: " + plain.errorMessages());
+        continue;
+      }
+      final var pair = Arrays.copyOf(all, all.length - 1);
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), pair);
+      final var classes = plain.define(MethodHandles.lookup());
+      final Attempt mapper = () -> classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      if (row.owed().startsWith(REFUSED)) {
+        final var fragment = row.owed().substring(REFUSED.length());
+        if (processed.success() || !processed.hasError("'child'") || !processed.hasError(fragment)) {
+          failures.add(what + ": the processor owed a refusal naming the row, saw " + describe(processed));
+        }
+        if (!errorsInGenerated(processed).isEmpty()) {
+          failures.add(what + ": and no error inside the generated file: " + errorsInGenerated(processed));
+        }
+        final var runtime = refusalOf(mapper);
+        if (runtime == null || !runtime.contains("'child'") || !runtime.contains(fragment)) {
+          failures.add(what + ": the runtime owed a refusal naming the row when it is built, saw " + runtime);
+        }
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(what + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      if (!processed.warningsInGenerated().isEmpty()) {
+        failures.add(what + ": the generated bridge warns: " + processed.warningsInGenerated());
+      }
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      @SuppressWarnings("unchecked")
+      final Attempt runtime = () ->
+        ((ForwardMapper<Object, Object>) mapper.get()).forward(src.getMethod("sample").invoke(null));
+      final var bridge = emitted(processed, plain, prefix);
+      final Attempt generated = () ->
+        bridge.getMethod("forward", src).invoke(null, src.getMethod("sample").invoke(null));
+      final var generatedShape = shapeOf(generated);
+      final var runtimeShape = shapeOf(runtime);
+      if (!generatedShape.equals(row.owed()) || !runtimeShape.equals(row.owed())) {
+        failures.add(
+          what + ": both paths owed " + row.owed() + ", generated " + generatedShape + ", runtime " + runtimeShape
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " row(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /** Whether a compilation succeeded, or the errors it reported. */
   private static String describe(final ProcessorHarness.Compilation compilation) {
     return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();
   }
 
-  /** The message of what {@code attempt} threw, or null when it threw nothing. */
+  /**
+   * The message of what {@code attempt} threw, or of what a method it called reflectively threw, or
+   * null when it threw nothing.
+   */
   private static String refusalOf(final Attempt attempt) {
     try {
       attempt.get();
       return null;
+    } catch (final InvocationTargetException e) {
+      return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return String.valueOf(e.getMessage());
     }

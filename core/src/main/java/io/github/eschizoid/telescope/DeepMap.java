@@ -121,7 +121,7 @@ public final class DeepMap {
    * verifier consumes the same rules through a {@code TypeMirror} adapter, so what constructs here
    * and what compiles there cannot drift.
    */
-  private static final ReflectionProps PROPS = new ReflectionProps();
+  static final ReflectionProps PROPS = new ReflectionProps();
 
   static final PairingRules<Type> PAIRING = new PairingRules<>(PROPS);
 
@@ -1770,7 +1770,8 @@ public final class DeepMap {
         // least-upper-bound of the two accessors, so to(Integer-getter, String-getter) compiles and
         // would otherwise identity-pass an Integer into a String setter (ClassCastException at
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
-        final var resolved = resolvedRow(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
+        final var resolution = resolvedRow(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
+        final var resolved = resolution.row();
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
             ? checkedAgainstFixed(
@@ -1795,7 +1796,7 @@ public final class DeepMap {
               )
             : resultChecked(
                 fieldIsoOf(resolved, srcType, tgtType, new RowSides(source, target, srcField, tgtField)),
-                resolved,
+                resolution,
                 paired,
                 new RowSides(source, target, srcField, tgtField),
                 srcRefl,
@@ -2407,7 +2408,11 @@ public final class DeepMap {
    * source.
    *
    * <p>A {@code via} row's mapper names the class it returns on each side, so a mapper no result of
-   * which the property can take is refused here, while the mapper is built.
+   * which the property can take is refused here, while the mapper is built. A {@code via} row whose
+   * methods convert the whole property writes their results as Java's assignment converts them
+   * ({@link ViaResults}): a wrapper whose primitive widens to the member's is widened to it before
+   * the check, and a result no assignment conversion or check of its class lets the member take is
+   * refused here too.
    *
    * <p>The value a transform row's conversion is handed is checked too, where the row reads the
    * property as a class narrower than its getter returns ({@link #narrowedRead}): a property
@@ -2418,16 +2423,44 @@ public final class DeepMap {
    */
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> resultChecked(
-    final Iso<?, ?> iso,
-    final Mapping<?, ?> row,
+    final Iso<?, ?> converted,
+    final ResolvedRow resolution,
     final PairedTypes<Type> paired,
     final RowSides sides,
     final Reflective srcRefl,
     final Reflective tgtRefl,
     final boolean forwardOnly
   ) {
+    final var row = resolution.row();
     final var targetWriter = tgtRefl.writerFor(sides.target());
     final var sourceWriter = srcRefl.writerFor(sides.source());
+    final var source = sides.source().getSimpleName();
+    final var target = sides.target().getSimpleName();
+    final var intoTargetMember = ViaResults.written(
+      resolution.forward(),
+      Beans.writtenMemberClass(targetWriter, sides.target(), sides.tgtField()),
+      paired.targetMember(),
+      source,
+      target,
+      sides.srcField(),
+      "target",
+      sides.target(),
+      sides.tgtField()
+    );
+    final var intoSourceMember = forwardOnly
+      ? null
+      : ViaResults.written(
+          resolution.backward(),
+          Beans.writtenMemberClass(sourceWriter, sides.source(), sides.srcField()),
+          paired.sourceMember(),
+          source,
+          target,
+          sides.srcField(),
+          "source",
+          sides.source(),
+          sides.srcField()
+        );
+    final var iso = widened(converted, intoTargetMember, intoSourceMember);
     final var targetDeclared = tgtRefl.genericType(sides.target(), sides.tgtField());
     final var sourceDeclared = srcRefl.genericType(sides.source(), sides.srcField());
     final var fixedTarget = fixedBy(paired.target(), targetDeclared, paired.targetMember());
@@ -2816,7 +2849,7 @@ public final class DeepMap {
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
       }
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, null);
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType, sides, null, null);
       case ViaClass<?, ?> __ -> throw new IllegalStateException(
         "A via row naming a class reaches its field's iso only as the row resolvedRow makes of it"
       );
@@ -2825,7 +2858,8 @@ public final class DeepMap {
         srcType,
         tgtType,
         sides,
-        LambdaIntrospection.conversionOf(r.forward())
+        LambdaIntrospection.conversionOf(r.forward()),
+        LambdaIntrospection.conversionOf(r.backward()).from()
       );
       // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
       // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
@@ -2858,7 +2892,8 @@ public final class DeepMap {
    * the accessor's source/target field types are same-kind containers and the mapper's
    * source/target classes match the element classes, lift via {@link Iso#liftList} / {@link
    * Iso#liftSet} / {@link Iso#liftOptional} / {@link Iso#liftMapValues}. Otherwise the
-   * element-level Iso flows through unchanged (scalar / record-pair case).
+   * element-level Iso flows through unchanged (scalar / record-pair case). A row of two methods
+   * hands the target's property to {@code backward}, which takes {@code backwardTakes}.
    */
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> liftViaIfNeeded(
@@ -2866,7 +2901,8 @@ public final class DeepMap {
     final Type srcType,
     final Type tgtType,
     final RowSides sides,
-    final LambdaIntrospection.Conversion methods
+    final LambdaIntrospection.Conversion methods,
+    final Class<?> backwardTakes
   ) {
     // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
     // pull the source/target classes from the same Mapper. Reading the public components inline
@@ -2883,17 +2919,7 @@ public final class DeepMap {
     final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
     final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
     if (methods != null) refuseNarrowedInput(sides, srcShape, tgtShape, srcType, methods);
-    if (
-      srcShape != null &&
-      tgtShape != null &&
-      srcShape.kind() == tgtShape.kind() &&
-      elementTypeMatches(srcShape.elementType(), mapperSrc) &&
-      (elementTypeMatches(tgtShape.elementType(), mapperTgt) ||
-        (methods != null &&
-          methods.resultInferred() &&
-          tgtShape.elementType() instanceof Class<?> written &&
-          mapperTgt.isAssignableFrom(written)))
-    ) {
+    if (liftsElements(srcShape, tgtShape, mapperSrc, mapperTgt, methods)) {
       if (srcShape.kind() == ContainerView.Kind.MAP_VALUES && !srcShape.keyType().equals(tgtShape.keyType())) {
         throw new IllegalStateException(
           "Deep map via(...): Map key types must match exactly — source " +
@@ -2917,8 +2943,35 @@ public final class DeepMap {
       };
     }
     refuseUnfit(sides, "source", sides.srcField(), srcType, mapperSrc);
-    refuseUnfit(sides, "target", sides.tgtField(), tgtType, mapperTgt);
+    refuseUnfit(sides, "target", sides.tgtField(), tgtType, backwardTakes == null ? mapperTgt : backwardTakes);
     return elementIso;
+  }
+
+  /**
+   * Whether a via row's mapper, converting {@code mapperSrc} into {@code mapperTgt}, converts the
+   * elements of two containers of one kind, {@code srcShape} and {@code tgtShape}, rather than the
+   * property itself: each side's element is what the mapper converts on that side, or, for a row of
+   * two methods whose {@code forward} returns its own type variable, the target's element is a
+   * class the call can infer that variable as.
+   */
+  private static boolean liftsElements(
+    final ContainerView<Type> srcShape,
+    final ContainerView<Type> tgtShape,
+    final Class<?> mapperSrc,
+    final Class<?> mapperTgt,
+    final LambdaIntrospection.Conversion methods
+  ) {
+    return (
+      srcShape != null &&
+      tgtShape != null &&
+      srcShape.kind() == tgtShape.kind() &&
+      elementTypeMatches(srcShape.elementType(), mapperSrc) &&
+      (elementTypeMatches(tgtShape.elementType(), mapperTgt) ||
+        (methods != null &&
+          methods.resultInferred() &&
+          tgtShape.elementType() instanceof Class<?> written &&
+          mapperTgt.isAssignableFrom(written)))
+    );
   }
 
   /**
@@ -2961,24 +3014,66 @@ public final class DeepMap {
   }
 
   /**
+   * {@code iso} with {@code intoTarget} applied to what it writes into the target and {@code
+   * intoSource} to what it writes back into the source, either of which may be null; {@code iso}
+   * itself where both are.
+   */
+  @SuppressWarnings("unchecked")
+  private static Iso<?, ?> widened(
+    final Iso<?, ?> iso,
+    final Function<Object, Object> intoTarget,
+    final Function<Object, Object> intoSource
+  ) {
+    if (intoTarget == null && intoSource == null) return iso;
+    final Iso<Object, Object> before = Iso.of(
+      Function.identity(),
+      intoSource == null ? Function.identity() : intoSource
+    );
+    final Iso<Object, Object> after = Iso.of(
+      intoTarget == null ? Function.identity() : intoTarget,
+      Function.identity()
+    );
+    return before.then((Iso<Object, Object>) iso).then(after);
+  }
+
+  /**
+   * A row as the runtime path converts it, and what a {@code via} row's methods return where they
+   * convert the whole property, each null where the row says nothing of it.
+   */
+  private record ResolvedRow(Mapping<?, ?> row, ViaResults.Given forward, ViaResults.Given backward) {}
+
+  /**
    * {@code row}, or, for a via row naming a class, the via row of the methods the class has for a
    * property the source declares as {@code srcType} and the target as {@code tgtType}; see {@link
    * ViaClasses}. The class's methods are read here, while the runtime path builds a mapper, and
-   * nowhere else.
+   * nowhere else. A via row of two methods, or one naming a class, carries what its methods return
+   * where they convert the property itself.
    */
-  private static Mapping<?, ?> resolvedRow(
+  private static ResolvedRow resolvedRow(
     final Mapping<?, ?> row,
     final Type srcType,
     final Type tgtType,
     final RowSides sides
   ) {
-    if (!(row instanceof ViaClass<?, ?> named)) return row;
     final var srcView = PAIRING.containerViewOf(srcType);
     final var tgtView = PAIRING.containerViewOf(tgtType);
     final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
     final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
+    if (row instanceof ViaMethods<?, ?> methods) {
+      final var nested = methods.resolved().nested();
+      final var conversion = LambdaIntrospection.conversionOf(methods.forward());
+      if (liftsElements(srcShape, tgtShape, nested.sourceClass(), nested.targetClass(), conversion)) {
+        return new ResolvedRow(row, null, null);
+      }
+      return new ResolvedRow(
+        row,
+        ViaResults.ofReference(methods.forward()),
+        ViaResults.ofReference(methods.backward())
+      );
+    }
+    if (!(row instanceof ViaClass<?, ?> named)) return new ResolvedRow(row, null, null);
     final var lifts = srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind();
-    return ViaClasses.resolve(
+    final var chosen = ViaClasses.resolve(
       named,
       srcType,
       tgtType,
@@ -2989,6 +3084,7 @@ public final class DeepMap {
       sides.srcField(),
       sides.tgtField()
     );
+    return new ResolvedRow(chosen.row(), chosen.forward(), chosen.backward());
   }
 
   /** The pair a row converts at and the two properties it reads and writes, named for a refusal. */

@@ -301,6 +301,41 @@ class WrittenMemberTest {
   }
 
   @Nested
+  @DisplayName("writtenMemberClass — the class the chosen member declares")
+  class WrittenMemberClass {
+
+    @Test
+    @DisplayName("a primitive member answers the primitive, for each way a property is written")
+    void aPrimitiveMemberAnswersThePrimitive() {
+      assertEquals(
+        int.class,
+        Beans.writtenMemberClass(Reflective.RECORDS.writerFor(IntRec.class), IntRec.class, "value")
+      );
+      assertEquals(
+        int.class,
+        Beans.writtenMemberClass(Reflective.BEANS.writerFor(Constructed.class), Constructed.class, "value")
+      );
+      assertEquals(int.class, Beans.writtenMemberClass(Reflective.BEANS.writerFor(Built.class), Built.class, "value"));
+      assertEquals(int.class, Beans.writtenMemberClass(Reflective.BEANS.writerFor(Set.class), Set.class, "value"));
+    }
+
+    @Test
+    @DisplayName("a member taking Object answers Object, where writtenClass answers nothing")
+    void anObjectMemberAnswersObject() {
+      assertEquals(
+        Object.class,
+        Beans.writtenMemberClass(Reflective.BEANS.writerFor(Anything.class), Anything.class, "value")
+      );
+    }
+
+    @Test
+    @DisplayName("a property no member writes answers nothing")
+    void anUnwrittenPropertyAnswersNothing() {
+      assertNull(Beans.writtenMemberClass(Reflective.RECORDS.writerFor(IntRec.class), IntRec.class, "absent"));
+    }
+  }
+
+  @Nested
   @DisplayName("writtenClass — the class the chosen member takes")
   class WrittenClass {
 
