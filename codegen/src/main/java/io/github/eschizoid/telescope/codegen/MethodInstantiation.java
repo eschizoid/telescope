@@ -215,6 +215,19 @@ final class MethodInstantiation {
   }
 
   /**
+   * Whether {@code type} reaches {@code taken}, a parameterization of a generic class, only as that
+   * class used raw: {@code type}'s class extends it raw, somewhere up its supertypes. Java's
+   * assignment then writes it through an unchecked conversion.
+   */
+  boolean reachesOnlyRaw(final TypeMirror type, final TypeMirror taken) {
+    if (!(type instanceof DeclaredType given) || !(taken instanceof DeclaredType wanted)) return false;
+    if (wanted.getTypeArguments().isEmpty()) return false;
+    if (!types.isSubtype(types.erasure(given), types.erasure(wanted))) return false;
+    final var view = viewAs(given, (TypeElement) wanted.asElement());
+    return view != null && view.getTypeArguments().isEmpty();
+  }
+
+  /**
    * Records what {@code argument}, the value handed to {@code member}'s one parameter, asks of the
    * variables the parameter names where it is not a variable on its own: the parameter is a
    * supertype of the argument's type. The argument's type is read after capture conversion, as
@@ -436,6 +449,15 @@ final class MethodInstantiation {
     }
     if (given instanceof WildcardType) return relation != Relation.EXACT;
     if (given instanceof DeclaredType declared) {
+      // A type variable, the fresh one of a wildcard's capture among them, is a subtype of a class
+      // only through a bound, so the class's type arguments are the ones that bound gives it.
+      if (relation == Relation.SUPERTYPE && met instanceof TypeVariable held) {
+        for (final var bound : boundsOf(held)) {
+          if (bound instanceof DeclaredType && types.isSubtype(types.erasure(bound), types.erasure(given))) {
+            return gather(given, bound, relation, into);
+          }
+        }
+      }
       if (!(met instanceof DeclaredType wanted)) {
         // A class type is never an array type or a primitive, nor a subtype of an array type, and
         // is a supertype of an array type only as one of the classes every array extends.

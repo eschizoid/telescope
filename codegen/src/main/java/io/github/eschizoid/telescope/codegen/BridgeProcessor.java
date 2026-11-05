@@ -5244,11 +5244,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var direction = method.getSimpleName().toString();
     out.println(
       "    static " +
-        to +
+        heldElement(to) +
         " " +
         direction +
         "(final " +
-        from +
+        heldElement(from) +
         " in) { return in == null ? null : " +
         mapper +
         "." +
@@ -5257,6 +5257,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         handed +
         "); }"
     );
+  }
+
+  /**
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is {@code
+   * Object} for one bounded from below or not at all, and any other type itself.
+   */
+  private TypeMirror heldElement(final TypeMirror element) {
+    if (!(element instanceof WildcardType wildcard)) return element;
+    return wildcard.getExtendsBound() == null ? mirrorProps().objectType() : wildcard.getExtendsBound();
   }
 
   /** The erasure of the type {@code method}'s one parameter takes. */
@@ -6311,9 +6320,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var widens = wrapperIntoPrimitive(gives, chosen) && !types.isSameType(types.unboxedType(gives), chosen);
     final var written = generic && chosen.getKind().isPrimitive() && !widens ? declared : gives;
     if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
-    // A result of a generic class used raw is written where the class takes type arguments
-    // through an unchecked conversion, as Java's assignment writes it.
-    if (usedRaw(gives) && types.isAssignable(gives, chosen)) return new ViaResult(written, null, true);
+    // A result of a generic class used raw, or of a class extending it raw, is written where the
+    // class takes type arguments through an unchecked conversion, as Java's assignment writes it.
+    if ((usedRaw(gives) || instantiation().reachesOnlyRaw(gives, chosen)) && types.isAssignable(gives, chosen)) {
+      return new ViaResult(written, null, true);
+    }
     if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);
     if (!generic && !mayShareInstance(boxedErasure(gives), boxedErasure(chosen))) {
       return new ViaResult(
