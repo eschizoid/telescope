@@ -123,7 +123,8 @@ final class ComputeForms {
    * instance method a {@code compute} row binds as a supplier: the type of the expression written
    * before {@code ::}. An instance method taking no argument fits a supplier only through a
    * receiver, since a reference naming it by its class takes the receiver as an argument. Null for
-   * a static method, a constructor, or an argument that is not a method reference.
+   * a static method or an argument that is not a method reference; for a constructor it is the
+   * class constructed, which the search for a constructor's form does not read.
    */
   static TypeMirror boundReceiver(
     final Trees trees,
@@ -131,11 +132,7 @@ final class ComputeForms {
     final ExpressionTree arg,
     final ExecutableElement chosen
   ) {
-    if (
-      !(arg instanceof MemberReferenceTree reference) ||
-      chosen.getKind() != ElementKind.METHOD ||
-      chosen.getModifiers().contains(Modifier.STATIC)
-    ) {
+    if (!(arg instanceof MemberReferenceTree reference) || chosen.getModifiers().contains(Modifier.STATIC)) {
       return null;
     }
     return trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
@@ -153,13 +150,13 @@ final class ComputeForms {
 
   /**
    * The class a search for a form starts at: the erasure of {@code receiver} where it is {@code
-   * owner} or a subtype of it, and {@code owner} otherwise.
+   * owner} or a subtype of it, and {@code owner} otherwise, as for a receiver typed by an
+   * intersection, which erases to its first bound, or an array.
    */
   private static TypeElement searchedFirst(final Types types, final TypeElement owner, final TypeMirror receiver) {
     if (receiver == null) return owner;
     final var erased = types.erasure(receiver);
-    if (!(types.asElement(erased) instanceof TypeElement held)) return owner;
-    return types.isSubtype(erased, types.erasure(owner.asType())) ? held : owner;
+    return types.isSubtype(erased, types.erasure(owner.asType())) ? (TypeElement) types.asElement(erased) : owner;
   }
 
   /**
