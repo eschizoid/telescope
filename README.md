@@ -67,6 +67,11 @@ You name only what differs between the two types. Each kind of difference has on
 source, and `LineMapper` is a hand-written class with `forward` and `backward` methods. A nested path also works as a
 target, so `to(Order::city, path(OrderDto::shipping, Shipping::city))` builds the `shipping` object it writes into.
 
+A read through a nested path gives the property's null value when an object on the way is null: `null` for a reference
+and zero for a primitive. A write through one builds a missing object on the way, unless the value written is null. A
+`compute` row names no source property, so every source field still maps by name beside it. On `backward`, `constant`
+and `compute` rows write nothing, so a reference comes back `null` and a primitive as zero or `false`.
+
 `Telescope.mapper(...)` returns a two-way `Mapper` with `forward`, `backward` and `patch`. Its rows run in reverse on
 `backward`, and it refuses, when it is built, any field it can't map in both directions. `Telescope.mapperForward(...)`
 returns a one-way `ForwardMapper`, which leaves a target field it can't fill at its null value. Both take the same rows.

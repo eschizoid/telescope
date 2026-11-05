@@ -84,6 +84,18 @@ class ReadmeHeroTest {
   );
 
   @Test
+  @DisplayName("the README shows the same mapper rows this test compiles")
+  void readmeShowsTheseRows() throws IOException {
+    final var readme = Files.readString(Path.of(System.getProperty("user.dir")).getParent().resolve("README.md"));
+    for (final var line : INVOICE.lines()
+      .filter(l -> l.startsWith("    ") && !l.isBlank())
+      .toList()) {
+      if (line.contains("declared") || line.contains("return DTO;")) continue;
+      assertTrue(readme.contains(line.substring(2)), () -> "README no longer shows: " + line.strip());
+    }
+  }
+
+  @Test
   @DisplayName("the README's @Bridge field compiles every row, and its generated mapper gives what the runtime gives")
   void heroCompilesAndAgrees() throws Exception {
     final var generated = ProcessorHarness.compileFully(
@@ -92,12 +104,14 @@ class ReadmeHeroTest {
       MODEL.toArray(JavaFileObject[]::new)
     );
     assertTrue(generated.success(), () -> generated.diagnostics().toString());
-    assertTrue(
-      generated.diagnostics().stream().noneMatch((d) -> d.getKind() == Diagnostic.Kind.WARNING),
-      () -> generated.diagnostics().toString()
-    );
+    assertTrue(generated
+      .diagnostics()
+      .stream()
+      .noneMatch(d -> d.getKind() == Diagnostic.Kind.WARNING), () -> generated.diagnostics().toString());
     final var bridge = generated.generated().get("rh.InvoiceToInvoiceDtoBridge");
-    assertTrue(bridge != null && bridge.contains("Money.format("), () -> String.valueOf(generated.generated().keySet()));
+    assertTrue(bridge != null && bridge.contains("Money.format("), () ->
+      String.valueOf(generated.generated().keySet())
+    );
 
     final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), MODEL.toArray(JavaFileObject[]::new));
     assertTrue(runtime.success(), () -> runtime.diagnostics().toString());
@@ -130,13 +144,11 @@ class ReadmeHeroTest {
   }
 
   private static Object invoice(final ClassLoader loader, final Object[] customer) throws Exception {
-    final Object owner = customer == null
-      ? null
-      : loader.loadClass("rh.Customer").getConstructors()[0].newInstance(customer[0], customer[1]);
-    return loader
-      .loadClass("rh.Invoice")
-      .getConstructors()[0]
-      .newInstance("INV-1", owner, 1234L, "internal");
+    final Object owner =
+      customer == null
+        ? null
+        : loader.loadClass("rh.Customer").getConstructors()[0].newInstance(customer[0], customer[1]);
+    return loader.loadClass("rh.Invoice").getConstructors()[0].newInstance("INV-1", owner, 1234L, "internal");
   }
 
   /** A loader over the compiled classes and generated resources, as a class path holds them. */
