@@ -52,11 +52,11 @@ With Gradle:
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.0.0")
+    implementation("io.github.eschizoid:telescope-core:2.1.0")
 
     compileOnly("org.projectlombok:lombok:1.18.48")
     annotationProcessor("org.projectlombok:lombok:1.18.48")
-    annotationProcessor("io.github.eschizoid:telescope-lombok:2.0.0")
+    annotationProcessor("io.github.eschizoid:telescope-lombok:2.1.0")
 }
 ```
 
@@ -67,7 +67,7 @@ With Maven:
   <dependency>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-core</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
   </dependency>
   <dependency>
     <groupId>org.projectlombok</groupId>
@@ -92,7 +92,7 @@ With Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-lombok</artifactId>
-            <version>2.0.0</version>
+            <version>2.1.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>

@@ -98,8 +98,8 @@ or annotate the target with its own `@Bridge`.
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:2.0.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
+implementation("io.github.eschizoid:telescope-core:2.1.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
@@ -186,8 +186,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.0.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
+    implementation("io.github.eschizoid:telescope-core:2.1.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
 }
 ```
 
@@ -197,7 +197,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>2.0.0</version>
+  <version>2.1.0</version>
 </dependency>
 
 <build>
@@ -210,7 +210,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>2.0.0</version>
+            <version>2.1.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -237,7 +237,7 @@ annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsCon
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -245,7 +245,7 @@ annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsCon
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.48")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:2.0.0")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:2.1.0")
 }
 ```
 
