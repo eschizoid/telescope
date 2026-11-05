@@ -6274,6 +6274,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         )
       );
     }
+    // Every parameterization of a generic class is a subtype of a class only where the generic
+    // class is, so a result of one that is not fits under no instantiation of its variables, and
+    // no check of its class is one javac lets the call's result reach.
+    if (
+      generic &&
+      declared.getKind() == TypeKind.DECLARED &&
+      mirrorProps().mentionsTypeVariable(declared) &&
+      !types.isSubtype(types.erasure(declared), types.erasure(chosen))
+    ) {
+      return new ViaResult(
+        declared,
+        site.refused(
+          mapper,
+          name,
+          PairingMessages.viaResultNoInstantiation(declared.toString(), ownerName, property, chosen.toString())
+        )
+      );
+    }
     final var gives = instantiation().result(member, argument, chosen);
     if (gives == null) {
       return new ViaResult(

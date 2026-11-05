@@ -7,11 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Mapping;
+import java.io.Serializable;
+import java.lang.constant.Constable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -1876,6 +1880,162 @@ class ViaResultAssignmentTest {
         ),
       "java.util.List<java.util.List<java.util.List<T>>>",
       "java.util.List<java.util.List<java.util.Set<java.lang.String>>>"
+    );
+  }
+
+  public record StringArrayList(ArrayList<String> v) {}
+
+  public static final class Collected {
+
+    private Collected() {}
+
+    public static <T> Collection<T> forward(final T a) {
+      return List.of(a);
+    }
+
+    public static String backward(final Collection<?> b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a generic result of a class that is no subtype of the target's class is refused, whatever its type arguments"
+  )
+  void aGenericResultOfAnUnrelatedClassIsRefused() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          StringArrayList.class,
+          Mapping.<Text, StringArrayList>via(Text::v, StringArrayList::v, Singleton.class)
+        ),
+      "java.util.List<T>",
+      "java.util.ArrayList<java.lang.String>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Strings.class,
+          Mapping.<Text, Strings>via(Text::v, Strings::v, Collected.class)
+        ),
+      "java.util.Collection<T>",
+      "java.util.List<java.lang.String>"
+    );
+  }
+
+  /** A list class whose variable is bounded by its own enum. */
+  public static final class EnumList<E extends Enum<E>> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public EnumList(final List<E> items) {
+      super(items);
+    }
+  }
+
+  /** A list class whose variable is comparable to itself. */
+  public static final class NodeList<N extends Comparable<N>> extends ArrayList<N> {
+
+    private static final long serialVersionUID = 1L;
+
+    public NodeList(final List<N> items) {
+      super(items);
+    }
+  }
+
+  public record Enums(EnumList<?> v) {}
+
+  public record Nodes(NodeList<?> v) {}
+
+  public record EnumValues(List<Enum<?>> v) {}
+
+  public record SerializableValues(List<Serializable> v) {}
+
+  @SuppressWarnings("rawtypes")
+  public record RawEnums(List<Enum> v) {}
+
+  public record Constables(List<Constable> v) {}
+
+  public static final class FromEnums {
+
+    private FromEnums() {}
+
+    public static <T> List<T> forward(final List<? extends T> a) {
+      return List.copyOf(a);
+    }
+
+    public static EnumList<?> backward(final List<?> b) {
+      return null;
+    }
+  }
+
+  public static final class FromNodes {
+
+    private FromNodes() {}
+
+    public static <T> List<T> forward(final List<? extends T> a) {
+      return List.copyOf(a);
+    }
+
+    public static NodeList<?> backward(final List<?> b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a wildcard argument of a subclass is a capture bounded by the subclass's own variable, so a supertype of that" +
+      " variable's bound admits it"
+  )
+  void aSubclassWildcardIsBoundedByTheSubclassVariable() {
+    final var seconds = new Enums(new EnumList<>(List.of(TimeUnit.SECONDS)));
+    final var enums = Telescope.mapperForward(
+      Enums.class,
+      EnumValues.class,
+      Mapping.<Enums, EnumValues>via(Enums::v, EnumValues::v, FromEnums.class)
+    );
+    assertEquals(new EnumValues(List.of(TimeUnit.SECONDS)), enums.forward(seconds));
+    final var comparables = Telescope.mapperForward(
+      Enums.class,
+      Comparables.class,
+      Mapping.<Enums, Comparables>via(Enums::v, Comparables::v, FromEnums.class)
+    );
+    assertEquals(new Comparables(List.of(TimeUnit.SECONDS)), comparables.forward(seconds));
+    final var serializable = Telescope.mapperForward(
+      Enums.class,
+      SerializableValues.class,
+      Mapping.<Enums, SerializableValues>via(Enums::v, SerializableValues::v, FromEnums.class)
+    );
+    assertEquals(new SerializableValues(List.of(TimeUnit.SECONDS)), serializable.forward(seconds));
+    final var raw = Telescope.mapperForward(
+      Enums.class,
+      RawEnums.class,
+      Mapping.<Enums, RawEnums>via(Enums::v, RawEnums::v, FromEnums.class)
+    );
+    assertEquals(new RawEnums(List.of(TimeUnit.SECONDS)), raw.forward(seconds));
+    final var constables = Telescope.mapperForward(
+      Enums.class,
+      Constables.class,
+      Mapping.<Enums, Constables>via(Enums::v, Constables::v, FromEnums.class)
+    );
+    assertEquals(new Constables(List.of(TimeUnit.SECONDS)), constables.forward(seconds));
+    final var nodes = Telescope.mapperForward(
+      Nodes.class,
+      Comparables.class,
+      Mapping.<Nodes, Comparables>via(Nodes::v, Comparables::v, FromNodes.class)
+    );
+    assertEquals(new Comparables(List.of("x")), nodes.forward(new Nodes(new NodeList<>(List.of("x")))));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Enums.class,
+          Integers.class,
+          Mapping.<Enums, Integers>via(Enums::v, Integers::v, FromEnums.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.Integer>"
     );
   }
 }

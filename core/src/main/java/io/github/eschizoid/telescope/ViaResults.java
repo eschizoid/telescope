@@ -202,13 +202,12 @@ final class ViaResults {
     final var seen = seenAs(argument, raw);
     if (seen == null) return true;
     final var arguments = parameterized.getActualTypeArguments();
-    final var declared = raw.getTypeParameters();
     for (int i = 0; i < arguments.length; i++) {
       final var met = seen.get(i);
       final var wildcard = arguments[i] instanceof WildcardType bounded ? bounded : null;
       if (wildcard != null && bound(wildcard) instanceof TypeVariable<?> variable) {
         if (wildcard.getLowerBounds().length == 0) {
-          forced.lower(variable, heldBy(met, declared[i]));
+          forced.lower(variable, heldBy(met, argument, raw, i));
         } else if (!(met instanceof WildcardType metWildcard)) {
           forced.raise(variable, met);
         } else if (metWildcard.getLowerBounds().length > 0) {
@@ -218,8 +217,9 @@ final class ViaResults {
         }
       } else if (met instanceof WildcardType) {
         if (wildcard == null) {
-          for (final var variable : variables)
+          for (final var variable : variables) {
             if (names(arguments[i], List.of(variable))) forced.captured().add(variable);
+          }
         }
       } else if (arguments[i] instanceof TypeVariable<?> variable) {
         if (!put(variable, met, forced)) return false;
@@ -239,15 +239,24 @@ final class ViaResults {
   }
 
   /**
-   * The types a value the type argument {@code met} holds, in the place of {@code declared}, is a
-   * value of, any of which it can be the whole of: {@code met} itself where it is a type, and where
-   * it is a wildcard its upper bound and the class's bounds for that argument, a bound naming the
+   * The types a value the type argument {@code met} holds is a value of, any of which it can be the
+   * whole of, where {@code met} is the {@code index}th argument {@code argument} gives {@code raw}:
+   * {@code met} itself where it is a type, and where it is a wildcard its upper bound and the
+   * bounds of the variable of {@code argument}'s own class it stands in for, a bound naming the
    * class's variables read as its erasure, which every value of it is one of.
+   *
+   * <p>A wildcard reaches {@code raw}'s arguments only as an argument of {@code argument}'s own
+   * class, which gives {@code raw} that class's variable in its place: a class declaration gives
+   * its supertypes no wildcard.
    */
-  private static List<Type> heldBy(final Type met, final TypeVariable<?> declared) {
+  private static List<Type> heldBy(final Type met, final Type argument, final Class<?> raw, final int index) {
     if (!(met instanceof WildcardType wildcard)) return List.of(met);
+    final var cls = (Class<?>) DeepMap.PROPS.rawType(argument);
+    final var variable = (TypeVariable<?>) (cls == raw
+      ? raw.getTypeParameters()[index]
+      : DeepMap.PROPS.declaredArgumentsAs(cls, raw).get(index));
     final var held = new ArrayList<Type>(List.of(wildcard.getUpperBounds()));
-    for (final var bound : declared.getBounds()) {
+    for (final var bound : variable.getBounds()) {
       held.add(DeepMap.PROPS.mentionsTypeVariable(bound) ? DeepMap.PROPS.rawType(bound) : bound);
     }
     return held;
@@ -281,7 +290,6 @@ final class ViaResults {
     if (declared instanceof ParameterizedType parameterized) {
       final var cls = (Class<?>) parameterized.getRawType();
       final var takenClass = DeepMap.heldClassOf(taken);
-      if (!takenClass.isAssignableFrom(cls)) return false;
       final var seen = resultArguments(parameterized, cls, takenClass);
       final var takenArguments = DeepMap.PROPS.typeArguments(taken);
       if (seen.size() == takenArguments.size()) {
@@ -454,8 +462,17 @@ final class ViaResults {
       );
     }
     final var result = given.given();
-    if (result == null) {
-      if (given.forced() == null || instantiable(given.forced(), given.declared(), memberType)) return null;
+    // Every parameterization of a generic class is a subtype of a class only where the generic
+    // class is, so a result of one that is not fits under no instantiation of its variables.
+    final var unrelated =
+      given.generic() &&
+      given.raw() == null &&
+      given.declared() instanceof ParameterizedType declared &&
+      !DeepMap.heldClassOf(memberType).isAssignableFrom((Class<?>) declared.getRawType());
+    if (
+      unrelated ||
+      (result == null && given.forced() != null && !instantiable(given.forced(), given.declared(), memberType))
+    ) {
       throw refused(
         given,
         source,
@@ -469,6 +486,7 @@ final class ViaResults {
         )
       );
     }
+    if (result == null) return null;
     final var resultClass = boxed(DeepMap.heldClassOf(result));
     final var unboxed = MethodType.methodType(resultClass).unwrap().returnType();
     if (member.isPrimitive() && unboxed.isPrimitive()) {

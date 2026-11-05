@@ -16322,6 +16322,22 @@ class CrossPathCorpusTest {
    */
   private record GenericResult(String forward, String source, String sample, String target, String owed) {}
 
+  /** A forward taking a list of any subtype of its variable, which it copies. */
+  private static final String EXTENDING_LIST =
+    "<T> java.util.List<T> forward(final java.util.List<? extends T> a) { return java.util.List.copyOf(a); }";
+
+  /** A list class of a self-bounded variable, declared inside a row's mapper. */
+  private static final String ENUM_LIST =
+    "\n  public static final class EnumList<E extends Enum<E>> extends java.util.ArrayList<E> {" +
+    " public EnumList(final java.util.List<E> e) { super(e); } }";
+
+  private static final String ENUM_LIST_TYPE = "%1$sChMap.EnumList<?>";
+
+  private static final String ENUM_LIST_SAMPLE =
+    "new %1$sChMap.EnumList<>(java.util.List.of(java.util.concurrent.TimeUnit.SECONDS))";
+
+  private static final String SECONDS = "#0(child=[TimeUnit.SECONDS])";
+
   private static final List<GenericResult> GENERIC_RESULTS = List.of(
     // javac accepts each of these calls written by hand, the raw ones with an unchecked
     // warning.
@@ -16520,6 +16536,61 @@ class CrossPathCorpusTest {
       "\"x\"",
       "java.util.List<java.util.Set<String>>",
       REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.List<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.ArrayList<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      "<T> java.util.Collection<T> forward(final T a) { return java.util.List.of(a); }",
+      "String",
+      "\"x\"",
+      "java.util.List<String>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    // A wildcard argument of a subclass stands in for the subclass's own variable, so its
+    // capture
+    // is bounded by that variable's bound, not by the bound the superclass declares.
+    new GenericResult(EXTENDING_LIST + ENUM_LIST, ENUM_LIST_TYPE, ENUM_LIST_SAMPLE, "java.util.List<Enum<?>>", SECONDS),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<Comparable<?>>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<java.io.Serializable>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<java.lang.constant.Constable>",
+      SECONDS
+    ),
+    new GenericResult(
+      EXTENDING_LIST + ENUM_LIST,
+      ENUM_LIST_TYPE,
+      ENUM_LIST_SAMPLE,
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
+    ),
+    new GenericResult(
+      EXTENDING_LIST +
+        "\n  public static final class NodeList<N extends Comparable<N>> extends java.util.ArrayList<N> {" +
+        " public NodeList(final java.util.List<N> n) { super(n); } }",
+      "%1$sChMap.NodeList<?>",
+      "new %1$sChMap.NodeList<>(java.util.List.of(\"x\"))",
+      "java.util.List<Comparable<?>>",
+      "#0(child=[\"x\"])"
     ),
     // No value of the class the method returns is one the target's property takes.
     new GenericResult(
