@@ -116,9 +116,10 @@ final class ComputeForms {
   }
 
   /**
-   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen} of the
-   * form {@code receiver::method}: the type of the expression written before {@code ::}. Null for a
-   * static reference, a constructor, an unbound reference or anything that is not a reference.
+   * The type of the receiver {@code arg} is bound to when it is a reference to {@code chosen} of
+   * the form {@code receiver::method}: the type of the expression written before {@code ::}. Null
+   * for a static reference, a constructor, an unbound reference or anything that is not a
+   * reference.
    */
   static TypeMirror boundReceiver(
     final Trees trees,

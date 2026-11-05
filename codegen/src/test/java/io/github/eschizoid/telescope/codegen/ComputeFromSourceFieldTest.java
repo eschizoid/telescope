@@ -458,7 +458,9 @@ class ComputeFromSourceFieldTest {
   }
 
   @Test
-  @DisplayName("a bound reference whose receiver's subclass declares the form taking the source is refused on both paths")
+  @DisplayName(
+    "a bound reference whose receiver's subclass declares the form taking the source is refused on both paths"
+  )
   void aBoundReferenceWithASubclassFormIsRefusedOnBothPaths() throws Exception {
     refusedOnBothPaths(
       "compute(Card::full, Lower.LOWER::ii)",
@@ -477,7 +479,9 @@ class ComputeFromSourceFieldTest {
   }
 
   @Test
-  @DisplayName("a static reference whose subclass declares the form taking the source runs as the supplier on both paths")
+  @DisplayName(
+    "a static reference whose subclass declares the form taking the source runs as the supplier on both paths"
+  )
   void aStaticReferenceWithASubclassFormRunsAsTheSupplier() throws Exception {
     final var owed =
       "Bag[first=ada, last=lovelace, age=36, tags=null, slot=null, label=upper, flag=false, made=null, count=0]";
@@ -485,7 +489,9 @@ class ComputeFromSourceFieldTest {
   }
 
   @Test
-  @DisplayName("an unbound reference to a name the subclass overloads reaches neither path, since javac cannot infer it")
+  @DisplayName(
+    "an unbound reference to a name the subclass overloads reaches neither path, since javac cannot infer it"
+  )
   void anUnboundReferenceToTheSubclassDoesNotCompile() {
     final var row = "compute(Card::full, Lower::ii)";
     final var generated = compile(sources(withRow(row)));

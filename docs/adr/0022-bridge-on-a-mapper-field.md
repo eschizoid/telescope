@@ -180,15 +180,15 @@ the existing emitter without a second one.
 > declaring the method, whatever class is written before `::`: the class file records a handle on the declaring class
 > and no trace of the class written, so the runtime path cannot see a form only that subclass declares, and the
 > processor and the verifier look where it does. `Sub::full`, with `full()` on `Base` and `full(User)` on `Sub`, runs
-> `Base.full()` as the supplier on both paths. In a `@Bridge` mapper the
-> function is a reference to a static method taking the source, to an instance method of the source or of a type it
-> extends, to a constructor taking the source, or to a method of a `static final` field, or a `static final` field
-> holding the function, and the generated bridge calls it directly on the source. The row names no source property, so
-> it records no write of one and every source property pairs by name as it would without the row; `backward` and `patch`
-> skip the property it fills. A null source never reaches the function, since both paths hand a null source back as
-> null, and a null wrapper result written into a primitive property takes the primitive's default, as a conversion's
-> result does. A function taking a class the source is not is refused by name, in the same words, by the processor, the
-> verifier and the runtime path when it builds the mapper; inside a native image it fails on its first call.
+> `Base.full()` as the supplier on both paths. In a `@Bridge` mapper the function is a reference to a static method
+> taking the source, to an instance method of the source or of a type it extends, to a constructor taking the source, or
+> to a method of a `static final` field, or a `static final` field holding the function, and the generated bridge calls
+> it directly on the source. The row names no source property, so it records no write of one and every source property
+> pairs by name as it would without the row; `backward` and `patch` skip the property it fills. A null source never
+> reaches the function, since both paths hand a null source back as null, and a null wrapper result written into a
+> primitive property takes the primitive's default, as a conversion's result does. A function taking a class the source
+> is not is refused by name, in the same words, by the processor, the verifier and the runtime path when it builds the
+> mapper; inside a native image it fails on its first call.
 
 > **Amendment: source and target paths.** A `to(path, accessor)` row compiles when the path is written in place from
 > `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
