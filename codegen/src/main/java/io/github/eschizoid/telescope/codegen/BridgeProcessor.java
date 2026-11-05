@@ -8916,24 +8916,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
-   * place as {@code Mapper.into} does, or null where generated code cannot: {@code target} is not a
-   * class, or a property in {@code names} has no setter that the runtime writer chooses from the
-   * property's type and that takes a value of that type as it is, or that setter takes the value
-   * only spread into a one-element array.
+   * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
+   * names} has no setter that the runtime writer chooses from the property's type and that takes a
+   * value of that type as it is, or that setter takes the value only spread into a one-element
+   * array. A record has no setter at all, so it never has an {@code into}.
    *
    * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
    * forward(source)} gives it, read back through its getter. Every value is read before the first
    * setter runs, so a getter that throws leaves {@code target} as it was. Each is written through
-   * the setter the property's type chooses, bound through a local of that setter's parameter type
-   * where the name has overloads; a value of a wrapper class bound for a primitive parameter is
-   * skipped when null, as the runtime writer skips it.
+   * the setter the property's type chooses, the rule the runtime writer applies; where the name has
+   * overloads the value is first assigned to a local of that setter's parameter type, which binds
+   * that method whatever javac would bind for the value's own type. A value of a wrapper class bound
+   * for a primitive parameter is skipped when null, as the runtime writer skips it.
    */
   private List<String> intoStatements(
     final TypeElement target,
     final List<Field> targetFields,
     final List<String> names
   ) {
-    if (target.getKind() != ElementKind.CLASS) return null;
     final var reads = new ArrayList<String>();
     final var writes = new ArrayList<String>();
     reads.add("final var __produced = forward(source);");
@@ -8945,12 +8945,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (setterRefusal(target, name, false) != null) return null;
       final var local = "__in" + index++;
       reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");
-      final var setter = choice.member().getSimpleName().toString();
-      final var argument = choice.argument();
+      final var setter = choice.member().getSimpleName();
       final var write = choice.argumentType() == null
         ? "target." + setter + "(" + local + ");"
         : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
-      final var guarded = argument.getKind().isPrimitive() && !field.type().getKind().isPrimitive();
+      final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
       writes.add(guarded ? "if (" + local + " != null) " + write : write);
     }
     final var statements = new ArrayList<>(reads);
