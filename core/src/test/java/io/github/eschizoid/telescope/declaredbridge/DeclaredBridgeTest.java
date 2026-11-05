@@ -142,7 +142,7 @@ class DeclaredBridgeTest {
         .declared()
         .orElseThrow()
         .why()
-        .endsWith("; into writes through " + bridge + ".into"),
+        .endsWith("; into writes through " + bridge + ".into, and a subclass of the target through the setters it looks up at run time"),
       () -> HintedMappers.HINTED.explain().toString()
     );
     final var bean = new HintedBean();

@@ -7895,6 +7895,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("    @Override");
         out.println("    public " + t + " into(final " + t + " target, final " + s + " source) {");
+        // The bridge's into binds each setter on the target class itself, and the runtime into
+        // binds it on the class of the object it is handed, so a subclass, whose own setter can
+        // take the value instead, is written by the runtime into.
+        if (!target.getModifiers().contains(Modifier.FINAL)) {
+          out.println(
+            "      if (target != null && target.getClass() != " + t + ".class) return super.into(target, source);"
+          );
+        }
         out.println("      return " + bridgeName + ".into(target, source);");
         out.println("    }");
       }

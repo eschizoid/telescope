@@ -14144,6 +14144,24 @@ class CrossPathCorpusTest {
       true
     ),
     new IntoRow(
+      "a subclass of the target whose own setter takes the value more closely",
+      List.of(
+        sampled("%1$sSrc", "String id, String label", "new %1$sSrc(\"1\", \"x\")"),
+        "public class %1$sTgt {\n  private String id;\n  private String label;\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public String getLabel() { return label; }\n" +
+          "  public void setLabel(final CharSequence l) { label = \"base:\" + l; }\n" +
+          "  public static %1$sTgt sample() { return (%1$sTgt) (Object) new %1$sSub(); }\n}\n",
+        "public class %1$sSub extends %1$sTgt {\n  private String sub = \"untouched\";\n" +
+          "  @Override public String getLabel() { return sub; }\n" +
+          "  public void setLabel(final String l) { sub = \"sub:\" + l; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(id=\"1\", label=\"sub:base:x\")",
+      true
+    ),
+    new IntoRow(
       "a primitive property whose setter name has an overload for a wider primitive and one for its wrapper",
       List.of(
         sampled("%1$sSrc", "int qty", "new %1$sSrc(3)"),
@@ -14445,7 +14463,7 @@ class CrossPathCorpusTest {
       final var bridge = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge");
       final var hasInto = Arrays.stream(bridge.getMethods()).anyMatch(m -> m.getName().equals("into"));
       final var why = ((Mapper<?, ?>) field).explain().declared().orElseThrow().why();
-      final var saysGenerated = why.endsWith("; into writes through " + bridge.getName() + ".into");
+      final var saysGenerated = why.endsWith("; into writes through " + bridge.getName() + ".into, and a subclass of the target through the setters it looks up at run time");
       if (hasInto != row.generated() || saysGenerated != row.generated()) {
         failures.add(row.name() + ": the bridge " + (hasInto ? "has" : "has no") + " into, and explain() says " + why);
       }
