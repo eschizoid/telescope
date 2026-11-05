@@ -16407,8 +16407,9 @@ class CrossPathCorpusTest {
       REFUSED + "which no instantiation of its type variables"
     ),
     // A variable that is the parameter's whole type, or that bounds a wildcard of it from
-    // above, is
-    // a supertype of what the property holds; one in a type argument of the result where the
+    // above,
+    // is a supertype of what the property holds. One in a type argument of the result where
+    // the
     // target's property has a type is that type exactly, which has to admit the property and
     // satisfy the variable's bound. One the target's property bounds by a wildcard from below
     // is
