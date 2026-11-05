@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -14477,11 +14478,15 @@ class CrossPathCorpusTest {
       .get(null);
     final var tgt = loader.loadClass(PACKAGE + "." + prefix + "Tgt");
     final var written = tgt.getConstructor().newInstance();
-    field.into(written, loader.loadClass(PACKAGE + "." + prefix + "Src").getMethod("sample").invoke(null));
+    final var source = loader.loadClass(PACKAGE + "." + prefix + "Src").getMethod("sample").invoke(null);
+    field.into(written, source);
     assertEquals(
       PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge",
       tgt.getMethod("writerOf", tgt).invoke(null, written)
     );
+    // A null target or source is refused by name, as the runtime mapper refuses it.
+    assertEquals("target", assertThrows(NullPointerException.class, () -> field.into(null, source)).getMessage());
+    assertEquals("source", assertThrows(NullPointerException.class, () -> field.into(written, null)).getMessage());
   }
 
   /**
