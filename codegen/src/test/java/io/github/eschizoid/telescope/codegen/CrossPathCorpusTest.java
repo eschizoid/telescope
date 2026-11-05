@@ -16338,6 +16338,15 @@ class CrossPathCorpusTest {
 
   private static final String SECONDS = "#0(child=[TimeUnit.SECONDS])";
 
+  /** A list class whose element variable is bounded by its other variable. */
+  private static final String KV_LIST =
+    "\n  public static final class KvList<K, V extends K> extends java.util.ArrayList<V> {" +
+    " public KvList(final java.util.List<V> v) { super(v); } }";
+
+  private static final String KV_LIST_TYPE = "%1$sChMap.KvList<String, ?>";
+
+  private static final String KV_LIST_SAMPLE = "new %1$sChMap.KvList<String, String>(java.util.List.of(\"x\"))";
+
   private static final List<GenericResult> GENERIC_RESULTS = List.of(
     // javac accepts each of these calls written by hand, the raw ones with an unchecked
     // warning.
@@ -16591,6 +16600,29 @@ class CrossPathCorpusTest {
       "new %1$sChMap.NodeList<>(java.util.List.of(\"x\"))",
       "java.util.List<Comparable<?>>",
       "#0(child=[\"x\"])"
+    ),
+    // A capture bounded by another of the subclass's variables is bounded by the type the
+    // argument gives that variable.
+    new GenericResult(
+      EXTENDING_LIST + KV_LIST,
+      KV_LIST_TYPE,
+      KV_LIST_SAMPLE,
+      "java.util.List<String>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      EXTENDING_LIST + KV_LIST,
+      KV_LIST_TYPE,
+      KV_LIST_SAMPLE,
+      "java.util.List<CharSequence>",
+      "#0(child=[\"x\"])"
+    ),
+    new GenericResult(
+      EXTENDING_LIST + KV_LIST,
+      KV_LIST_TYPE,
+      KV_LIST_SAMPLE,
+      "java.util.List<Integer>",
+      REFUSED + "which no instantiation of its type variables"
     ),
     // No value of the class the method returns is one the target's property takes.
     new GenericResult(

@@ -243,7 +243,8 @@ final class ViaResults {
    * whole of, where {@code met} is the {@code index}th argument {@code argument} gives {@code raw}:
    * {@code met} itself where it is a type, and where it is a wildcard its upper bound and the
    * bounds of the variable of {@code argument}'s own class it stands in for, a bound naming the
-   * class's variables read as its erasure, which every value of it is one of.
+   * class's variables read with the types {@code argument} gives them, and as its erasure, which
+   * every value of it is one of, where a wildcard stands for one.
    *
    * <p>A wildcard reaches {@code raw}'s arguments only as an argument of {@code argument}'s own
    * class, which gives {@code raw} that class's variable in its place: a class declaration gives
@@ -255,9 +256,21 @@ final class ViaResults {
     final var variable = (TypeVariable<?>) (cls == raw
       ? raw.getTypeParameters()[index]
       : DeepMap.PROPS.declaredArgumentsAs(cls, raw).get(index));
+    // A bound naming the class's variables is read with the types the argument gives them; one a
+    // wildcard stands for, the variable's own capture among them, is read as its erasure.
+    final var own = new ArrayList<Type>();
+    final var given = new ArrayList<Type>();
+    final var arguments = DeepMap.PROPS.typeArguments(argument);
+    final var parameters = cls.getTypeParameters();
+    for (int i = 0; i < parameters.length; i++) {
+      if (arguments.get(i) instanceof WildcardType) continue;
+      own.add(parameters[i]);
+      given.add(arguments.get(i));
+    }
     final var held = new ArrayList<Type>(List.of(wildcard.getUpperBounds()));
     for (final var bound : variable.getBounds()) {
-      held.add(DeepMap.PROPS.mentionsTypeVariable(bound) ? DeepMap.PROPS.rawType(bound) : bound);
+      final var read = DeepMap.PROPS.substitute(bound, own, given);
+      held.add(DeepMap.PROPS.mentionsTypeVariable(read) ? DeepMap.heldClassOf(read) : read);
     }
     return held;
   }
