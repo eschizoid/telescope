@@ -14045,6 +14045,9 @@ class CrossPathCorpusTest {
     );
   }
 
+  /** What follows a refusal of {@code into}: the target's {@link #shape} after the call. */
+  private static final String LEFT = ", leaving ";
+
   private static final String INTO_SOURCE =
     "public record %1$sSrc(String value) {\n" + "  public static %1$sSrc sample() { return new %1$sSrc(\"x\"); }\n}\n";
 
@@ -14075,19 +14078,19 @@ class CrossPathCorpusTest {
     new IntoRow(
       "a target built by its builder, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), builderOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value"),
+      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") + LEFT + "#0(value=\"y\")",
       false
     ),
     new IntoRow(
       "a target built by a constructor, with no setter for a property the mapper writes",
       List.of(INTO_SOURCE, plainField(false), constructorOnlyBean("Tgt"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value"),
+      REFUSED + PairingMessages.intoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "value") + LEFT + "#0(value=\"y\")",
       false
     ),
     new IntoRow(
       "a record target",
       List.of(INTO_SOURCE, plainField(false), sampled("%1$sTgt", "String value", "new %1$sTgt(\"y\")"), plainRuntime(false)),
-      REFUSED + PairingMessages.intoRecordTarget("%1$sSrc", "%1$sTgt", "%1$sTgt"),
+      REFUSED + PairingMessages.intoRecordTarget("%1$sSrc", "%1$sTgt", "%1$sTgt") + LEFT + "#0(value=\"y\")",
       false
     ),
     new IntoRow(
@@ -14139,6 +14142,21 @@ class CrossPathCorpusTest {
         plainRuntime(false)
       ),
       "#0(how=\"long\", qty=3)",
+      true
+    ),
+    new IntoRow(
+      "a value whose getter throws on the object forward built, read before any setter runs",
+      List.of(
+        sampled("%1$sSrc", "String a, String b", "new %1$sSrc(\"x\", \"boom\")"),
+        "public class %1$sTgt {\n  private String a;\n  private String b;\n  public %1$sTgt() {}\n" +
+          "  public String getA() { return a; }\n  public void setA(final String v) { a = v; }\n" +
+          "  public String getB() {\n    if (\"boom\".equals(b)) throw new IllegalStateException(\"unreadable b\");\n" +
+          "    return b;\n  }\n  public void setB(final String v) { b = v; }\n" +
+          "  public static %1$sTgt sample() { final var t = new %1$sTgt(); t.a = \"y\"; t.b = \"z\"; return t; }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      REFUSED + "unreadable b" + LEFT + "#0(a=\"y\", b=\"z\")",
       true
     ),
     new IntoRow(
@@ -14442,8 +14460,8 @@ class CrossPathCorpusTest {
   /**
    * What {@code mapper}'s {@code into} does with {@code %1$sTgt.sample()} and {@code
    * %1$sSrc.sample()}, the two classes {@code loader} holds: the target's {@link #shape}, or {@link
-   * #REFUSED} and the message it refused with. An {@code into} that returns another object than the
-   * target it was given says so.
+   * #REFUSED}, the message it refused with and the target's shape after the refusal. An {@code
+   * into} that returns another object than the target it was given says so.
    */
   @SuppressWarnings("unchecked")
   private static String intoOutcome(final Object mapper, final ClassLoader loader, final String prefix)
@@ -14457,7 +14475,7 @@ class CrossPathCorpusTest {
       if (written != target) return "another object than the target: " + shape(written, new IdentityHashMap<>());
       return shape(target, new IdentityHashMap<>());
     } catch (final RuntimeException e) {
-      return REFUSED + e.getMessage();
+      return REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>());
     }
   }
 
