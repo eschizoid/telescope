@@ -5,13 +5,13 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 @BeanFocus
 public class BfDocTgt {
 
-  private String numberOfAttempts;
+  private Boolean numberOfAttempts;
 
-  public String getNumberOfAttempts() {
+  public Boolean getNumberOfAttempts() {
     return numberOfAttempts;
   }
 
-  public void setNumberOfAttempts(final String v) {
+  public void setNumberOfAttempts(final Boolean v) {
     this.numberOfAttempts = v;
   }
 }

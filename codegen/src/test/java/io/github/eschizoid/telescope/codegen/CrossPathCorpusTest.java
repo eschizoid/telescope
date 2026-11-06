@@ -1423,11 +1423,12 @@ class CrossPathCorpusTest {
       "java.util.TreeSet<%sPlain>",
       new Refusal("does not implement Comparable", "does not implement Comparable")
     ),
-    refuses(
+    converts(
       "a sorted set into a list",
       "java.util.TreeSet<%sLeaf>",
       "java.util.ArrayList<%sLeafDto>",
-      DIFFERENT_SHAPES
+      "%sTgt[items=[%sLeafDto[v=a], %sLeafDto[v=b]]]",
+      "%sSrc[items=[%sLeaf[v=a], %sLeaf[v=b]]]"
     ),
     refuses(
       "a set into a map",
@@ -2348,6 +2349,11 @@ class CrossPathCorpusTest {
   private static final String SORTED_DTOS = "[%1$sLeafDto[v=a], %1$sLeafDto[v=b]]";
   private static final String LIST_KEYED_DTOS = "{[k1]=%1$sLeafDto[v=b], [k2]=%1$sLeafDto[v=a]}";
   private static final String REFUSED = "refused: ";
+
+  /**
+   * The prefix of an operation a cell owes a failure on, followed by words the failure contains.
+   */
+  private static final String FAILS = "fails: ";
 
   /**
    * A class declaring no type parameters against an interface, a JDK class, a generic subtype and
@@ -7657,10 +7663,11 @@ class CrossPathCorpusTest {
     if (value == null) return "null";
     if (value instanceof String text) return "\"" + text + "\"";
     if (value instanceof Number number) return number.toString();
+    if (value instanceof Boolean || value instanceof Character) return value.toString();
     // A constant renders as its enum's name without the cell prefix, so a cell owes the enum a
     // conversion produced as well as the constant.
     if (value instanceof Enum<?> constant) {
-      return constant.getDeclaringClass().getSimpleName().replaceFirst("^En\\d+", "") + "." + constant.name();
+      return constant.getDeclaringClass().getSimpleName().replaceFirst("^(En|Bi)\\d+", "") + "." + constant.name();
     }
     if (value instanceof Optional<?> present) {
       return present.isEmpty() ? "empty" : "of " + shape(present.get(), numbered);
@@ -9492,14 +9499,393 @@ class CrossPathCorpusTest {
    */
   private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of();
 
+  /** A record {@code %1$sSrc} with {@code components} and the {@code @Bridge} given, sampled. */
+  private static String bridgedSrc(final String bridge, final String components, final String sample) {
+    return bridge + sampled("%1$sSrc", components, sample);
+  }
+
+  /**
+   * Built-in conversions through both paths, in the shape of {@link EnumCell}: text and numbers,
+   * enums and booleans both ways, numbers widened forward only, lists and sets, the refusals the
+   * shared spec makes for narrowing, for widening on a mapper that converts back, and for text
+   * against a date, and the value failures a {@code String} that names no value gives.
+   */
+  private static final List<EnumCell> BUILT_IN_CELLS = List.of(
+    new EnumCell(
+      "a String into each number, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "String i, String l, String s, String b, String f, String d, String bi, String bd",
+          "new %1$sSrc(\"1\", \"-2\", \"3\", \"4\", \"1.5\", \"2.25\", \"12345678901234567890\", \"0.10\")"
+        ),
+        sampled(
+          "%1$sTgt",
+          "int i, Long l, short s, Byte b, float f, Double d, java.math.BigInteger bi, java.math.BigDecimal bd",
+          "new %1$sTgt(5, 6L, (short) 7, (byte) 8, 0.5f, 1.25, java.math.BigInteger.TEN, new java.math.BigDecimal(\"3.50\"))"
+        )
+      ),
+      "#0(i=1, l=-2, s=3, b=4, f=1.5, d=2.25, bi=12345678901234567890, bd=0.10)",
+      "#0(i=\"5\", l=\"6\", s=\"7\", b=\"8\", f=\"0.5\", d=\"1.25\", bi=\"10\", bd=\"3.50\")",
+      "#0(i=\"5\", l=\"6\", s=\"7\", b=\"8\", f=\"0.5\", d=\"1.25\", bi=\"10\", bd=\"3.50\")"
+    ),
+    new EnumCell(
+      "a String into an enum and a boolean, both ways, a null among them",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "String status, String paid, String flag", "new %1$sSrc(\"CLOSED\", \"TRUE\", null)"),
+        sampled(
+          "%1$sTgt",
+          "%1$sStatus status, boolean paid, Boolean flag",
+          "new %1$sTgt(%1$sStatus.OPEN, false, null)"
+        ),
+        enumOf("%1$sStatus", "OPEN, CLOSED")
+      ),
+      "#0(status=Status.CLOSED, paid=true, flag=null)",
+      "#0(status=\"OPEN\", paid=\"false\", flag=null)",
+      "#0(status=\"OPEN\", paid=\"false\", flag=null)"
+    ),
+    new EnumCell(
+      "a number and an enum into a String, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "int n, java.math.BigDecimal amount, %1$sStatus status",
+          "new %1$sSrc(7, new java.math.BigDecimal(\"1.50\"), %1$sStatus.OPEN)"
+        ),
+        sampled("%1$sTgt", "String n, String amount, String status", "new %1$sTgt(\"8\", \"2\", \"CLOSED\")"),
+        enumOf("%1$sStatus", "OPEN, CLOSED")
+      ),
+      "#0(n=\"7\", amount=\"1.50\", status=\"OPEN\")",
+      "#0(n=8, amount=2, status=Status.CLOSED)",
+      "#0(n=8, amount=2, status=Status.CLOSED)"
+    ),
+    new EnumCell(
+      "a String into a long on a bean, both ways",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var s = new %1$sSrc();\n" +
+              "    s.setId(\"42\");\n" +
+              "    return s;\n" +
+              "  }\n",
+            "String id"
+          ),
+        bean(
+          "%1$sTgt",
+          "  public static %1$sTgt sample() {\n" +
+            "    final var t = new %1$sTgt();\n" +
+            "    t.setId(9L);\n" +
+            "    return t;\n" +
+            "  }\n",
+          "long id"
+        )
+      ),
+      "#0(id=42)",
+      "#0(id=\"9\")",
+      "#0(id=\"9\")"
+    ),
+    new EnumCell(
+      "a list of Strings into a set of numbers, and a set of Strings into a list of enums, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<String> tags, java.util.Set<String> codes",
+          "new %1$sSrc(java.util.Arrays.asList(\"3\", \"1\", \"3\"), new java.util.LinkedHashSet<>(java.util.List.of(\"B\", \"A\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Set<Long> tags, java.util.List<%1$sCode> codes",
+          "new %1$sTgt(new java.util.LinkedHashSet<>(java.util.List.of(5L, 4L)), java.util.List.of(%1$sCode.A, %1$sCode.A))"
+        ),
+        enumOf("%1$sCode", "A, B")
+      ),
+      "#0(tags=[3, 1], codes=[Code.B, Code.A])",
+      "#0(tags=[\"5\", \"4\"], codes=[\"A\"])",
+      "#0(tags=[\"5\", \"4\"], codes=[\"A\"])"
+    ),
+    new EnumCell(
+      "a set into a list and a list into a sorted set, elements passing through, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.Set<String> tags, java.util.List<String> sorted",
+          "new %1$sSrc(new java.util.LinkedHashSet<>(java.util.List.of(\"b\", \"a\")), java.util.List.of(\"b\", \"a\", \"b\"))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<String> tags, java.util.TreeSet<String> sorted",
+          "new %1$sTgt(java.util.List.of(\"x\", \"x\"), new java.util.TreeSet<>(java.util.Set.of(\"z\", \"y\")))"
+        )
+      ),
+      "#0(tags=[\"b\", \"a\"], sorted=[\"a\", \"b\"])",
+      "#0(tags=[\"x\"], sorted=[\"y\", \"z\"])",
+      "#0(tags=[\"x\"], sorted=[\"y\", \"z\"])"
+    ),
+    new EnumCell(
+      "a list of records into a set of records, through a sub-bridge, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<%1$sLeaf> leaves",
+          "new %1$sSrc(java.util.List.of(new %1$sLeaf(\"a\"), new %1$sLeaf(\"a\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Set<%1$sLeafDto> leaves",
+          "new %1$sTgt(java.util.Set.of(new %1$sLeafDto(\"b\")))"
+        ),
+        "public record %1$sLeaf(String v) {}\n",
+        "public record %1$sLeafDto(String v) {}\n"
+      ),
+      "#0(leaves=[#1(v=\"a\")])",
+      "#0(leaves=[#1(v=\"b\")])",
+      "#0(leaves=[#1(v=\"b\")])"
+    ),
+    new EnumCell(
+      "an Optional of a String and a list of lists of Strings, converted inside, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.Optional<String> n, java.util.List<java.util.List<String>> rows",
+          "new %1$sSrc(java.util.Optional.of(\"4\"), java.util.List.of(java.util.List.of(\"1\", \"1\", \"2\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Optional<Integer> n, java.util.List<java.util.Set<Integer>> rows",
+          "new %1$sTgt(java.util.Optional.empty(), java.util.List.of(java.util.Set.of(3)))"
+        )
+      ),
+      "#0(n=of 4, rows=[[1, 2]])",
+      "#0(n=empty, rows=[[\"3\"]])",
+      "#0(n=empty, rows=[[\"3\"]])"
+    ),
+    new EnumCell(
+      "numbers widen forward on a forward-only mapper",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(
+          LENIENT_BRIDGE_TO_TGT,
+          "int a, Integer b, long c, char d, byte e, java.math.BigInteger f, short g, float h, java.util.List<Integer> xs",
+          "new %1$sSrc(1, 2, 3L, 'a', (byte) 4, java.math.BigInteger.TEN, (short) 5, 1.5f, java.util.List.of(6, 7))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "long a, double b, java.math.BigDecimal c, int d, java.math.BigInteger e, java.math.BigDecimal f, Long g," +
+            " double h, java.util.List<Long> xs",
+          "new %1$sTgt(0L, 0.0, null, 0, null, null, null, 0.0, null)"
+        )
+      ),
+      "#0(a=1, b=2.0, c=3, d=97, e=4, f=10, g=5, h=1.5, xs=[6, 7])",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a null wrapper widens to a primitive's default, and a String converts both ways on a forward-only mapper",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(LENIENT_BRIDGE_TO_TGT, "Integer n, String code", "new %1$sSrc(null, \"12\")"),
+        sampled("%1$sTgt", "long n, int code", "new %1$sTgt(0L, 0)")
+      ),
+      "#0(n=0, code=12)",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a widening on a mapper that converts both ways",
+      Directions.BOTH,
+      List.of(bridgedSrc(BRIDGE_TO_TGT, "int n", "new %1$sSrc(1)"), sampled("%1$sTgt", "long n", "new %1$sTgt(2L)")),
+      REFUSED + "widens int to long, which converts forward only",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a widening inside a list on a mapper that converts both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.List<Integer> xs", "new %1$sSrc(java.util.List.of())"),
+        sampled("%1$sTgt", "java.util.List<Long> xs", "new %1$sTgt(java.util.List.of())")
+      ),
+      REFUSED + "widens java.lang.Integer to java.lang.Long, which converts forward only",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a widening below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "%1$sInner i", "new %1$sSrc(new %1$sInner(1))"),
+        sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(2L))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, lenient = true)\n" +
+          "public record %1$sInner(int n) {}\n",
+        "public record %1$sInnerDto(long n) {}\n"
+      ),
+      "#0(i=#1(n=1))",
+      FAILS + "'n' widens int to long, which converts forward only",
+      FAILS + "'n' widens int to long, which converts forward only"
+    ),
+    new EnumCell(
+      "a narrowing on a forward-only mapper",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(LENIENT_BRIDGE_TO_TGT, "long n", "new %1$sSrc(1L)"),
+        sampled("%1$sTgt", "int n", "new %1$sTgt(2)")
+      ),
+      REFUSED + "would narrow long to int, which can lose the value",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a narrowing inside a set on a mapper that converts both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Set<Double> xs", "new %1$sSrc(java.util.Set.of())"),
+        sampled("%1$sTgt", "java.util.Set<Float> xs", "new %1$sTgt(java.util.Set.of())")
+      ),
+      REFUSED + "would narrow java.lang.Double to java.lang.Float",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a double into a BigDecimal on a forward-only mapper",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(LENIENT_BRIDGE_TO_TGT, "double r", "new %1$sSrc(1.0)"),
+        sampled("%1$sTgt", "java.math.BigDecimal r", "new %1$sTgt(null)")
+      ),
+      REFUSED + "would narrow double to java.math.BigDecimal",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a String into a date or time, both ways",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "String at", "new %1$sSrc(null)"),
+        sampled("%1$sTgt", "java.time.Instant at", "new %1$sTgt(null)")
+      ),
+      REFUSED +
+        "pairs java.lang.String with java.time.Instant, and text converts to and from a date or time only in a format",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a date into a String on a forward-only mapper",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(LENIENT_BRIDGE_TO_TGT, "java.time.LocalDate on", "new %1$sSrc(null)"),
+        sampled("%1$sTgt", "String on", "new %1$sTgt(null)")
+      ),
+      REFUSED + "pairs java.time.LocalDate with java.lang.String",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a String that is no number fails on that value",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "String total", "new %1$sSrc(\"12x\")"),
+        sampled("%1$sTgt", "java.math.BigDecimal total", "new %1$sTgt(java.math.BigDecimal.ONE)")
+      ),
+      FAILS + "'total' got \"12x\", not a BigDecimal",
+      "#0(total=\"1\")",
+      "#0(total=\"1\")"
+    ),
+    new EnumCell(
+      "an element that is no number fails naming the property holding it",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "a String that names no constant fails naming the enum",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "String status", "new %1$sSrc(\"open\")"),
+        sampled("%1$sTgt", "%1$sStatus status", "new %1$sTgt(%1$sStatus.OPEN)"),
+        enumOf("%1$sStatus", "OPEN, CLOSED")
+      ),
+      FAILS + "'status' got \"open\", not a constant of %1$sStatus",
+      "#0(status=\"OPEN\")",
+      "#0(status=\"OPEN\")"
+    ),
+    new EnumCell(
+      "a String that is neither true nor false fails, and one out of a byte's range fails",
+      Directions.FORWARD,
+      List.of(
+        bridgedSrc(LENIENT_BRIDGE_TO_TGT, "String paid", "new %1$sSrc(\"yes\")"),
+        sampled("%1$sTgt", "boolean paid", "new %1$sTgt(false)")
+      ),
+      FAILS + "'paid' got \"yes\", not a boolean",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a String out of a byte's range fails",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "String b", "new %1$sSrc(\"300\")"),
+        sampled("%1$sTgt", "byte b", "new %1$sTgt((byte) -1)")
+      ),
+      FAILS + "'b' got \"300\", not a byte",
+      "#0(b=\"-1\")",
+      "#0(b=\"-1\")"
+    )
+  );
+
+  @Test
+  @DisplayName("a built-in conversion converts the same way on both paths, and both refuse and fail alike")
+  void aBuiltInConversionConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = crossCells(BUILT_IN_CELLS, "Bi", Map.of(), new LinkedHashSet<>());
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " built-in cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
   @Test
   @DisplayName("an enum maps to an enum by constant name on both paths, and both refuse the same mismatches")
   void anEnumMapsByConstantNameOnBothPaths() throws ReflectiveOperationException {
-    final var failures = new ArrayList<String>();
     final var exercised = new LinkedHashSet<String>();
+    final var failures = crossCells(ENUM_CELLS, "En", ENUM_RUNTIME_REFUSALS, exercised);
+    assertTrue(failures.isEmpty(), () -> failures.size() + " enum cell(s) failed:\n  " + String.join("\n  ", failures));
+    assertTrue(
+      exercised.equals(ENUM_RUNTIME_REFUSALS.keySet()),
+      () -> "registered runtime refusals no cell exercised: " + ENUM_RUNTIME_REFUSALS.keySet()
+    );
+  }
+
+  /**
+   * Runs each cell through both paths and returns what failed. A cell's prefix is {@code
+   * prefixBase} and its index. An operation owed as {@link #FAILS} and a message is held to that
+   * message on both paths: the generated method and the runtime mapper each have to throw, with the
+   * message containing it. {@code runtimeRefusals} holds the cells whose runtime owes a refusal,
+   * and {@code exercised} collects those a cell reached.
+   */
+  private static List<String> crossCells(
+    final List<EnumCell> cells,
+    final String prefixBase,
+    final Map<String, String> runtimeRefusals,
+    final Set<String> exercised
+  ) throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var cell : ENUM_CELLS) {
-      final var prefix = "En" + index++;
+    for (final var cell : cells) {
+      final var prefix = prefixBase + index++;
       final var head = "package " + PACKAGE + ";\n";
       final var sources = cell
         .declarations()
@@ -9542,7 +9928,7 @@ class CrossPathCorpusTest {
         }
         continue;
       }
-      final var runtimeRefusal = ENUM_RUNTIME_REFUSALS.get(cell.name());
+      final var runtimeRefusal = runtimeRefusals.get(cell.name());
       if (runtimeRefusal != null) {
         exercised.add(cell.name());
         final var owed = runtimeRefusal.formatted(prefix);
@@ -9584,6 +9970,26 @@ class CrossPathCorpusTest {
           runtimeRefusal == null
             ? List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))
             : List.of(Map.entry("generated", generated));
+        if (operation.getValue().startsWith(FAILS)) {
+          final var owedMessage = operation.getValue().substring(FAILS.length()).formatted(prefix);
+          for (final var side : sides) {
+            final var thrown = refusalOf(side.getValue());
+            if (thrown == null || !thrown.contains(owedMessage)) {
+              failures.add(
+                cell.name() +
+                  ", " +
+                  operation.getKey() +
+                  ": " +
+                  side.getKey() +
+                  " owed a failure naming " +
+                  owedMessage +
+                  ", saw " +
+                  (thrown == null ? shapeOf(side.getValue()) : thrown)
+              );
+            }
+          }
+          continue;
+        }
         for (final var side : sides) {
           final var shape = shapeOf(side.getValue());
           if (!shape.equals(operation.getValue())) {
@@ -9602,11 +10008,7 @@ class CrossPathCorpusTest {
         }
       }
     }
-    assertTrue(failures.isEmpty(), () -> failures.size() + " enum cell(s) failed:\n  " + String.join("\n  ", failures));
-    assertTrue(
-      exercised.equals(ENUM_RUNTIME_REFUSALS.keySet()),
-      () -> "registered runtime refusals no cell exercised: " + ENUM_RUNTIME_REFUSALS.keySet()
-    );
+    return failures;
   }
 
   /**

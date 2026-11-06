@@ -2682,6 +2682,22 @@ public final class DeepMap {
       return enumByNameIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
+    // (a.1c) Two different scalars a built-in conversion takes between → parse, write as text, or
+    //        widen, each direction the JDK call the generated bridge makes for the pair.
+    if (decision instanceof PairDecision.BuiltIn<Type> d) {
+      final var src = (Class<?>) srcType;
+      final var tgt = (Class<?>) tgtType;
+      final var enumSide = src.isEnum() ? src : tgt.isEnum() ? tgt : null;
+      return BuiltIns.iso(
+        src,
+        tgt,
+        d.source(),
+        d.target(),
+        componentName,
+        enumSide == null ? null : PAIRING.nameInMessage(enumSide)
+      );
+    }
+
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (decision instanceof PairDecision.RecursePair) {
       // A pair given type arguments converts as its raw classes, which read each other's type
@@ -2815,6 +2831,15 @@ public final class DeepMap {
       // lifts
       // see the right shape directly — no extra reach-through — and treat every non-leaf shape the
       // same (plain Java loop).
+      if (d.src().kind() != d.tgt().kind()) {
+        return ContainerLifts.liftReshapedIntoTargetRaw(
+          eraseIso(elementIso),
+          srcType,
+          tgtType,
+          d.src().kind(),
+          d.tgt().kind()
+        );
+      }
       return switch (d.src().kind()) {
         case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
         case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);

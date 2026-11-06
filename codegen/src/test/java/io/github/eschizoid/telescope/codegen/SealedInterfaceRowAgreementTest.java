@@ -481,7 +481,7 @@ class SealedInterfaceRowAgreementTest {
         import static io.github.eschizoid.telescope.mapping.Mapping.*;
         import io.github.eschizoid.telescope.Telescope;
         record @@In(Integer v) {}
-        record @@InDto(String v) {}
+        record @@InDto(Boolean v) {}
         record @@Top(@@In i) {}
         record @@TopDto(@@InDto i) {}
         sealed interface @@K2 permits @@KB { @@In inner(); }
@@ -490,8 +490,8 @@ class SealedInterfaceRowAgreementTest {
         record @@KBDto(@@InDto inner) implements @@K2Dto {}
         """ +
         holder(
-          "false ? (Object) Telescope.mapper(@@Top.class, @@TopDto.class, to(@@In::v, @@InDto::v, i -> String.valueOf(i)," +
-            " x -> Integer.valueOf(x))) : Telescope.mapper(@@K2.class, @@K2Dto.class, cases(@@KB.class, @@KBDto.class)," +
+          "false ? (Object) Telescope.mapper(@@Top.class, @@TopDto.class, to(@@In::v, @@InDto::v, i -> i > 0," +
+            " x -> x ? 1 : 0)) : Telescope.mapper(@@K2.class, @@K2Dto.class, cases(@@KB.class, @@KBDto.class)," +
             " to(@@K2::inner, @@K2Dto::inner))"
         )
     );

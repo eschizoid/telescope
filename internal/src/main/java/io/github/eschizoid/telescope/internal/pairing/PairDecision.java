@@ -35,6 +35,15 @@ public sealed interface PairDecision<T> {
    */
   record EnumByName<T>() implements PairDecision<T> {}
 
+  /**
+   * Two different scalars a built-in conversion takes between, in each direction the mapper runs: a
+   * {@code String} and a number, an enum or a boolean, parsed one way and written as text the
+   * other; or a number widened to one that holds each of its values, which converts forward only. A
+   * null converts to null, or to the default of a primitive it is written into. A {@code String}
+   * that names no value of the other side fails on that value, naming the property and the value.
+   */
+  record BuiltIn<T>(Scalar source, Scalar target) implements PairDecision<T> {}
+
   /** Both sides reflectable (record or bean) — recurse into the nested pair. */
   record RecursePair<T>() implements PairDecision<T> {}
 

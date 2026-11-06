@@ -686,7 +686,10 @@ JVM/codegen-only under AOT).
 ## ADR index (`docs/adr/`)
 
 1. **0001 — Internal optic lattice.** Why the lattice is package-private.
-2. **0002 — No fuzzy auto-mapping.** `.auto()` is exact name+type; no Dozer-style heuristics.
+2. **0002 — No fuzzy auto-mapping.** `.auto()` is exact name+type; no Dozer-style heuristics. Amended for enums by
+   constant name and for built-in conversions on exactly-paired properties: `String` against a number, an enum or a
+   boolean both ways, numeric widening forward only, and `List` against `Set`; narrowing and dates against text stay
+   rows.
 3. **0003 — Reflection over MethodHandles.** Perf trade-off.
 4. **0004 — Runtime and codegen are separate strategies.** Why we don't unify the rebuild path.
 5. **0005 — LambdaMetafactory over MethodHandle.invoke.** Refines ADR-0003: keep reflective discovery; swap hot-path

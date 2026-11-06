@@ -79,6 +79,13 @@ spell the _differences_.
 > so a mapper that converts both ways needs every constant on each side to have a counterpart, and a forward-only mapper
 > (`mapperForward`, `@Bridge(lenient = true)`) needs one for every source constant. Any other enum pair is refused when
 > the mapper is built, naming the constants that have none.
+>
+> A few conversions between scalars are built in too, for properties that already pair by exact name or by a plain
+> `to(src, tgt)` row: a `String` to and from a number other than `char`, an enum by constant name and a boolean, in both
+> directions; and a number to one it widens to, forward only, so `Telescope.mapper` refuses such a pair and
+> `mapperForward` takes it. A list and a set convert into each other's kind: into a set, equal elements collapse to the
+> first, and into a list, the elements take the set's iteration order. A `String` that names no value fails on that
+> value, naming the property and the value. Narrowing, and text against a date or time, still take a row.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;

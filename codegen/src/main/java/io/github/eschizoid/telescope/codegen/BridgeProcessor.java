@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.Scalar;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -4136,6 +4137,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Two different enums converted constant to constant by name. subBridgeName names the
       // nested class whose forward and backward hold the two switches.
       ENUM,
+      // Two different scalars a built-in conversion takes between. subBridgeName names the nested
+      // class whose forward and backward parse, write as text or widen.
+      CONVERT,
+      // A list against a set, either way round. subBridgeName names the nested class whose forward
+      // and backward each rebuild one container as the other side's kind.
+      RESHAPE,
     }
 
     static FieldPlan identity() {
@@ -4655,10 +4662,40 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.ENUM, name));
         continue;
       }
+      // (1d) Two different scalars a built-in conversion takes between, converted by a nested
+      //      class calling the JDK's own parse, valueOf or widening, or refused in the shared
+      //      spec's words. A renamed pair is named as the runtime names it.
+      final var component = tf.name().equals(sf.name()) ? sf.name() : sf.name() + " → " + tf.name();
+      final var builtIn = lift == null ? rules.builtIn(sf.type(), tf.type(), component, lenient) : null;
+      if (builtIn != null) {
+        final var name = planBuiltIn(source, target, sf.type(), tf.type(), component, builtIn);
+        if (name == null) return null;
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.CONVERT, name));
+        continue;
+      }
       // (2) Container shape detection — both sides container of the same kind with element types
       //     that need their own sub-bridge. List/Set/Optional/Map values, key-equal Map.
       final var srcShape = containerShapeOf(sf.type(), tf.type());
       final var tgtShape = containerShapeOf(tf.type(), sf.type());
+      // (2-reshape) A list against a set: a nested class rebuilds each side as its own kind.
+      if (lift == null && srcShape != null && tgtShape != null && reshapes(srcShape.kind(), tgtShape.kind())) {
+        final var name = planReshape(
+          source,
+          target,
+          sf.name(),
+          sf.type(),
+          tf.type(),
+          srcShape,
+          tgtShape,
+          pending,
+          seen,
+          lenient,
+          parentPkg
+        );
+        if (name == null) return null;
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.RESHAPE, name));
+        continue;
+      }
       if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
         if (srcShape.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcShape.keyType(), tgtShape.keyType())) {
           error(
@@ -4929,8 +4966,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var name = planEnum(parentSource, parentTarget, fieldName, srcElement, tgtElement, lenient);
       return name == null ? null : FieldPlan.ofKind(kind, name);
     }
+    final var builtIn = rules.builtIn(srcElement, tgtElement, fieldName + "[*]", lenient);
+    if (builtIn != null) {
+      final var name = planBuiltIn(parentSource, parentTarget, srcElement, tgtElement, fieldName + "[*]", builtIn);
+      return name == null ? null : FieldPlan.ofKind(kind, name);
+    }
     final var innerSrc = containerShapeOf(srcElement, tgtElement);
     final var innerTgt = containerShapeOf(tgtElement, srcElement);
+    if (innerSrc != null && innerTgt != null && reshapes(innerSrc.kind(), innerTgt.kind())) {
+      final var unnameable = firstUnnameableContainer(srcElement, tgtElement, parentPkg);
+      if (unnameable != null) {
+        error(parentSource, unnameableContainerMessage(parentSource, parentTarget, fieldName, unnameable, parentPkg));
+        return null;
+      }
+      final var name = planReshape(
+        parentSource,
+        parentTarget,
+        fieldName,
+        srcElement,
+        tgtElement,
+        innerSrc,
+        innerTgt,
+        pending,
+        seen,
+        lenient,
+        parentPkg
+      );
+      return name == null ? null : FieldPlan.ofKind(kind, name);
+    }
     if (
       innerSrc != null &&
       innerTgt != null &&
@@ -5162,6 +5225,101 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a
+   * set.
+   */
+  private static boolean reshapes(final FieldPlan.Kind from, final FieldPlan.Kind to) {
+    return (
+      (from == FieldPlan.Kind.LIST && to == FieldPlan.Kind.SET) ||
+      (from == FieldPlan.Kind.SET && to == FieldPlan.Kind.LIST)
+    );
+  }
+
+  /**
+   * Plan a pair of scalars the shared spec builds a conversion in for as a nested class whose
+   * {@code forward} and {@code backward} convert one value, and return the class's name, or null
+   * after refusing a pair the spec refuses. {@code component} is the name a value failure gives.
+   */
+  private String planBuiltIn(
+    final TypeElement source,
+    final TypeElement target,
+    final TypeMirror srcType,
+    final TypeMirror tgtType,
+    final String component,
+    final PairDecision<TypeMirror> decision
+  ) {
+    if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+      error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message());
+      return null;
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(name, new NestedElement(srcType, tgtType, FieldPlan.ofKind(FieldPlan.Kind.CONVERT, name)));
+    builtInComponents.put(name, component);
+    return name;
+  }
+
+  /** The name each nested class of a built-in conversion gives a value it cannot convert. */
+  private final Map<String, String> builtInComponents = new HashMap<>();
+
+  /**
+   * Plan a list against a set, either way round, as a nested class whose {@code forward} rebuilds
+   * the source as the target's kind and {@code backward} the reverse, each element converted as the
+   * element pair is planned. Returns the class's name, or null after refusing the pair.
+   */
+  private String planReshape(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final ContainerShape srcShape,
+    final ContainerShape tgtShape,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen,
+    final boolean lenient,
+    final String parentPkg
+  ) {
+    final var decision = rules.decidePair(srcContainer, tgtContainer, fieldName, lenient);
+    if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+      error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message());
+      return null;
+    }
+    final var element = planElementSubBridge(
+      source,
+      target,
+      fieldName,
+      srcShape.elementType(),
+      tgtShape.elementType(),
+      tgtShape.kind(),
+      pending,
+      seen,
+      lenient,
+      parentPkg
+    );
+    if (element == null) return null;
+    for (final var side : List.of(Map.entry(srcContainer, srcShape.kind()), Map.entry(tgtContainer, tgtShape.kind()))) {
+      final var unassignable = firstUnassignableContainer(side.getKey(), side.getKey(), side.getValue(), parentPkg);
+      if (unassignable != null) {
+        error(source, refusedContainerMessage(source, target, fieldName, unassignable));
+        return null;
+      }
+      final var badAlloc = firstNonAllocatableContainer(side.getKey(), side.getKey(), side.getValue(), parentPkg);
+      if (badAlloc != null) {
+        error(source, refusedContainerMessage(source, target, fieldName, badAlloc));
+        return null;
+      }
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(
+      name,
+      new NestedElement(srcContainer, tgtContainer, FieldPlan.ofKind(FieldPlan.Kind.RESHAPE, element.subBridgeName()))
+    );
+    // A nested class whose elements take the active path takes it too, to pass it on.
+    if (threadedRefs.contains(element.subBridgeName())) threadedRefs.add(name);
+    return name;
+  }
+
+  /**
    * An element that is itself a container, converted by a generated nested class whose {@code
    * forward} and {@code backward} each rebuild one inner container. The outer helper calls it the
    * way it calls a sub-bridge, so containers nest to any depth without a helper of their own kind.
@@ -5324,6 +5482,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (plan.kind() == FieldPlan.Kind.ENUM) {
         emitEnumDirection(out, "forward", element.src(), element.tgt());
         emitEnumDirection(out, "backward", element.tgt(), element.src());
+      } else if (plan.kind() == FieldPlan.Kind.CONVERT) {
+        final var component = builtInComponents.get(entry.getKey());
+        emitConvertDirection(out, "forward", element.src(), element.tgt(), component, false);
+        emitConvertDirection(out, "backward", element.tgt(), element.src(), component, true);
+      } else if (plan.kind() == FieldPlan.Kind.RESHAPE) {
+        emitReshapeDirection(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), bridgePkg);
+        emitReshapeDirection(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), bridgePkg);
       } else if (plan.kind() == FieldPlan.Kind.COPY) {
         for (final var direction : List.of("forward", "backward")) {
           out.println(
@@ -5422,6 +5587,133 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     out.println("      };");
     out.println("    }");
+  }
+
+  /**
+   * One direction of a built-in conversion from a value of {@code from} to one of {@code to}: a
+   * null converts to null, or to the default of a primitive it is written into; a {@code String} is
+   * parsed by the JDK call the runtime makes, and a value it does not name fails with the property
+   * and the value in the shared spec's words; a value is written as text by {@code String.valueOf},
+   * an enum constant by its name; and a number is widened as Java widens it. The backward direction
+   * of a widening, which only a forward-only bridge has, refuses, as the runtime's does. {@code
+   * backward} is true for that direction, whose {@code from} is the pair's target.
+   */
+  private void emitConvertDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String component,
+    final boolean backward
+  ) {
+    final var in = rules.scalarOf(from);
+    final var outScalar = rules.scalarOf(to);
+    out.println("    static " + scalarTypeName(to) + " " + direction + "(final " + scalarTypeName(from) + " in) {");
+    if (backward && in != Scalar.STRING && outScalar != Scalar.STRING) {
+      final var props = mirrorProps();
+      out.println(
+        "      throw new java.lang.UnsupportedOperationException(" +
+          literal(PairingMessages.wideningOneWay(component, props.typeName(to), props.typeName(from))) +
+          ");"
+      );
+      out.println("    }");
+      return;
+    }
+    if (!from.getKind().isPrimitive()) {
+      out.println("      if (in == null) return " + primitiveDefaultLiteral(to.getKind()).orElse("null") + ";");
+    }
+    if (in == Scalar.STRING) {
+      final var failure =
+        literal(PairingMessages.notAValueHead(component)) +
+        " + in + " +
+        literal(
+          PairingMessages.notAValueTail(
+            PairingMessages.scalarPhrase(
+              outScalar,
+              to.getKind().isPrimitive(),
+              outScalar == Scalar.ENUM ? rules.nameInMessage(to) : null
+            )
+          )
+        );
+      if (outScalar == Scalar.BOOLEAN) {
+        out.println("      if (in.equalsIgnoreCase(\"true\")) return true;");
+        out.println("      if (in.equalsIgnoreCase(\"false\")) return false;");
+        out.println("      throw new java.lang.IllegalArgumentException(" + failure + ");");
+      } else {
+        out.println("      try {");
+        out.println("        return " + parseExpression(outScalar, to) + ";");
+        out.println("      } catch (final java.lang.IllegalArgumentException e) {");
+        out.println("        throw new java.lang.IllegalArgumentException(" + failure + ", e);");
+        out.println("      }");
+      }
+    } else if (outScalar == Scalar.STRING) {
+      out.println("      return " + (in == Scalar.ENUM ? "in.name()" : "java.lang.String.valueOf(in)") + ";");
+    } else {
+      out.println("      return " + wideningExpression(in, outScalar) + ";");
+    }
+    out.println("    }");
+  }
+
+  /**
+   * The JDK call that parses the {@code String} {@code in} into {@code scalar}, held as {@code to}.
+   */
+  private static String parseExpression(final Scalar scalar, final TypeMirror to) {
+    return switch (scalar) {
+      case BYTE -> "java.lang.Byte.parseByte(in)";
+      case SHORT -> "java.lang.Short.parseShort(in)";
+      case INT -> "java.lang.Integer.parseInt(in)";
+      case LONG -> "java.lang.Long.parseLong(in)";
+      case FLOAT -> "java.lang.Float.parseFloat(in)";
+      case DOUBLE -> "java.lang.Double.parseDouble(in)";
+      case BIG_INTEGER -> "new java.math.BigInteger(in)";
+      case BIG_DECIMAL -> "new java.math.BigDecimal(in)";
+      case ENUM -> qualifiedName(to) + ".valueOf(in)";
+      case BOOLEAN, CHAR, STRING -> throw new IllegalStateException("no built-in parse into " + scalar);
+    };
+  }
+
+  /** The widening of {@code in}, a value of the number {@code from}, into {@code to}. */
+  private static String wideningExpression(final Scalar from, final Scalar to) {
+    // A long, or a Long, is handed to valueOf(long) as it is; a cast there is redundant.
+    final var asLong = from == Scalar.LONG ? "in" : "(long) in";
+    return switch (to) {
+      case SHORT, INT, LONG, FLOAT, DOUBLE -> "(" + to.primitive() + ") in";
+      case BIG_INTEGER -> "java.math.BigInteger.valueOf(" + asLong + ")";
+      case BIG_DECIMAL -> from == Scalar.BIG_INTEGER
+        ? "new java.math.BigDecimal(in)"
+        : "java.math.BigDecimal.valueOf(" + asLong + ")";
+      default -> throw new IllegalStateException("no built-in widening from " + from + " to " + to);
+    };
+  }
+
+  /**
+   * A scalar's type as generated code writes it: a primitive's name, or a class's qualified name.
+   */
+  private static String scalarTypeName(final TypeMirror type) {
+    return type.getKind().isPrimitive() ? type.getKind().name().toLowerCase(Locale.ROOT) : qualifiedName(type);
+  }
+
+  /**
+   * One direction of a list against a set: a helper rebuilding a {@code from} container as {@code
+   * to}'s kind, each element converted through {@code element}, or copied where the elements pass
+   * through.
+   */
+  private void emitReshapeDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String element,
+    final String bridgePkg
+  ) {
+    final var kind = containerShapeOf(to, from).kind();
+    if (IDENTITY_ELEMENT_SENTINEL.equals(element)) {
+      emitRawContainerHelper(out, direction, from, to, FieldPlan.ofKind(kind, element), direction, bridgePkg);
+    } else if (kind == FieldPlan.Kind.SET) {
+      emitSetHelper(out, direction, from, to, element, direction, bridgePkg);
+    } else {
+      emitListHelper(out, direction, from, to, element, direction, bridgePkg);
+    }
   }
 
   /** The qualified name of a declared type's class, without its type-use annotations. */
@@ -6460,7 +6752,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.fwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE, ENUM -> subCall(sub, "forward", readExpr);
+      case RECURSE, ENUM, CONVERT, RESHAPE -> subCall(sub, "forward", readExpr);
       // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
       // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
       // size-presized for-loop, eliminating the Stream + Spliterator + collector overhead at the
@@ -6527,7 +6819,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.bwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE, ENUM -> subCall(sub, "backward", readExpr);
+      case RECURSE, ENUM, CONVERT, RESHAPE -> subCall(sub, "backward", readExpr);
       case LIST, SET, MAP_VALUES -> elementIdentity
         ? "(" +
           readExpr +
