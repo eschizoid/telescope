@@ -32,7 +32,7 @@ final class MhAccessors {
 
   /** {@code () -> R} (a no-arg factory / {@code builder()}) as a {@code Supplier<Object>}. */
   static Supplier<Object> supplier(final MethodHandle handle) {
-    final var adapted = handle.asType(MethodType.methodType(Object.class));
+    final var adapted = fixed(handle, MethodType.methodType(Object.class));
     return () -> {
       try {
         return (Object) adapted.invokeExact();
@@ -46,7 +46,7 @@ final class MhAccessors {
    * {@code (P) -> R} (a reader / getter / {@code build()}) as a {@code Function<Object, Object>}.
    */
   static Function<Object, Object> function(final MethodHandle handle) {
-    final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class));
+    final var adapted = fixed(handle, MethodType.methodType(Object.class, Object.class));
     return obj -> {
       try {
         return (Object) adapted.invokeExact(obj);
@@ -58,7 +58,7 @@ final class MhAccessors {
 
   /** {@code (P, V) -> void} (a void setter) as a {@code BiConsumer<Object, Object>}. */
   static BiConsumer<Object, Object> biConsumer(final MethodHandle handle) {
-    final var adapted = handle.asType(MethodType.methodType(void.class, Object.class, Object.class));
+    final var adapted = fixed(handle, MethodType.methodType(void.class, Object.class, Object.class));
     return (target, value) -> {
       try {
         adapted.invokeExact(target, value);
@@ -72,7 +72,7 @@ final class MhAccessors {
    * {@code (P, V) -> R} (a fluent builder setter) as a {@code BiFunction<Object, Object, Object>}.
    */
   static BiFunction<Object, Object, Object> biFunction(final MethodHandle handle) {
-    final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class, Object.class));
+    final var adapted = fixed(handle, MethodType.methodType(Object.class, Object.class, Object.class));
     return (target, value) -> {
       try {
         return (Object) adapted.invokeExact(target, value);
@@ -80,6 +80,19 @@ final class MhAccessors {
         throw dispatchFailure(t);
       }
     };
+  }
+
+  /**
+   * {@code handle} at fixed arity, adapted to {@code type}. {@code unreflect} of a variable-arity
+   * method gives a collecting handle, and {@code asType} to a type whose trailing parameter is
+   * {@code Object} keeps it collecting, so an array the closure is handed would arrive wrapped as
+   * the one element of a new array. Every closure here is handed a value of the member's declared
+   * parameter type, as a Java call passing an array to a variable-arity parameter passes it, and as
+   * the {@code LambdaMetafactory} accessor does; a caller that means to spread one value into the
+   * array wraps it first.
+   */
+  private static MethodHandle fixed(final MethodHandle handle, final MethodType type) {
+    return handle.asFixedArity().asType(type);
   }
 
   // Preserve the raw exception: an unchecked ClassCastException / NullPointerException from a bad

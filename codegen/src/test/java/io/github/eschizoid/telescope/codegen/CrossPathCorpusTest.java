@@ -14614,6 +14614,23 @@ class CrossPathCorpusTest {
       "#0(value=\"x!!\")",
       true
     ),
+    // An array handed to a variable-arity setter of its own array type is passed as it is, as a
+    // Java call passes it, not wrapped as the one element of a new array.
+    new IntoRow(
+      "an array property with a variable-arity setter of its own type",
+      List.of(
+        sampled("%1$sSrc", "String[] tags", "new %1$sSrc(new String[] {\"a\", \"b\"})"),
+        "public class %1$sTgt {\n  private String[] tags;\n  private String seen = \"none\";\n  public %1$sTgt() {}\n" +
+          "  public String[] getTags() { return tags; }\n" +
+          "  public void setTags(final String... v) { tags = v; seen = v.length + \":\" + String.join(\"+\", v); }\n" +
+          "  public String getSeen() { return seen; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(seen=\"2:a+b\", tags=#1())",
+      true
+    ),
     new IntoRow(
       "a value whose getter throws on the object forward built, read before any setter runs",
       List.of(

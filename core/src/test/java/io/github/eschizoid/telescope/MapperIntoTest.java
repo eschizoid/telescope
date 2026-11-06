@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -500,6 +501,37 @@ class MapperIntoTest {
       final var fresh = mapper.forward(new OrderDto("a", "Alice", 5));
       assertNotNull(fresh, "forward() also produces a valid result");
       assertEquals(10, fresh.getQuantity(), "fresh forward() result identically transformed");
+    }
+  }
+
+  @Nested
+  @DisplayName("Variable-arity setters — an array of the setter's own type is passed as it is")
+  class VariableAritySetter {
+
+    record TagsDto(String[] tags) {}
+
+    static class Tagged {
+
+      private String[] tags;
+
+      public Tagged() {}
+
+      public String[] getTags() {
+        return tags;
+      }
+
+      public void setTags(final String... tags) {
+        this.tags = tags;
+      }
+    }
+
+    @Test
+    @DisplayName("into writes an array property through a variable-arity setter of its own type as the array itself")
+    void intoPassesTheArrayToAVariableAritySetterOfItsOwnType() {
+      final var mapper = Telescope.mapper(TagsDto.class, Tagged.class);
+      final var target = mapper.into(new Tagged(), new TagsDto(new String[] { "a", "b" }));
+
+      assertArrayEquals(new String[] { "a", "b" }, target.getTags());
     }
   }
 }
