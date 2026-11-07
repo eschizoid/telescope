@@ -752,6 +752,11 @@ JVM/codegen-only under AOT).
     a default method `to<Target>()` per `@Bridge` field, so a type that implements it converts itself
     (`invoice.toInvoiceDto()`); a two-way mapper adds `to<Source>()` on `<Target>Mappings`. No new `@Bridge` attribute;
     a name clash is refused by name.
+24. **0024 — Typed `before` and `after` edit rows.** (Proposed.) `before(over(...))`, `after(over(...))` and their
+    backward twins are rows holding `Edit`s, run around `forward` and `backward`, fused into one rebuild, compiled into
+    the bridge, and shown by `explain()`. They replace mapping callbacks for normalisation; the lambda hooks stay for
+    side effects. Lands after `over(Accessor, fn)`, a traversing `each(...)` path factory and container steps in
+    generated paths.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
