@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Which properties of a pair a strict mapper refuses for having nothing to pair them with, decided
@@ -18,6 +19,12 @@ import java.util.Set;
  * target property of its name, when no row writes that one. Which other rows the pair has changes
  * neither.
  *
+ * <p>A property whose class has no member to write it, no setter, no builder member and no
+ * constructor parameter, is a getter the class derives from its other state, such as a {@code
+ * getFull()} joining two names. No direction of the mapper can write it, and nothing is lost when
+ * nothing pairs with it, so it is not refused. One that a member does write is refused like any
+ * other.
+ *
  * <p>A path whose first property is not known may start at any property of its side, so where one
  * does, no property of that side is refused.
  */
@@ -31,21 +38,25 @@ public final class Unpaired {
    * sourceNames} are the source's properties, which decide whether a target property has a
    * namesake; {@code filled} the target properties path, {@code constant} and {@code compute} rows
    * write, or null when one of them starts at a property not known; {@code read} the source
-   * properties path rows read, or null when one of them starts at a property not known. The names
-   * of the classes and of what each calls a property are as the messages show them.
+   * properties path rows read, or null when one of them starts at a property not known. {@code
+   * targetUnwritable} and {@code sourceUnwritable} answer, for a property of their side, whether
+   * its class has no member to write it, and are asked only of a property that would be refused.
+   * The names of the classes and of what each calls a property are as the messages show them.
    */
   public static List<String> refusals(
     final Sides sides,
     final List<String> sourceNames,
     final PairingRules.MatchResult match,
     final Set<String> filled,
-    final Set<String> read
+    final Set<String> read,
+    final Predicate<String> targetUnwritable,
+    final Predicate<String> sourceUnwritable
   ) {
     final var refusals = new ArrayList<String>();
     final var namesakes = new HashSet<>(sourceNames);
     if (filled != null) {
       for (final var name : match.unmatchedTargets()) {
-        if (filled.contains(name)) continue;
+        if (filled.contains(name) || targetUnwritable.test(name)) continue;
         refusals.add(
           namesakes.contains(name)
             ? PairingMessages.sameNameSourceRead(sides.source(), sides.target(), sides.tgtSlot(), sides.srcSlot(), name)
@@ -55,7 +66,7 @@ public final class Unpaired {
     }
     if (read != null) {
       for (final var name : match.unmatchedSources()) {
-        if (read.contains(name)) continue;
+        if (read.contains(name) || sourceUnwritable.test(name)) continue;
         refusals.add(
           PairingMessages.noSameNameTarget(sides.source(), sides.target(), sides.srcSlot(), sides.tgtSlot(), name)
         );

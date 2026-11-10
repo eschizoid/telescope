@@ -11,10 +11,11 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A 2-arg {@code to(src, tgt)} rename whose leaf types differ (javac infers the shared type as the
- * LUB, so {@code to(Integer-getter, String-getter)} compiles) must be rejected at build with a
- * precise, actionable error — not pass the value through identity into a mismatched setter, which
- * ClassCastExceptions at runtime. The same root surfaces through the reflective writer AND the
- * {@code @BeanFocus} FieldOptics construct; one build-time check covers both.
+ * LUB, so {@code to(Integer-getter, Boolean-getter)} compiles) and that no built-in conversion
+ * takes must be rejected at build with a precise, actionable error — not pass the value through
+ * identity into a mismatched setter, which ClassCastExceptions at runtime. The same root surfaces
+ * through the reflective writer AND the {@code @BeanFocus} FieldOptics construct; one build-time
+ * check covers both. A pair a built-in conversion takes converts through the same row.
  */
 class RenameLeafTypeMismatchTest {
 
@@ -53,14 +54,30 @@ class RenameLeafTypeMismatchTest {
         Mapping.to(
           DocSrc::getDocUpdateAttempts,
           DocTgt::getNumberOfAttempts,
-          i -> i == null ? null : String.valueOf(i),
-          s -> s == null ? null : Integer.parseInt(s)
+          i -> i == null ? null : i > 0,
+          b -> b == null ? null : b ? 1 : 0
         )
       )
       .build();
 
     final var forward = mapper.forward(new DocSrc(5));
-    assertEquals("5", forward.getNumberOfAttempts());
-    assertEquals(Integer.valueOf(5), mapper.backward(forward).getDocUpdateAttempts());
+    assertEquals(Boolean.TRUE, forward.getNumberOfAttempts());
+    assertEquals(Integer.valueOf(1), mapper.backward(forward).getDocUpdateAttempts());
+  }
+
+  record Attempts(Integer docUpdateAttempts) {}
+
+  record AttemptsText(String numberOfAttempts) {}
+
+  @Test
+  @DisplayName("a 2-arg to() rename between a number and a String converts through the built-in conversion")
+  void aRenameABuiltInTakesConverts() {
+    final var mapper = Telescope.mapper(
+      Attempts.class,
+      AttemptsText.class,
+      Mapping.to(Attempts::docUpdateAttempts, AttemptsText::numberOfAttempts)
+    );
+    assertEquals(new AttemptsText("5"), mapper.forward(new Attempts(5)));
+    assertEquals(new Attempts(5), mapper.backward(new AttemptsText("5")));
   }
 }

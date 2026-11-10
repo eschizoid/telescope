@@ -139,12 +139,27 @@ final class ContainerLifts {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> liftListIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
-    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, false);
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, ContainerView.Kind.LIST, ContainerView.Kind.LIST);
   }
 
   /** Set counterpart; custom sorted comparators cannot safely consume a changed element type. */
   static Iso<?, ?> liftSetIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
-    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, true);
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, ContainerView.Kind.SET, ContainerView.Kind.SET);
+  }
+
+  /**
+   * The lift between a list and a set, either way round: each side is allocated and ordered as its
+   * own kind, so the set side keeps the first of any elements that are equal and the list side
+   * takes the set's iteration order.
+   */
+  static Iso<?, ?> liftReshapedIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Type srcType,
+    final Type tgtType,
+    final ContainerView.Kind srcKind,
+    final ContainerView.Kind tgtKind
+  ) {
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, srcKind, tgtKind);
   }
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
@@ -152,11 +167,13 @@ final class ContainerLifts {
     final Iso<Object, Object> elementIso,
     final Type srcType,
     final Type tgtType,
-    final boolean set
+    final ContainerView.Kind srcKind,
+    final ContainerView.Kind tgtKind
   ) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
-    final var kind = set ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
+    final var srcSet = srcKind == ContainerView.Kind.SET;
+    final var tgtSet = tgtKind == ContainerView.Kind.SET;
     // A sorted output whose elements change type has to see each converted element before it is
     // inserted, and the fused MethodHandle loop offers nowhere to stand between the two. Asking
     // outside the loop instead would mean converting the first element twice, once to test it and
@@ -164,18 +181,18 @@ final class ContainerLifts {
     // that counts or generates would see element zero twice and every other element once. The loop
     // converts once and tests what it is about to insert, so the fusion is what gives way.
     final boolean converts = elementIso != Iso.<Object>identity();
-    final boolean copies = !converts && copiesBothWays(srcRaw, srcType, tgtRaw, tgtType, kind);
-    final var srcCopy = copies ? copyConstructorIfRefused(srcRaw, srcType, kind, tgtRaw) : null;
-    final var tgtCopy = copies ? copyConstructorIfRefused(tgtRaw, tgtType, kind, srcRaw) : null;
-    final var srcAlloc = srcCopy != null ? null : liftAllocatorFor(srcRaw, srcType, kind);
-    final var tgtAlloc = tgtCopy != null ? null : liftAllocatorFor(tgtRaw, tgtType, kind);
+    final boolean copies = !converts && copiesBothWays(srcRaw, srcType, srcKind, tgtRaw, tgtType, tgtKind);
+    final var srcCopy = copies ? copyConstructorIfRefused(srcRaw, srcType, srcKind, tgtRaw) : null;
+    final var tgtCopy = copies ? copyConstructorIfRefused(tgtRaw, tgtType, tgtKind, srcRaw) : null;
+    final var srcAlloc = srcCopy != null ? null : liftAllocatorFor(srcRaw, srcType, srcKind);
+    final var tgtAlloc = tgtCopy != null ? null : liftAllocatorFor(tgtRaw, tgtType, tgtKind);
     // Only the side being built has an ordering to establish, so only that side gives up its fused
     // loop. Asking the pair instead would cost the other direction its fusion to buy nothing: the
     // forward half of a sorted-source-to-unsorted-target conversion inserts into a container that
     // orders nothing and can raise no cast for the refusal to describe.
     final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
-    final boolean loopForward = set && converts && keepsOrder(tgtRaw);
-    final boolean loopBackward = set && converts && keepsOrder(srcRaw);
+    final boolean loopForward = tgtSet && converts && keepsOrder(tgtRaw);
+    final boolean loopBackward = srcSet && converts && keepsOrder(srcRaw);
     final Iso<Object, Object> filled =
       mh != null && !loopForward && !loopBackward
         ? mh
@@ -193,10 +210,10 @@ final class ContainerLifts {
     // need not be: building a sorted container out of an unsorted one leaves nothing to ask about,
     // and the result takes natural ordering. That is a silent reordering, and it is what the
     // generated path does too -- one decision on both, rather than two that differ.
-    final var targetRefusal = set && converts ? convertedRefusal(tgtType, tgtRaw) : null;
-    final var sourceRefusal = set && converts ? convertedRefusal(srcType, srcRaw) : null;
+    final var targetRefusal = tgtSet && converts ? convertedRefusal(tgtType, tgtRaw) : null;
+    final var sourceRefusal = srcSet && converts ? convertedRefusal(srcType, srcRaw) : null;
     // Either refusal implies this, so it alone decides whether the wrapper is needed.
-    final boolean sortedEitherWay = set && (keepsOrder(tgtRaw) || keepsOrder(srcRaw));
+    final boolean sortedEitherWay = (tgtSet && keepsOrder(tgtRaw)) || (srcSet && keepsOrder(srcRaw));
     final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
     if (!sortedEitherWay && !finish) return loop;
     return Iso.of(
@@ -458,7 +475,7 @@ final class ContainerLifts {
     final var tgtRaw = rawClassOf(tgtType);
     final var kind = ContainerView.Kind.MAP_VALUES;
     final boolean copies =
-      elementIso == Iso.<Object>identity() && copiesBothWays(srcRaw, srcType, tgtRaw, tgtType, kind);
+      elementIso == Iso.<Object>identity() && copiesBothWays(srcRaw, srcType, kind, tgtRaw, tgtType, kind);
     final var srcCopy = copies ? copyConstructorIfRefused(srcRaw, srcType, kind, tgtRaw) : null;
     final var tgtCopy = copies ? copyConstructorIfRefused(tgtRaw, tgtType, kind, srcRaw) : null;
     final var srcAlloc = srcCopy != null ? null : allocatorFor(srcRaw, srcType, kind);
@@ -510,15 +527,16 @@ final class ContainerLifts {
   private static boolean copiesBothWays(
     final Class<?> srcRaw,
     final Type srcType,
+    final ContainerView.Kind srcKind,
     final Class<?> tgtRaw,
     final Type tgtType,
-    final ContainerView.Kind kind
+    final ContainerView.Kind tgtKind
   ) {
     return (
-      ALLOCATION.copiesInPlace(tgtType, kind, srcType, null) &&
-      ALLOCATION.copiesInPlace(srcType, kind, tgtType, null) &&
-      !builtByBuilder(srcRaw, srcType, kind) &&
-      !builtByBuilder(tgtRaw, tgtType, kind)
+      ALLOCATION.copiesInPlace(tgtType, tgtKind, srcType, null) &&
+      ALLOCATION.copiesInPlace(srcType, srcKind, tgtType, null) &&
+      !builtByBuilder(srcRaw, srcType, srcKind) &&
+      !builtByBuilder(tgtRaw, tgtType, tgtKind)
     );
   }
 

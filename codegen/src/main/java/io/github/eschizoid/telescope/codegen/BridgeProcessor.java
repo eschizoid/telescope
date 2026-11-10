@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.Scalar;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -2060,7 +2061,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         kept.add(sf.name());
       }
     }
-    final var taken = KeptNames.taken(kept, renameTargetNames);
+    final var taken = KeptNames.taken(kept, renameTargetNames, name -> false);
     for (final var name : taken) {
       if (!transforms.containsKey(name) && !viaMappers.containsKey(name)) continue;
       error(
@@ -2069,9 +2070,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       return;
     }
+    // A kept property a strict bridge refuses is one the source class has a member to write; one it
+    // has none for is a derived getter, which the bridge leaves unread as a drop leaves it.
+    final var refusedTaken = KeptNames.taken(kept, renameTargetNames, name -> noWriteMember(source, name));
     final var effectiveDrops = new LinkedHashSet<>(drops);
     effectiveDrops.addAll(pathConsumed);
     effectiveDrops.addAll(targetPathSources);
+    if (!lenient) {
+      for (final var name : taken) if (!refusedTaken.contains(name)) effectiveDrops.add(name);
+    }
     if (lenient) {
       final var targetFieldNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
       for (final var sf : sourceFields) {
@@ -2122,6 +2129,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
+    // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
+    // mapper does, by the property's name.
+    if (!lenient && !refusedTaken.isEmpty()) {
+      error(
+        source,
+        PairingMessages.noSameNameTarget(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          slotWord(source),
+          slotWord(target),
+          refusedTaken.getFirst()
+        )
+      );
+      return;
+    }
+    // A derived getter nothing pairs with is left out: on the source as a drop, unread forward and
+    // unwritten backward, and on the target as a property nothing fills.
+    final var unwritten = paired(
+      source,
+      sourceFields,
+      effectiveDrops,
+      target,
+      targetFields,
+      renames,
+      renameFanouts,
+      injectedTargetFields
+    );
+    if (unwritten == null) return;
+    effectiveDrops.addAll(unwritten.sources());
+
     // The properties the bridge writes a value into, which a setters strategy it is told to take
     // has to have a setter for: on the target, each a kept source property is written into and each
     // a row fills; on the source, which only a mapper that converts backward writes, each kept
@@ -2141,43 +2178,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!lenient && !forwardOnlyTransforms.contains(sf.name())) writesSource.add(sf.name());
     }
 
-    // Bijection check: apply forward renames on the source side, then compare to target names —
-    // skipping target names covered by constants/computes (injected; no source counterpart needed).
-    // Dropped sources are excluded from the check entirely.
+    // The source properties the bridge reads by name: every one no drop, path, lenient fill or
+    // derived getter takes.
     final var nonDroppedSourceFields = effectiveDrops.isEmpty()
       ? sourceFields
       : sourceFields
           .stream()
           .filter(f -> !effectiveDrops.contains(f.name()))
           .toList();
-    // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
-    // mapper does, by the property's name.
-    if (!lenient && !taken.isEmpty()) {
-      error(
-        source,
-        PairingMessages.noSameNameTarget(
-          source.getSimpleName().toString(),
-          target.getSimpleName().toString(),
-          slotWord(source),
-          slotWord(target),
-          taken.getFirst()
-        )
-      );
-      return;
-    }
-    if (
-      !paired(
-        source,
-        sourceFields,
-        effectiveDrops,
-        target,
-        targetFields,
-        renames,
-        renameFanouts,
-        injectedTargetFields
-      ) ||
-      !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
-    ) return;
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
     ) return;
@@ -2613,6 +2621,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         backwardResults.put(root.name(), given);
       }
     }
+    // A strategy the field's writeBeans default names that builds no side of the pair the mapper
+    // builds is refused as the runtime refuses it: the target, and the source where backward
+    // rebuilds it.
+    final var targetUnbuilt = defaultUnbuilt(cfg, source, target, target, targetFields, targetRebuild);
+    if (targetUnbuilt != null) {
+      error(source, targetUnbuilt);
+      return;
+    }
+    final var sourceUnbuilt = lenient ? null : defaultUnbuilt(cfg, source, target, source, sourceFields, sourceRebuild);
+    if (sourceUnbuilt != null) {
+      error(source, sourceUnbuilt);
+      return;
+    }
     final var builtForward = buildExpr(
       target,
       readForward,
@@ -2845,11 +2866,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pathWriters.addAll(written);
     }
 
+    // The target properties the bridge writes, which into updates: every one but a derived getter
+    // nothing fills. A strict bridge updates a target in place itself where generated code can.
+    final var intoNames = new ArrayList<String>();
+    for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
+    final var intoStatements = lenient ? null : intoStatements(target, targetFields, intoNames);
+
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
     if (carrierEl != null) {
-      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission);
+      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission, intoNames, intoStatements != null);
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
 
@@ -2976,6 +3003,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
+        // A generic target is named raw, so each setter call is an unchecked call on a raw type.
+        if (intoStatements != null) emitInto(
+          out,
+          target.getTypeParameters().isEmpty() ? suppressRaw : RAW_SUPPRESSION + "\n",
+          sourceFq,
+          targetFq,
+          intoStatements
+        );
         emitBridgeHandles(
           out,
           namesRaw,
@@ -3507,7 +3542,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         gives,
         referenceValued,
         null,
-        null
+        Set.of(property)
       );
       if (body == null) return null;
       final var text = new StringWriter();
@@ -3708,7 +3743,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form umbrella lives beside its carrier like any carrier-form bridge, so it is
     // registered for the same ServiceLoader lookup.
     if (configsByPair.getOrDefault(new TypePair(sourceFq, targetFq), BridgeConfig.EMPTY).carrierFq() != null) {
-      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY);
+      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of(), false);
     }
 
     writeClass(
@@ -4102,6 +4137,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Two different enums converted constant to constant by name. subBridgeName names the
       // nested class whose forward and backward hold the two switches.
       ENUM,
+      // Two different scalars a built-in conversion takes between. subBridgeName names the nested
+      // class whose forward and backward parse, write as text or widen.
+      CONVERT,
+      // A list against a set, either way round. subBridgeName names the nested class whose forward
+      // and backward each rebuild one container as the other side's kind.
+      RESHAPE,
     }
 
     static FieldPlan identity() {
@@ -4621,10 +4662,40 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.ENUM, name));
         continue;
       }
+      // (1d) Two different scalars a built-in conversion takes between, converted by a nested
+      //      class calling the JDK's own parse, valueOf or widening, or refused in the shared
+      //      spec's words. A renamed pair is named as the runtime names it.
+      final var component = tf.name().equals(sf.name()) ? sf.name() : sf.name() + " → " + tf.name();
+      final var builtIn = lift == null ? rules.builtIn(sf.type(), tf.type(), component, lenient) : null;
+      if (builtIn != null) {
+        final var name = planBuiltIn(source, target, sf.type(), tf.type(), component, builtIn);
+        if (name == null) return null;
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.CONVERT, name));
+        continue;
+      }
       // (2) Container shape detection — both sides container of the same kind with element types
       //     that need their own sub-bridge. List/Set/Optional/Map values, key-equal Map.
       final var srcShape = containerShapeOf(sf.type(), tf.type());
       final var tgtShape = containerShapeOf(tf.type(), sf.type());
+      // (2-reshape) A list against a set: a nested class rebuilds each side as its own kind.
+      if (lift == null && srcShape != null && tgtShape != null && reshapes(srcShape.kind(), tgtShape.kind())) {
+        final var name = planReshape(
+          source,
+          target,
+          sf.name(),
+          sf.type(),
+          tf.type(),
+          srcShape,
+          tgtShape,
+          pending,
+          seen,
+          lenient,
+          parentPkg
+        );
+        if (name == null) return null;
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.RESHAPE, name));
+        continue;
+      }
       if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
         if (srcShape.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcShape.keyType(), tgtShape.keyType())) {
           error(
@@ -4895,8 +4966,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var name = planEnum(parentSource, parentTarget, fieldName, srcElement, tgtElement, lenient);
       return name == null ? null : FieldPlan.ofKind(kind, name);
     }
+    final var builtIn = rules.builtIn(srcElement, tgtElement, fieldName + "[*]", lenient);
+    if (builtIn != null) {
+      final var name = planBuiltIn(parentSource, parentTarget, srcElement, tgtElement, fieldName + "[*]", builtIn);
+      return name == null ? null : FieldPlan.ofKind(kind, name);
+    }
     final var innerSrc = containerShapeOf(srcElement, tgtElement);
     final var innerTgt = containerShapeOf(tgtElement, srcElement);
+    if (innerSrc != null && innerTgt != null && reshapes(innerSrc.kind(), innerTgt.kind())) {
+      final var unnameable = firstUnnameableContainer(srcElement, tgtElement, parentPkg);
+      if (unnameable != null) {
+        error(parentSource, unnameableContainerMessage(parentSource, parentTarget, fieldName, unnameable, parentPkg));
+        return null;
+      }
+      final var name = planReshape(
+        parentSource,
+        parentTarget,
+        fieldName,
+        srcElement,
+        tgtElement,
+        innerSrc,
+        innerTgt,
+        pending,
+        seen,
+        lenient,
+        parentPkg
+      );
+      return name == null ? null : FieldPlan.ofKind(kind, name);
+    }
     if (
       innerSrc != null &&
       innerTgt != null &&
@@ -5128,6 +5225,101 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether a container of kind {@code from} converts into one of kind {@code to}: a list and a
+   * set.
+   */
+  private static boolean reshapes(final FieldPlan.Kind from, final FieldPlan.Kind to) {
+    return (
+      (from == FieldPlan.Kind.LIST && to == FieldPlan.Kind.SET) ||
+      (from == FieldPlan.Kind.SET && to == FieldPlan.Kind.LIST)
+    );
+  }
+
+  /**
+   * Plan a pair of scalars the shared spec builds a conversion in for as a nested class whose
+   * {@code forward} and {@code backward} convert one value, and return the class's name, or null
+   * after refusing a pair the spec refuses. {@code component} is the name a value failure gives.
+   */
+  private String planBuiltIn(
+    final TypeElement source,
+    final TypeElement target,
+    final TypeMirror srcType,
+    final TypeMirror tgtType,
+    final String component,
+    final PairDecision<TypeMirror> decision
+  ) {
+    if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+      error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message());
+      return null;
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(name, new NestedElement(srcType, tgtType, FieldPlan.ofKind(FieldPlan.Kind.CONVERT, name)));
+    builtInComponents.put(name, component);
+    return name;
+  }
+
+  /** The name each nested class of a built-in conversion gives a value it cannot convert. */
+  private final Map<String, String> builtInComponents = new HashMap<>();
+
+  /**
+   * Plan a list against a set, either way round, as a nested class whose {@code forward} rebuilds
+   * the source as the target's kind and {@code backward} the reverse, each element converted as the
+   * element pair is planned. Returns the class's name, or null after refusing the pair.
+   */
+  private String planReshape(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final ContainerShape srcShape,
+    final ContainerShape tgtShape,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen,
+    final boolean lenient,
+    final String parentPkg
+  ) {
+    final var decision = rules.decidePair(srcContainer, tgtContainer, fieldName, lenient);
+    if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+      error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + refused.message());
+      return null;
+    }
+    final var element = planElementSubBridge(
+      source,
+      target,
+      fieldName,
+      srcShape.elementType(),
+      tgtShape.elementType(),
+      tgtShape.kind(),
+      pending,
+      seen,
+      lenient,
+      parentPkg
+    );
+    if (element == null) return null;
+    for (final var side : List.of(Map.entry(srcContainer, srcShape.kind()), Map.entry(tgtContainer, tgtShape.kind()))) {
+      final var unassignable = firstUnassignableContainer(side.getKey(), side.getKey(), side.getValue(), parentPkg);
+      if (unassignable != null) {
+        error(source, refusedContainerMessage(source, target, fieldName, unassignable));
+        return null;
+      }
+      final var badAlloc = firstNonAllocatableContainer(side.getKey(), side.getKey(), side.getValue(), parentPkg);
+      if (badAlloc != null) {
+        error(source, refusedContainerMessage(source, target, fieldName, badAlloc));
+        return null;
+      }
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(
+      name,
+      new NestedElement(srcContainer, tgtContainer, FieldPlan.ofKind(FieldPlan.Kind.RESHAPE, element.subBridgeName()))
+    );
+    // A nested class whose elements take the active path takes it too, to pass it on.
+    if (threadedRefs.contains(element.subBridgeName())) threadedRefs.add(name);
+    return name;
+  }
+
+  /**
    * An element that is itself a container, converted by a generated nested class whose {@code
    * forward} and {@code backward} each rebuild one inner container. The outer helper calls it the
    * way it calls a sub-bridge, so containers nest to any depth without a helper of their own kind.
@@ -5244,11 +5436,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var direction = method.getSimpleName().toString();
     out.println(
       "    static " +
-        to +
+        heldElement(to) +
         " " +
         direction +
         "(final " +
-        from +
+        heldElement(from) +
         " in) { return in == null ? null : " +
         mapper +
         "." +
@@ -5257,6 +5449,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         handed +
         "); }"
     );
+  }
+
+  /**
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is {@code
+   * Object} for one bounded from below or not at all, and any other type itself.
+   */
+  private TypeMirror heldElement(final TypeMirror element) {
+    if (!(element instanceof WildcardType wildcard)) return element;
+    return wildcard.getExtendsBound() == null ? mirrorProps().objectType() : wildcard.getExtendsBound();
   }
 
   /** The erasure of the type {@code method}'s one parameter takes. */
@@ -5281,6 +5482,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (plan.kind() == FieldPlan.Kind.ENUM) {
         emitEnumDirection(out, "forward", element.src(), element.tgt());
         emitEnumDirection(out, "backward", element.tgt(), element.src());
+      } else if (plan.kind() == FieldPlan.Kind.CONVERT) {
+        final var component = builtInComponents.get(entry.getKey());
+        emitConvertDirection(out, "forward", element.src(), element.tgt(), component, false);
+        emitConvertDirection(out, "backward", element.tgt(), element.src(), component, true);
+      } else if (plan.kind() == FieldPlan.Kind.RESHAPE) {
+        emitReshapeDirection(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), bridgePkg);
+        emitReshapeDirection(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), bridgePkg);
       } else if (plan.kind() == FieldPlan.Kind.COPY) {
         for (final var direction : List.of("forward", "backward")) {
           out.println(
@@ -5379,6 +5587,133 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     out.println("      };");
     out.println("    }");
+  }
+
+  /**
+   * One direction of a built-in conversion from a value of {@code from} to one of {@code to}: a
+   * null converts to null, or to the default of a primitive it is written into; a {@code String} is
+   * parsed by the JDK call the runtime makes, and a value it does not name fails with the property
+   * and the value in the shared spec's words; a value is written as text by {@code String.valueOf},
+   * an enum constant by its name; and a number is widened as Java widens it. The backward direction
+   * of a widening, which only a forward-only bridge has, refuses, as the runtime's does. {@code
+   * backward} is true for that direction, whose {@code from} is the pair's target.
+   */
+  private void emitConvertDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String component,
+    final boolean backward
+  ) {
+    final var in = rules.scalarOf(from);
+    final var outScalar = rules.scalarOf(to);
+    out.println("    static " + scalarTypeName(to) + " " + direction + "(final " + scalarTypeName(from) + " in) {");
+    if (backward && in != Scalar.STRING && outScalar != Scalar.STRING) {
+      final var props = mirrorProps();
+      out.println(
+        "      throw new java.lang.UnsupportedOperationException(" +
+          literal(PairingMessages.wideningOneWay(component, props.typeName(to), props.typeName(from))) +
+          ");"
+      );
+      out.println("    }");
+      return;
+    }
+    if (!from.getKind().isPrimitive()) {
+      out.println("      if (in == null) return " + primitiveDefaultLiteral(to.getKind()).orElse("null") + ";");
+    }
+    if (in == Scalar.STRING) {
+      final var failure =
+        literal(PairingMessages.notAValueHead(component)) +
+        " + in + " +
+        literal(
+          PairingMessages.notAValueTail(
+            PairingMessages.scalarPhrase(
+              outScalar,
+              to.getKind().isPrimitive(),
+              outScalar == Scalar.ENUM ? rules.nameInMessage(to) : null
+            )
+          )
+        );
+      if (outScalar == Scalar.BOOLEAN) {
+        out.println("      if (in.equalsIgnoreCase(\"true\")) return true;");
+        out.println("      if (in.equalsIgnoreCase(\"false\")) return false;");
+        out.println("      throw new java.lang.IllegalArgumentException(" + failure + ");");
+      } else {
+        out.println("      try {");
+        out.println("        return " + parseExpression(outScalar, to) + ";");
+        out.println("      } catch (final java.lang.IllegalArgumentException e) {");
+        out.println("        throw new java.lang.IllegalArgumentException(" + failure + ", e);");
+        out.println("      }");
+      }
+    } else if (outScalar == Scalar.STRING) {
+      out.println("      return " + (in == Scalar.ENUM ? "in.name()" : "java.lang.String.valueOf(in)") + ";");
+    } else {
+      out.println("      return " + wideningExpression(in, outScalar) + ";");
+    }
+    out.println("    }");
+  }
+
+  /**
+   * The JDK call that parses the {@code String} {@code in} into {@code scalar}, held as {@code to}.
+   */
+  private static String parseExpression(final Scalar scalar, final TypeMirror to) {
+    return switch (scalar) {
+      case BYTE -> "java.lang.Byte.parseByte(in)";
+      case SHORT -> "java.lang.Short.parseShort(in)";
+      case INT -> "java.lang.Integer.parseInt(in)";
+      case LONG -> "java.lang.Long.parseLong(in)";
+      case FLOAT -> "java.lang.Float.parseFloat(in)";
+      case DOUBLE -> "java.lang.Double.parseDouble(in)";
+      case BIG_INTEGER -> "new java.math.BigInteger(in)";
+      case BIG_DECIMAL -> "new java.math.BigDecimal(in)";
+      case ENUM -> qualifiedName(to) + ".valueOf(in)";
+      case BOOLEAN, CHAR, STRING -> throw new IllegalStateException("no built-in parse into " + scalar);
+    };
+  }
+
+  /** The widening of {@code in}, a value of the number {@code from}, into {@code to}. */
+  private static String wideningExpression(final Scalar from, final Scalar to) {
+    // A long, or a Long, is handed to valueOf(long) as it is; a cast there is redundant.
+    final var asLong = from == Scalar.LONG ? "in" : "(long) in";
+    return switch (to) {
+      case SHORT, INT, LONG, FLOAT, DOUBLE -> "(" + to.primitive() + ") in";
+      case BIG_INTEGER -> "java.math.BigInteger.valueOf(" + asLong + ")";
+      case BIG_DECIMAL -> from == Scalar.BIG_INTEGER
+        ? "new java.math.BigDecimal(in)"
+        : "java.math.BigDecimal.valueOf(" + asLong + ")";
+      default -> throw new IllegalStateException("no built-in widening from " + from + " to " + to);
+    };
+  }
+
+  /**
+   * A scalar's type as generated code writes it: a primitive's name, or a class's qualified name.
+   */
+  private static String scalarTypeName(final TypeMirror type) {
+    return type.getKind().isPrimitive() ? type.getKind().name().toLowerCase(Locale.ROOT) : qualifiedName(type);
+  }
+
+  /**
+   * One direction of a list against a set: a helper rebuilding a {@code from} container as {@code
+   * to}'s kind, each element converted through {@code element}, or copied where the elements pass
+   * through.
+   */
+  private void emitReshapeDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String element,
+    final String bridgePkg
+  ) {
+    final var kind = containerShapeOf(to, from).kind();
+    if (IDENTITY_ELEMENT_SENTINEL.equals(element)) {
+      emitRawContainerHelper(out, direction, from, to, FieldPlan.ofKind(kind, element), direction, bridgePkg);
+    } else if (kind == FieldPlan.Kind.SET) {
+      emitSetHelper(out, direction, from, to, element, direction, bridgePkg);
+    } else {
+      emitListHelper(out, direction, from, to, element, direction, bridgePkg);
+    }
   }
 
   /** The qualified name of a declared type's class, without its type-use annotations. */
@@ -6311,9 +6646,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var widens = wrapperIntoPrimitive(gives, chosen) && !types.isSameType(types.unboxedType(gives), chosen);
     final var written = generic && chosen.getKind().isPrimitive() && !widens ? declared : gives;
     if (types.isAssignable(gives, chosen) && rules.argumentsFit(gives, chosen)) return new ViaResult(written, null);
-    // A result of a generic class used raw is written where the class takes type arguments
-    // through an unchecked conversion, as Java's assignment writes it.
-    if (usedRaw(gives) && types.isAssignable(gives, chosen)) return new ViaResult(written, null, true);
+    // A result of a generic class used raw, or of a class extending it raw, is written where the
+    // class takes type arguments through an unchecked conversion, as Java's assignment writes it.
+    if ((usedRaw(gives) || instantiation().reachesOnlyRaw(gives, chosen)) && types.isAssignable(gives, chosen)) {
+      return new ViaResult(written, null, true);
+    }
     if (reachesByCheck(gives, chosen)) return new ViaResult(written, null);
     if (!generic && !mayShareInstance(boxedErasure(gives), boxedErasure(chosen))) {
       return new ViaResult(
@@ -6415,7 +6752,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.fwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE, ENUM -> subCall(sub, "forward", readExpr);
+      case RECURSE, ENUM, CONVERT, RESHAPE -> subCall(sub, "forward", readExpr);
       // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
       // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
       // size-presized for-loop, eliminating the Stream + Spliterator + collector overhead at the
@@ -6482,7 +6819,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.bwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE, ENUM -> subCall(sub, "backward", readExpr);
+      case RECURSE, ENUM, CONVERT, RESHAPE -> subCall(sub, "backward", readExpr);
       case LIST, SET, MAP_VALUES -> elementIdentity
         ? "(" +
           readExpr +
@@ -7688,14 +8025,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * lets {@code mapperForward} look it up by {@code (source, target)} through {@link
    * java.util.ServiceLoader}. The public class has an implicit no-arg constructor for {@code
    * ServiceLoader}; source/target are imported and referenced by simple name like the bridge
-   * itself.
+   * itself. {@code intoNames} are the target properties the bridge writes, which a field-declared
+   * mapper's {@code into} updates; a derived getter the bridge leaves out is not among them. {@code
+   * writesInto} says the bridge has an {@code into} of its own, which that mapper's {@code into}
+   * then calls.
    */
   private void emitBridgeProvider(
     final TypeElement source,
     final TypeElement target,
     final String bridgeName,
     final String pkg,
-    final BridgeConfig cfg
+    final BridgeConfig cfg,
+    final List<String> intoNames,
+    final boolean writesInto
   ) {
     final var providerName = bridgeName + "Provider";
     final var carrier =
@@ -7751,10 +8093,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           out.println();
           out.println("  @Override");
           out.println("  public List<String> targetProperties() {");
-          out.println("    return List.of(" + quotedList(fieldsOf(target).stream().map(Field::name).toList()) + ");");
+          out.println("    return List.of(" + quotedList(intoNames) + ");");
           out.println("  }");
           out.println();
-          emitFieldMapper(out, source, target, bridgeName, cfg);
+          if (writesInto) {
+            out.println("  @Override");
+            out.println("  public boolean writesInto() {");
+            out.println("    return true;");
+            out.println("  }");
+            out.println();
+          }
+          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -7778,14 +8127,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * the bridge and overrides each direction with one call through the bridge's {@code BRIDGE_FN}
    * constant, so a call through the field resolves to the bridge as a call to {@code BRIDGE_FN}
    * does. Names are written in full, since the source or target may share a simple name with the
-   * telescope types.
+   * telescope types. Where {@code writesInto}, {@code into} is one call to the bridge's own {@code
+   * into} too.
    */
   private static void emitFieldMapper(
     final PrintWriter out,
     final TypeElement source,
     final TypeElement target,
     final String bridgeName,
-    final BridgeConfig cfg
+    final BridgeConfig cfg,
+    final boolean writesInto
   ) {
     final var s = source.getQualifiedName().toString();
     final var t = target.getQualifiedName().toString();
@@ -7832,6 +8183,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       out.println("    public " + s + " patch(final " + s + " base, final " + t + " partial) {");
       out.println("      return " + fn + ".patch(base, partial);");
       out.println("    }");
+      if (writesInto) {
+        out.println();
+        out.println("    @Override");
+        out.println("    public " + t + " into(final " + t + " target, final " + s + " source) {");
+        // The bridge's into binds each setter on the target class itself, and the runtime into
+        // binds it on the class of the object it is handed, so a subclass, whose own setter can
+        // take the value instead, is written by the runtime into.
+        if (!target.getModifiers().contains(Modifier.FINAL)) {
+          out.println(
+            "      if (target != null && target.getClass() != " + t + ".class) return super.into(target, source);"
+          );
+        }
+        out.println("      return " + bridgeName + ".into(target, source);");
+        out.println("    }");
+      }
     }
     out.println("  }");
     out.println();
@@ -8301,6 +8667,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * The bridge's {@code into(target, source)}, whose body is {@code statements}: a null target or
+   * source is refused by name, as {@code Mapper.into} refuses it, before anything converts.
+   */
+  private static void emitInto(
+    final PrintWriter out,
+    final String suppression,
+    final String sourceFq,
+    final String targetFq,
+    final List<String> statements
+  ) {
+    out.println("  /**");
+    out.println("   * Writes into {@code target} the value {@code forward(source)} gives each property this bridge");
+    out.println("   * writes, through the setter the property's type chooses, and returns {@code target}.");
+    out.println("   */");
+    out.print(suppression);
+    out.println(
+      "  public static " + targetFq + " into(final " + targetFq + " target, final " + sourceFq + " source) {"
+    );
+    out.println("    if (target == null) throw new NullPointerException(\"target\");");
+    out.println("    if (source == null) throw new NullPointerException(\"source\");");
+    for (final var statement : statements) out.println("    " + statement);
+    out.println("  }");
+    out.println();
+  }
+
+  /**
    * The access of a guarded bridge's path-carrying overloads: package-private when every bridge
    * that can call them shares this bridge's package, public otherwise. Those callers are the
    * bridges whose source lies on a cycle with this one's source, each emitted beside its source or
@@ -8542,8 +8934,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * refuse a setters strategy asked for with no setter for a property in {@code written}, the
    * properties the bridge writes into {@code to}. The ladder itself, and records always taking
    * their canonical constructor whatever the strategy, are {@link #rebuildFor}'s. {@code
-   * pairTarget} and {@code written} are null where {@code to} is an object a path steps through,
-   * which the path's plan has already held to its strategy.
+   * pairTarget} is null where {@code to} is an object a path steps through, which the path's plan
+   * has already held to its strategy, and {@code written} then holds the one property the path
+   * writes into it. Built through setters, a property in no {@code written} that has no setter is
+   * left as the constructor leaves it, as the runtime writer leaves it.
    *
    * <p>The choice is made once, by {@link #rebuildFor}, and handed here rather than made again. A
    * transform is checked against the member this will write through, so a second run of the ladder
@@ -8579,7 +8973,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) {
       for (final var f : toFields) {
         if (!written.contains(f.name()) || setterName(to, f.name()) != null) continue;
-        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name()));
+        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name(), "SETTERS"));
         return null;
       }
     }
@@ -8656,14 +9050,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var setter = setterName(to, f.name());
-          // A property the bridge writes nothing into is left as the constructor leaves it, as the
-          // runtime writer leaves a property its setters strategy has no setter for.
-          if (setter == null && heldToSetters && !written.contains(f.name())) continue;
+          // A property the bridge writes nothing into, of a side of the pair or of an object a path
+          // steps through, is left as the constructor leaves it, as the runtime writer leaves a
+          // property its setters strategy has no setter for, whether a hint names the strategy or
+          // the shared order takes it.
+          if (setter == null && !written.contains(f.name())) continue;
           if (setter == null) {
             error(
               annotationSite,
-              heldToSetters
-                ? settersDropMessage(annotationSite, pairTarget, to, f.name())
+              pairTarget != null
+                ? settersDropMessage(annotationSite, pairTarget, to, f.name(), heldToSetters ? "SETTERS" : null)
                 : "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
             );
             return null;
@@ -8818,6 +9214,52 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // would fall through here and return the value meaning "already reported" -- emitting nothing
     // and saying nothing.
     throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
+  }
+
+  /**
+   * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
+   * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
+   * names} has no setter that the runtime writer chooses from the property's type and that takes a
+   * value of that type without a cast. A record has no setter at all, so it never has an {@code
+   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as
+   * the runtime writer does.
+   *
+   * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
+   * forward(source)} gives it, read back through its getter. Every value is read before the first
+   * setter runs, so a getter that throws leaves {@code target} as it was. Each is written through
+   * the setter the property's type chooses, the rule the runtime writer applies; where the name has
+   * overloads the value is first assigned to a local of that setter's parameter type, which binds
+   * that method whatever javac would bind for the value's own type. A value of a wrapper class
+   * bound for a primitive parameter is skipped when null, as the runtime writer skips it.
+   */
+  private List<String> intoStatements(
+    final TypeElement target,
+    final List<Field> targetFields,
+    final List<String> names
+  ) {
+    final var reads = new ArrayList<String>();
+    final var writes = new ArrayList<String>();
+    reads.add("final var __produced = forward(source);");
+    var index = 0;
+    for (final var name : names) {
+      final var field = fieldByName(targetFields, name);
+      final var choice = setterChoice(target, name);
+      if (choice.member() == null) return null;
+      if (setterRefusal(target, name, false) != null) return null;
+      final var local = "__in" + index++;
+      reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");
+      final var setter = choice.member().getSimpleName();
+      final var write =
+        choice.argumentType() == null
+          ? "target." + setter + "(" + local + ");"
+          : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
+      final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
+      writes.add(guarded ? "if (" + local + " != null) " + write : write);
+    }
+    final var statements = new ArrayList<>(reads);
+    statements.addAll(writes);
+    statements.add("return target;");
+    return statements;
   }
 
   /**
@@ -9327,21 +9769,59 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The refusal of a setters strategy the bridge of {@code source} and {@code target} is told to
-   * rebuild {@code side} with, which has no setter for {@code property}: the runtime's words.
+   * The refusal of a setters strategy the bridge of {@code source} and {@code target} rebuilds
+   * {@code side} with, which has no setter for {@code property}, in the runtime's words: {@code
+   * strategy} is {@code SETTERS} where the bridge is told to take it, and null where the shared
+   * order takes it.
    */
   private static String settersDropMessage(
     final TypeElement source,
     final TypeElement target,
     final TypeElement side,
-    final String property
+    final String property,
+    final String strategy
   ) {
     return PairingMessages.beanPropertyUnwritable(
       source.getSimpleName().toString(),
       target.getSimpleName().toString(),
       side.getSimpleName().toString(),
       property,
-      "SETTERS"
+      strategy
+    );
+  }
+
+  /**
+   * The refusal of a {@code @Bridge} field's {@code writeBeans} default, in the runtime's words,
+   * where the strategy it names for {@code side}, a side of the pair of {@code source} and {@code
+   * target} with {@code sideFields}, finds no member to build {@code side} with at all; null where
+   * {@code rebuild} reaches a rung, where the pair has no such default, where a {@code writeBean}
+   * row names the strategy for {@code side}, and where the member is there and only the bridge's
+   * package cannot call it, which the runtime calls through a lookup with private access.
+   */
+  private static String defaultUnbuilt(
+    final BridgeConfig cfg,
+    final TypeElement source,
+    final TypeElement target,
+    final TypeElement side,
+    final List<Field> sideFields,
+    final Rebuild rebuild
+  ) {
+    if (rebuild.kind() != Rebuild.Kind.NONE || cfg.declaringField() == null || cfg.pathDefault() == null) return null;
+    if (cfg.pathStrategies().containsKey(side.getQualifiedName().toString())) return null;
+    final var constructors = ElementFilter.constructorsIn(side.getEnclosedElements());
+    // The builder() the ladder takes is public, so no rung for BUILDER means no builder the runtime
+    // takes either; a constructor can be there and out of the bridge's reach.
+    final var present = switch (cfg.pathDefault()) {
+      case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
+      case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
+      default -> false;
+    };
+    if (present) return null;
+    return PairingMessages.beanUnbuiltBy(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side.getSimpleName().toString(),
+      cfg.pathDefault()
     );
   }
 
@@ -9830,12 +10310,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether every property of the pair has something to pair it with, as the shared spec decides
-   * for a strict mapper, refusing the first that has not by name: a target property no row writes,
-   * no {@code constant} or {@code compute} fills and no source property of its name pairs with, or
-   * a source property no row reads or drops and no target property of its name pairs with.
+   * The derived getters of a pair nothing pairs with, which a strict bridge leaves out, once every
+   * other property of the pair has something to pair it with, as the shared spec decides for a
+   * strict mapper; null after refusing the first that has not by name: a target property no row
+   * writes, no {@code constant} or {@code compute} fills and no source property of its name pairs
+   * with, or a source property no row reads or drops and no target property of its name pairs with,
+   * where its class has a member to write it.
    */
-  private boolean paired(
+  private Unwritten paired(
     final TypeElement source,
     final List<Field> sourceFields,
     final Set<String> drops,
@@ -9866,52 +10348,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceNames,
       match,
       injectedTargetFields,
-      Set.of()
+      Set.of(),
+      name -> noWriteMember(target, name),
+      name -> noWriteMember(source, name)
     );
-    if (refusals.isEmpty()) return true;
-    error(source, refusals.getFirst());
-    return false;
+    if (!refusals.isEmpty()) {
+      error(source, refusals.getFirst());
+      return null;
+    }
+    final var sources = new LinkedHashSet<String>();
+    for (final var name : match.unmatchedSources()) if (noWriteMember(source, name)) sources.add(name);
+    final var targets = new LinkedHashSet<String>();
+    for (final var name : match.unmatchedTargets()) {
+      if (!injectedTargetFields.contains(name) && noWriteMember(target, name)) targets.add(name);
+    }
+    return new Unwritten(sources, targets);
   }
 
-  private boolean sameNames(
-    final TypeElement source,
-    final List<Field> sourceFields,
-    final TypeElement target,
-    final List<Field> targetFields,
-    final Map<String, String> renames,
-    final Map<String, List<String>> renameFanouts,
-    final Set<String> injectedTargetFields
-  ) {
-    final var sn = new TreeSet<String>();
-    for (final var f : sourceFields) {
-      sn.add(renames.getOrDefault(f.name(), f.name()));
-      // Forward-only fan-out: every extra target counts as a source-derived name in the bijection,
-      // since forward writes the source value into every fan-out target slot.
-      final var extras = renameFanouts.get(f.name());
-      if (extras != null) sn.addAll(extras);
-    }
-    final var tn = targetFields
-      .stream()
-      .map(Field::name)
-      .filter(n -> !injectedTargetFields.contains(n))
-      .collect(Collectors.toCollection(TreeSet::new));
-    if (sn.equals(tn)) return true;
-    error(
-      source,
-      "@Bridge: " +
-        source.getSimpleName() +
-        " and " +
-        target.getSimpleName() +
-        " must expose the same field names (a bijection). " +
-        source.getSimpleName() +
-        (renames.isEmpty() ? " has " : " (after renames) has ") +
-        sn +
-        ", " +
-        target.getSimpleName() +
-        " has " +
-        tn
-    );
-    return false;
+  /** The derived getters of each side of a pair that nothing pairs with. */
+  private record Unwritten(Set<String> sources, Set<String> targets) {}
+
+  /** Whether bean {@code type} has no member that writes {@code property}, a derived getter. */
+  private boolean noWriteMember(final TypeElement type, final String property) {
+    return WriteMembers.noWriteMember(processingEnv.getElementUtils(), type, property);
   }
 
   /**

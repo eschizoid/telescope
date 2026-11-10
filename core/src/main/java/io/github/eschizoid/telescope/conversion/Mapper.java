@@ -225,12 +225,13 @@ public class Mapper<A, B> {
   /**
    * Codegen-support seam: the state of {@code built}, a mapper over a generated bridge with no
    * hooks, for the class the {@code @Bridge} processor generates for a field. That class overrides
-   * {@link #forward}, {@link #backward} and {@link #patch} with one static call each into the
-   * field's bridge, so a call through the field's constant is a call the JIT resolves to the bridge
-   * and inlines; every other method is this class's own, and final. {@code grant} is the {@link
-   * BridgeGrant} the field's provider is handed when the field's factory call is dispatched to it,
-   * which keeps a class written by hand from extending this one by accident; a registered provider
-   * of one's own, or reflection on the class path, can still obtain it.
+   * {@link #forward}, {@link #backward} and {@link #patch}, and {@link #into} where the bridge has
+   * one, with one static call each into the field's bridge, so a call through the field's constant
+   * is a call the JIT resolves to the bridge and inlines; every other method is this class's own,
+   * and final. {@code grant} is the {@link BridgeGrant} the field's provider is handed when the
+   * field's factory call is dispatched to it, which keeps a class written by hand from extending
+   * this one by accident; a registered provider of one's own, or reflection on the class path, can
+   * still obtain it.
    *
    * @throws IllegalArgumentException if {@code grant} is not the one core hands out, or {@code
    *     built} is not a mapper over a generated bridge with no hooks
@@ -695,20 +696,26 @@ public class Mapper<A, B> {
    * repository.save(managed);
    * }</pre>
    *
-   * <p>Semantically equivalent to {@code forward(source)} writes — each property the forward
-   * mapping would set is written onto {@code target} through its public {@code setX(value)} setter
-   * (properties without one are skipped; see the setter note below). The hook chain (before/after)
-   * runs as it does in {@link #forward}; the only difference is the final write step targets {@code
-   * target} rather than a fresh allocation.
+   * <p><b>What it updates.</b> The properties of {@code target} the mapper writes: each a source
+   * property pairs with by name, and each a row fills, such as a rename, a {@code constant} or a
+   * {@code compute} row. Each takes the value {@code forward(source)} gives it. Every other
+   * property of {@code target}, such as a getter the class derives from others, keeps the value it
+   * had. The hook chain (before/after) runs as it does in {@link #forward}; the only difference is
+   * the final write step targets {@code target} rather than a fresh allocation.
    *
    * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
-   * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
-   * and discard / replace the receiver, or have the target type be a bean with setters.
+   * mapper throws {@link UnsupportedOperationException}, naming the record, at apply time. Use
+   * {@link #forward(Object)} and discard / replace the receiver, or have the target type be a bean
+   * with setters.
    *
-   * <p><b>Setter requirement.</b> Properties are written through public {@code setX(...)} setters
-   * on {@code target.getClass()}; a property without a public setter is silently skipped — the same
-   * semantics MapStruct applies to {@code @MappingTarget} update methods, so read-only fields on
-   * the target don't block the rest of the update.
+   * <p><b>Setter requirement.</b> Each property it updates is written through a public setter of
+   * {@code target.getClass()} that takes a value of the property's type, whatever strategy {@code
+   * forward} builds a new instance with. A bean built by a builder or a constructor may have no
+   * such setter for a property the mapper writes; {@code into} then cannot update that property in
+   * place and refuses the call by the property's name, before writing anything. The refusal comes
+   * from the first {@code into} call for a target of that class, not when the mapper is built,
+   * because a mapper used only through {@code forward} needs no setters and a subclass handed to
+   * {@code into} may declare the setter its declared class lacks.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
@@ -716,29 +723,38 @@ public class Mapper<A, B> {
    * <p><b>Sealed interfaces.</b> Between two sealed interfaces, {@code target} is written by the
    * mapper of its own case, and {@code source} must convert to that case.
    *
+   * <p><b>A {@code @Bridge} field's mapper.</b> Where the bridge generated for the field can update
+   * its target in place, the field's mapper hands a target of exactly the class the bridge writes
+   * to the bridge's {@code into}, which writes the same properties through the same setters with no
+   * reflection; {@link #explain()} says so. A subclass of that class is written here instead, since
+   * its own setters, which the bridge cannot know, decide how it takes a value. The bridge has such
+   * an {@code into} only when the target is a bean with a setter for every property the bridge
+   * writes.
+   *
    * @param target the existing instance to mutate; must not be null and must not be a record
    * @param source the source value to map from
    * @return {@code target} (same reference, mutated in place)
    * @throws NullPointerException if {@code target} or {@code source} is null
    * @throws UnsupportedOperationException if {@code target}'s class is a record
-   * @throws IllegalArgumentException between two sealed interfaces, if {@code source} converts to a
-   *     case other than {@code target}'s
+   * @throws IllegalArgumentException if {@code target}'s class has no setter for a property the
+   *     mapper writes, or, between two sealed interfaces, if {@code source} converts to a case
+   *     other than {@code target}'s
    */
-  public final B into(final B target, final A source) {
+  public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
     if (cases == null) refuseRecordTarget(targetClass);
     return writeInto(target, forward(source));
   }
 
-  private static void refuseRecordTarget(final Class<?> targetClass) {
-    if (targetClass.isRecord()) {
-      throw new UnsupportedOperationException(
-        "Mapper.into(target, source) requires a mutable target — records are immutable. Use" +
-          " Mapper.forward(source) and discard the receiver, or have your target type be a" +
-          " bean with public setters."
-      );
-    }
+  private void refuseRecordTarget(final Class<?> written) {
+    if (written.isRecord()) throw new UnsupportedOperationException(
+      PairingMessages.intoRecordTarget(
+        sourceClass.getSimpleName(),
+        targetClass.getSimpleName(),
+        PairingMessages.className(written)
+      )
+    );
   }
 
   /** Write {@code produced}, which this mapper's forward made, onto {@code target} in place. */
@@ -767,9 +783,9 @@ public class Mapper<A, B> {
     // Scoping: iterate the mapper's patch-table keyset — the set of top-level target fields the
     // engine actually produced values for — NOT every getter-derived property on target.getClass().
     // Iterating all properties would (1) clobber unmapped pre-existing fields on the managed
-    // entity, defeating the "load-mutate-save" idiom; and (2) stage pointless reads for read-only
-    // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
-    // silently no-op — work for a property the user never asked us to map.
+    // entity, defeating the "load-mutate-save" idiom; and (2) refuse a getter the class derives
+    // from others (e.g. getFullName() from firstName + lastName), which has no setter and which
+    // the mapper never writes.
     // Same null-table sentinel as patch(): the producing factory does not support target-mutating
     // operations at all — throw the UOE, don't NPE on the sentinel.
     if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("into()"));
@@ -782,7 +798,10 @@ public class Mapper<A, B> {
       // preForward and postForward may map to null by contract, and a null product wrote null to
       // every mapped property rather than failing. Readers are never bound here: there is nothing
       // to read from.
-      for (final var name : intoNames()) Beans.capturedWriter(writeClass, name).accept(target, null);
+      final var names = intoNames();
+      final var writers = new ArrayList<BiConsumer<Object, Object>>(names.size());
+      for (final var name : names) writers.add(intoWriter(writeClass, name));
+      for (final var writer : writers) writer.accept(target, null);
       return target;
     }
     final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
@@ -853,10 +872,29 @@ public class Mapper<A, B> {
     final var built = new IntoSlot[names.size()];
     var i = 0;
     for (final var name : names) {
-      built[i++] = new IntoSlot(Beans.capturedReader(readClass, name), Beans.capturedWriter(writeClass, name));
+      built[i++] = new IntoSlot(Beans.capturedReader(readClass, name), intoWriter(writeClass, name));
     }
     intoPlan = new IntoPlan(readClass, writeClass, built);
     return built;
+  }
+
+  /**
+   * The setter {@link #into} writes property {@code name} of a {@code writeClass} target through,
+   * refusing by name a property the class has no setter for, which {@code into} cannot update in
+   * place. Every writer is bound before the first write, so a refused call leaves the target as it
+   * was.
+   */
+  private BiConsumer<Object, Object> intoWriter(final Class<?> writeClass, final String name) {
+    final var writer = Beans.capturedWriter(writeClass, name);
+    if (writer == null) throw new IllegalArgumentException(
+      PairingMessages.intoPropertyUnwritable(
+        sourceClass.getSimpleName(),
+        targetClass.getSimpleName(),
+        PairingMessages.className(writeClass),
+        name
+      )
+    );
+    return writer;
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */

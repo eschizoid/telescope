@@ -226,35 +226,52 @@ declaration needed.
 **telescope:**
 
 ```java
-// Auto (no row needed): primitive<->wrapper, collection copies, Optional<->nullable, enum<->enum by constant name
-final var mapper = Telescope.mapper(Source.class, Target.class); // boolean<->Boolean, Integer<->int just work, null-safe
+record Order(String id, String total, String status, List<String> tags) {}
+record OrderDto(long id, BigDecimal total, Status status, Set<String> tags) {}
 
-// Everything else is an explicit typed row (by design — ADR-0002):
+// No row on either path: same-named properties convert, and the mapper converts back.
+final var mapper = Telescope.mapper(Order.class, OrderDto.class);   // runtime
+@Bridge static final Mapper<Order, OrderDto> DTO = mapper(Order.class, OrderDto.class); // generated
+
+// A widening converts forward only, so a two-way mapper refuses it and mapperForward takes it:
+Telescope.mapperForward(Count.class, CountDto.class); // int -> long, Integer -> BigDecimal, ...
+
+// Dates and times against text, and narrowing, stay explicit rows:
 Telescope.mapper(Src.class, Dst.class,
-    to(Src::getAttempts, Dst::getAttemptsText,
-       i -> i == null ? null : String.valueOf(i),
-       s -> s == null ? null : Integer.parseInt(s)),          // String<->number
-    to(Src::status, Dst::statusName, Enum::name, s -> Status.valueOf(s))); // enum<->String
+    to(Src::at, Dst::at, Instant::toString, Instant::parse));
 ```
 
-`Primitive<->wrapper` is genuinely automatic and matches MapStruct's null->0/false behavior (tested). Two different enum
-types whose constants match by name convert without a row too, on the runtime mapper and on `@Bridge` alike (see
-[Enum mapping](#enum-mapping)). But `String<->number`, `enum<->String`, and date/time conversions are deliberately NOT
-implicit (ADR-0002 'no fuzzy auto-mapping'): a same-name field with mismatched types throws at mapper-build time with a
-message naming the fix. The workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed, but a
-MapStruct migrator must write rows MapStruct generated silently.
+Built in on both paths, in both directions: `String` to and from every number but `char` (the primitives, their
+wrappers, `BigInteger` and `BigDecimal`), an enum by constant name, and `boolean`/`Boolean` (`true` or `false` in any
+case). A number widens to one that holds each of its values, by Java's widening rules plus the integral types and
+`BigInteger` into `BigInteger` and `BigDecimal`; that converts forward only, so `Telescope.mapper` and a strict
+`@Bridge` refuse the pair naming the row to write, while `mapperForward` and `@Bridge(lenient = true)` take it. A list
+and a set convert into each other's kind, each element converted too: into a set, equal elements collapse to the first,
+and into a list, the elements take the set's iteration order. Two different enum types whose constants match by name
+convert as well (see [Enum mapping](#enum-mapping)), and so do a primitive and its wrapper, matching MapStruct's
+null->0/false behaviour. The conversions apply to properties that pair by exact name, or by a plain `to(src, tgt)` row;
+no name is guessed (ADR-0002).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `computeAutoIso` (the Identity,
-PrimitiveWrapper, EnumByName, CollectionCopy and MapCopy branches, and the OptionalToNullable / NullableToOptional
-branches that lift `Optional<->nullable`) and `primitiveWrapperIso` (autobox with a JLS-default null guard);
-internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, `incompatibleShapes` (a
-same-name pair of differing scalar types is refused with 'add a to(src, tgt, forward, backward) row');
-core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the `PrimitiveWrapperAutoboxing` nested
-class ('auto-mapping handles primitive↔wrapper pairs …' and 'null boxed source mapping to primitive target uses JLS
-default …'), and the tests '2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime
-ClassCastException' and 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field';
-docs/adr/0002-no-fuzzy-auto-mapping.md (exact name+type only, explicit rows otherwise, amended for enum constant
-names)</sub>
+A `String` that is no valid number, constant or boolean fails on that value with the property and the value named, for
+example `'total' got "12x", not a BigDecimal`, the same message on both paths. The generated bridge calls
+`Long.parseLong`, `Enum.valueOf`, `new BigDecimal(...)` and `String.valueOf` directly and reads each property once.
+
+What stays explicit: narrowing (`long` to `int`, `double` to `float`, `double` to `BigDecimal`, which has no NaN or
+infinity), and dates and times against a `String`, which need a format. Each is refused when the mapper is built, or at
+compile time on `@Bridge`, with a message naming the `to(source, target, forward, backward)` row that converts it.
+
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `builtIn` and
+`scalarOf` (which pairs convert, in which directions) and the `reshapes` check in `decidePair` (a list against a set);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/Scalar.java, `widensTo`;
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, `notAValue`,
+`wideningOneWay`, `narrowing` and `textNeedsFormat`; core/src/main/java/io/github/eschizoid/telescope/BuiltIns.java (the
+runtime conversions); codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
+`emitConvertDirection` and `emitReshapeDirection` (the generated ones);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a built-in conversion
+converts the same way on both paths, and both refuse and fail alike';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BuiltInAgreementTest.java (the verifier agrees);
+core/src/test/java/io/github/eschizoid/telescope/BuiltInConversionTest.java; docs/adr/0002-no-fuzzy-auto-mapping.md
+(amended for built-in conversions)</sub>
 
 ### Format strings
 
@@ -414,13 +431,13 @@ final Mapper<TeamEntity, TeamDto> teamMapper2 = Telescope.mapper(
 ```
 
 Element mapping is reused automatically (same-name recursion) or explicitly (via(...) with a pre-built element Mapper),
-including nested containers like `List<Optional<X>>` and `Map<K,List<X>>`. Bidirectional round-trip comes free. One
-honesty caveat: auto-lift requires SAME-kind containers on both sides (`PairingRules.decidePair` compares the two
-container views' kinds); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in
-telescope. A `Deque` or `Queue` field is viewed as a list, and a field declared as the general `Collection` takes the
-other side's kind (`PairingRules.settledAgainst`). Target concrete class (ArrayList/LinkedList/Deque/...) is honored
-through the allocation table in `PairingRules` and the rules `ContainerAllocation` layers on it, which the runtime and
-codegen paths share, rendered at runtime by `ContainerLifts.allocatorFor`.
+including nested containers like `List<Optional<X>>` and `Map<K,List<X>>`. Bidirectional round-trip comes free. A list
+and a set convert into each other's kind, as MapStruct's List -> Set copy does: into a set, equal elements collapse to
+the first, and into a list, the elements take the set's iteration order. A `Deque` or `Queue` field is viewed as a list,
+and a field declared as the general `Collection` takes the other side's kind (`PairingRules.settledAgainst`). Target
+concrete class (ArrayList/LinkedList/Deque/...) is honored through the allocation table in `PairingRules` and the rules
+`ContainerAllocation` layers on it, which the runtime and codegen paths share, rendered at runtime by
+`ContainerLifts.allocatorFor`.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the class javadoc
 (List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), the LiftContainer branch of
@@ -734,21 +751,48 @@ mapper.into(managed, dto);        // writes dto's mapped fields onto `managed` v
 repository.save(managed);
 // sparse sibling: only non-null fields of a partial target overlay the base
 final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partial B) -> A
+
+// Codegen (@Bridge field) form — the same rows; into is generated with the bridge:
+public final class OrderMappers {
+  @Bridge
+  public static final Mapper<OrderDto, OrderEntity> ORDER = Telescope.mapper(OrderDto.class, OrderEntity.class, to(OrderDto::sku, OrderEntity::getSku));
+}
+OrderMappers.ORDER.into(managed, dto); // one call to OrderDtoToOrderEntityBridge.into: plain setter calls, no reflection
 ```
 
 Deliberate parity feature — the javadoc names @MappingTarget explicitly and the test class pins JPA load-mutate-save
 semantics (identity preserved, only mapped fields written, atomic staging). Bean targets only: records throw
-UnsupportedOperationException (MapStruct can't mutate records in place either). Properties without a public setter are
-silently skipped — matching MapStruct's @MappingTarget semantics. Bonus over MapStruct: patch() gives null-skipping
-sparse update without NullValuePropertyMappingStrategy.IGNORE config.
+UnsupportedOperationException naming the record (MapStruct can't mutate records in place either). A property the mapper
+writes that has no public setter is refused where MapStruct's @MappingTarget skips it: when the mapper is built, for a
+bean built through its setters, since forward would drop the value as well, and on the first into call, for a bean built
+by a builder or a constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives
+null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config.
+
+**Generated path: ✅ full.** A strict `@Bridge` whose target is a bean with a setter for every property it writes gets a
+static `into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
+subclass, whose own setters may take a value differently, goes to the runtime `into`. `explain()` says so. It writes
+what the runtime `into` writes: each property takes the value `forward(source)` gives it, read back through its getter,
+every value read before the first setter runs, each written through the setter the runtime chooses from the property's
+type, and a nested bean is replaced by the new object forward builds rather than updated in place. Every row the field
+form compiles behaves in it as in the runtime `into`. Where the bridge cannot update the target itself (a record, a bean
+without such a setter, a setter that takes the value only after a check of its class, a pair of sealed interfaces), it
+has no `into`, so a direct call does not compile, and the field's mapper runs the runtime `into`, which refuses in the
+same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;
+where `forward` inlines, as on a flat bean, the JIT can remove that object, and `IntoBenchmark` measures what is left.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a
 record target is rejected with UnsupportedOperationException) and `patch(Object, Object)` (sparse overlay);
 core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the class javadoc ('Pins Mapper.into(target,
 source) — the @MappingTarget equivalent'), the tests 'into(managed, dto) mutates target via setters; reference identity
-preserved' and 'Subsequent into(...) calls re-mutate the same instance', and 'property without a setter is silently
-skipped — matches SettersWriter'</sub>
+preserved' and 'Subsequent into(...) calls re-mutate the same instance', 'a paired property without a setter refuses the
+mapper rather than being dropped by forward and into', and 'a builder-built target refuses on into by the property's
+name, and has written nothing'; codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
+`intoStatements` and `emitInto` (the generated `into`); codegen/src/test/java/io/github/eschizoid/telescope/codegen/
+CrossPathCorpusTest.java, the tests 'into updates every property the mapper writes through a setter, and refuses by name
+one it has no setter for, on both paths', 'between two sealed interfaces, into writes the target's own case and refuses
+another, on both paths' and 'a @Bridge field's mapper writes into the target through the generated bridge's own
+into'</sub>
 
 ### Object factories
 

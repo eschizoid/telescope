@@ -498,4 +498,71 @@ class ViaClassRowTest {
     );
     assertEquals(new HolderDto(new ShapeDto("sub:a")), mapper.forward(new Holder(new Circle("a"))));
   }
+
+  public record SomeCircles(List<? extends Circle> shapes) {}
+
+  public record SomeShapeDtos(List<? extends ShapeDto> shapes) {}
+
+  public record AnyCircles(List<? super Circle> shapes) {}
+
+  public static final class ByCircle {
+
+    private ByCircle() {}
+
+    public static ShapeDto forward(final Circle circle) {
+      return new ShapeDto(circle.name().toUpperCase());
+    }
+
+    public static Circle backward(final ShapeDto dto) {
+      return new Circle(dto.name().toLowerCase());
+    }
+  }
+
+  public static final class ByCircleFromAnything {
+
+    private ByCircleFromAnything() {}
+
+    public static ShapeDto forward(final Circle circle) {
+      return new ShapeDto(circle.name());
+    }
+
+    public static Circle backward(final Object dto) {
+      return new Circle(((ShapeDto) dto).name());
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "an element a wildcard types is held as the wildcard's upper bound, which chooses the element methods, or" +
+      " refuses by name the row whose methods take none of them"
+  )
+  void aWildcardElementIsHeldAsItsUpperBound() {
+    final var some = Telescope.mapper(
+      SomeCircles.class,
+      CirclesDto.class,
+      via(SomeCircles::shapes, CirclesDto::shapes, ByCircle.class)
+    );
+    final var circles = new SomeCircles(List.of(new Circle("a")));
+    final var dto = some.forward(circles);
+    assertEquals(new CirclesDto(List.of(new ShapeDto("A"))), dto);
+    assertEquals(circles, some.backward(dto));
+    final var into = Telescope.mapper(
+      Circles.class,
+      SomeShapeDtos.class,
+      via(Circles::shapes, SomeShapeDtos::shapes, ByCircle.class)
+    );
+    assertEquals(new SomeShapeDtos(List.of(new ShapeDto("A"))), into.forward(new Circles(List.of(new Circle("a")))));
+    final var anything = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapper(
+        SomeCircles.class,
+        CirclesDto.class,
+        via(SomeCircles::shapes, CirclesDto::shapes, ByCircleFromAnything.class)
+      )
+    );
+    assertTrue(anything.getMessage().contains("source's 'shapes'"), anything.getMessage());
+    final var supers = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapper(AnyCircles.class, CirclesDto.class, via(AnyCircles::shapes, CirclesDto::shapes, ByCircle.class))
+    );
+    assertTrue(supers.getMessage().contains("source's 'shapes'"), supers.getMessage());
+  }
 }

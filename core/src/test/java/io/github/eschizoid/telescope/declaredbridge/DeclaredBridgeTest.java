@@ -134,6 +134,37 @@ class DeclaredBridgeTest {
   }
 
   @Test
+  @DisplayName("explain says into writes through the bridge's own into where it has one, and by reflection otherwise")
+  void explainSaysWhichPathIntoWritesOn() {
+    final var bridge = HintedMappers.class.getPackageName() + ".HintedToHintedBeanBridge";
+    assertTrue(
+      HintedMappers.HINTED.explain()
+        .declared()
+        .orElseThrow()
+        .why()
+        .endsWith(
+          "; into writes through " +
+            bridge +
+            ".into, and a subclass of the target through the setters it looks up at run time"
+        ),
+      () -> HintedMappers.HINTED.explain().toString()
+    );
+    final var bean = new HintedBean();
+    assertSame(bean, HintedMappers.HINTED.into(bean, new Hinted("n")));
+    assertEquals("n", bean.getLabel());
+    assertTrue(
+      PointMappers.POINT.explain()
+        .declared()
+        .orElseThrow()
+        .why()
+        .endsWith(
+          "; into writes through the setters it looks up at run time, since " + Point.class.getName() + " has no into"
+        ),
+      () -> PointMappers.POINT.explain().toString()
+    );
+  }
+
+  @Test
   @DisplayName("a forward-only mapper the declaring class builds runs the generated bridge")
   void aForwardMapperRunsTheBridge() {
     final var before = DeclaredFixtures.GENERATED_CALLS.get();

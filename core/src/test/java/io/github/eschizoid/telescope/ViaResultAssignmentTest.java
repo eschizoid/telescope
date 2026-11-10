@@ -2094,4 +2094,609 @@ class ViaResultAssignmentTest {
       "java.util.List<java.lang.Integer>"
     );
   }
+
+  public record NumberValued(Map<String, ? extends Number> v) {}
+
+  public record CharValued(Map<String, ? extends CharSequence> v) {}
+
+  public record LongBelow(Optional<? extends Long> v) {}
+
+  public record NumberBelow(Optional<? extends Number> v) {}
+
+  public record IntegersBelow(Map<String, ? extends Integer> v) {}
+
+  public static final class SelfPaired {
+
+    private SelfPaired() {}
+
+    public static <T> Map<T, T> forward(final T a) {
+      return Map.of(a, a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Optionals {
+
+    private Optionals() {}
+
+    public static <T> Optional<T> forward(final T a) {
+      return Optional.of(a);
+    }
+
+    public static int backward(final Object b) {
+      return 0;
+    }
+  }
+
+  public static final class Dependent {
+
+    private Dependent() {}
+
+    public static <T, U extends T> Map<T, U> forward(final T a) {
+      return Map.of();
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class DependentList {
+
+    private DependentList() {}
+
+    public static <T, U extends T> List<U> forward(final T a) {
+      return List.of();
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Sequenced {
+
+    private Sequenced() {}
+
+    public static <T extends CharSequence> List<T> forward(final T a) {
+      return List.of(a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Numeric {
+
+    private Numeric() {}
+
+    public static <T extends Number> T forward(final String a) {
+      return null;
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a variable the target bounds by a wildcard is held to that bound with what the argument and its own bounds force" +
+      " on it, and a result that is the variable is held to the member's type"
+  )
+  void aVariableTheTargetBoundsByAWildcardIsHeldToTheBound() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          NumberValued.class,
+          Mapping.<Text, NumberValued>via(Text::v, NumberValued::v, SelfPaired.class)
+        ),
+      "java.util.Map<T, T>",
+      "java.util.Map<java.lang.String, ? extends java.lang.Number>"
+    );
+    final var paired = Telescope.mapperForward(
+      Text.class,
+      CharValued.class,
+      Mapping.<Text, CharValued>via(Text::v, CharValued::v, SelfPaired.class)
+    );
+    assertEquals(new CharValued(Map.of("x", "x")), paired.forward(new Text("x")));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Count.class,
+          LongBelow.class,
+          Mapping.<Count, LongBelow>via(Count::v, LongBelow::v, Optionals.class)
+        ),
+      "java.util.Optional<T>",
+      "java.util.Optional<? extends java.lang.Long>"
+    );
+    final var present = Telescope.mapperForward(
+      Count.class,
+      NumberBelow.class,
+      Mapping.<Count, NumberBelow>via(Count::v, NumberBelow::v, Optionals.class)
+    );
+    assertEquals(new NumberBelow(Optional.of(7)), present.forward(new Count(7)));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Lowered.class,
+          Mapping.<Text, Lowered>via(Text::v, Lowered::v, Sequenced.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<? super java.lang.Integer>"
+    );
+    final var sequenced = Telescope.mapperForward(
+      Text.class,
+      Supers.class,
+      Mapping.<Text, Supers>via(Text::v, Supers::v, Sequenced.class)
+    );
+    assertEquals(new Supers(List.of("x")), sequenced.forward(new Text("x")));
+    assertNoInstantiation(
+      () -> Telescope.mapperForward(Text.class, Text.class, Mapping.<Text, Text>via(Text::v, Text::v, Numeric.class)),
+      "T",
+      "java.lang.String"
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "a variable's bound naming another variable is read with that variable's type in place where the target fixes it"
+  )
+  void aBoundNamingAnotherVariableIsReadWithItsType() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Weights.class,
+          Mapping.<Text, Weights>via(Text::v, Weights::v, Dependent.class)
+        ),
+      "java.util.Map<T, U>",
+      "java.util.Map<java.lang.String, java.lang.Integer>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntegersBelow.class,
+          Mapping.<Text, IntegersBelow>via(Text::v, IntegersBelow::v, Dependent.class)
+        ),
+      "java.util.Map<T, U>",
+      "java.util.Map<java.lang.String, ? extends java.lang.Integer>"
+    );
+    final var below = Telescope.mapperForward(
+      Text.class,
+      ExtendsInteger.class,
+      Mapping.<Text, ExtendsInteger>via(Text::v, ExtendsInteger::v, DependentList.class)
+    );
+    assertEquals(new ExtendsInteger(List.of()), below.forward(new Text("x")));
+    final var exact = Telescope.mapperForward(
+      Text.class,
+      Integers.class,
+      Mapping.<Text, Integers>via(Text::v, Integers::v, DependentList.class)
+    );
+    assertEquals(new Integers(List.of()), exact.forward(new Text("x")));
+  }
+
+  public record IntArrays(List<Integer[]> v) {}
+
+  public record IntArraysBelow(List<? extends Integer[]> v) {}
+
+  public record StringArrays(List<String[]> v) {}
+
+  public record CharArraysBelow(List<? extends CharSequence[]> v) {}
+
+  public record IntArraysAbove(List<? super Integer[]> v) {}
+
+  public record CloneablesBelow(List<? extends Cloneable> v) {}
+
+  public record IntsBelow(List<? extends int[]> v) {}
+
+  public record IntsAbove(List<? super int[]> v) {}
+
+  public record IntArrayArrays(List<Integer[][]> v) {}
+
+  public static final class Arrayed {
+
+    private Arrayed() {}
+
+    public static <T> List<T[]> forward(final T a) {
+      return List.of();
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "an array of a variable is an array whose component the variable is, a subtype of the classes every array" +
+      " extends, and of no array of a primitive"
+  )
+  void anArrayOfAVariableIsHeldThroughItsComponent() {
+    final List<Supplier<?>> refused = List.of(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntArrays.class,
+          Mapping.<Text, IntArrays>via(Text::v, IntArrays::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntArraysBelow.class,
+          Mapping.<Text, IntArraysBelow>via(Text::v, IntArraysBelow::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          ExtendsNumber.class,
+          Mapping.<Text, ExtendsNumber>via(Text::v, ExtendsNumber::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntsBelow.class,
+          Mapping.<Text, IntsBelow>via(Text::v, IntsBelow::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntsAbove.class,
+          Mapping.<Text, IntsAbove>via(Text::v, IntsAbove::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntArrayArrays.class,
+          Mapping.<Text, IntArrayArrays>via(Text::v, IntArrayArrays::v, Arrayed.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Strings.class,
+          Mapping.<Text, Strings>via(Text::v, Strings::v, Arrayed.class)
+        )
+    );
+    for (final var built : refused) {
+      final var message = assertThrows(IllegalArgumentException.class, built::get).getMessage();
+      assertTrue(message.contains("returns java.util.List<T[]>, " + NO_INSTANTIATION), message);
+    }
+    final var exact = Telescope.mapperForward(
+      Text.class,
+      StringArrays.class,
+      Mapping.<Text, StringArrays>via(Text::v, StringArrays::v, Arrayed.class)
+    );
+    assertEquals(new StringArrays(List.of()), exact.forward(new Text("x")));
+    final var below = Telescope.mapperForward(
+      Text.class,
+      CharArraysBelow.class,
+      Mapping.<Text, CharArraysBelow>via(Text::v, CharArraysBelow::v, Arrayed.class)
+    );
+    assertEquals(new CharArraysBelow(List.of()), below.forward(new Text("x")));
+    final var above = Telescope.mapperForward(
+      Text.class,
+      IntArraysAbove.class,
+      Mapping.<Text, IntArraysAbove>via(Text::v, IntArraysAbove::v, Arrayed.class)
+    );
+    assertEquals(new IntArraysAbove(List.of()), above.forward(new Text("x")));
+    final var cloneable = Telescope.mapperForward(
+      Text.class,
+      CloneablesBelow.class,
+      Mapping.<Text, CloneablesBelow>via(Text::v, CloneablesBelow::v, Arrayed.class)
+    );
+    assertEquals(new CloneablesBelow(List.of()), cloneable.forward(new Text("x")));
+  }
+
+  public record WildLists(List<List<? extends CharSequence>> v) {}
+
+  public record SuperLists(List<List<? super String>> v) {}
+
+  public record ListsAbove(List<? super List<String>> v) {}
+
+  public record IntListsAbove(List<? super List<Integer>> v) {}
+
+  public record SetsAbove(List<? super Set<String>> v) {}
+
+  public static final class Nesting {
+
+    private Nesting() {}
+
+    public static <T> List<List<T>> forward(final T a) {
+      return List.of(List.of(a));
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class NestingBelow {
+
+    private NestingBelow() {}
+
+    public static <T> List<List<? extends T>> forward(final T a) {
+      return List.of(List.of(a));
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class NestingAbove {
+
+    private NestingAbove() {}
+
+    public static <T> List<List<? super T>> forward(final T a) {
+      return List.<List<? super T>>of(new ArrayList<T>(List.of(a)));
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Below {
+
+    private Below() {}
+
+    public static <T> List<? extends T> forward(final T a) {
+      return List.of(a);
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  public static final class Above {
+
+    private Above() {}
+
+    public static <T> List<? super T> forward(final T a) {
+      return new ArrayList<T>(List.of(a));
+    }
+
+    public static Object backward(final Object b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a wildcard of the result is contained in the target's only where bounded the same way, and inside a type" +
+      " argument the target gives exactly it is met only by the same wildcard"
+  )
+  void aWildcardOfTheResultIsHeldToTheTargets() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          WildLists.class,
+          Mapping.<Text, WildLists>via(Text::v, WildLists::v, Nesting.class)
+        ),
+      "java.util.List<java.util.List<T>>",
+      "java.util.List<java.util.List<? extends java.lang.CharSequence>>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Boxed.class,
+          WildLists.class,
+          Mapping.<Boxed, WildLists>via(Boxed::v, WildLists::v, NestingBelow.class)
+        ),
+      "java.util.List<java.util.List<? extends T>>",
+      "java.util.List<java.util.List<? extends java.lang.CharSequence>>"
+    );
+    final var wild = Telescope.mapperForward(
+      Text.class,
+      WildLists.class,
+      Mapping.<Text, WildLists>via(Text::v, WildLists::v, NestingBelow.class)
+    );
+    assertEquals(new WildLists(List.of(List.of("x"))), wild.forward(new Text("x")));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          WildLists.class,
+          Mapping.<Text, WildLists>via(Text::v, WildLists::v, NestingAbove.class)
+        ),
+      "java.util.List<java.util.List<? super T>>",
+      "java.util.List<java.util.List<? extends java.lang.CharSequence>>"
+    );
+    final var superLists = Telescope.mapperForward(
+      Text.class,
+      SuperLists.class,
+      Mapping.<Text, SuperLists>via(Text::v, SuperLists::v, NestingAbove.class)
+    );
+    assertEquals(new SuperLists(List.of(List.of("x"))), superLists.forward(new Text("x")));
+    final var listsAbove = Telescope.mapperForward(
+      Text.class,
+      ListsAbove.class,
+      Mapping.<Text, ListsAbove>via(Text::v, ListsAbove::v, Nesting.class)
+    );
+    assertEquals(new ListsAbove(List.of(List.of("x"))), listsAbove.forward(new Text("x")));
+    final var belowAbove = Telescope.mapperForward(
+      Text.class,
+      ListsAbove.class,
+      Mapping.<Text, ListsAbove>via(Text::v, ListsAbove::v, NestingBelow.class)
+    );
+    assertEquals(new ListsAbove(List.of(List.of("x"))), belowAbove.forward(new Text("x")));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          IntListsAbove.class,
+          Mapping.<Text, IntListsAbove>via(Text::v, IntListsAbove::v, Nesting.class)
+        ),
+      "java.util.List<java.util.List<T>>",
+      "java.util.List<? super java.util.List<java.lang.Integer>>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          SetsAbove.class,
+          Mapping.<Text, SetsAbove>via(Text::v, SetsAbove::v, Nesting.class)
+        ),
+      "java.util.List<java.util.List<T>>",
+      "java.util.List<? super java.util.Set<java.lang.String>>"
+    );
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Strings.class,
+          Mapping.<Text, Strings>via(Text::v, Strings::v, Below.class)
+        ),
+      "java.util.List<? extends T>",
+      "java.util.List<java.lang.String>"
+    );
+    final var elements = Telescope.mapperForward(
+      Text.class,
+      Elements.class,
+      Mapping.<Text, Elements>via(Text::v, Elements::v, Below.class)
+    );
+    assertEquals(new Elements(List.of("x")), elements.forward(new Text("x")));
+    final var unbounded = Telescope.mapperForward(
+      Text.class,
+      Unbounded.class,
+      Mapping.<Text, Unbounded>via(Text::v, Unbounded::v, Below.class)
+    );
+    assertEquals(new Unbounded(List.of("x")), unbounded.forward(new Text("x")));
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          Text.class,
+          Elements.class,
+          Mapping.<Text, Elements>via(Text::v, Elements::v, Above.class)
+        ),
+      "java.util.List<? super T>",
+      "java.util.List<? extends java.lang.String>"
+    );
+    final var above = Telescope.mapperForward(
+      Text.class,
+      Supers.class,
+      Mapping.<Text, Supers>via(Text::v, Supers::v, Above.class)
+    );
+    assertEquals(new Supers(List.of("x")), above.forward(new Text("x")));
+  }
+
+  public record IntArrayValues(List<Integer[]> v) {}
+
+  public record StringArraysBelow(List<? extends String[]> v) {}
+
+  public record ObjectArraysBelow(List<? extends Object[]> v) {}
+
+  public record PrimitiveArrays(List<int[]> v) {}
+
+  public record LongArraysBelow(List<? extends long[]> v) {}
+
+  public static final class Lowering {
+
+    private Lowering() {}
+
+    public static <T> List<T> forward(final List<? super T> a) {
+      return List.of();
+    }
+
+    @SuppressWarnings("rawtypes")
+    public static List backward(final List<?> b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "two types a variable is a subtype of admit it only where some class can be both: not two classes neither of" +
+      " which extends the other, an array and a class no array is, nor two arrays whose components are so"
+  )
+  void twoUpperBoundsAdmitAVariableOnlyWhereOneClassCanBeBoth() {
+    final List<Supplier<?>> refused = List.of(
+      () ->
+        Telescope.mapperForward(
+          Integers.class,
+          Elements.class,
+          Mapping.<Integers, Elements>via(Integers::v, Elements::v, Lowering.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          IntArrayValues.class,
+          StringArraysBelow.class,
+          Mapping.<IntArrayValues, StringArraysBelow>via(IntArrayValues::v, StringArraysBelow::v, Lowering.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          IntArrayValues.class,
+          ExtendsNumber.class,
+          Mapping.<IntArrayValues, ExtendsNumber>via(IntArrayValues::v, ExtendsNumber::v, Lowering.class)
+        ),
+      () ->
+        Telescope.mapperForward(
+          PrimitiveArrays.class,
+          LongArraysBelow.class,
+          Mapping.<PrimitiveArrays, LongArraysBelow>via(PrimitiveArrays::v, LongArraysBelow::v, Lowering.class)
+        )
+    );
+    for (final var built : refused) {
+      final var message = assertThrows(IllegalArgumentException.class, built::get).getMessage();
+      assertTrue(message.contains("returns java.util.List<T>, " + NO_INSTANTIATION), message);
+    }
+    final var number = Telescope.mapperForward(
+      Integers.class,
+      ExtendsNumber.class,
+      Mapping.<Integers, ExtendsNumber>via(Integers::v, ExtendsNumber::v, Lowering.class)
+    );
+    assertEquals(new ExtendsNumber(List.of()), number.forward(new Integers(List.of(7))));
+    final var objects = Telescope.mapperForward(
+      IntArrayValues.class,
+      ObjectArraysBelow.class,
+      Mapping.<IntArrayValues, ObjectArraysBelow>via(IntArrayValues::v, ObjectArraysBelow::v, Lowering.class)
+    );
+    assertEquals(new ObjectArraysBelow(List.of()), objects.forward(new IntArrayValues(List.of())));
+  }
+
+  public static final class Unnested {
+
+    private Unnested() {}
+
+    public static <T> List<T> forward(final List<? extends List<T>> a) {
+      return a.getFirst();
+    }
+
+    public static List<List<String>> backward(final List<?> b) {
+      return null;
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a parameter's wildcard bounded by a generic class gives that class the type arguments the property's argument" +
+      " gives it, which fix the variables inside it"
+  )
+  void aParameterWildcardBoundedByAGenericClassFixesItsVariables() {
+    assertNoInstantiation(
+      () ->
+        Telescope.mapperForward(
+          ExtendsLists.class,
+          Chars.class,
+          Mapping.<ExtendsLists, Chars>via(ExtendsLists::v, Chars::v, Unnested.class)
+        ),
+      "java.util.List<T>",
+      "java.util.List<java.lang.CharSequence>"
+    );
+    final var flattened = Telescope.mapperForward(
+      ExtendsLists.class,
+      Strings.class,
+      Mapping.<ExtendsLists, Strings>via(ExtendsLists::v, Strings::v, Unnested.class)
+    );
+    assertEquals(new Strings(List.of("x")), flattened.forward(new ExtendsLists(List.of(List.of("x")))));
+  }
 }

@@ -1,12 +1,11 @@
 package io.github.eschizoid.telescope;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -198,15 +197,17 @@ class MapperIntoTest {
     record EntityRec(String name) {}
 
     @Test
-    @DisplayName("calling into() with a record target throws with a clear message pointing at forward()")
+    @DisplayName("calling into() with a record target throws, naming the record and pointing at forward()")
     void recordTargetRejected() {
       final var mapper = Telescope.mapper(DtoRec.class, EntityRec.class);
       final var existing = new EntityRec("old");
 
       final var ex = assertThrows(UnsupportedOperationException.class, () -> mapper.into(existing, new DtoRec("new")));
 
-      assertTrue(ex.getMessage().contains("records are immutable"), "message explains the constraint");
-      assertTrue(ex.getMessage().contains("Mapper.forward"), "message suggests the alternative");
+      assertEquals(
+        PairingMessages.intoRecordTarget("DtoRec", "EntityRec", PairingMessages.className(EntityRec.class)),
+        ex.getMessage()
+      );
     }
   }
 
@@ -230,7 +231,7 @@ class MapperIntoTest {
   }
 
   @Nested
-  @DisplayName("Missing setter — silently skipped to match SettersWriter / MapStruct @MappingTarget")
+  @DisplayName("Missing setter — a property the mapper writes with no setter is refused when the mapper is built")
   class MissingSetter {
 
     record DtoOnly(String id, String missingOnEntity) {}
@@ -256,16 +257,155 @@ class MapperIntoTest {
     }
 
     @Test
-    @DisplayName("property without a setter is silently skipped — matches SettersWriter")
-    void missingSetterIsSilentlySkipped() {
-      // Mapper.into and Mapper.forward both reach the target through Beans setter dispatch;
-      // both paths must silently skip an absent setter to keep the contract symmetric (matches
-      // MapStruct @MappingTarget behaviour). The setId() target is still written; the
-      // missingOnEntity target stays at its JLS default.
-      final var mapper = Telescope.mapper(DtoOnly.class, EntityOnlyId.class);
-      final var target = new EntityOnlyId();
-      assertDoesNotThrow(() -> mapper.into(target, new DtoOnly("a", "b")));
-      assertEquals("a", target.getId());
+    @DisplayName("a paired property without a setter refuses the mapper rather than being dropped by forward and into")
+    void missingSetterRefusesTheMapper() {
+      // The target is built through its setters, the first strategy it offers, and forward and
+      // into both write through them, so a property they would pass a value to and cannot write is
+      // refused where the mapper is built.
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(DtoOnly.class, EntityOnlyId.class)
+      );
+      assertEquals(
+        PairingMessages.beanPropertyUnwritable("DtoOnly", "EntityOnlyId", "EntityOnlyId", "missingOnEntity", null),
+        refused.getMessage()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("A target built by a builder or a constructor — into refuses a property it has no setter for")
+  class SetterlessBuiltTarget {
+
+    record Dto(String id, String label) {}
+
+    /** Built by its builder; a setter for {@code id} and none for {@code label}. */
+    public static class Built {
+
+      private String id;
+      private String label;
+
+      private Built() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getLabel() {
+        return label;
+      }
+
+      public static Builder builder() {
+        return new Builder();
+      }
+
+      public static final class Builder {
+
+        private final Built built = new Built();
+
+        public Builder id(final String id) {
+          built.id = id;
+          return this;
+        }
+
+        public Builder label(final String label) {
+          built.label = label;
+          return this;
+        }
+
+        public Built build() {
+          return built;
+        }
+      }
+    }
+
+    /** Built by a constructor taking both properties; no setter for either. */
+    public static class Constructed {
+
+      private final String id;
+      private final String label;
+
+      public Constructed(final String id, final String label) {
+        this.id = id;
+        this.label = label;
+      }
+
+      public String getId() {
+        return id;
+      }
+
+      public String getLabel() {
+        return label;
+      }
+    }
+
+    /** A subclass of {@link Built} that declares the setter its superclass lacks. */
+    public static class Labelled extends Built {
+
+      private String written;
+
+      public void setLabel(final String label) {
+        written = label;
+      }
+
+      String written() {
+        return written;
+      }
+    }
+
+    @Test
+    @DisplayName("a builder-built target refuses on into by the property's name, and has written nothing")
+    void builderBuiltTargetRefusesBeforeWriting() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class);
+      final var target = Built.builder().id("old").label("kept").build();
+      final var refused = assertThrows(IllegalArgumentException.class, () -> mapper.into(target, new Dto("new", "x")));
+      assertEquals(
+        PairingMessages.intoPropertyUnwritable("Dto", "Built", PairingMessages.className(Built.class), "label"),
+        refused.getMessage()
+      );
+      assertEquals("old", target.getId(), "every writer is bound before the first write");
+      assertEquals("kept", target.getLabel());
+    }
+
+    @Test
+    @DisplayName("a constructor-built target refuses on into, though forward builds it")
+    void constructorBuiltTargetRefusesOnInto() {
+      final var mapper = Telescope.mapper(Dto.class, Constructed.class);
+      assertEquals("x", mapper.forward(new Dto("a", "x")).getLabel());
+      final var refused = assertThrows(IllegalArgumentException.class, () ->
+        mapper.into(new Constructed("old", "kept"), new Dto("a", "x"))
+      );
+      assertEquals(
+        PairingMessages.intoPropertyUnwritable(
+          "Dto",
+          "Constructed",
+          PairingMessages.className(Constructed.class),
+          "id"
+        ),
+        refused.getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a forward hook that produces nothing is refused the same way before any null is written")
+    void nullProductRefusesBeforeWriting() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class).afterForward((dto, built) -> null);
+      final var target = Built.builder().id("old").label("kept").build();
+      assertThrows(IllegalArgumentException.class, () -> mapper.into(target, new Dto("new", "x")));
+      assertEquals("old", target.getId());
+    }
+
+    @Test
+    @DisplayName("a subclass handed to into that declares the missing setter is updated in full")
+    void aSubclassWithTheSetterIsUpdated() {
+      final var mapper = Telescope.mapper(Dto.class, Built.class);
+      final var target = new Labelled();
+      assertSame(target, mapper.into(target, new Dto("new", "x")));
+      assertEquals("new", target.getId());
+      assertEquals("x", target.written());
     }
   }
 

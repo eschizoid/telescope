@@ -6,8 +6,8 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -127,14 +127,29 @@ class WriteHintPrecedenceTest {
   }
 
   @Test
-  @DisplayName("a BUILDER default refuses a bean in the same tree that has no builder")
+  @DisplayName("a BUILDER default refuses a bean in the same tree that has no builder when the mapper is built")
   void builderDefaultRefusesABeanWithoutABuilder() {
-    final var thrown = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(Mixed.class, MixedTarget.class, writeBeans(BUILDER)).forward(
-        new Mixed(new Source("a"), new Source("b"))
-      )
+    final var thrown = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapper(Mixed.class, MixedTarget.class, writeBeans(BUILDER))
     );
-    assertTrue(thrown.getMessage().contains(SettersOnly.class.getName()), thrown::getMessage);
-    assertTrue(thrown.getMessage().contains("builder()"), thrown::getMessage);
+    assertEquals(PairingMessages.beanUnbuiltBy("Source", "SettersOnly", "SettersOnly", "BUILDER"), thrown.getMessage());
+  }
+
+  @Test
+  @DisplayName("a BUILDER default does not refuse the source of a forward-only mapper, which it never builds")
+  void builderDefaultLeavesAForwardOnlySourceAlone() {
+    final var source = new SettersOnly();
+    source.setName("a");
+    final var mapper = Telescope.mapperForward(SettersOnly.class, Source.class, writeBeans(BUILDER));
+    assertEquals(new Source("a"), mapper.forward(source));
+  }
+
+  @Test
+  @DisplayName("a BUILDER default refuses the source of a two-way mapper, which backward builds")
+  void builderDefaultRefusesATwoWaySource() {
+    final var thrown = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapper(SettersOnly.class, Source.class, writeBeans(BUILDER))
+    );
+    assertEquals(PairingMessages.beanUnbuiltBy("SettersOnly", "Source", "SettersOnly", "BUILDER"), thrown.getMessage());
   }
 }

@@ -553,7 +553,7 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `SameTypedContainerBenchmark`                                    | same-typed List, Set and Map copies by mapper and bridge, against two controls     |
 | `CycleGuardBenchmark`                                            | a self-referencing type by bridge and mapper, chain and ring, against a plain copy |
 | `ContainerWriteBenchmark`                                        | `.each()` / `.eachValue()` rebuilds across cardinality                             |
-| `IntoBenchmark`                                                  | `Mapper.into` against `forward`, at five and twenty properties                     |
+| `IntoBenchmark`                                                  | `Mapper.into` runtime and generated, against `forward` and a setter sequence       |
 | `LmfBenchmark`                                                   | the dispatch substrate: LMF vs reflection vs hand-rolled                           |
 | `EffectfulTraversalBenchmark`                                    | `updateOptional` and `updateValidated` against a pure update                       |
 | `MergeBenchmark`, `FromMapBenchmark`, `MultiEditBenchmark`       | the positional-bind and fusion engines                                             |
@@ -686,7 +686,10 @@ JVM/codegen-only under AOT).
 ## ADR index (`docs/adr/`)
 
 1. **0001 — Internal optic lattice.** Why the lattice is package-private.
-2. **0002 — No fuzzy auto-mapping.** `.auto()` is exact name+type; no Dozer-style heuristics.
+2. **0002 — No fuzzy auto-mapping.** `.auto()` is exact name+type; no Dozer-style heuristics. Amended for enums by
+   constant name and for built-in conversions on exactly-paired properties: `String` against a number, an enum or a
+   boolean both ways, numeric widening forward only, and `List` against `Set`; narrowing and dates against text stay
+   rows.
 3. **0003 — Reflection over MethodHandles.** Perf trade-off.
 4. **0004 — Runtime and codegen are separate strategies.** Why we don't unify the rebuild path.
 5. **0005 — LambdaMetafactory over MethodHandle.invoke.** Refines ADR-0003: keep reflective discovery; swap hot-path

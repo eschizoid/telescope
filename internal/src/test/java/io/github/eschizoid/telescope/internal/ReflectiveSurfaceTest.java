@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import java.lang.reflect.ParameterizedType;
 import java.util.HashMap;
 import java.util.List;
@@ -247,7 +248,7 @@ class ReflectiveSurfaceTest {
         }
       };
       tracking.put(SimpleBean.class, Beans.settersWriter(SimpleBean.class));
-      final var refl = Reflective.beansWithHints(tracking, null);
+      final var refl = Reflective.beansWithHints(tracking, null, null);
 
       final var built = (SimpleBean) refl.construct(SimpleBean.class, name ->
         switch (name) {
@@ -275,7 +276,7 @@ class ReflectiveSurfaceTest {
       // memoise per class on its own, so per-call factory invocation doesn't rebuild LMF sites
       // every time — the cost is just the factory function call.)
       final var factoryCalls = new int[] { 0 };
-      final var refl = Reflective.beansWithHints(new HashMap<>(), cls -> {
+      final var refl = Reflective.beansWithHints(new HashMap<>(), BeanWriteStrategy.SETTERS, cls -> {
         factoryCalls[0]++;
         return Beans.settersWriter(SimpleBean.class);
       });
@@ -295,7 +296,7 @@ class ReflectiveSurfaceTest {
       // the hinted class, so a regression collapsing the two tiers fails loudly.
       final var hints = new HashMap<Class<?>, Beans.BeanWriter<?>>();
       hints.put(SimpleBean.class, Beans.settersWriter(SimpleBean.class));
-      final var refl = Reflective.beansWithHints(hints, cls -> {
+      final var refl = Reflective.beansWithHints(hints, BeanWriteStrategy.SETTERS, cls -> {
         throw new AssertionError("default factory must not be consulted when a hint exists for " + cls);
       });
 

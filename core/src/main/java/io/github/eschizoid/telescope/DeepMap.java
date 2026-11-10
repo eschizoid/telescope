@@ -60,6 +60,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -273,7 +274,12 @@ public final class DeepMap {
 
   private static final Logger LOGGER = System.getLogger(Telescope.class.getName());
 
-  /** The mapper over the generated bridge {@code declaration} found. */
+  /**
+   * The mapper over the generated bridge {@code declaration} found. Its {@code explain()} also says
+   * which path its {@code into} writes on: the bridge's own {@code into} where the provider says
+   * the bridge has one and the target is of the class the bridge writes, and the setters {@code
+   * Mapper.into} looks up at run time otherwise.
+   */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static <A, B> Mapper<A, B> declaredMapper(
     final Declaration declaration,
@@ -282,13 +288,21 @@ public final class DeepMap {
   ) {
     final var bridge = declaration.provider().bridge();
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(bridge);
+    final var node = declaration.node();
+    final var bridgeName = declaration.provider().getClass().getName().replaceFirst("Provider$", "");
+    final var into = declaration.provider().writesInto()
+      ? "; into writes through " +
+        bridgeName +
+        ".into, and a subclass of the target through the setters it looks up" +
+        " at run time"
+      : "; into writes through the setters it looks up at run time, since " + bridgeName + " has no into";
     final var built = Mapper.ofGenerated(
       fn,
       source,
       target,
       Telescope.bridgePatch((Telescope) bridge),
       declaration.provider().targetProperties(),
-      List.of(declaration.node())
+      List.of(new OpticNode.Declared(node.declaredBy(), node.runs(), node.why() + into))
     );
     return (Mapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }
@@ -406,7 +420,11 @@ public final class DeepMap {
     final var beanRefl =
       hintMap.isEmpty() && defaultWriterFactory == null
         ? Reflective.BEANS
-        : Reflective.beansWithHints(hintMap, defaultWriterFactory);
+        : Reflective.beansWithHints(
+            hintMap,
+            defaultStrategy == null ? null : BeanWriteStrategy.valueOf(defaultStrategy.name()),
+            defaultWriterFactory
+          );
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
@@ -1845,7 +1863,7 @@ public final class DeepMap {
         for (final var name : srcNames) {
           if (!claimedSrc.contains(name) && !telescopeReadsSrc.contains(name)) kept.add(name);
         }
-        final var taken = KeptNames.taken(kept, claimedTgt);
+        final var taken = KeptNames.taken(kept, claimedTgt, name -> Beans.noWriteMember(source, name));
         if (!taken.isEmpty()) {
           final var dropped = topLevelDrop(overrides, source, srcRefl, taken.getFirst());
           throw new IllegalStateException(
@@ -1896,7 +1914,9 @@ public final class DeepMap {
           List.of(srcNames),
           match,
           filled,
-          unknownSrcRead ? null : telescopeReadsSrc
+          unknownSrcRead ? null : telescopeReadsSrc,
+          name -> Beans.noWriteMember(target, name),
+          name -> Beans.noWriteMember(source, name)
         );
         if (!unpaired.isEmpty()) throw new IllegalStateException(unpaired.getFirst());
       }
@@ -1908,6 +1928,17 @@ public final class DeepMap {
         // hop on the target. Elsewhere a field no row fills stays at its default, except a field
         // whose same-named source a row reads, which only a row naming that field lets through.
         if (!byName.contains(name)) {
+          // A getter no member of the target writes is derived from the target's other state. A
+          // strict mapper leaves it out where no row writes it: nothing fills it and nothing could,
+          // so it takes no step, and into, which writes the steps' properties, leaves it alone too.
+          if (
+            !lenient &&
+            !forwardOnly &&
+            !telescopeWritesTgt.contains(name) &&
+            !unknownTgtWrite &&
+            !writtenThroughPath(overrides, target, name) &&
+            Beans.noWriteMember(target, name)
+          ) continue;
           // Lenient on nested auto-recursed pairs: a pair recursed into from computeAutoIso (no
           // topStepsOut) was never explicitly configured by the user — it was visited because a
           // parent field's genericType is reflectable. An unmatched target field there should stay
@@ -2038,6 +2069,12 @@ public final class DeepMap {
           );
           continue;
         }
+        // A getter no member of the source writes is derived from the source's other state, so
+        // backward has nothing to write into it and forward nothing to read it for.
+        if (Beans.noWriteMember(source, name)) {
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
+          continue;
+        }
         // A source field nothing reads falls back to a NULLING placeholder on a nested
         // auto-recursed pair and on a mapper converting forward only. Where a strict mapper decides
         // the pair's fields, the refusal above leaves one here only when a path row names no first
@@ -2058,9 +2095,10 @@ public final class DeepMap {
         );
       }
 
-      // A value converted for a bean property's own type is written through its setter, so a
-      // setter that cannot take that type, or a setters strategy a hint names with no setter for
-      // the property, refuses the pair here, on the side each direction the mapper runs writes.
+      // Each side a direction the mapper runs builds is refused here when the strategy it is built
+      // through cannot build it, or would not write a property the mapper writes: a strategy the
+      // writeBeans default names that does not apply, a setter that cannot take a value of the
+      // property's own type, and a setters strategy, hinted or taken, with no setter for it.
       refuseUnwritableSetters(source, target, target, tgtRefl, byTargetName, telescopeWritesTgt, true);
       if (!forwardOnly) refuseUnwritableSetters(source, target, source, srcRefl, bySourceName, pathWritesSrc, false);
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
@@ -2644,6 +2682,22 @@ public final class DeepMap {
       return enumByNameIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
+    // (a.1c) Two different scalars a built-in conversion takes between → parse, write as text, or
+    //        widen, each direction the JDK call the generated bridge makes for the pair.
+    if (decision instanceof PairDecision.BuiltIn<Type> d) {
+      final var src = (Class<?>) srcType;
+      final var tgt = (Class<?>) tgtType;
+      final var enumSide = src.isEnum() ? src : tgt.isEnum() ? tgt : null;
+      return BuiltIns.iso(
+        src,
+        tgt,
+        d.source(),
+        d.target(),
+        componentName,
+        enumSide == null ? null : PAIRING.nameInMessage(enumSide)
+      );
+    }
+
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (decision instanceof PairDecision.RecursePair) {
       // A pair given type arguments converts as its raw classes, which read each other's type
@@ -2777,6 +2831,15 @@ public final class DeepMap {
       // lifts
       // see the right shape directly — no extra reach-through — and treat every non-leaf shape the
       // same (plain Java loop).
+      if (d.src().kind() != d.tgt().kind()) {
+        return ContainerLifts.liftReshapedIntoTargetRaw(
+          eraseIso(elementIso),
+          srcType,
+          tgtType,
+          d.src().kind(),
+          d.tgt().kind()
+        );
+      }
       return switch (d.src().kind()) {
         case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
         case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
@@ -3148,9 +3211,13 @@ public final class DeepMap {
   /**
    * Whether a container's {@code elementType} is what the element mapper converts: the mapper's own
    * class, or a type variable whose bound admits it, since such a container may hold the mapper's
-   * class.
+   * class. An element a wildcard types is held as the wildcard's upper bound.
    */
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
+    if (elementType instanceof WildcardType wildcard) return elementTypeMatches(
+      wildcard.getUpperBounds()[0],
+      mapperClass
+    );
     if (elementType instanceof Class<?> cls) return cls.equals(mapperClass);
     return elementType instanceof TypeVariable<?> variable && boundOf(variable).isAssignableFrom(mapperClass);
   }
@@ -3917,13 +3984,17 @@ public final class DeepMap {
   }
 
   /**
-   * Refuses a bean side, {@code cls} of the pair of {@code source} and {@code target}, for every
-   * property of it the mapper writes: each a step fills from the other side, the target's
-   * properties when {@code isTarget} is true and otherwise the source's, which the backward
-   * direction writes, and each in {@code rowWritten}, which a row writes through a path, a constant
-   * or a computed value. A setter that cannot take a value of the property's own type is refused
-   * for a property a step fills, and then a setters strategy a hint names for {@code cls} that has
-   * no setter for a property the mapper writes, which would drop the value.
+   * Refuses a bean side, {@code cls} of the pair of {@code source} and {@code target}, that the
+   * mapper builds and cannot build as it writes it. A strategy the {@code writeBeans} default names
+   * for {@code cls} that does not build it is refused, as a {@code writeBean} hint naming one is
+   * refused when the hint is built. Then, for every property of {@code cls} the mapper writes, each
+   * a step fills from the other side, the target's properties when {@code isTarget} is true and
+   * otherwise the source's, which the backward direction writes, and each in {@code rowWritten},
+   * which a row writes through a path, a constant or a computed value: a setter that cannot take a
+   * value of the property's own type is refused for a property a step fills, and then a setters
+   * strategy, named by a hint or taken by the shared order, that has no setter for a property the
+   * mapper writes, which would drop the value. A property nothing writes is left as the strategy
+   * leaves it.
    */
   private static void refuseUnwritableSetters(
     final Class<?> source,
@@ -3935,7 +4006,18 @@ public final class DeepMap {
     final boolean isTarget
   ) {
     final var writer = refl.writerFor(cls);
-    if (writer == null) return;
+    final var named = refl.namedStrategyFor(cls);
+    if (writer == null) {
+      if (named == null) return;
+      throw new IllegalArgumentException(
+        PairingMessages.beanUnbuiltBy(
+          source.getSimpleName(),
+          target.getSimpleName(),
+          PairingMessages.className(cls),
+          named.name()
+        )
+      );
+    }
     final var written = new LinkedHashSet<String>();
     for (final var step : steps.values()) {
       final var name = isTarget ? step.targetName() : step.sourceName();
@@ -3946,17 +4028,16 @@ public final class DeepMap {
       written.add(name);
     }
     written.addAll(rowWritten);
-    final var named = refl.namedWriterFor(cls);
-    if (named == null || Beans.strategyOf(named) != BeanWriteStrategy.SETTERS) return;
+    if (Beans.strategyOf(writer) != BeanWriteStrategy.SETTERS) return;
     for (final var name : written) {
-      if (!named.writes(name)) {
+      if (!writer.writes(name)) {
         throw new IllegalArgumentException(
           PairingMessages.beanPropertyUnwritable(
             source.getSimpleName(),
             target.getSimpleName(),
             PairingMessages.className(cls),
             name,
-            BeanWriteStrategy.SETTERS.name()
+            named == null ? null : named.name()
           )
         );
       }

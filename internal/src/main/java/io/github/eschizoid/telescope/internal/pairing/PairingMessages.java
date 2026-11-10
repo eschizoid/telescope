@@ -626,14 +626,6 @@ public final class PairingMessages {
     final String intermediate,
     final String strategy
   ) {
-    final var reason = switch (strategy) {
-      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
-      " BUILDER, or SETTERS, or add a name-matched constructor.";
-      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
-      " SETTERS, or add a builder().";
-      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
-      " no-argument constructor the mapper's package can call.";
-    };
     return (
       "Deep map " +
       source +
@@ -646,8 +638,45 @@ public final class PairingMessages {
       ", which a write through the path builds where it is null, and writeStrategy = " +
       strategy +
       " for it finds " +
-      reason
+      unbuiltReason(strategy)
     );
+  }
+
+  /**
+   * A pair a mapper converts whose side {@code bean} the mapper builds, and the write strategy the
+   * mapper's {@code writeBeans} default names, {@code strategy} ({@code CONSTRUCTOR}, {@code
+   * BUILDER} or {@code SETTERS}), does not build it.
+   */
+  public static String beanUnbuiltBy(
+    final String source,
+    final String target,
+    final String bean,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the mapper builds " +
+      bean +
+      ", and writeStrategy = " +
+      strategy +
+      ", which the mapper's writeBeans default names for it, finds " +
+      unbuiltReason(strategy)
+    );
+  }
+
+  /** What {@code strategy} finds missing on a class it does not build, and what to do instead. */
+  private static String unbuiltReason(final String strategy) {
+    return switch (strategy) {
+      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
+      " BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
+      " SETTERS, or add a builder().";
+      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
+      " no-argument constructor the mapper's package can call.";
+    };
   }
 
   /**
@@ -685,9 +714,10 @@ public final class PairingMessages {
   }
 
   /**
-   * A pair a mapper converts whose side {@code bean} is built through {@code strategy}, as a hint
-   * names it, and that strategy writes no {@code property} into it although the mapper writes a
-   * value there, so the value would be dropped.
+   * A pair a mapper converts whose side {@code bean} is built through {@code strategy} as a hint
+   * names it, or, where {@code strategy} is null, through the one the shared order takes for it,
+   * and that strategy writes no {@code property} into it although the mapper writes a value there,
+   * so the value would be dropped.
    */
   public static String beanPropertyUnwritable(
     final String source,
@@ -705,15 +735,67 @@ public final class PairingMessages {
       property +
       "' into " +
       bean +
-      ", and writeStrategy = " +
-      strategy +
-      " for it writes no '" +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
       property +
       "' into it, so the value would be dropped. Give " +
       bean +
       " a member that writes '" +
       property +
       "', or name a strategy that writes it."
+    );
+  }
+
+  /**
+   * A mapper's {@code into} handed a {@code bean} with no setter that takes {@code property}, a
+   * property the mapper writes. {@code into} updates the object it is given through its setters, so
+   * it cannot update that property in place.
+   */
+  public static String intoPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into writes '" +
+      property +
+      "' into the " +
+      bean +
+      " it is given through a setter, and " +
+      bean +
+      " has no setter that takes it, so into cannot update it in place. Give " +
+      bean +
+      " a setter for '" +
+      property +
+      "', or call forward(source) for a new " +
+      bean +
+      "."
+    );
+  }
+
+  /**
+   * A mapper's {@code into} handed a {@code record}, which it cannot update in place: a record's
+   * components are fixed once its canonical constructor has run.
+   */
+  public static String intoRecordTarget(final String source, final String target, final String record) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into updates the object it is given in place, and " +
+      record +
+      " is a record, so it cannot: records are immutable. Call forward(source) for a new " +
+      record +
+      ", or make " +
+      record +
+      " a bean with a setter for each property the mapper writes."
     );
   }
 
@@ -1382,6 +1464,103 @@ public final class PairingMessages {
       sb.append(", or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))");
     }
     return sb.append(".").toString();
+  }
+
+  /** The row that converts a pair both ways, as a refusal names it. */
+  private static final String TWO_WAY_ROW = "to(source, target, forward, backward)";
+
+  /** The row that converts a pair forward only, as a refusal names it. */
+  private static final String ONE_WAY_ROW = "toOneWay(source, target, forward)";
+
+  /**
+   * A number widened to a type that holds each of its values, on a mapper that also converts back,
+   * where the way back would narrow.
+   */
+  public static String wideningOneWay(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' widens " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which converts forward only: the way back would narrow " +
+      tgtType +
+      " to " +
+      srcType +
+      " and can lose the value. Convert it both ways with a " +
+      TWO_WAY_ROW +
+      " row, or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))."
+    );
+  }
+
+  /** A number converted to a type that does not hold each of its values. */
+  public static String narrowing(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' would narrow " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which can lose the value, so it is not converted without a row. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /** A {@code String} paired with a date or time, whose text has no one format. */
+  public static String textNeedsFormat(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", and text converts to and from a date or time only in a format, which nothing here names. " +
+      "Convert it with a " +
+      TWO_WAY_ROW +
+      " row that parses and formats in the format the text uses, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A value a built-in conversion cannot convert: a {@code String} that is no {@code what}, read
+   * from {@code componentName}. {@code what} is the phrase {@link #scalarPhrase} gives, and the
+   * message reads {@code 'total' got "12x", not a BigDecimal}. An element of a container is named
+   * by the property holding it.
+   */
+  public static String notAValue(final String componentName, final String value, final String what) {
+    return notAValueHead(componentName) + value + notAValueTail(what);
+  }
+
+  /** The text {@link #notAValue} puts before the value, which generated code writes as is. */
+  public static String notAValueHead(final String componentName) {
+    final var bracket = componentName.indexOf('[');
+    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket)) + "' got \"";
+  }
+
+  /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
+  public static String notAValueTail(final String what) {
+    return "\", not " + what;
+  }
+
+  /**
+   * What a value converted to {@code scalar} has to be, with its article: {@code an int}, {@code a
+   * Long}, {@code a BigDecimal}, {@code a boolean}, or for an enum {@code a constant of Status}, by
+   * {@code enumName}, the enum's name in source.
+   */
+  public static String scalarPhrase(final Scalar scalar, final boolean primitive, final String enumName) {
+    final String noun;
+    if (scalar == Scalar.ENUM) noun = "constant of " + enumName;
+    else if (primitive) noun = scalar.primitive();
+    else noun = scalar.className().substring(scalar.className().lastIndexOf('.') + 1);
+    return ("aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ") + noun;
   }
 
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */

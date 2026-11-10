@@ -11,6 +11,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,11 +23,12 @@ import java.util.Set;
  * chooses them for the same row on a mapper field, made into the {@link Via} row the deep mapping
  * already converts through. Where the two sides are containers of one kind and the class has a
  * {@code forward} taking the source's element and a {@code backward} taking the target's, and not a
- * pair of overloads converting the whole property both ways, the row converts element by element.
- * Otherwise each direction calls the overload Java binds for the property's value: the most
- * specific one it applies to, without boxing where one applies so, then a generic one whose type
- * variable admits the value, and otherwise the one method a value of the property can be an
- * instance of the parameter of, which the call checks the value's class against.
+ * pair of overloads converting the whole property both ways, the row converts element by element;
+ * an element a wildcard types is held as the wildcard's upper bound. Otherwise each direction calls
+ * the overload Java binds for the property's value: the most specific one it applies to, without
+ * boxing where one applies so, then a generic one whose type variable admits the value, and
+ * otherwise the one method a value of the property can be an instance of the parameter of, which
+ * the call checks the value's class against.
  */
 final class ViaClasses {
 
@@ -92,8 +94,10 @@ final class ViaClasses {
       tgtElement != null &&
       !(convertsWhole(forwards, srcType, tgtType) && convertsWhole(backwards, tgtType, srcType))
     ) {
-      final var forward = elementMethods(forwards, srcElement, srcType);
-      final var backward = elementMethods(backwards, tgtElement, tgtType);
+      final var srcHeld = heldElement(srcElement);
+      final var tgtHeld = heldElement(tgtElement);
+      final var forward = elementMethods(forwards, srcHeld, srcType);
+      final var backward = elementMethods(backwards, tgtHeld, tgtType);
       if (!forward.isEmpty() && !backward.isEmpty()) {
         if (forward.size() > 1 || backward.size() > 1) {
           final var method = forward.size() > 1 ? "forward" : "backward";
@@ -114,8 +118,8 @@ final class ViaClasses {
             row,
             forward.getFirst(),
             backward.getFirst(),
-            elementClass(srcElement, forward.getFirst()),
-            elementClass(tgtElement, backward.getFirst())
+            elementClass(srcHeld, forward.getFirst()),
+            elementClass(tgtHeld, backward.getFirst())
           ),
           null,
           null
@@ -270,6 +274,14 @@ final class ViaClasses {
       .filter(m -> boxed(m.getParameterTypes()[0]).isAssignableFrom(held))
       .filter(m -> !m.getParameterTypes()[0].isAssignableFrom(containerClass))
       .toList();
+  }
+
+  /**
+   * The type an element {@code element} types is held as: a wildcard's upper bound, which is {@code
+   * Object} for one bounded from below or not at all, and any other type itself.
+   */
+  private static Type heldElement(final Type element) {
+    return element instanceof WildcardType wildcard ? wildcard.getUpperBounds()[0] : element;
   }
 
   /**

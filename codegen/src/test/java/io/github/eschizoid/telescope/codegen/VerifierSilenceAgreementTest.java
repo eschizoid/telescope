@@ -1015,6 +1015,21 @@ class VerifierSilenceAgreementTest {
     }
 
     @Test
+    @DisplayName("not where a constant row fills a target property whose namesake the source has, which pairs with it")
+    void namesakeOfAConstantFilledTarget() {
+      assertBothAccept(
+        verified(
+          "VuW",
+          """
+            record @@Src(String id, String tenant) {}
+            record @@Tgt(String id, String tenant) {}
+            """ +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, constant(@@Tgt::tenant, \"production\"))")
+        )
+      );
+    }
+
+    @Test
     @DisplayName("not on a nested pair no row is keyed to, beside a constant row on the mapper's pair")
     void notOnANestedPair() {
       assertBothAccept(
@@ -1383,6 +1398,130 @@ class VerifierSilenceAgreementTest {
         "Telescope.mapperForward(@@Src.class, @@Tgt.class, to(Telescope.path(@@Other::m, @@Mid::n), @@Tgt::a))"
       );
       assertBothRefuse(outcome);
+    }
+  }
+
+  /**
+   * A bean with a setter for {@code first} and {@code last}, and a getter alone for {@code full}.
+   */
+  private static final String DERIVED = """
+    class @@Named {
+      private String first;
+      private String last;
+      public @@Named() {}
+      public String getFirst() { return first; }
+      public void setFirst(String v) { first = v; }
+      public String getLast() { return last; }
+      public void setLast(String v) { last = v; }
+      public String getFull() { return first + " " + last; }
+    }
+    """;
+
+  /** A bean built by its builder, with a getter alone for {@code value} and for {@code extra}. */
+  private static final String BUILT = """
+    class @@Built {
+      private final String value;
+      private final String extra;
+      private @@Built(String value, String extra) { this.value = value; this.extra = extra; }
+      public String getValue() { return value; }
+      public String getExtra() { return extra; }
+      public static Builder builder() { return new Builder(); }
+      public static final class Builder {
+        private String value;
+        private String extra;
+        public Builder value(String v) { value = v; return this; }
+        public Builder extra(String v) { extra = v; return this; }
+        public @@Built build() { return new @@Built(value, extra); }
+      }
+    }
+    """;
+
+  @Nested
+  @DisplayName("A getter-only property nothing pairs with")
+  class GetterOnly {
+
+    @Test
+    @DisplayName("is accepted by both on the target where no member writes it")
+    void derivedTarget() {
+      assertBothAccept(
+        verified(
+          "VgA",
+          DERIVED +
+            "record @@Rec(String first, String last) {}\n" +
+            holder("Telescope.mapper(@@Rec.class, @@Named.class)")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both on the source where no member writes it")
+    void derivedSource() {
+      assertBothAccept(
+        verified(
+          "VgB",
+          DERIVED +
+            "record @@Rec(String first, String last) {}\n" +
+            holder("Telescope.mapper(@@Named.class, @@Rec.class)")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both on the source where a rename of another property fills its namesake")
+    void derivedSourceWhoseNamesakeARenameFills() {
+      assertBothAccept(
+        verified(
+          "VgC",
+          DERIVED +
+            "record @@Rec(String first, String full) {}\n" +
+            holder("Telescope.mapper(@@Named.class, @@Rec.class, to(@@Named::getLast, @@Rec::full))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both on a nested source where a rename of another property fills its namesake")
+    void derivedNestedSourceWhoseNamesakeARenameFills() {
+      assertBothAccept(
+        verified(
+          "VgF",
+          DERIVED +
+            """
+            record @@Rec(String first, String full) {}
+            record @@Outer(@@Named in) {}
+            record @@OuterDto(@@Rec in) {}
+            """ +
+            holder("Telescope.mapper(@@Outer.class, @@OuterDto.class, to(@@Named::getLast, @@Rec::full))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is refused by both on the target where its builder writes it")
+    void builderWrittenTarget() {
+      final var outcome = verified(
+        "VgD",
+        BUILT + "record @@Rec(String value) {}\n" + holder("Telescope.mapper(@@Rec.class, @@Built.class)")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.noSameNameSource("VgDRec", "VgDBuilt", "property", "field", "extra"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("is refused by both on the source where its builder writes it")
+    void builderWrittenSource() {
+      final var outcome = verified(
+        "VgE",
+        BUILT + "record @@Rec(String value) {}\n" + holder("Telescope.mapper(@@Built.class, @@Rec.class)")
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.noSameNameTarget("VgEBuilt", "VgERec", "property", "field", "extra"),
+        outcome.construction()
+      );
     }
   }
 }

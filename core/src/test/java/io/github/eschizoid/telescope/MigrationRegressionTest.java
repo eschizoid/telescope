@@ -2751,13 +2751,13 @@ class MigrationRegressionTest {
 
     public static class AttemptsTarget {
 
-      private String numberOfAttempts;
+      private Boolean numberOfAttempts;
 
-      public String getNumberOfAttempts() {
+      public Boolean getNumberOfAttempts() {
         return numberOfAttempts;
       }
 
-      public void setNumberOfAttempts(final String numberOfAttempts) {
+      public void setNumberOfAttempts(final Boolean numberOfAttempts) {
         this.numberOfAttempts = numberOfAttempts;
       }
     }
@@ -2798,7 +2798,7 @@ class MigrationRegressionTest {
     public static class MultiRowTarget {
 
       private String documentId;
-      private String numberOfAttempts;
+      private Boolean numberOfAttempts;
       private String origin;
 
       public String getDocumentId() {
@@ -2809,11 +2809,11 @@ class MigrationRegressionTest {
         this.documentId = documentId;
       }
 
-      public String getNumberOfAttempts() {
+      public Boolean getNumberOfAttempts() {
         return numberOfAttempts;
       }
 
-      public void setNumberOfAttempts(final String numberOfAttempts) {
+      public void setNumberOfAttempts(final Boolean numberOfAttempts) {
         this.numberOfAttempts = numberOfAttempts;
       }
 
@@ -2828,15 +2828,13 @@ class MigrationRegressionTest {
 
     @Test
     @DisplayName(
-      "2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime ClassCastException"
+      "2-arg to(Integer-getter, Boolean-getter) rename is rejected at build, not a runtime ClassCastException"
     )
     void mismatchedSameTypedRenameRejectedAtBuild() {
-      // The feedback reports a runtime ClassCastException (Integer cannot be cast to String) at
-      // SettersWriter.construct: javac infers the shared type of the 2-arg to() as the LUB, so it
-      // compiles and then identity-passes the Integer into the String setter. The fix routes the
-      // same-typed row through autoIso, turning it into a build-time rejection that names the
-      // fields
-      // and points to the converting 4-arg form.
+      // javac infers the shared type of the 2-arg to() as the LUB, so the row compiles. Passed
+      // through unchanged, the Integer would reach the Boolean setter and fail with a cast there;
+      // routed through the same pairing as a same-named field, a pair no built-in conversion takes
+      // is refused at build, naming the fields and the converting 4-arg form.
       final var ex = assertThrows(IllegalStateException.class, () ->
         Telescope.mapperBuilder(AttemptsSource.class, AttemptsTarget.class)
           .add(Mapping.to(AttemptsSource::getDocUpdateAttempts, AttemptsTarget::getNumberOfAttempts))
@@ -2855,8 +2853,8 @@ class MigrationRegressionTest {
           Mapping.to(
             AttemptsSource::getDocUpdateAttempts,
             AttemptsTarget::getNumberOfAttempts,
-            i -> i == null ? null : String.valueOf(i),
-            s -> s == null ? null : Integer.parseInt(s)
+            i -> i == null ? null : i > 0,
+            b -> b == null ? null : b ? 7 : 0
           )
         )
         .build();
@@ -2865,7 +2863,7 @@ class MigrationRegressionTest {
       src.setDocUpdateAttempts(7);
 
       final var dto = mapper.forward(src);
-      assertEquals("7", dto.getNumberOfAttempts());
+      assertEquals(Boolean.TRUE, dto.getNumberOfAttempts());
 
       final var back = mapper.backward(dto);
       assertEquals(Integer.valueOf(7), back.getDocUpdateAttempts());

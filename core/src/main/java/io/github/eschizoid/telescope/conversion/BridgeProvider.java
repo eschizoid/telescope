@@ -73,12 +73,22 @@ public interface BridgeProvider {
   }
 
   /**
+   * For a bridge a field declared, whether the bridge updates a target in place itself, which the
+   * field's mapper's {@code Mapper.into} then calls: true where the target is a bean with a setter
+   * for every property the bridge writes. False for a bridge a class declared, and where {@code
+   * into} writes through the setters it looks up at run time instead.
+   */
+  default boolean writesInto() {
+    return false;
+  }
+
+  /**
    * Codegen-support seam: the mapper a {@code Telescope.mapper} call for this bridge's pair
    * returns, given {@code built}, the mapper over this bridge, and {@code grant}, which {@link
    * BridgeRegistry#specialise(BridgeProvider, Mapper)} hands only to a registered provider. For a
    * bridge a field declared, an instance of the class generated for the field, whose {@code
-   * forward}, {@code backward} and {@code patch} call the bridge directly; {@code built} itself
-   * otherwise.
+   * forward}, {@code backward} and {@code patch}, and {@code into} where {@link #writesInto} says
+   * so, call the bridge directly; {@code built} itself otherwise.
    */
   default Mapper<?, ?> mapper(final Mapper<?, ?> built, final BridgeGrant grant) {
     return built;

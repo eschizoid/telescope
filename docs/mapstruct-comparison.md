@@ -166,10 +166,16 @@ reports the same message as a compile error. It checks each `Telescope.mapper(..
 
 Some entry points are lenient on purpose. `mapperForward(...)` and `@Bridge(lenient = true)` leave an unmatched target
 field at its default value, which is `null`, zero, or `false`. `Telescope.fromMap(...)` fills a component with no value
-from a default for its type. `Mapper.into(...)` writes onto an existing bean and skips a property with no public setter.
+from a default for its type. `Mapper.into(...)` is not lenient: it writes onto an existing bean through its setters, and
+refuses by name a property the mapper writes that the bean has no setter for.
 
 Same-typed JDK collections are copied rather than shared, so changing the target's list never changes the source's.
 [docs/type-conversion.md](type-conversion.md) has the details.
+
+Some conversions MapStruct makes without being asked are built in on both paths: a `String` and a number, an enum or a
+boolean, both ways; a number widened forward on a forward-only mapper; and a list and a set, each into the other's kind.
+A `String` that is no valid value fails on that value, naming the property and the value. Narrowing and dates against
+text still need a row, and the refusal names it.
 
 ## Measured performance
 
