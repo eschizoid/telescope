@@ -100,7 +100,7 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: eschizoid/telescope
+          slug: telescopeorganization/telescope
           files: |
             ./internal/build/reports/jacoco/test/jacocoTestReport.xml
             ./core/build/reports/jacoco/test/jacocoTestReport.xml
@@ -114,7 +114,7 @@ jobs:
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: eschizoid/telescope
+          slug: telescopeorganization/telescope
           files: |
             ./**/build/test-results/test/*.xml
 

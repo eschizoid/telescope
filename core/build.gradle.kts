@@ -147,8 +147,8 @@ publishing {
             pom {
                 name.set("telescope-core")
                 description.set("Telescope — a deep-copy DSL for Java records and POJOs.")
-                url.set("https://github.com/eschizoid/telescope")
-                inceptionYear.set("2025")
+                url.set("https://github.com/telescopeorganization/telescope")
+                inceptionYear.set("2026")
 
                 licenses {
                     license {
@@ -162,11 +162,16 @@ publishing {
                         name.set("Mariano Gonzalez")
                         email.set("mariano.gonzalez.mx@gmail.com")
                     }
+                    developer {
+                        id.set("xchopin")
+                        name.set("Xavier Chopin")
+                        email.set("xavierchopin.ca@gmail.com")
+                    }
                 }
                 scm {
-                    connection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    developerConnection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    url.set("https://github.com/eschizoid/telescope")
+                    connection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    developerConnection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    url.set("https://github.com/telescopeorganization/telescope")
                 }
             }
         }

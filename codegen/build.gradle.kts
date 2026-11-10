@@ -101,8 +101,8 @@ publishing {
             pom {
                 name.set("telescope-codegen")
                 description.set("Compile-time codegen for telescope — @Focus / @BeanFocus / @Bridge annotation processors that emit typed <X>Telescope navigators for reflection-free deep navigation.")
-                url.set("https://github.com/eschizoid/telescope")
-                inceptionYear.set("2025")
+                url.set("https://github.com/telescopeorganization/telescope")
+                inceptionYear.set("2026")
 
                 licenses {
                     license {
@@ -116,11 +116,16 @@ publishing {
                         name.set("Mariano Gonzalez")
                         email.set("mariano.gonzalez.mx@gmail.com")
                     }
+                    developer {
+                        id.set("xchopin")
+                        name.set("Xavier Chopin")
+                        email.set("xavierchopin.ca@gmail.com")
+                    }
                 }
                 scm {
-                    connection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    developerConnection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    url.set("https://github.com/eschizoid/telescope")
+                    connection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    developerConnection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    url.set("https://github.com/telescopeorganization/telescope")
                 }
             }
         }

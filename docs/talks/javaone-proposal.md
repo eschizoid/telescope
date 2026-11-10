@@ -42,9 +42,9 @@ record update written by hand, replaces it with a composed path, and ends by map
 ## Additional notes (2000 characters)
 
 The session is about a technique attendees can use in plain Java, with telescope as the worked example in the last
-third. telescope is open source (Apache 2.0) on GitHub at github.com/eschizoid/telescope and published to Maven Central.
-I wrote a three-part blog series on its design at mariano-gonzalez.com. I am happy to adapt the session length or turn
-it into a hands-on lab.
+third. telescope is open source (Apache 2.0) on GitHub at github.com/telescopeorganization/telescope and published to
+Maven Central. I wrote a three-part blog series on its design at mariano-gonzalez.com. I am happy to adapt the session
+length or turn it into a hands-on lab.
 
 ## Speaker bio (2000 characters)
 
