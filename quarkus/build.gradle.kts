@@ -51,7 +51,7 @@ tasks.withType<JavaCompile>().configureEach {
 // in this artifact still wins for consumers on a clean modular classpath.
 tasks.jar {
     manifest {
-        attributes(mapOf("Automatic-Module-Name" to "io.github.eschizoid.telescope.quarkus"))
+        attributes(mapOf("Automatic-Module-Name" to "io.github.telescopeorganization.telescope.quarkus"))
     }
 }
 
@@ -135,7 +135,7 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-quarkus"
             from(components["java"])
 
@@ -144,7 +144,7 @@ publishing {
                 description.set(
                     "Quarkus CDI extension + Mapper<A,B> bean registry for the telescope optics DSL."
                 )
-                url.set("https://github.com/eschizoid/telescope")
+                url.set("https://github.com/telescopeorganization/telescope")
                 inceptionYear.set("2026")
 
                 licenses {
@@ -159,11 +159,16 @@ publishing {
                         name.set("Mariano Gonzalez")
                         email.set("mariano.gonzalez.mx@gmail.com")
                     }
+                    developer {
+                        id.set("xchopin")
+                        name.set("Xavier Chopin")
+                        email.set("xavierchopin.ca@gmail.com")
+                    }
                 }
                 scm {
-                    connection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    developerConnection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    url.set("https://github.com/eschizoid/telescope")
+                    connection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    developerConnection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    url.set("https://github.com/telescopeorganization/telescope")
                 }
             }
         }

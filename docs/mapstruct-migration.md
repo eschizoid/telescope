@@ -23,7 +23,7 @@ public interface CustomerMapper {
 
 ```java
 // telescope — one value, both directions
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
 
 Mapper<Customer, CustomerDto> MAPPER = Telescope.mapper(
   Customer.class,
@@ -77,7 +77,7 @@ Every mapping row above is expanded — with evidence and limitations — in the
 telescope's introspection makes each migrated mapper self-checking:
 
 ```java
-import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
+import io.github.telescopeorganization.telescope.introspection.OpticNode.Mapped;
 
 // the migrated mapper maps everything the old one did — nothing silently dropped
 assertThat(mapper.explain().skipped()).isEmpty();
@@ -101,7 +101,7 @@ cheapest possible safety net, and you delete it together with the old interface.
   at `forward(...)` time, not at the method signature (see the matrix row for details).
 - **Row-group reuse** (`MapperBuilder.inherit`) applies across mappers of the **same** (source, target) pair; a group
   inherited into a different pair fails fast at `build()` with an error naming the unreachable pair
-  ([#223](https://github.com/eschizoid/telescope/issues/223)) — declare a per-variant group instead.
+  ([#223](https://github.com/telescopeorganization/telescope/issues/223)) — declare a per-variant group instead.
 - **Multi-constructor immutables** (MapStruct's `@Default`) aren't disambiguated — records and single-constructor
   classes are the supported shapes.
 - **Hot loops:** the runtime path is reflective (fast enough outside hot paths); annotate the pair with

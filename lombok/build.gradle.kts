@@ -83,14 +83,14 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-lombok"
             from(components["java"])
 
             pom {
                 name.set("telescope-lombok")
                 description.set("Lombok integration for telescope — emits <X>Telescope<R> navigators for @Data/@Value/@Builder classes.")
-                url.set("https://github.com/eschizoid/telescope")
+                url.set("https://github.com/telescopeorganization/telescope")
                 inceptionYear.set("2026")
 
                 licenses {
@@ -105,11 +105,16 @@ publishing {
                         name.set("Mariano Gonzalez")
                         email.set("mariano.gonzalez.mx@gmail.com")
                     }
+                    developer {
+                        id.set("xchopin")
+                        name.set("Xavier Chopin")
+                        email.set("xavierchopin.ca@gmail.com")
+                    }
                 }
                 scm {
-                    connection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    developerConnection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    url.set("https://github.com/eschizoid/telescope")
+                    connection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    developerConnection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    url.set("https://github.com/telescopeorganization/telescope")
                 }
             }
         }

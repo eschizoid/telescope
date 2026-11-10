@@ -1,0 +1,1370 @@
+package io.github.telescopeorganization.telescope.spring;
+
+import static io.github.telescopeorganization.telescope.codegen.ProcessorHarness.source;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.github.telescopeorganization.telescope.codegen.BridgeProcessor;
+import io.github.telescopeorganization.telescope.codegen.ProcessorHarness;
+import io.github.telescopeorganization.telescope.codegen.TelescopeMapperProcessor;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.TypeElement;
+import javax.tools.Diagnostic;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+class TelescopeSpringProcessorTest {
+
+  @Test
+  void missingDefaultPathFailsAtCompileTime() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.BadPathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        record Person(String name) {}
+        @TelescopeTransformer
+        interface BadPathTransformer extends TelescopeTransformation<Person, String> {}
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("requires a default path()")).isTrue();
+  }
+
+  // The next two pin the refactor safety the annotations rely on: a path is method references, so a
+  // renamed or retyped accessor fails the build in javac itself, with no processor involved.
+  @Test
+  void renamedAccessorFailsTheBuildWithoutTheProcessor() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      source(
+        "demo.BadNestedPathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.Telescope;
+        record Contact(String email) {}
+        record Person(Contact contact) {}
+        @TelescopeTransformer
+        interface BadNestedPathTransformer extends TelescopeTransformation<Person, String> {
+          default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
+          default Telescope<Person, String> path() {
+            return Telescope.of(Person.class).field(Person::contact).field(Contact::oldEmail);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("oldEmail");
+  }
+
+  @Test
+  void retypedAccessorFailsTheBuildWithoutTheProcessor() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      source(
+        "demo.WrongTypePathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.Telescope;
+        record Person(String name) {}
+        @TelescopeTransformer
+        interface WrongTypePathTransformer extends TelescopeTransformation<Person, Integer> {
+          default Transformation<Integer> transform() { return new Transformation<>(0, value -> value); }
+          default Telescope<Person, Integer> path() {
+            return Telescope.of(Person.class).field(Person::name);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("incompatible types");
+  }
+
+  @Test
+  void wrongPathInterfaceFailsAtCompileTime() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.NonRecordPathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.Telescope;
+        record Person(String name) {}
+        @TelescopeTransformer
+        interface NonRecordPathTransformer {
+          default Telescope<Person, String> path() {
+            return Telescope.of(Person.class).field(Person::name);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("must extend TelescopeTransformation<S, A> with concrete types")).isTrue();
+  }
+
+  @Test
+  void mapperRequiresAnExistingBridge() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.BadMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        record Source(String name) {}
+        record Target(String name) {}
+        @TelescopeMapper(from = Source.class, to = Target.class)
+        interface BadMapper { Target map(Source source); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("requires a generated @Bridge")).isTrue();
+  }
+
+  @Test
+  void projectionOwnsStructuralMappingWithoutABridge() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.StructuralProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        record Source(String name) {}
+        record Target(String name) {}
+        @TelescopeMapper
+        interface StructuralProjection extends TelescopeProjection<Source, Target> {}
+        """
+      )
+    );
+    assertThat(result.success()).isTrue();
+  }
+
+  @Test
+  void projectionCanDeclareTypedTranslationRows() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RenamedProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+        record Source(String displayName, String phoneNumber) {}
+        record Target(String name, String phone) {}
+        @TelescopeMapper
+        interface RenamedProjection extends TelescopeProjection<Source, Target> {
+          default void translate(MapperBuilder<Source, Target> mapping) {
+            mapping.from(Source::displayName).to(Target::name)
+              .from(Source::phoneNumber).to(Target::phone);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.RenamedProjectionImpl")).contains(
+      "RenamedProjection.super.translate(builder);"
+    );
+  }
+
+  @Test
+  void translateRowWithMismatchedSidesFailsTheBuild() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.SwappedProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+        record Source(String displayName, int age) {}
+        record Target(String name, int years) {}
+        @TelescopeMapper
+        interface SwappedProjection extends TelescopeProjection<Source, Target> {
+          default void translate(MapperBuilder<Source, Target> mapping) {
+            mapping.from(Source::displayName).to(Target::years);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("incompatible types");
+  }
+
+  @Test
+  void mapperMethodMustMatchItsDeclaredTypePair() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.WrongSignatureMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface WrongSignatureMapper { User map(User input); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError(
+        "@TelescopeMapper requires map to accept io.github.telescopeorganization.telescope.spring.blueprint.User and return io.github.telescopeorganization.telescope.spring.blueprint.UserDto"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+  }
+
+  @Test
+  void projectionMayRedeclareItsOwnMethods() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RedeclaringProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper
+        interface RedeclaringProjection extends TelescopeProjection<User, UserDto> {
+          @Override User backward(UserDto target);
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void mapperMethodWithAnotherNameIsToldToBeNamedMap() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.ToDtoMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface ToDtoMapper { UserDto toDto(User input); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError(
+        "@TelescopeMapper requires a method named map accepting io.github.telescopeorganization.telescope.spring.blueprint.User and returning io.github.telescopeorganization.telescope.spring.blueprint.UserDto; found toDto"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+  }
+
+  @Test
+  void mapperCanUseABridgeCompiledInAnotherModule() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.ExternalMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface ExternalMapper { UserDto map(User user); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.ExternalMapperImpl"))
+      .contains("return io.github.telescopeorganization.telescope.spring.blueprint.UserToUserDtoBridge.forward(input);")
+      .doesNotContain("transformers");
+  }
+
+  @Test
+  void mapperWithTransformersLoopsByIndexOverTheSnapshotWithNoIteratorAllocation() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.LoopShapeMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserCityTransformer;
+        @TelescopeMapper(from = User.class, to = UserDto.class, transformers = { UserCityTransformer.class })
+        interface LoopShapeMapper { UserDto map(User user); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.LoopShapeMapperImpl"))
+      .contains("for (int i = 0, n = current.size(); i < n; i++) value = current.get(i).apply(value);")
+      .doesNotContain("for (final var transformer : current)");
+  }
+
+  @Test
+  void inheritedGenericMapperCompiles() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.InheritedMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        interface Mapping<S, T> { T map(S source); }
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface InheritedMapper extends Mapping<User, UserDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void inheritedExtraAbstractMethodIsRejectedOnTheBlueprint() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.ExtraMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        interface Extra { String other(); }
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface ExtraMapper extends Extra { UserDto map(User source); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("@TelescopeMapper cannot implement demo.Extra.other(); only map may be abstract"))
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+    assertThat(result.generated()).doesNotContainKey("demo.ExtraMapperImpl");
+  }
+
+  @Test
+  void unnamedPackageMapperCompiles() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor(), new BridgeProcessor()),
+      List.of(),
+      source(
+        "PlainMapper",
+        """
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(Target.class) record Source(String name) {}
+        record Target(String name) {}
+        @TelescopeMapper(from = Source.class, to = Target.class)
+        interface PlainMapper { Target map(Source source); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void parameterizedPathAndInheritedDefaultCompile() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.NamesTransformer",
+        """
+        package demo;
+        import java.util.List;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        record Person(List<String> names) {}
+        interface NamedPath<A> extends TelescopeTransformation<Person, A> {}
+        interface NamesBase extends NamedPath<List<String>> {
+          default Transformation<List<String>> transform() { return new Transformation<>(List.of(), value -> value); }
+          default Telescope<Person, List<String>> path() {
+            return Telescope.of(Person.class).field(Person::names);
+          }
+        }
+        interface Marker {}
+        @TelescopeTransformer("names")
+        interface NamesTransformer extends NamesBase, Marker {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void rawPathIsRejected() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RawPathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        @TelescopeTransformer interface RawPathTransformer extends TelescopeTransformation {
+          default Telescope path() { return null; }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("must extend TelescopeTransformation<S, A> with concrete types")).isTrue();
+  }
+
+  @Test
+  void inheritedExtraTransformMethodIsRejected() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.ExtraPathTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        interface Extra { String other(); }
+        @TelescopeTransformer interface ExtraPathTransformer extends TelescopeTransformation<String, String>, Extra {
+          default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("requires no other abstract methods")).isTrue();
+  }
+
+  @Test
+  void unsupportedBlueprintShapesHaveActionableDiagnostics() {
+    for (final var shape : List.of(
+      List.of("class InvalidTransformer {}", "@TelescopeTransformer requires an interface"),
+      List.of("interface InvalidTransformer<T> {}", "@TelescopeTransformer requires a non-generic interface"),
+      List.of(
+        "sealed interface InvalidTransformer permits Child {} non-sealed interface Child extends InvalidTransformer {}",
+        "@TelescopeTransformer requires a non-sealed interface"
+      )
+    )) {
+      final var declaration = shape.get(0);
+      final var result = ProcessorHarness.compileFully(
+        List.of(new TelescopeMapperProcessor()),
+        List.of(),
+        source(
+          "demo.InvalidTransformer",
+          """
+            package demo;
+            import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+            @TelescopeTransformer
+            """ +
+            declaration
+        )
+      );
+      assertThat(result.success()).isFalse();
+      assertThat(result.errorMessages()).as(declaration).contains(shape.get(1));
+      assertThat(result.errorMessages()).as(declaration).containsOnlyOnce("@TelescopeTransformer requires");
+    }
+  }
+
+  @Test
+  void missingTransformIsRejectedBeforeGeneration() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.MissingTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        @TelescopeTransformer interface MissingTransformer extends TelescopeTransformation<String, String> {
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("requires a default transform() returning Transformation<A>")).isTrue();
+    assertThat(result.generated()).doesNotContainKey("demo.MissingTransformerImpl");
+  }
+
+  @Test
+  void rawTransformReturnIsRejectedWithDiagnostic() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RawTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        @TelescopeTransformer interface RawTransformer extends TelescopeTransformation<String, String> {
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+          default Transformation transform() { return new Transformation<>(null, value -> value); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError("requires typed Telescope<S, A> path() and Transformation<A> transform() results")
+    ).isTrue();
+  }
+
+  @Test
+  void rawPathReturnIsRejectedWithDiagnostic() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RawPathReturnTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        @TelescopeTransformer interface RawPathReturnTransformer extends TelescopeTransformation<String, String> {
+          default Telescope path() { return Telescope.of(String.class); }
+          default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError("requires typed Telescope<S, A> path() and Transformation<A> transform() results")
+    ).isTrue();
+  }
+
+  @Test
+  void wrongTransformationFocusTypeFailsCompilation() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.WrongTransformTypeTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        @TelescopeTransformer interface WrongTransformTypeTransformer extends TelescopeTransformation<String, String> {
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+          default Transformation<Integer> transform() { return new Transformation<>(0, value -> value + 1); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError(
+        "@TelescopeTransformer requires typed Telescope<S, A> path() and Transformation<A> transform() results"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+  }
+
+  @Test
+  void inheritedGenericTransformAndPathCompile() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.InheritedTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        interface Base<S, A> extends TelescopeTransformation<S, A> {
+          default Transformation<A> transform() { return new Transformation<>(null, value -> value); }
+        }
+        @TelescopeTransformer interface InheritedTransformer extends Base<String, String> {
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void generatedTransformCachesBothFactoriesAndBeanName() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.NamedTransformer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        @TelescopeTransformer("normalizer") interface NamedTransformer extends TelescopeTransformation<String, String> {
+          default Telescope<String, String> path() { return Telescope.of(String.class); }
+          default Transformation<String> transform() { return new Transformation<>("", String::toLowerCase); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    final var generated = result.generated().get("demo.NamedTransformerImpl");
+    assertThat(generated).contains(
+      "@Component(\"normalizer\")",
+      "private final Telescope<String, String> path",
+      "private final Transformation<String> transformation"
+    );
+  }
+
+  @Test
+  void transformBlueprintNameNeedNotEndWithTransformer() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.CityNormalizer",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.inject.Transformation;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+        import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+        record City(String name) {}
+        @TelescopeTransformer interface CityNormalizer extends TelescopeTransformation<City, String> {
+          default Telescope<City, String> path() { return Telescope.of(City.class).field(City::name); }
+          default Transformation<String> transform() { return new Transformation<>(null, String::toLowerCase); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated()).containsKey("demo.CityNormalizerImpl");
+  }
+
+  @Test
+  void inheritedTranslateIsHonouredEvenWhenABridgeExists() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.InheritedTranslateProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        interface RenamingBase extends TelescopeProjection<User, UserDto> {
+          @Override default void translate(MapperBuilder<User, UserDto> mapping) {
+            mapping.from(User::name).to(UserDto::name);
+          }
+        }
+        @TelescopeMapper
+        interface InheritedTranslateProjection extends RenamingBase {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.InheritedTranslateProjectionImpl"))
+      .contains("InheritedTranslateProjection.super.translate(builder);")
+      .doesNotContain("UserToUserDtoBridge.forward");
+  }
+
+  @Test
+  void unrelatedTranslateMethodDoesNotReplaceTheBridge() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.UnrelatedTranslate",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        interface HasTranslate { default String translate(final String text) { return text; } }
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface UnrelatedTranslateMapper extends HasTranslate { UserDto map(User source); }
+        @TelescopeMapper
+        interface UnrelatedTranslate extends TelescopeProjection<User, UserDto>, HasTranslate {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.UnrelatedTranslateMapperImpl")).contains(
+      "UserToUserDtoBridge.forward(input)"
+    );
+    assertThat(result.generated().get("demo.UnrelatedTranslateImpl")).contains("UserToUserDtoBridge.forward(input)");
+  }
+
+  @Test
+  void mapperFindsTheBridgeOfASourceWithSeveralTargets() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.TgtA", "package demo; public record TgtA(String name) {}"),
+      source("demo.TgtB", "package demo; public record TgtB(String name) {}"),
+      source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(TgtA.class)
+        @Bridge(TgtB.class)
+        public record Src(String name) {}
+        """
+      ),
+      source(
+        "demo.SrcMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Src.class, to = TgtB.class)
+        public interface SrcMapper { TgtB map(Src source); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.SrcMapperImpl")).contains("SrcToTgtBBridge.forward(input)");
+  }
+
+  @Test
+  void mapperFindsTheBridgeAFieldDeclaresForItsPair() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.Account", "package demo; public record Account(String login) {}"),
+      source("demo.AccountDto", "package demo; public record AccountDto(String username) {}"),
+      source(
+        "demo.Mappers",
+        """
+        package demo;
+        import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+        import io.github.telescopeorganization.telescope.Telescope;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        import io.github.telescopeorganization.telescope.conversion.Mapper;
+        public final class Mappers {
+          @Bridge
+          public static final Mapper<Account, AccountDto> ACCOUNT =
+              Telescope.mapper(Account.class, AccountDto.class, to(Account::login, AccountDto::username));
+        }
+        """
+      ),
+      source(
+        "demo.AccountMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Account.class, to = AccountDto.class)
+        public interface AccountMapper { AccountDto map(Account source); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.AccountMapperImpl")).contains("AccountToAccountDtoBridge.forward(input)");
+  }
+
+  @Test
+  void mapperAndProjectionFindACarrierBridge() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "carriers.CarCarrier",
+        """
+        package carriers;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        import model.Car;
+        import model.CarDto;
+        @Bridge(source = Car.class, target = CarDto.class)
+        public final class CarCarrier {}
+        """
+      ),
+      source(
+        "demo.CarMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper(from = Car.class, to = CarDto.class)
+        public interface CarMapper { CarDto map(Car source); }
+        """
+      ),
+      source(
+        "demo.CarProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.CarMapperImpl")).contains("CarCarrierBridge.forward(input)");
+    assertThat(result.generated().get("demo.CarProjectionImpl"))
+      .contains("CarCarrierBridge.forward(input)")
+      .contains("return carriers.CarCarrierBridge.patch(source, partial);")
+      .doesNotContain("mapperBuilder");
+  }
+
+  @Test
+  void genericModelTypesAreRefusedOnTheBlueprint() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.Box", "package demo; public record Box<T>(T value, String label) {}"),
+      source("demo.BoxDto", "package demo; public record BoxDto<T>(T value, String label) {}"),
+      source(
+        "demo.BoxProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface BoxProjection extends TelescopeProjection<Box<String>, BoxDto<String>> {}
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("@TelescopeMapper does not support generic model types: demo.Box<java.lang.String>"))
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+    assertThat(result.generated()).doesNotContainKey("demo.BoxProjectionImpl");
+  }
+
+  @Test
+  void projectionWithoutTranslateStillUsesTheBridge() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.PlainProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper
+        interface PlainProjection extends TelescopeProjection<User, UserDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.PlainProjectionImpl"))
+      .contains("UserToUserDtoBridge.forward")
+      .contains("ObjectProvider<TelescopeCustomizer<PlainProjection>> customizers")
+      .contains("private final List<TelescopeTransformation<User, ?>> transformers;")
+      .doesNotContain("volatile")
+      .doesNotContain("synchronized");
+  }
+
+  @Test
+  void mapperRejectsTransformerWithDifferentSourceType() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.WrongSourceProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.spring.blueprint.CounterValueTransformer;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class,
+          transformers = { CounterValueTransformer.class })
+        interface WrongSourceProjection { UserDto map(User source); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError("must focus on io.github.telescopeorganization.telescope.spring.blueprint.User")
+    ).isTrue();
+    assertThat(result.generated()).doesNotContainKey("demo.WrongSourceProjectionImpl");
+  }
+
+  @Test
+  void projectionTypeArgumentsMustMatchMapperPair() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.WrongPairProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import io.github.telescopeorganization.telescope.spring.blueprint.Counter;
+        import io.github.telescopeorganization.telescope.spring.blueprint.User;
+        import io.github.telescopeorganization.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface WrongPairProjection extends TelescopeProjection<Counter, UserDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("from/to must match TelescopeProjection<S, T>")).isTrue();
+  }
+
+  @Test
+  void mapperWithoutProjectionRequiresExplicitPair() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.MissingPairMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        record Source(String name) {}
+        record Target(String name) {}
+        @TelescopeMapper interface MissingPairMapper { Target map(Source source); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("requires from/to or TelescopeProjection<S, T>")).isTrue();
+  }
+
+  @Test
+  void mapperPairAttributesMustBeProvidedTogether() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.PartialPairMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        record Source(String name) {}
+        record Target(String name) {}
+        @TelescopeMapper(from = Source.class)
+        interface PartialPairMapper { Target map(Source source); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("from and to must be supplied together")).isTrue();
+  }
+
+  // A bridge for a source carrying a Lombok annotation is emitted in the last processing round,
+  // once
+  // Lombok's patches have fired. A class created in the last round can be referenced by its
+  // qualified
+  // name and cannot be imported, so a mapper that imported its bridge failed to compile for exactly
+  // those sources. The processor recognises the annotation by its name, so a stand-in declaring
+  // that
+  // name reaches the same deferral without Lombok on the classpath.
+  @Test
+  void mapperCompilesAgainstABridgeEmittedInTheLastRound() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("lombok.Data", "package lombok; public @interface Data {}"),
+      source(
+        "demo.Entity",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @lombok.Data
+        @Bridge(EntityDto.class)
+        public record Entity(String name) {}
+        """
+      ),
+      source("demo.EntityDto", "package demo; public record EntityDto(String name) {}"),
+      source(
+        "demo.EntityMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Entity.class, to = EntityDto.class)
+        public interface EntityMapper { EntityDto map(Entity source); }
+        """
+      )
+    );
+
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    // In the mapper's own package the bridge needs neither an import nor a qualifier.
+    assertThat(result.generated().get("demo.EntityMapperImpl"))
+      .contains("return EntityBridge.forward(input);")
+      .doesNotContain("import demo.EntityBridge;");
+  }
+
+  // From another package the bridge cannot be named by its simple name, and a last-round bridge
+  // cannot be imported either, so the qualified name is the one form that compiles. This pins why
+  // the qualifier is kept outside the mapper's own package.
+  @Test
+  void mapperInAnotherPackageNamesALastRoundBridgeInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("lombok.Data", "package lombok; public @interface Data {}"),
+      source(
+        "domain.Entity",
+        """
+        package domain;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @lombok.Data
+        @Bridge(EntityDto.class)
+        public record Entity(String name) {}
+        """
+      ),
+      source("domain.EntityDto", "package domain; public record EntityDto(String name) {}"),
+      source(
+        "mapping.EntityMapper",
+        """
+        package mapping;
+        import domain.Entity;
+        import domain.EntityDto;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Entity.class, to = EntityDto.class)
+        public interface EntityMapper { EntityDto map(Entity source); }
+        """
+      )
+    );
+
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("mapping.EntityMapperImpl"))
+      .contains("return domain.EntityBridge.forward(input);")
+      .doesNotContain("import domain.EntityBridge;");
+  }
+
+  @Test
+  @DisplayName("an entity and a DTO sharing a simple name are written in full, and every other type is still imported")
+  void modelsSharingASimpleNameAreWrittenInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("api.Item", "package api; public record Item(String name) {}"),
+      source(
+        "domain.Item",
+        """
+        package domain;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(api.Item.class)
+        public record Item(String name) {}
+        """
+      ),
+      source(
+        "demo.ItemMapper",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = domain.Item.class, to = api.Item.class)
+        public interface ItemMapper { api.Item map(domain.Item s); }
+        """
+      ),
+      source(
+        "demo.ItemProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ItemProjection extends TelescopeProjection<domain.Item, api.Item> {}
+        """
+      ),
+      source(
+        "demo.ItemRowsProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ItemRowsProjection extends TelescopeProjection<domain.Item, api.Item> {
+          @Override default void translate(final MapperBuilder<domain.Item, api.Item> mapping) {}
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.ItemMapperImpl"))
+      .contains("public api.Item map(final domain.Item input)")
+      .doesNotContain("import api.Item;")
+      .doesNotContain("import domain.Item;");
+    assertThat(result.generated().get("demo.ItemProjectionImpl"))
+      .contains("public domain.Item patch(final domain.Item source, final api.Item partial)")
+      .contains("import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;")
+      .contains("List<TelescopeTransformation<domain.Item, ?>>")
+      .doesNotContain("import api.Item;")
+      .doesNotContain("import domain.Item;");
+    assertThat(result.generated().get("demo.ItemRowsProjectionImpl"))
+      .contains("Telescope.mapperBuilder(domain.Item.class, api.Item.class)")
+      .contains("import io.github.telescopeorganization.telescope.conversion.Mapper;");
+  }
+
+  @Test
+  @DisplayName("a model named like a type the implementation names itself is written in full, and so is that type")
+  void modelsNamedLikeTheImplementationsOwnTypesAreWrittenInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source("shop.Override", "package shop; public record Override(String name) {}"),
+      source("shop.Mapper", "package shop; public record Mapper(String name) {}"),
+      source(
+        "demo.ShopProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        @TelescopeMapper
+        public interface ShopProjection extends TelescopeProjection<shop.Override, shop.Mapper> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.ShopProjectionImpl"))
+      .contains(
+        "private final io.github.telescopeorganization.telescope.conversion.Mapper<shop.Override, shop.Mapper> mapping"
+      )
+      .contains("@Override public shop.Mapper map(final shop.Override input)")
+      .doesNotContain("import io.github.telescopeorganization.telescope.conversion.Mapper;")
+      .doesNotContain("import shop.");
+  }
+
+  @Test
+  @DisplayName("a mapper and a projection written a round after a carrier find the carrier's bridge")
+  void mapperAndProjectionWrittenInALaterRoundFindTheCarrierBridge() {
+    final var processors = new ArrayList<Processor>();
+    processors.add(
+      new LaterRoundSources(
+        Map.of(
+          "demo.CarMapper",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+          import model.Car;
+          import model.CarDto;
+          @TelescopeMapper(from = Car.class, to = CarDto.class)
+          public interface CarMapper { CarDto map(Car source); }
+          """,
+          "demo.CarProjection",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+          import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+          import model.Car;
+          import model.CarDto;
+          @TelescopeMapper
+          public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+          """
+        )
+      )
+    );
+    // Every codegen processor, with TelescopeMapperProcessor last: a processor ahead of it that
+    // claimed @Bridge would keep a round holding only a carrier from reaching it.
+    Processor mapperProcessor = null;
+    for (final var processor : ServiceLoader.load(Processor.class, TelescopeMapperProcessor.class.getClassLoader())) {
+      if (processor instanceof TelescopeMapperProcessor) mapperProcessor = processor;
+      else if (processor.getClass().getPackageName().equals(TelescopeMapperProcessor.class.getPackageName())) {
+        processors.add(processor);
+      }
+    }
+    processors.add(mapperProcessor);
+    final var result = ProcessorHarness.compileFully(
+      processors,
+      List.of(),
+      source("gen.Generate", "package gen; public @interface Generate {}"),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "carriers.CarCarrier",
+        """
+        package carriers;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        import model.Car;
+        import model.CarDto;
+        @gen.Generate
+        @Bridge(source = Car.class, target = CarDto.class)
+        public final class CarCarrier {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.CarMapperImpl")).contains("carriers.CarCarrierBridge.forward(input)");
+    assertThat(result.generated().get("demo.CarProjectionImpl"))
+      .contains("carriers.CarCarrierBridge.forward(input)")
+      .doesNotContain("mapperBuilder");
+  }
+
+  @Test
+  @DisplayName("a projection over a pair with no bridge in sight says it maps through a runtime Mapper")
+  void projectionWithNoBridgeInSightReportsTheRuntimeMapper() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "model.Boat",
+        """
+        package model;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(BoatDto.class)
+        public record Boat(String name) {}
+        """
+      ),
+      source("model.BoatDto", "package model; public record BoatDto(String name) {}"),
+      source(
+        "demo.CarProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+        """
+      ),
+      source(
+        "demo.CarRowsProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarRowsProjection extends TelescopeProjection<Car, CarDto> {
+          @Override default void translate(final MapperBuilder<Car, CarDto> mapping) {}
+        }
+        """
+      ),
+      source(
+        "demo.BoatProjection",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+        import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+        import model.Boat;
+        import model.BoatDto;
+        @TelescopeMapper
+        public interface BoatProjection extends TelescopeProjection<Boat, BoatDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    final var notes = result
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.NOTE)
+      .map(d -> d.getMessage(Locale.ROOT))
+      .filter(m -> m.contains("Projection"))
+      .toList();
+    assertThat(notes).singleElement().asString().contains("CarProjection").contains("runtime Mapper");
+  }
+
+  /** Writes the given sources in its first round, so they are compiled a round after the inputs. */
+  @SupportedAnnotationTypes("gen.Generate")
+  private static final class LaterRoundSources extends AbstractProcessor {
+
+    private final Map<String, String> sources;
+    private boolean written;
+
+    LaterRoundSources(final Map<String, String> sources) {
+      this.sources = sources;
+    }
+
+    @Override
+    public SourceVersion getSupportedSourceVersion() {
+      return SourceVersion.latestSupported();
+    }
+
+    @Override
+    public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment round) {
+      if (written) return false;
+      written = true;
+      for (final var entry : sources.entrySet()) {
+        try (final var out = processingEnv.getFiler().createSourceFile(entry.getKey()).openWriter()) {
+          out.write(entry.getValue());
+        } catch (final IOException e) {
+          throw new UncheckedIOException(e);
+        }
+      }
+      return false;
+    }
+  }
+}

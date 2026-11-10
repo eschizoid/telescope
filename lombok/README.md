@@ -52,11 +52,11 @@ With Gradle:
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.1.0")
+    implementation("io.github.telescopeorganization:telescope-core:2.1.0")
 
     compileOnly("org.projectlombok:lombok:1.18.48")
     annotationProcessor("org.projectlombok:lombok:1.18.48")
-    annotationProcessor("io.github.eschizoid:telescope-lombok:2.1.0")
+    annotationProcessor("io.github.telescopeorganization:telescope-lombok:2.1.0")
 }
 ```
 
@@ -65,7 +65,7 @@ With Maven:
 ```xml
 <dependencies>
   <dependency>
-    <groupId>io.github.eschizoid</groupId>
+    <groupId>io.github.telescopeorganization</groupId>
     <artifactId>telescope-core</artifactId>
     <version>2.1.0</version>
   </dependency>
@@ -90,7 +90,7 @@ With Maven:
             <version>1.18.48</version>
           </path>
           <path>
-            <groupId>io.github.eschizoid</groupId>
+            <groupId>io.github.telescopeorganization</groupId>
             <artifactId>telescope-lombok</artifactId>
             <version>2.1.0</version>
           </path>
@@ -158,7 +158,7 @@ edits on hand-written `Telescope.ofBean(...)` paths. Navigator paths and hand-wr
 also fuse with each other:
 
 ```java
-import static io.github.eschizoid.telescope.Edit.over;
+import static io.github.telescopeorganization.telescope.Edit.over;
 
 var normalize = Telescope.all(
   over(UserTelescope.of().email(), String::toLowerCase),

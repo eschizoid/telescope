@@ -1,0 +1,40 @@
+package io.github.telescopeorganization.telescope.mapping;
+
+import io.github.telescopeorganization.telescope.Telescope.Accessor;
+import io.github.telescopeorganization.telescope.internal.LambdaIntrospection;
+import java.util.function.Function;
+
+/**
+ * Typed-transform correspondence row from {@link Mapping#to(Accessor, Accessor, Function,
+ * Function)}. {@code DeepMap} reads {@link #forward()} / {@link #backward()} and assembles the
+ * leaf-level Iso itself, so no internal optic type appears on this record's surface.
+ *
+ * <p>Internal — users construct via {@link Mapping#to(Accessor, Accessor, Function, Function)} and
+ * never see this type at the call site.
+ */
+public record TypedTransformTo<A, B, X, Y>(
+  Accessor<A, X> src,
+  Accessor<B, Y> tgt,
+  Function<? super X, ? extends Y> forward,
+  Function<? super Y, ? extends X> backward
+) implements Mapping<A, B> {
+  @Override
+  public Class<A> sourceClass() {
+    return LambdaIntrospection.receiverClassOf(src);
+  }
+
+  @Override
+  public Class<B> targetClass() {
+    return LambdaIntrospection.receiverClassOf(tgt);
+  }
+
+  @Override
+  public String sourceField() {
+    return LambdaIntrospection.methodNameOf(src);
+  }
+
+  @Override
+  public String targetField() {
+    return LambdaIntrospection.methodNameOf(tgt);
+  }
+}

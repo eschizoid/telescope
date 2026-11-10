@@ -1,0 +1,322 @@
+package io.github.telescopeorganization.telescope;
+
+import static io.github.telescopeorganization.telescope.mapping.Mapping.constant;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+import static org.junit.jupiter.api.Assertions.*;
+
+import io.github.telescopeorganization.telescope.mapping.MapStep;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Pins {@code Telescope.mapperBuilder(A, B).inherit(...).add(...).build()} — the @
+ * InheritConfiguration equivalent for sharing {@code MapStep} groups across related mappers. Covers
+ * the inherit/add semantic interchangeability, override precedence (later wins), build
+ * independence, error surface, and the buildTelescope alternative.
+ */
+class MapperBuilderTest {
+
+  record Entity(String id, String name, String createdAt, String updatedAt) {}
+
+  record Dto(String id, String name, String createdAt, String updatedAt, String tenant) {}
+
+  record AdminDto(String id, String name, String createdAt, String updatedAt, String role) {}
+
+  record RenamedSource(String displayName, String phoneNumber) {}
+
+  record RenamedTarget(String name, String phone) {}
+
+  // Shared audit-column group reused across mappers
+  private static final MapStep[] AUDIT_COLUMNS = {
+    to(Entity::createdAt, Dto::createdAt),
+    to(Entity::updatedAt, Dto::updatedAt),
+  };
+
+  @Nested
+  @DisplayName("inherit + add — accumulate steps and build a working Mapper")
+  class BasicBuild {
+
+    @Test
+    @DisplayName("inherit(AUDIT_COLUMNS).add(constant(...)) — both row groups apply")
+    void inheritAndAdd() {
+      final var mapper = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(Dto::tenant, "us-east"))
+        .build();
+
+      final var entity = new Entity("e1", "Alice", "2026-01-01", "2026-06-01");
+      final var dto = mapper.forward(entity);
+
+      assertEquals("e1", dto.id());
+      assertEquals("Alice", dto.name());
+      assertEquals("2026-01-01", dto.createdAt(), "inherited audit row");
+      assertEquals("2026-06-01", dto.updatedAt(), "inherited audit row");
+      assertEquals("us-east", dto.tenant(), "added constant row");
+    }
+
+    @Test
+    @DisplayName("multiple inherit groups compose; same builder feeds multiple distinct mappers")
+    void multipleGroups() {
+      final MapStep[] tenantRow = { constant(Dto::tenant, "shared-tenant") };
+      final var mapper = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .inherit(tenantRow)
+        .build();
+
+      final var dto = mapper.forward(new Entity("e1", "Alice", "2026-01-01", "2026-06-01"));
+      assertEquals("shared-tenant", dto.tenant());
+      assertEquals("2026-01-01", dto.createdAt());
+    }
+  }
+
+  @Nested
+  @DisplayName("Cross-pair inherit fails fast — rows bound to a foreign type pair cannot be silently dropped")
+  class CrossPairInherit {
+
+    @Test
+    @DisplayName("inheriting a Dto-typed row group into an AdminDto mapper throws at build, naming both pairs")
+    void crossPairInheritThrowsAtBuild() {
+      // AUDIT_COLUMNS rows decode to the (Entity, Dto) pair; an (Entity, AdminDto) mapper never
+      // visits that pair, so the rows could only ever be silently ignored (same-name auto masks
+      // the loss). The builder must refuse instead.
+      // constant(role) satisfies the strict check, so pre-guard this mapper built cleanly and the
+      // inherited rows were dead — the exact silent loss the guard now surfaces.
+      final var builder = Telescope.mapperBuilder(Entity.class, AdminDto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(AdminDto::role, "ADMIN"));
+      final var ex = assertThrows(IllegalArgumentException.class, builder::build);
+      // Stable tokens only — the class names (fully qualified in the message) and one dead row.
+      assertTrue(ex.getMessage().contains("AdminDto"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("never visits"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("createdAt"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("the same dead-row guard fires through the plain varargs factory, not just the builder")
+    void crossPairRowsThrowViaVarargsFactory() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(
+          Entity.class,
+          AdminDto.class,
+          to(Entity::createdAt, Dto::createdAt),
+          constant(AdminDto::role, "ADMIN")
+        )
+      );
+      assertTrue(ex.getMessage().contains("never visits"), ex.getMessage());
+    }
+  }
+
+  @Nested
+  @DisplayName("Different mappers reusing the same shared group")
+  class SharedAcrossMappers {
+
+    @Test
+    @DisplayName("AUDIT_COLUMNS feeds both userDto and adminDto mappers without re-declaration")
+    void sharedAuditAcrossMappers() {
+      final var userMapper = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(Dto::tenant, "tenant-x"))
+        .build();
+
+      // Use the audit subset only — same field shape, different rows after
+      final MapStep[] adminAudit = {
+        to(Entity::createdAt, AdminDto::createdAt),
+        to(Entity::updatedAt, AdminDto::updatedAt),
+      };
+      final var adminMapper = Telescope.mapperBuilder(Entity.class, AdminDto.class)
+        .inherit(adminAudit)
+        .add(constant(AdminDto::role, "ADMIN"))
+        .build();
+
+      final var entity = new Entity("e1", "Alice", "2026-01-01", "2026-06-01");
+
+      final var userDto = userMapper.forward(entity);
+      assertEquals("2026-01-01", userDto.createdAt());
+      assertEquals("tenant-x", userDto.tenant());
+
+      final var adminDto = adminMapper.forward(entity);
+      assertEquals("2026-01-01", adminDto.createdAt(), "same audit semantic on admin variant");
+      assertEquals("ADMIN", adminDto.role());
+    }
+  }
+
+  @Nested
+  @DisplayName("Build independence — calling build() multiple times yields independent Mappers")
+  class BuildIndependence {
+
+    @Test
+    @DisplayName("two build() calls on the same builder return distinct Mapper instances")
+    void distinctInstances() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(Dto::tenant, "shared"));
+
+      final var m1 = builder.build();
+      final var m2 = builder.build();
+
+      assertNotSame(m1, m2, "successive build() calls produce independent instances");
+
+      final var entity = new Entity("e1", "Alice", "2026-01-01", "2026-06-01");
+      assertEquals(m1.forward(entity), m2.forward(entity), "but both behave identically");
+    }
+
+    @Test
+    @DisplayName("rows added after build() affect ONLY future builds, not previous Mappers")
+    void laterAddsDontAffectEarlierMappers() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(Dto::tenant, "base"));
+
+      final var m1 = builder.build();
+
+      // Add another row AFTER first build()
+      builder.add(constant(Dto::tenant, "later"));
+
+      // m1 is unaffected — the "later" row doesn't enter its row list
+      final var entity = new Entity("e1", "Alice", "2026-01-01", "2026-06-01");
+      assertEquals("base", m1.forward(entity).tenant(), "earlier build snapshot unchanged");
+
+      // Building again WOULD throw — duplicate target 'tenant'. We do not call build() to
+      // demonstrate the snapshot semantics — the engine's duplicate-target validation is the
+      // safety net for the post-build override case.
+    }
+  }
+
+  @Nested
+  @DisplayName("buildTelescope — same accumulator, deep-mapping Telescope shape")
+  class BuildTelescopeVariant {
+
+    @Test
+    @DisplayName("buildTelescope() returns a Telescope<A, B> (composable shape)")
+    void telescopeVariant() {
+      final var telescope = Telescope.mapperBuilder(Entity.class, Dto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(Dto::tenant, "us-east"))
+        .buildTelescope();
+
+      final var entity = new Entity("e1", "Alice", "2026-01-01", "2026-06-01");
+      // Telescope#read on a deep-mapping Iso returns the forward result
+      final var dto = telescope.read(entity);
+      assertEquals("us-east", dto.tenant());
+      assertEquals("2026-01-01", dto.createdAt());
+    }
+  }
+
+  @Nested
+  @DisplayName("Null guards")
+  class NullGuards {
+
+    @Test
+    @DisplayName("inherit(null) throws NullPointerException")
+    void inheritNullArray() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+      assertThrows(NullPointerException.class, () -> builder.inherit((MapStep[]) null));
+    }
+
+    @Test
+    @DisplayName("add(null) throws NullPointerException")
+    void addNullArray() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+      assertThrows(NullPointerException.class, () -> builder.add((MapStep[]) null));
+    }
+
+    @Test
+    @DisplayName("inherit(MapStep[] with null element) throws NPE naming the failing index")
+    void inheritNullElement() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+      final MapStep[] withNullSlot = {
+        to(Entity::createdAt, Dto::createdAt),
+        null,
+        to(Entity::updatedAt, Dto::updatedAt),
+      };
+
+      final var ex = assertThrows(NullPointerException.class, () -> builder.inherit(withNullSlot));
+      assertTrue(ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+    }
+
+    @Test
+    @DisplayName("add(MapStep, null) throws NPE naming the failing index")
+    void addNullElement() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+
+      final var ex = assertThrows(NullPointerException.class, () ->
+        builder.add(to(Entity::createdAt, Dto::createdAt), null)
+      );
+      assertTrue(ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+    }
+
+    @Test
+    @DisplayName("null source class throws NullPointerException")
+    void nullSourceClass() {
+      assertThrows(NullPointerException.class, () -> Telescope.mapperBuilder(null, Dto.class));
+    }
+
+    @Test
+    @DisplayName("null target class throws NullPointerException")
+    void nullTargetClass() {
+      assertThrows(NullPointerException.class, () -> Telescope.mapperBuilder(Entity.class, null));
+    }
+  }
+
+  @Nested
+  @DisplayName("Empty builder — build() yields a pure auto-recursion mapper")
+  class EmptyBuilder {
+
+    record SameShapeSrc(String id, String name) {}
+
+    record SameShapeDst(String id, String name) {}
+
+    @Test
+    @DisplayName("no inherit / no add → builder produces a mapper equivalent to direct Telescope.mapper(A, B)")
+    void emptyBuild() {
+      final var built = Telescope.mapperBuilder(SameShapeSrc.class, SameShapeDst.class).build();
+      final var direct = Telescope.mapper(SameShapeSrc.class, SameShapeDst.class);
+
+      final var src = new SameShapeSrc("e1", "Alice");
+      assertEquals(direct.forward(src), built.forward(src), "empty builder matches direct mapper");
+    }
+  }
+
+  @Test
+  @DisplayName("from(...).to(...) adds multiple typed rename rows and preserves backward mapping")
+  void typedFromToRows() {
+    final var mapper = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class)
+      .from(RenamedSource::displayName)
+      .to(RenamedTarget::name)
+      .from(RenamedSource::phoneNumber)
+      .to(RenamedTarget::phone)
+      .build();
+
+    final var source = new RenamedSource("Ada", "555");
+    final var target = mapper.forward(source);
+    assertEquals(new RenamedTarget("Ada", "555"), target);
+    assertEquals(source, mapper.backward(target));
+  }
+
+  @Test
+  @DisplayName("typed from(...).to(...) rejects null accessors immediately")
+  void typedFromToNullAccessor() {
+    final var builder = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class);
+    assertThrows(NullPointerException.class, () -> builder.from(null));
+    assertThrows(NullPointerException.class, () -> builder.from(RenamedSource::displayName).to(null));
+  }
+
+  @Test
+  @DisplayName("fluent field selection exposes only the alternating next operation")
+  void typedFromToCannotRepeatEitherSide() throws NoSuchMethodException {
+    final var builder = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class);
+    final var selection = builder.from(RenamedSource::displayName);
+
+    assertThrows(
+      NoSuchMethodException.class,
+      () -> selection.getClass().getMethod("from", Telescope.Accessor.class),
+      "from(...).from(...) is not part of the fluent surface"
+    );
+    assertThrows(
+      NoSuchMethodException.class,
+      () -> builder.getClass().getMethod("to", Telescope.Accessor.class),
+      "to(...).to(...) is not part of the fluent surface"
+    );
+  }
+}

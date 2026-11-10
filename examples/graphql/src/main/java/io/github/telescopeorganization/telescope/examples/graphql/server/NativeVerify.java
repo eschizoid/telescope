@@ -1,0 +1,453 @@
+package io.github.telescopeorganization.telescope.examples.graphql.server;
+
+import static io.github.telescopeorganization.telescope.Edit.over;
+import static io.github.telescopeorganization.telescope.mapping.MapExtractStep.extract;
+
+import io.github.telescopeorganization.telescope.Telescope;
+import io.github.telescopeorganization.telescope.conversion.Mapper;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Account;
+import io.github.telescopeorganization.telescope.examples.graphql.model.AccountBridge;
+import io.github.telescopeorganization.telescope.examples.graphql.model.AccountBuilderBean;
+import io.github.telescopeorganization.telescope.examples.graphql.model.AccountEntity;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Address;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Badge;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Booking;
+import io.github.telescopeorganization.telescope.examples.graphql.model.BookingView;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Crewmate;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Itinerary;
+import io.github.telescopeorganization.telescope.examples.graphql.model.ItineraryView;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Label;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Role;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Shift;
+import io.github.telescopeorganization.telescope.examples.graphql.model.ShiftTelescope;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Tagged;
+import io.github.telescopeorganization.telescope.examples.graphql.model.Ticket;
+import io.github.telescopeorganization.telescope.examples.graphql.model.TicketToTicketViewBridge;
+import io.github.telescopeorganization.telescope.examples.graphql.model.TicketView;
+import io.github.telescopeorganization.telescope.examples.graphql.model.TicketViews;
+import io.github.telescopeorganization.telescope.examples.graphql.model.User;
+import io.github.telescopeorganization.telescope.examples.graphql.model.UserFromMap;
+import io.github.telescopeorganization.telescope.examples.graphql.model.UserTelescope;
+import io.github.telescopeorganization.telescope.examples.graphql.model.UserView;
+import io.github.telescopeorganization.telescope.introspection.OpticNode;
+import io.github.telescopeorganization.telescope.mapping.Mapping;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The native-image verifier for this example — and the entry point the {@code graalvmNative} build
+ * bakes. It exercises telescope's full runtime + codegen surface over the example's own domain
+ * models and asserts the converted values, so a compiled binary that produces wrong output (or
+ * fails to build) is a red CI run, not a silent pass.
+ *
+ * <p>Each capability maps to a substrate mechanic whose survival under {@code
+ * --initialize-at-build-time} + native-image's closed-world assumption is what this verifies:
+ *
+ * <ul>
+ *   <li><b>record field update / read</b> — {@code Telescope.of(User).field(User::x)...}: {@code
+ *       SerializedLambda} decode of the method reference + the cached LMF record reader + the
+ *       canonical-constructor {@code MethodHandle} rebuild.
+ *   <li><b>bean-getter read</b> — {@code Telescope.ofBean(AccountEntity).field(getter).read(e)}:
+ *       the cached LMF getter {@code Function} dispatch, exercised on its own so a getter-LMF
+ *       regression surfaces as its own line rather than hiding inside the bean mapper's write path.
+ *   <li><b>runtime record→record mapper</b> — {@code Telescope.mapper(User, UserView).forward(u)}:
+ *       LMF readers on the source, canonical-constructor rebuild on the target, carrying the nested
+ *       {@link Address} record through unchanged and the {@link Role} enum through by identity.
+ *   <li><b>runtime record→bean mapper</b> — {@code Telescope.mapper(Account, AccountEntity)}: the
+ *       Beans LMF no-arg-constructor {@code Supplier} + LMF setter {@code BiConsumer} write path.
+ *   <li><b>runtime record→builder bean mapper</b> — {@code Telescope.mapper(Account,
+ *       AccountBuilderBean)}: the Beans {@code BuilderWriter} — {@code builder()} {@code Supplier}
+ *       + fluent-setter {@code BiFunction} + {@code build()} {@code Function}; the only capability
+ *       that reaches the builder write path (the target has no no-arg constructor or setters).
+ *   <li><b>generated {@code @FromMap}</b> — {@code UserFromMap.fromMap(map)}: the reflection-free
+ *       codegen control — no LMF, no {@code SerializedLambda}, just typed method calls.
+ *   <li><b>runtime {@code fromMap} over a {@code @FromMap} component</b> — {@code
+ *       Telescope.fromMap(User, extract("name", ...))} leaves {@link Address} to its default, which
+ *       it accepts only after finding {@code AddressFromMap}'s provider through {@code
+ *       ServiceLoader}: the image has to carry the {@code META-INF/services} registration and the
+ *       provider class, with no reflection entry for either.
+ *   <li><b>generated {@code @Bridge}</b> — {@code AccountBridge.BRIDGE.read(a)}: the codegen bridge
+ *       constant, a {@code Telescope<Account, AccountEntity>} that lands in the build-time image
+ *       heap — which is why the telescope classes take {@code --initialize-at-build-time} from
+ *       telescope-core's {@code native-image.properties} and this example's generated-model package
+ *       takes it from {@code build.gradle.kts}.
+ *   <li><b>row typed by a class's type argument</b> — {@code Mapping.<Tagged<String>, Label,
+ *       String, String>to(Tagged::value, Label::value, ...)}, and one typed by {@link Badge}: the
+ *       mapper reads the class the row reads {@code value} as from the method reference's {@code
+ *       SerializedLambda} and loads it by name, which inside an image answers only for a class
+ *       registered for reflection, then checks each value against it before the row's function
+ *       runs.
+ *   <li><b>navigator-only multi-edit</b> — {@code Telescope.all(over(ShiftTelescope.of()...), ...)}
+ *       over {@link Shift} and {@link Crewmate}, which have no reflection registration: the fused
+ *       pass has to rebuild each record level through the navigators' own generated setters.
+ *   <li><b>{@code @Bridge} mapper field</b> — {@code Ticket.VIEW}: the factory finds the bridge
+ *       generated from the field's rows by the calling class through {@code StackWalker} and {@code
+ *       ServiceLoader}, in the image. {@link Ticket} and {@link TicketView} have no reflection
+ *       registration, so a mapper that fell back to the runtime path fails here.
+ *   <li><b>{@code @Bridge} mapper field with a via row of two methods</b> — {@code Booking.VIEW}:
+ *       the generated bridge calls {@code TicketViews.forward} and {@code backward} on each ticket,
+ *       and the row's method references are never decoded, so they need no serialization entry.
+ *   <li><b>runtime via row naming a class</b> — {@code via(Itinerary::legs, ItineraryView::legs,
+ *       TicketViews.class)} built on the runtime path: the mapper reads {@link TicketViews}'s
+ *       methods reflectively, which needs the class registered for its declared methods, and calls
+ *       them through method handles.
+ * </ul>
+ *
+ * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
+ * #runtimeLabel()} says which one just passed. Every capability is required on both runtimes: the
+ * Wall B substrate branch plus telescope's build-time-init metadata and the example's own
+ * reflection / serialization metadata carry the full runtime + codegen surface through
+ * native-image, so any FAIL is a real regression.
+ */
+public final class NativeVerify {
+
+  private NativeVerify() {}
+
+  public static void main(final String[] args) {
+    // Every capability is required on both runtimes: with the Wall B substrate branch and the
+    // build-time-init + reflection/serialization metadata in place, the full runtime + codegen
+    // surface passes under native-image, so any FAIL here — JVM or native — is a real regression.
+    final var results = new ArrayList<Result>();
+    results.add(
+      guard("record field update (SerializedLambda + LMF reader + ctor MH)", NativeVerify::recordFieldUpdate)
+    );
+    results.add(guard("record read path (.field(...).read())", NativeVerify::recordReadPath));
+    results.add(
+      guard("bean getter read (ofBean.field(getter).read(), LMF getter Function)", NativeVerify::beanReadPath)
+    );
+    results.add(
+      guard("runtime record → record mapper (LMF readers + ctor rebuild, nested + enum)", NativeVerify::recordMapper)
+    );
+    results.add(guard("runtime record → bean mapper (Beans LMF no-arg ctor + setters)", NativeVerify::beanMapper));
+    results.add(
+      guard("runtime record → builder bean mapper (builder() + fluent setters + build())", NativeVerify::builderMapper)
+    );
+    results.add(guard("generated @FromMap converter (reflection-free codegen control)", NativeVerify::fromMap));
+    results.add(
+      guard(
+        "runtime fromMap finds a generated @FromMap binder (FromMapProvider via ServiceLoader)",
+        NativeVerify::runtimeFromMapFindsBinder
+      )
+    );
+    results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
+    results.add(
+      guard("generated @Focus navigator (UserTelescope.of().address().city())", NativeVerify::focusNavigator)
+    );
+    results.add(
+      guard(
+        "runtime row typed by a class's type argument checks the value it reads (Class.forName by name)",
+        NativeVerify::rowTypedByArgument
+      )
+    );
+    results.add(
+      guard(
+        "navigator-only Telescope.all over records with no reflection registration",
+        NativeVerify::navigatorMultiEdit
+      )
+    );
+    results.add(
+      guard(
+        "@Bridge mapper field runs its generated bridge (StackWalker + ServiceLoader, no registration)",
+        NativeVerify::bridgeField
+      )
+    );
+    results.add(
+      guard(
+        "@Bridge mapper field with a via row of two methods runs its bridge, the methods never read",
+        NativeVerify::bridgeFieldViaMethods
+      )
+    );
+    results.add(
+      guard(
+        "runtime mapper with a via row naming a class finds its methods and calls them on each element",
+        NativeVerify::runtimeViaClass
+      )
+    );
+
+    System.out.println();
+    System.out.println("=== telescope native-image verification (graphql example) ===");
+    var failures = 0;
+    for (final var r : results) {
+      final var detail = r.detail() == null ? "" : "  — " + r.detail();
+      System.out.println((r.passed() ? "PASS  " : "FAIL  ") + r.name() + detail);
+      if (!r.passed()) failures++;
+    }
+    System.out.println();
+    if (failures == 0) System.out.println(
+      "ALL " + results.size() + " CAPABILITIES PASSED on this runtime (" + runtimeLabel() + ")."
+    );
+    else System.out.println(failures + " of " + results.size() + " CAPABILITIES FAILED — see the FAIL lines.");
+    System.exit(failures == 0 ? 0 : 1);
+  }
+
+  private static User sampleUser() {
+    return new User("Ada", "ada@example.com", 36, Role.ADMIN, new Address("London", "NW1"));
+  }
+
+  // (a) record field update through the full method-reference decode + rebuild path.
+  private static void recordFieldUpdate() {
+    final var before = sampleUser();
+    final var after = Telescope.of(User.class).field(User::name).update(before, String::toUpperCase);
+    expect("ADA".equals(after.name()), "expected name=ADA, got " + after.name());
+    final var deeper = Telescope.of(User.class)
+      .field(User::address)
+      .field(Address::city)
+      .update(before, String::toUpperCase);
+    expect(
+      "LONDON".equals(deeper.address().city()) && deeper.age() == 36,
+      "nested update or primitive carry-over failed: " + deeper
+    );
+  }
+
+  // (b) LMF record read path — .read() dispatches the cached LMF record reader.
+  private static void recordReadPath() {
+    final var user = sampleUser();
+    final String city = Telescope.of(User.class).field(User::address).field(Address::city).read(user);
+    final int age = Telescope.of(User.class).field(User::age).read(user);
+    expect("London".equals(city) && age == 36, "record read path mismatch: city=" + city + " age=" + age);
+  }
+
+  // (c) LMF bean-getter read — ofBean(...).field(getter).read() dispatches the cached LMF getter
+  // Function. Read counterpart to the bean write path in (e); exercised on its own so a
+  // getter-LMF regression surfaces as its own line rather than hiding inside the bean mapper.
+  private static void beanReadPath() {
+    final var entity = new AccountEntity();
+    entity.setUsername("grace");
+    final String username = Telescope.ofBean(AccountEntity.class).field(AccountEntity::getUsername).read(entity);
+    expect("grace".equals(username), "bean getter read mismatch: " + username);
+  }
+
+  // (d) runtime record → record deep mapper: same-name inference over nested record + enum.
+  private static void recordMapper() {
+    final Mapper<User, UserView> mapper = Telescope.mapper(User.class, UserView.class);
+    final var view = mapper.forward(sampleUser());
+    expect(
+      "Ada".equals(view.name()) &&
+        view.age() == 36 &&
+        view.role() == Role.ADMIN &&
+        "London".equals(view.address().city()),
+      "record mapper.forward mismatch: " + view
+    );
+  }
+
+  // (e) runtime record → bean deep mapper: Beans LMF no-arg ctor Supplier + setter BiConsumer.
+  private static void beanMapper() {
+    final Mapper<Account, AccountEntity> mapper = Telescope.mapper(Account.class, AccountEntity.class);
+    final var entity = mapper.forward(new Account("ada", "ada@example.com"));
+    expect(
+      "ada".equals(entity.getUsername()) && "ada@example.com".equals(entity.getEmail()),
+      "bean mapper.forward mismatch: username=" + entity.getUsername() + " email=" + entity.getEmail()
+    );
+  }
+
+  // (f) runtime record → builder-only bean: Beans BuilderWriter — builder() Supplier + fluent
+  // setter BiFunction + build() Function. AccountBuilderBean has no no-arg ctor / setters, so this
+  // is the only capability that reaches the builder write path.
+  private static void builderMapper() {
+    final Mapper<Account, AccountBuilderBean> mapper = Telescope.mapper(Account.class, AccountBuilderBean.class);
+    final var bean = mapper.forward(new Account("ivy", "ivy@example.com"));
+    expect(
+      "ivy".equals(bean.getUsername()) && "ivy@example.com".equals(bean.getEmail()),
+      "builder mapper.forward mismatch: username=" + bean.getUsername() + " email=" + bean.getEmail()
+    );
+  }
+
+  // (g) generated @FromMap converter — reflection-free codegen control; also exercises enum +
+  // nested.
+  private static void fromMap() {
+    final Map<String, Object> address = new HashMap<>();
+    address.put("city", "New York");
+    address.put("zip", "10001");
+    final Map<String, Object> map = new HashMap<>();
+    map.put("name", "Alice");
+    map.put("email", "alice@example.com");
+    map.put("age", 30);
+    map.put("role", "ADMIN");
+    map.put("address", address);
+    final var user = UserFromMap.fromMap(map);
+    expect(
+      "Alice".equals(user.name()) &&
+        user.age() == 30 &&
+        user.role() == Role.ADMIN &&
+        "New York".equals(user.address().city()),
+      "@FromMap conversion mismatch: " + user
+    );
+  }
+
+  // (j) runtime fromMap filling an unnamed component whose type has a generated binder, through
+  // that binder: both finding it and calling it rest on the binder's ServiceLoader registration,
+  // which the image must carry.
+  private static void runtimeFromMapFindsBinder() {
+    final var user = Telescope.fromMap(User.class, extract("name", User::name, Object::toString)).forward(
+      Map.of("name", "Bea", "age", "41", "address", Map.of("city", "Oslo", "zip", "0150"))
+    );
+    expect(
+      "Bea".equals(user.name()) && user.age() == 41 && new Address("Oslo", "0150").equals(user.address()),
+      "runtime fromMap mismatch: " + user
+    );
+  }
+
+  // (h) generated @Bridge constant — pure typed method calls, baked into the image heap.
+  private static void bridgeConstant() {
+    final var entity = AccountBridge.BRIDGE.read(new Account("grace", "grace@example.com"));
+    expect(
+      "grace".equals(entity.getUsername()) && "grace@example.com".equals(entity.getEmail()),
+      "bridge constant mismatch: username=" + entity.getUsername() + " email=" + entity.getEmail()
+    );
+  }
+
+  // (k) Telescope.all over generated navigator paths only. Shift and Crewmate carry no
+  // reflect-config entry, so each fused record level has to rebuild through the navigators' own
+  // setters; a rebuild that discovered the canonical constructor reflectively fails here.
+  private static void navigatorMultiEdit() {
+    final var normalize = Telescope.all(
+      over(ShiftTelescope.of().label(), String::toUpperCase),
+      over(ShiftTelescope.of().code(), String::trim),
+      over(ShiftTelescope.of().crew().each().name(), String::toLowerCase),
+      over(ShiftTelescope.of().crew().each().handle(), (final String h) -> "@" + h)
+    );
+    final var out = normalize.apply(
+      new Shift("night", " n1 ", List.of(new Crewmate("ADA", "ada"), new Crewmate("BO", "bo")))
+    );
+    expect(
+      new Shift("NIGHT", "n1", List.of(new Crewmate("ada", "@ada"), new Crewmate("bo", "@bo"))).equals(out),
+      "navigator multi-edit mismatch: " + out
+    );
+  }
+
+  // (l) a runtime row typed by a class's type argument reads Tagged.value, declared with a type
+  // variable, as String, and another as Badge: the mapper loads each by the name the method
+  // reference records, which inside an image answers only for a registered class, and checks the
+  // value against it, so a value of another class is refused by name before the row's function
+  // runs. The classes are passed as values so the compile-time verifier does not read the rows
+  // against the raw record.
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void rowTypedByArgument() {
+    final Class source = Tagged.class;
+    final Class<Label> target = Label.class;
+    final Mapper<Tagged<?>, Label> mapper = Telescope.mapper(
+      source,
+      target,
+      Mapping.<Tagged<String>, Label, String, String>to(Tagged::value, Label::value, s -> s + "!", s -> s)
+    );
+    final Mapper<Tagged<?>, Label> badged = Telescope.mapper(
+      source,
+      target,
+      Mapping.<Tagged<Badge>, Label, Badge, String>to(Tagged::value, Label::value, Badge::text, Badge::new)
+    );
+    final var badge = badged.forward(new Tagged<>(new Badge("b")));
+    expect(new Label("b").equals(badge), "row typed by an application class mismatch: " + badge);
+    final var label = mapper.forward(new Tagged<>("a"));
+    expect(new Label("a!").equals(label), "row typed by an argument mismatch: " + label);
+    try {
+      mapper.forward(new Tagged<>(5));
+      throw new AssertionError("a value of another class was handed to the row's function");
+    } catch (final ClassCastException refused) {
+      expect(
+        refused.getMessage() != null &&
+          refused.getMessage().contains("is handed to a conversion that takes java.lang.String"),
+        "the refusal did not name the class the row reads: " + refused.getMessage()
+      );
+    }
+  }
+
+  // (m) a @Bridge mapper field over two records with no reflection registration: the mapper the
+  // field holds converts through the bridge generated from its rows, both ways and in patch, and
+  // agrees with that bridge called directly.
+  private static void bridgeField() {
+    final var mapper = Ticket.VIEW;
+    final var ticket = new Ticket("K7", "12A");
+    final var view = mapper.forward(ticket);
+    expect(new TicketView("K7", "12A").equals(view), "bridge field forward mismatch: " + view);
+    expect(view.equals(TicketToTicketViewBridge.forward(ticket)), "bridge field disagrees with its bridge");
+    expect(ticket.equals(mapper.backward(view)), "bridge field backward mismatch");
+    final var patched = mapper.patch(ticket, new TicketView(null, "3C"));
+    expect(new Ticket("K7", "3C").equals(patched), "bridge field patch mismatch: " + patched);
+  }
+
+  // (n) a @Bridge mapper field whose via row names two methods written by hand: the generated
+  // bridge calls them on each ticket, and the row's method references are never decoded, so the
+  // image needs no serialization registration for them.
+  private static void bridgeFieldViaMethods() {
+    final var mapper = Booking.VIEW;
+    expect(
+      mapper
+        .explain()
+        .declared()
+        .map(d -> d.runs() == OpticNode.Runs.GENERATED)
+        .orElse(false),
+      "via-row field is not on the generated path: " + mapper.explain()
+    );
+    final var booking = new Booking("B1", List.of(new Ticket("K7", "12A"), new Ticket("K8", "12B")));
+    final var view = mapper.forward(booking);
+    expect(
+      new BookingView("B1", List.of(new TicketView("K7", "12A"), new TicketView("K8", "12B"))).equals(view),
+      "via-row field forward mismatch: " + view
+    );
+    expect(booking.equals(mapper.backward(view)), "via-row field backward mismatch");
+  }
+
+  // (o) a runtime mapper whose via row names the class converting each ticket: the mapper finds
+  // the class's forward and backward reflectively when it is built and calls them through method
+  // handles, so the image needs the class registered for its declared methods.
+  private static void runtimeViaClass() {
+    final var mapper = Telescope.mapper(
+      Itinerary.class,
+      ItineraryView.class,
+      Mapping.via(Itinerary::legs, ItineraryView::legs, TicketViews.class)
+    );
+    expect(
+      mapper
+        .explain()
+        .declared()
+        .map(d -> d.runs() == OpticNode.Runs.RUNTIME)
+        .orElse(true),
+      "via-class mapper is not on the runtime path: " + mapper.explain()
+    );
+    final var itinerary = new Itinerary("I1", List.of(new Ticket("K7", "12A"), new Ticket("K8", "12B")));
+    final var view = mapper.forward(itinerary);
+    expect(
+      new ItineraryView("I1", List.of(new TicketView("K7", "12A"), new TicketView("K8", "12B"))).equals(view),
+      "via-class mapper forward mismatch: " + view
+    );
+    expect(itinerary.equals(mapper.backward(view)), "via-class mapper backward mismatch");
+  }
+
+  // "native-image" when running as a compiled binary, otherwise "JVM" — a green JVM run only
+  // validates the harness; a green native-image run is the real verdict.
+  private static String runtimeLabel() {
+    return System.getProperty("org.graalvm.nativeimage.imagecode") != null ? "native-image" : "JVM";
+  }
+
+  private static void expect(final boolean condition, final String message) {
+    if (!condition) throw new AssertionError(message);
+  }
+
+  private static Result guard(final String name, final Runnable capability) {
+    try {
+      capability.run();
+      return new Result(name, true, null);
+    } catch (final Throwable t) {
+      System.err.println("[FAIL] " + name);
+      t.printStackTrace();
+      return new Result(name, false, t.getClass().getSimpleName() + ": " + t.getMessage());
+    }
+  }
+
+  private record Result(String name, boolean passed, String detail) {}
+
+  // (i) generated @Focus navigator — the emitted UserTelescope composes lenses from method
+  // references AT CALL TIME, so the generated class is the lambda-capturing type an image must
+  // register in serialization-config. This capability is the proof that the documented recipe
+  // (add the generated navigator class to lambdaCapturingTypes) actually works natively.
+  private static void focusNavigator() {
+    final var user = new User("ann", "ann@x.io", 30, Role.ADMIN, new Address("nyc", "10001"));
+    final String city = UserTelescope.of().address().city().read(user);
+    final var upper = UserTelescope.of().name().update(user, String::toUpperCase);
+    if (!"nyc".equals(city) || !"ANN".equals(upper.name())) {
+      throw new IllegalStateException("focus navigator mismatch: " + city + " / " + upper.name());
+    }
+  }
+}

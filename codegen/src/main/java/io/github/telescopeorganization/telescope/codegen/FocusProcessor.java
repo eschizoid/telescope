@@ -1,0 +1,318 @@
+package io.github.telescopeorganization.telescope.codegen;
+
+import java.io.PrintWriter;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import javax.annotation.processing.RoundEnvironment;
+import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.RecordComponentElement;
+import javax.lang.model.element.TypeElement;
+
+/**
+ * Annotation processor for {@link io.github.telescopeorganization.telescope.annotations.Focus}. For
+ * each annotated record, emits a fluent typed path navigator: a sibling class {@code
+ * <Record>Telescope<R>} whose methods descend into the record's components, plus one container-step
+ * class per collection-shaped component. The navigator gives the reading flow of the reflective DSL
+ * —
+ *
+ * <pre>{@code
+ * CompanyPath.of().departments().each().teams().each().users().each().email()
+ * }</pre>
+ *
+ * with end-to-end compile-time type checking, and the method bodies use {@link
+ * io.github.telescopeorganization.telescope.Telescope#lens(java.util.function.Function,
+ * java.util.function.BiFunction)} plus the no-arg {@code .each()} only — fully reflection-free.
+ *
+ * <p>Each scalar component emits a terminal {@code Telescope<R, T>} method; each sub-record
+ * component emits a {@code <Sub>Telescope<R>}-returning method (the sub-record must also be
+ * annotated with {@code @Focus}); each container component (List/Set/Iterable, Map values,
+ * Optional) emits a container step whose {@code each} / {@code eachValue} / {@code whenPresent}
+ * method returns the element's {@code Path} (if it's a record) or a terminal {@code Telescope<R,
+ * E>}.
+ *
+ * <p>Guards (each reported as a compile error on the offending element):
+ *
+ * <ul>
+ *   <li>the annotated element must be a {@code record};
+ *   <li>the record must be top-level — a nested record is rejected because the generated top-level
+ *       {@code *Path} class cannot name a nested record's canonical constructor.
+ * </ul>
+ */
+@SupportedAnnotationTypes("io.github.telescopeorganization.telescope.annotations.Focus")
+public final class FocusProcessor extends AbstractTelescopeProcessor {
+
+  /**
+   * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
+   */
+  public FocusProcessor() {
+    super();
+  }
+
+  // Records held back one round because their bridge hop leads to a class telescope-lombok's
+  // processor may still take on, which decides whether that hop descends or ends.
+  private final Set<TypeElement> held = new LinkedHashSet<>();
+
+  @Override
+  public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
+    readFieldBridges(roundEnv);
+    final var heldLastRound = List.copyOf(held);
+    held.clear();
+    for (final var recordType : heldLastRound) generate(recordType);
+    for (final Element element : roundEnv.getElementsAnnotatedWith(
+      processingEnv.getElementUtils().getTypeElement("io.github.telescopeorganization.telescope.annotations.Focus")
+    )) {
+      if (element.getKind() != ElementKind.RECORD) {
+        error(element, "@Focus is only supported on records");
+        continue;
+      }
+      if (element.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
+        error(
+          element,
+          "@Focus is only supported on top-level records (the generated *Path class can't " +
+            "reference a nested record's canonical constructor)"
+        );
+        continue;
+      }
+      final var recordType = (TypeElement) element;
+      if (!roundEnv.processingOver() && awaitsLombokTarget(bridgeTargetTypes(recordType))) held.add(recordType);
+      else generate(recordType);
+    }
+    return true;
+  }
+
+  private void generate(final TypeElement recordType) {
+    final var pkg = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
+    final var recordName = recordType.getSimpleName().toString();
+    // The name the generated siblings are built from, and the reference the emitted source uses to
+    // name the record, are two different strings whenever the record's own name collides with one
+    // of the navigator's type variables: the sibling is still XTelescope, but the type has to be
+    // named in full inside it or the variable shadows it.
+    final var recordRef = navigatorTypeRefOf(recordType);
+    final var pathName = recordName + "Telescope";
+    final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
+    final List<? extends RecordComponentElement> components = recordType.getRecordComponents();
+
+    // Both artifacts are rejected together, before either is written. A component that cannot be
+    // emitted as a typed constant also cannot be named in the navigator's type parameters, and a
+    // component colliding with a navigator method makes the navigator uncompilable — emitting
+    // either artifact anyway hands the author a javac error inside a file they never wrote.
+    final var hopTarget = bridgeTargetFqn(recordType);
+    final var reservedHop = hopTarget == null ? Set.<String>of() : Set.of("as" + simpleNameOf(hopTarget));
+    if (
+      hasReservedPropertyName(
+        recordType,
+        "@Focus",
+        components
+          .stream()
+          .map(c -> c.getSimpleName().toString())
+          .toList(),
+        reservedHop
+      )
+    ) return;
+    for (final var comp : components) {
+      if (!isEmittableAsTypedConstant(comp.asType())) {
+        error(
+          recordType,
+          "@Focus: cannot emit metadata constant for component '" +
+            comp.getSimpleName() +
+            "' of type '" +
+            comp.asType() +
+            "'" +
+            unemittableReason(comp.asType()) +
+            ". Remove " +
+            "@Focus from this record to use the runtime path."
+        );
+        return;
+      }
+    }
+
+    // First, emit one container-step class per collection-shaped component (each goes in its own
+    // top-level source file because each is public and Java permits at most one public top-level
+    // type per file).
+    for (final var comp : components) {
+      final var shape = traversalKind(comp.asType());
+      if (shape != null) emitStep(recordType, recordRef, pkg, comp, shape);
+    }
+    final var owner = OwnerRef.of(recordType, recordRef);
+
+    // Then emit the main Path navigator.
+    writeInstanceClass(
+      qualifiedPath,
+      pathName,
+      "<R>",
+      "Generated by telescope-codegen for @Focus record " + recordName + ".",
+      recordType,
+      out -> {
+        emitPathClassHeader(out, pathName, owner);
+        for (var i = 0; i < components.size(); i++) emitComponentMethod(out, owner, components, i, components.get(i));
+        final var bridgeTarget = bridgeTargetFqn(recordType);
+        if (bridgeTarget != null) emitBridgeHop(out, recordType, recordRef, bridgeTarget);
+        emitTelescopeForwarders(out, recordRef, owner.suppression("  "));
+      }
+    );
+
+    // Finally, emit the sibling <X>Telescope metadata holder. If any component carries an
+    // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
+    // holder emission for that record only.
+    emitMetadataHolder(recordType, recordName, pkg, components);
+  }
+
+  // Emits the sibling <X>Telescope holder, one `public static final Telescope<X, FieldType>`
+  // constant per record component. Containers are emitted as raw container lenses (Telescope<X,
+  // List<E>>, etc.) — the consumer composes via .then(...) to descend.
+  private void emitMetadataHolder(
+    final TypeElement recordType,
+    final String recordName,
+    final String pkg,
+    final List<? extends RecordComponentElement> components
+  ) {
+    final var holderName = recordName + "FieldOptics";
+    final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
+    final var owner = OwnerRef.of(recordType, recordName);
+
+    final Set<String> extraImports = new LinkedHashSet<>();
+    for (final var comp : components) collectStdImports(comp.asType(), extraImports);
+    // The holder also exposes a static construct(Function<String, Object>) so the runtime forward
+    // branch in Reflective#structuralIso can skip the canonical-ctor reflective path.
+    extraImports.add("java.util.function.Function");
+    // The holder also exposes a static constants() returning the name → lens map, so the runtime
+    // probe skips the per-field getDeclaredFields() scan.
+    extraImports.add("java.util.Map");
+
+    writeMetadataHolderClass(
+      qualifiedHolder,
+      holderName,
+      "Generated by telescope-codegen for @Focus record " +
+        recordName +
+        ". Per-component Telescope constants for runtime hybrid dispatch.",
+      recordType,
+      extraImports,
+      out -> {
+        for (final var comp : components) {
+          final var compName = comp.getSimpleName().toString();
+          final var fieldType = shortenStdImports(boxedType(comp.asType()));
+          final var lensArgs = owner.methodRef(compName) + ", " + canonicalSetter(owner, components, compName);
+          emitFieldConstant(out, owner, comp.asType(), fieldType, compName, lensArgs);
+        }
+        emitRecordConstruct(out, owner, components);
+        emitConstantsMap(
+          out,
+          components
+            .stream()
+            .map(c -> c.getSimpleName().toString())
+            .toList()
+        );
+      }
+    );
+  }
+
+  // Emit a `public static <Record> construct(Function<String, Object> values)` that calls the
+  // canonical constructor directly: a reference component is a plain cast, a primitive component is
+  // pulled through an instanceof-default null-guard (so a null boxed value takes the JLS default
+  // instead of NPE-ing on the unbox). The runtime hybrid dispatch in MetadataHolderProbe /
+  // Reflective#structuralIso routes here, bypassing the reflective Records.construct path.
+  private void emitRecordConstruct(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final List<? extends RecordComponentElement> components
+  ) {
+    final var recordName = owner.ref();
+    out.println("  /** Canonical-constructor short-circuit for the runtime forward branch. */");
+    out.println(constructSuppression(owner, components.stream().map(Element::asType).toList()));
+    out.println("  public static " + recordName + " construct(final Function<String, Object> values) {");
+    out.print("    return new " + recordName + "(");
+    for (var i = 0; i < components.size(); i++) {
+      final var comp = components.get(i);
+      final var compName = comp.getSimpleName().toString();
+      final var castType = shortenStdImports(boxedType(comp.asType()));
+      final var apply = "values.apply(\"" + compName + "\")";
+      // A primitive component null-guards with an instanceof-default so a null boxed value takes
+      // the
+      // JLS default instead of NPE-ing on the canonical-constructor unbox — same guard the bean
+      // construct emits via valueExprForProp. The pattern variable is named per-component because
+      // all
+      // arguments live in one `new R(...)` expression, so a shared name could collide.
+      final var pv = "__v_" + compName;
+      final var arg = primitiveDefaultLiteral(comp.asType().getKind())
+        .map(def -> apply + " instanceof " + castType + " " + pv + " ? " + pv + " : " + def)
+        .orElseGet(() -> "(" + castType + ") " + apply);
+      out.print(arg);
+      if (i < components.size() - 1) out.print(", ");
+    }
+    out.println(");");
+    out.println("  }");
+    out.println();
+  }
+
+  // Emits one navigator method for the given record component, dispatching on its shape:
+  // container (List/Set/Iterable, Map, Optional) -> per-component step class; sub-record ->
+  // <Sub>Telescope<R>; scalar -> terminal Telescope<R, T>.
+  private void emitComponentMethod(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final List<? extends RecordComponentElement> components,
+    final int componentIndex,
+    final RecordComponentElement comp
+  ) {
+    final var compName = comp.getSimpleName().toString();
+    final var lensArgs = owner.methodRef(compName) + ", " + canonicalSetter(owner, components, compName);
+    emitNavigatorMethod(out, owner, componentIndex, compName, comp.asType(), lensArgs, FOCUS_ONLY);
+  }
+
+  // Container-step emission for an @Focus record's collection-shaped component. All shared logic
+  // (List/Set/Map/Optional dispatch, navigable-element check, body emission) lives in
+  // AbstractTelescopeProcessor#emitContainerStep; this just supplies record-flavored inputs.
+  private void emitStep(
+    final TypeElement recordType,
+    final String recordName,
+    final String pkg,
+    final RecordComponentElement comp,
+    final TraversalShape shape
+  ) {
+    final var compName = comp.getSimpleName().toString();
+    emitContainerStep(
+      recordType,
+      recordName,
+      pkg,
+      compName,
+      comp.asType(),
+      shape,
+      FOCUS_ONLY,
+      "Generated by telescope-codegen for @Focus container hop " + recordName + "." + compName + "."
+    );
+  }
+
+  // The annotation set used by emitNavigatorMethod / emitContainerStep to decide whether a
+  // sub-component's element type has its own generated <X>Telescope<R>.
+  private static final Set<String> FOCUS_ONLY = Set.of("io.github.telescopeorganization.telescope.annotations.Focus");
+
+  // The canonical-constructor setter expression for a target component: (s, v) -> new Record(args)
+  // where each arg is `v` for the target component or a null-guarded `s.other()` for the others.
+  // The null-guard lets the lens rebuild a fresh record when it writes into a never-constructed
+  // nested intermediate (a null write-target at any depth): the off-path component then takes its
+  // JLS default (null for references, 0/false/etc. for primitives) instead of NPE-ing on the read,
+  // matching the @BeanFocus setter rebuild. A single-component record emits no guard (no off-path
+  // read), and a populated previous record reads its off-path components through unchanged.
+  private static String canonicalSetter(
+    final OwnerRef owner,
+    final List<? extends RecordComponentElement> components,
+    final String targetName
+  ) {
+    final var sb = new StringBuilder();
+    for (var i = 0; i < components.size(); i++) {
+      final var name = components.get(i).getSimpleName().toString();
+      if (name.equals(targetName)) {
+        sb.append("v");
+      } else {
+        final var def = primitiveDefaultLiteral(components.get(i).asType().getKind()).orElse("null");
+        sb.append("(s == null ? ").append(def).append(" : ").append(owner.receiver("s"));
+        sb.append(".").append(name).append("())");
+      }
+      if (i < components.size() - 1) sb.append(", ");
+    }
+    return "(s, v) -> " + owner.creation(sb.toString());
+  }
+}

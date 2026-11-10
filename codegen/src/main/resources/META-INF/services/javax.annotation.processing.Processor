@@ -1,6 +1,6 @@
-io.github.eschizoid.telescope.codegen.FocusProcessor
-io.github.eschizoid.telescope.codegen.BridgeProcessor
-io.github.eschizoid.telescope.codegen.BeanFocusProcessor
-io.github.eschizoid.telescope.codegen.FromMapProcessor
-io.github.eschizoid.telescope.codegen.TelescopeMapperProcessor
-io.github.eschizoid.telescope.codegen.MapperVerifierProcessor
+io.github.telescopeorganization.telescope.codegen.FocusProcessor
+io.github.telescopeorganization.telescope.codegen.BridgeProcessor
+io.github.telescopeorganization.telescope.codegen.BeanFocusProcessor
+io.github.telescopeorganization.telescope.codegen.FromMapProcessor
+io.github.telescopeorganization.telescope.codegen.TelescopeMapperProcessor
+io.github.telescopeorganization.telescope.codegen.MapperVerifierProcessor

@@ -1,0 +1,381 @@
+package io.github.telescopeorganization.telescope.codegen;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.lang.invoke.MethodHandles;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import javax.annotation.processing.Processor;
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.FileObject;
+import javax.tools.ForwardingJavaFileManager;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileManager;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
+
+/**
+ * Shared in-memory compilation harness for the annotation-processor tests. Drives one or more
+ * processors through the JDK's {@link ToolProvider#getSystemJavaCompiler()} over in-memory source
+ * strings, capturing generated {@code SOURCE} outputs and all diagnostics — no third-party
+ * compile-testing dependency. Exposed via this module's {@code testFixtures} source set so the
+ * downstream {@code :lombok} tests can reuse it alongside the in-tree processor tests.
+ */
+public final class ProcessorHarness {
+
+  private ProcessorHarness() {}
+
+  /**
+   * Compile {@code sources} with the single {@code processor} attached, capturing generated source
+   * + diagnostics.
+   */
+  public static Compilation compile(final Processor processor, final JavaFileObject... sources) {
+    return compile(List.of(processor), sources);
+  }
+
+  /**
+   * Compile {@code sources} with every processor in {@code processors} attached, capturing
+   * generated source + diagnostics. List ordering is preserved — javac runs each processor once per
+   * round.
+   */
+  public static Compilation compile(final List<? extends Processor> processors, final JavaFileObject... sources) {
+    return compile(processors, List.of(), sources);
+  }
+
+  /**
+   * Same as {@link #compile(List, JavaFileObject...)} with extra compiler options appended — e.g.
+   * {@code -Atelescope.verify=warn} to exercise a processor's option handling.
+   */
+  public static Compilation compile(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, extraOptions, true, sources);
+  }
+
+  /**
+   * Compile through the FULL javac pipeline (parse → process → analyze → generate), with class
+   * output captured in memory and discarded. Needed for processors that do their work from a
+   * post-analysis task listener rather than in the processing rounds — under {@code -proc:only} the
+   * analyze phase never runs, so such processors would be silent.
+   */
+  public static Compilation compileFully(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, extraOptions, false, sources);
+  }
+
+  private static Compilation run(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final boolean procOnly,
+    final JavaFileObject... sources
+  ) {
+    final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+    if (compiler == null) {
+      throw new IllegalStateException("no system Java compiler available (need a JDK, not a JRE)");
+    }
+
+    final var diagnostics = new DiagnosticCollector<JavaFileObject>();
+    final var capturing = new CapturingFileManager(
+      compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)
+    );
+
+    // -proc:only runs annotation processing without emitting .class files (nothing leaks into the
+    // working tree, no read-back compile round); the full pipeline routes class output into the
+    // capturing manager's in-memory sink instead. The -Xlint flags mirror the build.
+    final var options = new ArrayList<>(
+      procOnly ? List.of("-proc:only", "-Xlint:all,-processing") : List.of("-Xlint:all,-processing")
+    );
+    options.addAll(extraOptions);
+    final JavaCompiler.CompilationTask task = compiler.getTask(
+      null,
+      capturing,
+      diagnostics,
+      options,
+      null,
+      List.of(sources)
+    );
+    task.setProcessors(List.copyOf(processors));
+
+    final boolean success = task.call();
+    return new Compilation(
+      success,
+      diagnostics.getDiagnostics(),
+      capturing.generatedSources(),
+      capturing.generatedResources(),
+      capturing.compiledClasses()
+    );
+  }
+
+  public static JavaFileObject source(final String fqcn, final String code) {
+    return new StringSource(fqcn, code);
+  }
+
+  /** Outcome of one in-memory compilation. */
+  public record Compilation(
+    boolean success,
+    List<Diagnostic<? extends JavaFileObject>> diagnostics,
+    Map<String, String> generated,
+    Map<String, String> resources,
+    Map<String, byte[]> classes
+  ) {
+    /**
+     * Define every class this compilation produced through the caller's own lookup, keyed by binary
+     * name.
+     *
+     * <p>Running what was compiled is what lets a test compare the generated path against the
+     * reflective one on the same input, rather than comparing generated text against an
+     * expectation. The lookup is a parameter rather than something this fixture builds because it
+     * decides the loader and module the classes land in, and those decide which accessors the
+     * runtime path builds for them. A class in the caller's module is read through accessors {@link
+     * java.lang.invoke.LambdaMetafactory} spins. A class held by a loader of its own sits in a
+     * distinct unnamed module, under a name the runtime's own loader cannot resolve, and is read
+     * through method handle closures instead. Defining through the caller's lookup keeps a test on
+     * the path an application on the class path takes.
+     *
+     * <p>Two consequences for whoever writes the sources. {@link MethodHandles.Lookup#defineClass}
+     * takes only bytes naming the lookup class's own package, so the sources have to declare that
+     * package; and one loader holds every cell of a grid, so the names have to be distinct across
+     * cells.
+     *
+     * <p>Empty for a {@code -proc:only} compile, which attributes declarations and emits no
+     * classes.
+     */
+    public Map<String, Class<?>> define(final MethodHandles.Lookup lookup) {
+      final var defined = new LinkedHashMap<String, Class<?>>();
+      final var pending = new LinkedHashMap<>(classes);
+      // defineClass links, and linking a class that references another of the set can need that
+      // one present. Nothing here knows the dependency order, so define what can be defined and
+      // go round again while the round defined something.
+      while (!pending.isEmpty()) {
+        final var failures = new LinkedHashMap<String, Throwable>();
+        final var before = pending.size();
+        for (final var entry : List.copyOf(pending.entrySet())) {
+          try {
+            defined.put(entry.getKey(), lookup.defineClass(entry.getValue()));
+            pending.remove(entry.getKey());
+          } catch (final IllegalAccessException | LinkageError t) {
+            failures.put(entry.getKey(), t);
+          }
+        }
+        if (pending.size() == before) {
+          throw new IllegalStateException("cannot define " + failures.keySet(), failures.values().iterator().next());
+        }
+      }
+      return defined;
+    }
+
+    /**
+     * Every warning javac reported in a source file a processor generated, any lint category
+     * included, as {@code file:line: message}.
+     */
+    public List<String> warningsInGenerated() {
+      final var generatedFiles = new HashSet<String>();
+      for (final var name : generated.keySet()) generatedFiles.add("/" + name.replace('.', '/') + ".java");
+      final var warnings = new ArrayList<String>();
+      for (final var d : diagnostics) {
+        if (d.getKind() != Diagnostic.Kind.WARNING && d.getKind() != Diagnostic.Kind.MANDATORY_WARNING) continue;
+        if (d.getSource() == null || !generatedFiles.contains(d.getSource().getName())) continue;
+        warnings.add(d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT));
+      }
+      return warnings;
+    }
+
+    public List<Diagnostic<? extends JavaFileObject>> errors() {
+      final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
+      for (final var d : diagnostics) {
+        if (d.getKind() == Diagnostic.Kind.ERROR) out.add(d);
+      }
+      return out;
+    }
+
+    public boolean hasError(final String fragment) {
+      for (final var d : errors()) {
+        if (d.getMessage(Locale.ROOT).contains(fragment)) return true;
+      }
+      return false;
+    }
+
+    public String errorMessages() {
+      final var sb = new StringBuilder();
+      for (final var d : diagnostics) {
+        sb.append(d.getKind()).append(": ").append(d.getMessage(Locale.ROOT)).append('\n');
+      }
+      return sb.toString();
+    }
+  }
+
+  /** A source {@link JavaFileObject} backed by an in-memory string. */
+  private static final class StringSource extends SimpleJavaFileObject {
+
+    private final String code;
+
+    StringSource(final String fqcn, final String code) {
+      super(URI.create("string:///" + fqcn.replace('.', '/') + Kind.SOURCE.extension), Kind.SOURCE);
+      this.code = code;
+    }
+
+    @Override
+    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+      return code;
+    }
+  }
+
+  /**
+   * Wraps the standard file manager and captures any {@code SOURCE}-kind outputs the processor
+   * emits via the {@code Filer}, keyed by the binary name the compiler requested.
+   */
+  private static final class CapturingFileManager extends ForwardingJavaFileManager<JavaFileManager> {
+
+    private final Map<String, CapturedSource> captured = new LinkedHashMap<>();
+    private final Map<String, CapturedResource> capturedResources = new LinkedHashMap<>();
+    private final Map<String, CapturedClass> classes = new LinkedHashMap<>();
+
+    CapturingFileManager(final JavaFileManager delegate) {
+      super(delegate);
+    }
+
+    @Override
+    public JavaFileObject getJavaFileForOutput(
+      final Location location,
+      final String className,
+      final JavaFileObject.Kind kind,
+      final FileObject sibling
+    ) throws IOException {
+      if (location == StandardLocation.SOURCE_OUTPUT && kind == JavaFileObject.Kind.SOURCE) {
+        final var sourceFile = new CapturedSource(className);
+        captured.put(className, sourceFile);
+        return sourceFile;
+      }
+      // Full-pipeline compiles route class output here — sink it in memory so nothing lands in
+      // the working tree.
+      if (location == StandardLocation.CLASS_OUTPUT && kind == JavaFileObject.Kind.CLASS) {
+        final var classFile = new CapturedClass(className);
+        classes.put(className, classFile);
+        return classFile;
+      }
+      return super.getJavaFileForOutput(location, className, kind, sibling);
+    }
+
+    // Capture resource outputs (e.g. META-INF/services registrations) in memory too, so they're
+    // assertable and — critically — never escape to disk in the working tree under -proc:only.
+    @Override
+    public FileObject getFileForOutput(
+      final Location location,
+      final String packageName,
+      final String relativeName,
+      final FileObject sibling
+    ) {
+      final var key = packageName.isEmpty() ? relativeName : packageName.replace('.', '/') + "/" + relativeName;
+      final var resource = new CapturedResource(key);
+      capturedResources.put(key, resource);
+      return resource;
+    }
+
+    Map<String, String> generatedSources() {
+      final var out = new LinkedHashMap<String, String>();
+      captured.forEach((name, file) -> out.put(name, file.text()));
+      return out;
+    }
+
+    Map<String, byte[]> compiledClasses() {
+      final var out = new LinkedHashMap<String, byte[]>();
+      classes.forEach((name, file) -> out.put(name, file.bytes()));
+      return out;
+    }
+
+    Map<String, String> generatedResources() {
+      final var out = new LinkedHashMap<String, String>();
+      capturedResources.forEach((name, file) -> out.put(name, file.text()));
+      return out;
+    }
+  }
+
+  /** In-memory sink for a single generated resource (e.g. a {@code META-INF/services} file). */
+  private static final class CapturedResource extends SimpleJavaFileObject {
+
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedResource(final String path) {
+      super(URI.create("mem:///" + path), Kind.OTHER);
+    }
+
+    @Override
+    public OutputStream openOutputStream() {
+      return bytes;
+    }
+
+    @Override
+    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+      return text();
+    }
+
+    String text() {
+      return bytes.toString(StandardCharsets.UTF_8);
+    }
+  }
+
+  /**
+   * In-memory sink for class output in full-pipeline compiles, keeping the bytes.
+   *
+   * <p>Nothing lands in the working tree either way. Keeping them is what lets a test run what it
+   * compiled rather than only reading the source it generated, which is the difference between
+   * checking that a processor emits something and checking what that something does.
+   */
+  private static final class CapturedClass extends SimpleJavaFileObject {
+
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedClass(final String className) {
+      super(URI.create("mem:///" + className.replace('.', '/') + Kind.CLASS.extension), Kind.CLASS);
+    }
+
+    @Override
+    public OutputStream openOutputStream() {
+      return bytes;
+    }
+
+    byte[] bytes() {
+      return bytes.toByteArray();
+    }
+  }
+
+  /** In-memory sink for a single generated source file. */
+  private static final class CapturedSource extends SimpleJavaFileObject {
+
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedSource(final String className) {
+      super(URI.create("mem:///" + className.replace('.', '/') + Kind.SOURCE.extension), Kind.SOURCE);
+    }
+
+    @Override
+    public OutputStream openOutputStream() {
+      return bytes;
+    }
+
+    // The compiler reads generated sources back in the next round; serve the captured bytes.
+    @Override
+    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+      return text();
+    }
+
+    String text() {
+      return bytes.toString(StandardCharsets.UTF_8);
+    }
+  }
+}

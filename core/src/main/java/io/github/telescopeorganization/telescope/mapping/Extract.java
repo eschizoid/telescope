@@ -1,0 +1,17 @@
+package io.github.telescopeorganization.telescope.mapping;
+
+import io.github.telescopeorganization.telescope.Telescope.Accessor;
+import java.util.function.Function;
+
+/**
+ * Permit of {@link MapExtractStep} — one {@code Telescope.fromMap(...)} row. Users construct via
+ * {@link MapExtractStep#extract(String, Accessor, Function)} rather than naming this type, which a
+ * sealed permit has to be public to be. The record-generated accessors return {@code Accessor<T,
+ * X>} / {@code Function<Object, X>}, which are covariant with the {@link MapExtractStep}
+ * supertype's wildcarded returns.
+ */
+public record Extract<T, X>(
+  String key,
+  Accessor<T, X> targetAccessor,
+  Function<Object, X> converter
+) implements MapExtractStep {}

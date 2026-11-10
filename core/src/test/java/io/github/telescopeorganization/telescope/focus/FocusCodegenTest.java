@@ -1,0 +1,269 @@
+package io.github.telescopeorganization.telescope.focus;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
+import io.github.telescopeorganization.telescope.effects.Either;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * End-to-end probe of the {@code @Focus} fluent path navigator. The processor runs against this
+ * test source set (see {@code testAnnotationProcessor(project(":telescope-codegen"))} in the build)
+ * and generates a sibling {@code <X>Telescope<R>} class for each annotated top-level record ({@link
+ * FocusPerson} &rarr; {@code FocusPersonTelescope}, {@link FocusAddress} &rarr; {@code
+ * FocusAddressTelescope}, …). The tests here use those navigators, proving both that the processor
+ * ran and that the emitted code is correct.
+ */
+class FocusCodegenTest {
+
+  @Nested
+  @DisplayName("Generated *Path navigators")
+  class Generated {
+
+    @Test
+    @DisplayName("Generated navigators forward observe at the current focus")
+    void observeForwarder() {
+      final var seen = new ArrayList<FocusPerson>();
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var path = FocusPersonTelescope.of().observe(seen::add).field(FocusPerson::name);
+
+      assertEquals("alice", path.read(alice));
+      assertEquals(List.of(alice), seen);
+    }
+
+    @Test
+    @DisplayName("FocusPersonTelescope.of().name() reads and updates the name field")
+    void nameNavigation() {
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var name = FocusPersonTelescope.of().name();
+
+      assertEquals("alice", name.read(alice));
+
+      final var renamed = name.update(alice, String::toUpperCase);
+      assertEquals("ALICE", renamed.name());
+      assertEquals(30, renamed.age());
+      assertEquals(alice.address(), renamed.address());
+    }
+
+    @Test
+    @DisplayName("FocusPersonTelescope.of().age() boxes int → Integer; round-trips correctly")
+    void primitiveBoxing() {
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var age = FocusPersonTelescope.of().age();
+
+      assertEquals(30, age.read(alice));
+
+      final var aged = age.update(alice, n -> n + 1);
+      assertEquals(31, aged.age());
+    }
+
+    @Test
+    @DisplayName("Deep paths compose through sub-record Path returns, compile-checked end to end")
+    void deepFieldPath() {
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+
+      // address() returns FocusAddressTelescope<FocusPerson>; city() returns Telescope<FocusPerson,
+      // String>
+      final var city = FocusPersonTelescope.of().address().city();
+
+      assertEquals("nyc", city.read(alice));
+
+      final var moved = city.set(alice, "BOSTON");
+      assertEquals("BOSTON", moved.address().city());
+      assertEquals("10001", moved.address().zip());
+    }
+
+    @Test
+    @DisplayName("Container hop: List<Record> traverses elements via .each() into the element's Path")
+    void listTraversal() {
+      final var team = new FocusTeam(
+        "eng",
+        List.of(
+          new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
+          new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
+        )
+      );
+
+      // members() returns FocusTeamMembersStep<FocusTeam>; .each() returns
+      // FocusPersonTelescope<FocusTeam>;
+      // .name() returns Telescope<FocusTeam, String>. Whole path is compile-checked,
+      // reflection-free.
+      final var memberNames = FocusTeamTelescope.of().members().each().name();
+
+      assertEquals(List.of("alice", "bob"), memberNames.toList(team));
+
+      final var shouted = memberNames.update(team, String::toUpperCase);
+      assertEquals("ALICE", shouted.members().get(0).name());
+      assertEquals("BOB", shouted.members().get(1).name());
+      assertEquals("eng", shouted.name());
+      // original untouched (immutable rebuild)
+      assertEquals("alice", team.members().get(0).name());
+    }
+
+    @Test
+    @DisplayName("Container hops: Map values via .eachValue() (keys preserved) and Optional via .whenPresent()")
+    void mapAndOptionalTraversal() {
+      final var bag = new FocusBag(Map.of("a", "x", "b", "y"), Optional.of("hi"), List.of("p", "q"));
+
+      // Map<String, String> values: eachValue() returns terminal Telescope<FocusBag, String>.
+      final var labelValues = FocusBagTelescope.of().labels().eachValue();
+      final var upperValues = labelValues.update(bag, String::toUpperCase);
+      assertEquals(Map.of("a", "X", "b", "Y"), upperValues.labels());
+
+      // Optional<String>: whenPresent() returns terminal Telescope<FocusBag, String>.
+      final var noteValue = FocusBagTelescope.of().note().whenPresent();
+      final var upperNote = noteValue.update(bag, String::toUpperCase);
+      assertEquals(Optional.of("HI"), upperNote.note());
+
+      // List<String>: each() returns terminal Telescope<FocusBag, String>.
+      assertEquals(List.of("p", "q"), FocusBagTelescope.of().tags().each().toList(bag));
+    }
+
+    @Test
+    @DisplayName(".get() returns the current Telescope at any hop (terminal use of a step)")
+    void stepGetReturnsCurrentTelescope() {
+      final var team = new FocusTeam("eng", List.of(new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"))));
+
+      // The members() step exposes the whole List as a Telescope<FocusTeam, List<FocusPerson>>.
+      final var membersList = FocusTeamTelescope.of().members().get();
+      assertEquals(1, membersList.read(team).size());
+    }
+
+    @Test
+    @DisplayName("Bridge hop: as<Target>() chains @Bridge into the navigator, returning the target's Path")
+    void bridgeHop() {
+      final var entity = new FocusEntity("u1", "Alice@Example.com");
+
+      // Direct read across the bridge: FocusEntity -> FocusDto.
+      final FocusDto dto = FocusEntityTelescope.of().asFocusDto().read(entity);
+      assertEquals("u1", dto.id());
+      assertEquals("Alice@Example.com", dto.email());
+
+      // Compose through the bridge into a target field and update — the Iso round-trips back to
+      // FocusEntity, so we get an updated entity back.
+      final var lowered = FocusEntityTelescope.of().asFocusDto().email().update(entity, String::toLowerCase);
+      assertEquals("alice@example.com", lowered.email());
+      assertEquals("u1", lowered.id());
+    }
+
+    @Test
+    @DisplayName("Every Path and Step forwards the full Telescope op surface (incl. effects) at any hop")
+    void forwardersAtIntermediateHops() throws Exception {
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+
+      // Sync ops directly on the root Path — no .get() unwrap.
+      final var renamed = FocusPersonTelescope.of().update(alice, p -> new FocusPerson("ALICE", p.age(), p.address()));
+      assertEquals("ALICE", renamed.name());
+      assertEquals("alice", FocusPersonTelescope.of().read(alice).name());
+
+      // Effect at an intermediate sub-record Path hop: updateAsync on
+      // FocusAddressTelescope<FocusPerson>.
+      final var movedFuture = FocusPersonTelescope.of()
+        .address()
+        .updateAsync(alice, addr ->
+          CompletableFuture.completedFuture(new FocusAddress(addr.city().toUpperCase(), addr.zip()))
+        );
+      assertEquals("NYC", movedFuture.get().address().city());
+
+      // updateEither at an intermediate Step → Path chain.
+      final var team = new FocusTeam(
+        "eng",
+        List.of(
+          new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
+          new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
+        )
+      );
+      final Either<String, FocusTeam> ok = FocusTeamTelescope.of()
+        .members()
+        .each()
+        .updateEither(team, p -> Either.right(new FocusPerson(p.name().toUpperCase(), p.age(), p.address())));
+      assertEquals(
+        "ALICE",
+        ok.fold(
+          err -> {
+            throw new AssertionError(err);
+          },
+          t -> t.members().get(0).name()
+        )
+      );
+
+      // updateIndexed forwarded from a Step → Path chain.
+      final var bumped = FocusTeamTelescope.of()
+        .members()
+        .each()
+        .updateIndexed(team, (i, p) -> new FocusPerson(p.name() + ":" + i, p.age(), p.address()));
+      assertEquals("alice:0", bumped.members().get(0).name());
+      assertEquals("bob:1", bumped.members().get(1).name());
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "Null intermediate WRITE through @Focus record codegen — multi-component intermediates rebuild from null"
+  )
+  class NullIntermediateRecordWrite {
+
+    @Test
+    @DisplayName(
+      "navigator write through a null multi-component @Focus intermediate constructs every hop and defaults off-path components"
+    )
+    void recordNavigatorWriteThroughNullMultiComponentIntermediate() {
+      // The record canonical-ctor rebuild reads off-path components off the previous record:
+      // (s, v) -> new MultiCompLeafRecord(v, s.countryName(), s.zipCode()). When the intermediate
+      // is a null write-target that previous record is null, so each off-path read must be
+      // null-guarded — reference to null, primitive to its JLS default — exactly like the bean
+      // path.
+      final var built = MultiCompOuterRecordTelescope.of()
+        .mid()
+        .address()
+        .cityName()
+        .set(new MultiCompOuterRecord(null), "rectown");
+      assertNotNull(built.mid(), "hop-1 record intermediate constructed");
+      assertNotNull(built.mid().address(), "null multi-component hop-2 record intermediate constructed");
+      assertEquals("rectown", built.mid().address().cityName(), "focused component written");
+      assertNull(built.mid().address().countryName(), "off-path reference component defaulted to null");
+      assertEquals(0, built.mid().address().zipCode(), "off-path primitive component defaulted to 0");
+    }
+
+    @Test
+    @DisplayName(
+      "record navigator write into a multi-component intermediate at hop 3 still defaults off-path components — N-hop"
+    )
+    void recordNavigatorWriteAtHopThreeIsNHopSafe() {
+      final var built = MultiCompDeepRootRecordTelescope.of()
+        .outer()
+        .mid()
+        .address()
+        .cityName()
+        .set(new MultiCompDeepRootRecord(null), "metropolis");
+      assertNotNull(built.outer(), "hop-1 record intermediate constructed");
+      assertNotNull(built.outer().mid(), "hop-2 record intermediate constructed");
+      assertNotNull(built.outer().mid().address(), "null multi-component hop-3 record intermediate constructed");
+      assertEquals("metropolis", built.outer().mid().address().cityName(), "focused component written at hop 3");
+      assertNull(built.outer().mid().address().countryName(), "off-path reference component defaulted at hop 3");
+      assertEquals(0, built.outer().mid().address().zipCode(), "off-path primitive component defaulted at hop 3");
+    }
+
+    @Test
+    @DisplayName(
+      "setting a component on a POPULATED multi-component @Focus record carries every off-path component forward — the guard's non-null arm"
+    )
+    void recordSetOnPopulatedIntermediateCarriesOffPathForward() {
+      // Pins the guard's other arm for records: a populated previous record must have its off-path
+      // components read and carried forward, overwriting only the focused component.
+      final var existing = new MultiCompLeafRecord("old", "US", 90210);
+      final var updated = MultiCompLeafRecordTelescope.of().cityName().set(existing, "new");
+      assertEquals("new", updated.cityName(), "focused component overwritten");
+      assertEquals("US", updated.countryName(), "off-path reference carried forward, not defaulted");
+      assertEquals(90210, updated.zipCode(), "off-path primitive carried forward, not defaulted");
+    }
+  }
+}

@@ -158,14 +158,14 @@ Mapped:
 
 Every mapper also logs both reports through `java.lang.System.Logger`, so you can turn them on with a log level instead
 of a code change. It logs `explain()` at `DEBUG` once, when the mapper is built, and `trace(input)` at `TRACE` on every
-`forward(...)`. The logger for a mapper is named `io.github.eschizoid.telescope.mapper.<Source>.<Target>`, with simple
-class names. With the JDK's default backend, `System.Logger` writes to `java.util.logging`, where `TRACE` maps to
-`FINER`. The handler needs a low enough level as well, as in this `logging.properties`:
+`forward(...)`. The logger for a mapper is named `io.github.telescopeorganization.telescope.mapper.<Source>.<Target>`,
+with simple class names. With the JDK's default backend, `System.Logger` writes to `java.util.logging`, where `TRACE`
+maps to `FINER`. The handler needs a low enough level as well, as in this `logging.properties`:
 
 ```properties
 handlers = java.util.logging.ConsoleHandler
 java.util.logging.ConsoleHandler.level = FINER
-io.github.eschizoid.telescope.mapper.Order.OrderDto.level = FINER
+io.github.telescopeorganization.telescope.mapper.Order.OrderDto.level = FINER
 ```
 
 [docs/introspection.md](../../docs/introspection.md) covers the Spring Boot and Logback settings.

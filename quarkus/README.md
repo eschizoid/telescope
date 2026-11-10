@@ -14,14 +14,14 @@ The module is built against Quarkus 3.40.1 and needs Java 21 or later.
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope-quarkus:2.1.0")
+    implementation("io.github.telescopeorganization:telescope-quarkus:2.1.0")
 }
 ```
 
 ```xml
 <!-- Maven -->
 <dependency>
-  <groupId>io.github.eschizoid</groupId>
+  <groupId>io.github.telescopeorganization</groupId>
   <artifactId>telescope-quarkus</artifactId>
   <version>2.1.0</version>
 </dependency>

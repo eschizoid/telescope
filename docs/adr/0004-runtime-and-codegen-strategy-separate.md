@@ -4,10 +4,10 @@
 
 ## Context
 
-Both the runtime (`io.github.eschizoid.telescope.internal.Beans.autoWriter` and its probes) and the codegen processors
-(`BridgeProcessor`, `BeanFocusProcessor`) decide a POJO's rebuild strategy (builder → setters → ctor) with similar
-naming conventions (`builder()` / `build()`, `setX` / `withX`, no-arg ctor). They look like duplicated logic and a
-periodic architecture review suggests sharing them through one `BeanShape` abstraction.
+Both the runtime (`io.github.telescopeorganization.telescope.internal.Beans.autoWriter` and its probes) and the codegen
+processors (`BridgeProcessor`, `BeanFocusProcessor`) decide a POJO's rebuild strategy (builder → setters → ctor) with
+similar naming conventions (`builder()` / `build()`, `setX` / `withX`, no-arg ctor). They look like duplicated logic and
+a periodic architecture review suggests sharing them through one `BeanShape` abstraction.
 
 ## Decision
 

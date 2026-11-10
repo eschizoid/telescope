@@ -91,7 +91,7 @@ them and builds the same telescope as the chain above, so the two read, write, e
 alike:
 
 ```java
-import static io.github.eschizoid.telescope.Telescope.path;
+import static io.github.telescopeorganization.telescope.Telescope.path;
 
 final Telescope<User, String> city = path(User::address, Address::city);
 ```
@@ -266,7 +266,7 @@ To apply several edits at different paths in one go, declare each path once as a
 folds them into a reusable `Telescope<S, S>` whose `.apply(s)` runs every edit in argument order.
 
 ```java
-import static io.github.eschizoid.telescope.Edit.over;
+import static io.github.telescopeorganization.telescope.Edit.over;
 
 static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
   .each(Company::departments)

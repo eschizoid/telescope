@@ -28,21 +28,21 @@ tasks.withType<Test>().configureEach {
 tasks.register<JavaExec>("runRuntimeFromMapServer") {
     group = "demos"
     description = "Runtime tier: graphql-java server using Telescope.fromMap (reflective; JVM only)"
-    mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer")
+    mainClass.set("io.github.telescopeorganization.telescope.examples.graphql.server.RuntimeFromMapServer")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 tasks.register<JavaExec>("runGeneratedFromMapServer") {
     group = "demos"
     description = "Generated tier: graphql-java server using the @FromMap-generated UserFromMap"
-    mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.GeneratedFromMapServer")
+    mainClass.set("io.github.telescopeorganization.telescope.examples.graphql.server.GeneratedFromMapServer")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 tasks.register<JavaExec>("runNativeVerify") {
     group = "verification"
     description = "Runs the native-image capability verifier on the JVM — a green run validates the harness; the native-image run is the verdict"
-    mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.NativeVerify")
+    mainClass.set("io.github.telescopeorganization.telescope.examples.graphql.server.NativeVerify")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
@@ -57,7 +57,7 @@ graalvmNative {
     toolchainDetection.set(false)
     binaries {
         named("main") {
-            mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.NativeVerify")
+            mainClass.set("io.github.telescopeorganization.telescope.examples.graphql.server.NativeVerify")
             imageName.set("telescope-native-verify")
             buildArgs.add("--no-fallback")
             buildArgs.add("-H:+ReportExceptionStackTraces")
@@ -66,7 +66,7 @@ graalvmNative {
             // the jar) — adopters need no --initialize-at-build-time args for telescope itself. Only
             // this example's generated model package (which holds the AccountBridge / UserFromMap
             // constants) is app-specific and stays here.
-            buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.examples.graphql.model")
+            buildArgs.add("--initialize-at-build-time=io.github.telescopeorganization.telescope.examples.graphql.model")
         }
     }
 }

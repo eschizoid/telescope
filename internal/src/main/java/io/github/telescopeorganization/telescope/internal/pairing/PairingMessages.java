@@ -1,0 +1,2097 @@
+package io.github.telescopeorganization.telescope.internal.pairing;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * The single source of truth for every diagnostic the shared pairing decisions emit. The runtime
+ * throws these strings at mapper construction; the compile-time verifier reports the same strings
+ * as compiler errors — byte-identical, so a user who has seen one recognizes the other. Wording
+ * changes happen here and nowhere else.
+ */
+public final class PairingMessages {
+
+  private PairingMessages() {}
+
+  /** A {@code writeBean} hint targeting a record — the hint can never apply. */
+  public static String writeBeanTargetsRecord(final String binaryName) {
+    return (
+      "writeBean hint targets a record class (" +
+      binaryName +
+      "). Records are always reconstructed via the canonical constructor; the hint cannot apply. " +
+      "Remove the writeBean(...) row, or move it to the bean side of the mapping."
+    );
+  }
+
+  /**
+   * A constructor whose known parameter names are partly properties: binding by name would leave
+   * the others without a value, and binding by position could hand one property's value to a
+   * parameter named after another.
+   */
+  public static String constructorParametersNotProperties(final String binaryName, final List<String> unmatched) {
+    return (
+      "Cannot write " +
+      binaryName +
+      " through its constructor: the parameters " +
+      unmatched +
+      " are named after no property, while the others are. Telescope matches a constructor's" +
+      " arguments by parameter name when every name is a property, and by position when none is." +
+      " Name every parameter after a property, or write the class through setters or a builder."
+    );
+  }
+
+  /** Two {@code writeBeans} defaults in one mapper. */
+  public static String duplicateWriteBeansDefault() {
+    return "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call.";
+  }
+
+  /** Two {@code writeBean} hints for the same target class. */
+  public static String duplicateWriteBeanHint(final String binaryName) {
+    return (
+      "Duplicate writeBean hint for " +
+      binaryName +
+      ". Each target class may declare at most one writeBean(...) row per Telescope.map(...) call."
+    );
+  }
+
+  /**
+   * A bean has no getter for {@code property}, which a row or path names on the class whose binary
+   * name is {@code beanClass}.
+   */
+  public static String noGetter(final String property, final String beanClass) {
+    return "No getter for property '" + property + "' on " + beanClass;
+  }
+
+  /**
+   * A record has no component named {@code component}, which a row or path names on the class whose
+   * binary name is {@code recordClass}; {@code known} are its components in declaration order.
+   */
+  public static String noComponent(final String component, final String recordClass, final List<String> known) {
+    return "No field '" + component + "' on " + recordClass + " — known fields: " + known;
+  }
+
+  /**
+   * One row in a {@link #rowsNeverVisited} refusal, by the raw method names of its accessors. A
+   * side given as a telescope path has no accessor and is written {@code <path>}.
+   */
+  public static String unvisitedRow(final String sourceMethod, final String targetMethod) {
+    return (sourceMethod == null ? "<path>" : sourceMethod) + " -> " + (targetMethod == null ? "<path>" : targetMethod);
+  }
+
+  /**
+   * Two rows keyed to two pairs of sealed interfaces, neither of which extends the other, that both
+   * apply to the pair of cases {@code caseSource} and {@code caseTarget} and both claim its
+   * property {@code property}. The rows come from {@link #unvisitedRow}; classes are named by
+   * binary name.
+   */
+  public static String interfaceRowsClash(
+    final String firstRow,
+    final String firstSource,
+    final String firstTarget,
+    final String secondRow,
+    final String secondSource,
+    final String secondTarget,
+    final String caseSource,
+    final String caseTarget,
+    final String property
+  ) {
+    return (
+      "Mapping rows " +
+      firstRow +
+      ", keyed to the sealed interfaces (" +
+      firstSource +
+      " -> " +
+      firstTarget +
+      "), and " +
+      secondRow +
+      ", keyed to (" +
+      secondSource +
+      " -> " +
+      secondTarget +
+      "), both apply to the pair (" +
+      caseSource +
+      " -> " +
+      caseTarget +
+      ") and both claim its property '" +
+      property +
+      "', and neither pair of interfaces extends the other, so neither is the more specific. Key a row to the" +
+      " pair of cases to say which applies there, or remove one."
+    );
+  }
+
+  /**
+   * A row keyed to two sealed interfaces, which applies to each pair of their cases a mapper
+   * converts, where one case of the pair {@code caseSource} and {@code caseTarget} has no property
+   * the row names. {@code row} comes from {@link #unvisitedRow}; classes are named by binary name.
+   */
+  public static String interfaceRowOffCase(
+    final String row,
+    final String sealedSource,
+    final String sealedTarget,
+    final String caseSource,
+    final String caseTarget,
+    final String lacking,
+    final String property
+  ) {
+    return (
+      "Mapping row " +
+      row +
+      " is keyed to the sealed interfaces (" +
+      sealedSource +
+      " -> " +
+      sealedTarget +
+      "), so it applies to each pair of their cases the mapper converts, but " +
+      lacking +
+      " has no property '" +
+      property +
+      "' for it on the pair (" +
+      caseSource +
+      " -> " +
+      caseTarget +
+      "). Give " +
+      lacking +
+      " the property, or key the row to the pairs of cases that have it."
+    );
+  }
+
+  /**
+   * The rows keyed to one type pair the mapper never visits, as one entry of a {@link
+   * #rowsNeverVisited} refusal. Classes are named by binary name; {@code rows} come from {@link
+   * #unvisitedRow}.
+   */
+  public static String unvisitedPair(final String source, final String target, final List<String> rows) {
+    return "(" + source + " -> " + target + "): [" + String.join(", ", rows) + "]";
+  }
+
+  /**
+   * Rows keyed to type pairs the mapper's recursion never reaches, which would otherwise be ignored
+   * without a trace. Classes are named by binary name; {@code pairs} come from {@link
+   * #unvisitedPair}, in the order the first row of each was given.
+   */
+  public static String rowsNeverVisited(final String topSource, final String topTarget, final List<String> pairs) {
+    return (
+      "Mapping rows bound to a type pair the mapper (" +
+      topSource +
+      " -> " +
+      topTarget +
+      ") never visits — they would be silently ignored: " +
+      String.join("; ", pairs) +
+      ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove them."
+    );
+  }
+
+  /**
+   * The name a message gives the class of a value it was handed: the enum's for an enum constant's
+   * body, which is anonymous, the binary name for any other class whose simple name is empty, such
+   * as an anonymous or a hidden class, and the simple name otherwise.
+   */
+  public static String className(final Class<?> type) {
+    final var parent = type.getSuperclass();
+    if (parent != null && parent.isEnum()) return parent.getSimpleName();
+    return type.getSimpleName().isEmpty() ? type.getName() : type.getSimpleName();
+  }
+
+  /**
+   * The refusal of a via row of two method references whose {@code backward} returns {@code takes},
+   * a class narrower than what the property holds: the lambda the compiler builds for {@code
+   * forward} casts each value to {@code takes}, so it cannot convert every value the property
+   * holds. Both paths refuse with these words.
+   */
+  public static String viaMethodsNarrowed(
+    final String source,
+    final String target,
+    final String property,
+    final String takes,
+    final String held
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the via row's backward returns " +
+      takes +
+      ", so the compiler types its forward as taking only " +
+      takes +
+      ", and the source's '" +
+      property +
+      "' holds " +
+      held +
+      ", which is not one; have backward return " +
+      held +
+      ", or name the class: via(src, tgt, Hw.class)"
+    );
+  }
+
+  /**
+   * A {@code via} row naming a class whose methods named {@code method} cannot convert {@code
+   * property}: {@code why} says how, and finishes the sentence that starts with the method's name.
+   * Both paths refuse with these words.
+   */
+  public static String viaClassRefused(
+    final String source,
+    final String target,
+    final String property,
+    final String using,
+    final String method,
+    final String why
+  ) {
+    return viaClassPrefix(source, target, property) + using + "'s " + method + " " + why;
+  }
+
+  /**
+   * A {@code via} row naming a class that has no static method named {@code method}, of one
+   * parameter, that the code converting the row can call. Both paths refuse with these words.
+   */
+  public static String viaClassDeclaresNo(
+    final String source,
+    final String target,
+    final String property,
+    final String using,
+    final String method
+  ) {
+    return viaClassPrefix(source, target, property) + using + " declares no " + method;
+  }
+
+  /**
+   * Why a class's methods of one name convert no value of {@code value}: none of them takes it. The
+   * end of a {@link #viaClassRefused} sentence.
+   */
+  public static String viaTakesNoValue(final String value) {
+    return "takes no value of " + value;
+  }
+
+  /**
+   * Why a class's methods of one name convert no value held as {@code value}: there are several,
+   * and the class of a value held as {@code Object} is all that could tell them apart. The end of a
+   * {@link #viaClassRefused} sentence.
+   */
+  public static String viaChoosesBlind(final String value) {
+    return (
+      "has several overloads, and the value is held as " +
+      value +
+      ", so the overload its class calls for cannot be chosen before the value is seen"
+    );
+  }
+
+  /**
+   * Why a class's methods of one name convert no element of {@code container}: several take an
+   * element, and which one an element calls for depends on its class. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaSeveralElementOverloads(final String container) {
+    return (
+      "has several overloads that take an element of " +
+      container +
+      ", so the one an element's class calls for cannot be chosen before the element is seen"
+    );
+  }
+
+  /**
+   * How a refusal of a value of the type named {@code declared} names it: as it is, followed by the
+   * class it is held as where the two differ, as they do for a type naming a type variable.
+   */
+  public static String heldPhrase(final String declared, final String held) {
+    return declared.equals(held) ? declared : declared + " (held as its erasure " + held + ")";
+  }
+
+  private static String viaClassPrefix(final String source, final String target, final String property) {
+    return "Deep map " + source + " → " + target + ": via(...) of '" + property + "': ";
+  }
+
+  /**
+   * A {@code via} row whose mapper is handed one side's property as it is, though no value of that
+   * property can be an instance of the class the mapper converts on that side: the property is not
+   * a List, Set, Optional or a map's values the mapper's elements lift over, so every call would
+   * fail.
+   */
+  public static String viaMapperNeverFits(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String mapperClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row hands the " +
+      side +
+      "'s '" +
+      property +
+      "' to a mapper of " +
+      mapperClass +
+      ", but it never holds a " +
+      mapperClass +
+      ", nor is it a List, Set, Optional or map's values of one. Give the row a mapper of the whole" +
+      " property, or of the elements of one of those containers."
+    );
+  }
+
+  /**
+   * A {@code via} row whose mapper's result is written into one side's property, though no value of
+   * the class the mapper returns can be an instance of the class the property takes there, the
+   * class that side fixes the property's type variable to among them: every write would fail.
+   */
+  public static String viaResultNeverFits(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String resultClass,
+    final String takenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row writes its mapper's result, " +
+      withArticle(resultClass) +
+      ", into the " +
+      side +
+      "'s '" +
+      property +
+      "', which takes " +
+      takenClass +
+      ", and no " +
+      resultClass +
+      " is " +
+      withArticle(takenClass) +
+      ". Give the row a mapper whose result is of the class the property takes."
+    );
+  }
+
+  /**
+   * {@code name}, a class's simple name, which a declared type always has, after the indefinite
+   * article its first letter takes in speech.
+   */
+  private static String withArticle(final String name) {
+    return ("aeiouAEIOU".indexOf(name.charAt(0)) >= 0 ? "an " : "a ") + name;
+  }
+
+  /**
+   * Why a {@code via} row's method cannot convert: it returns {@code returned}, which the member
+   * {@code owner} writes {@code property} through, taking {@code taken}, does not take. The end of
+   * a {@link #viaClassRefused} sentence.
+   */
+  public static String viaResultNotTaken(
+    final String returned,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      returned +
+      ", which the member " +
+      owner +
+      " writes " +
+      property +
+      " through does not take: it takes " +
+      taken
+    );
+  }
+
+  /**
+   * Why a generic {@code via} method cannot convert: it returns {@code declared}, and no
+   * instantiation of its type variables within their bounds lets the member {@code owner} writes
+   * {@code property} through, taking {@code taken}, take the result. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaResultNoInstantiation(
+    final String declared,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      declared +
+      ", which no instantiation of its type variables lets the member " +
+      owner +
+      " writes " +
+      property +
+      " through take: it takes " +
+      taken
+    );
+  }
+
+  /**
+   * Why a generic {@code via} method cannot convert: it is handed a value of {@code raw}, a generic
+   * class used raw, where its parameter gives its type variables type arguments, so the call's
+   * result is the erasure of {@code declared}, {@code erased}, which the member {@code owner}
+   * writes {@code property} through, taking {@code taken}, does not take. The end of a {@link
+   * #viaClassRefused} sentence.
+   */
+  public static String viaResultErased(
+    final String declared,
+    final String raw,
+    final String erased,
+    final String owner,
+    final String property,
+    final String taken
+  ) {
+    return (
+      "returns " +
+      declared +
+      ", which a call handed a raw " +
+      raw +
+      " erases to " +
+      erased +
+      ", and the member " +
+      owner +
+      " writes " +
+      property +
+      " through does not take that: it takes " +
+      taken
+    );
+  }
+
+  /** Duplicate override row claiming an already-claimed source field. */
+  public static String duplicateSourceRow(final String source, final String target, final String srcField) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": duplicate override row for source field '" +
+      srcField +
+      "'. Each (source, target) type pair may declare at most one row per source field."
+    );
+  }
+
+  /**
+   * A source property a mapper that converts backward writes into several targets, {@code targets}
+   * in the order its rows write them: backward reads each source property back from one target.
+   */
+  public static String fanOutBothWays(
+    final String source,
+    final String target,
+    final String srcField,
+    final List<String> targets
+  ) {
+    final var named = new ArrayList<String>();
+    for (final var each : targets) named.add("'" + each + "'");
+    final var listed = String.join(", ", named.subList(0, named.size() - 1)) + " and " + named.getLast();
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is written into " +
+      listed +
+      ", and a mapper that converts both ways has no one target to read it back from. Fan it out" +
+      " with Telescope.mapperForward(...), one row per target, or write '" +
+      srcField +
+      "' into one target with a single two-way row and fill the others another way, such as a" +
+      " constant or compute row."
+    );
+  }
+
+  /** A source property one row drops and another writes. */
+  public static String droppedAndWritten(final String source, final String target, final String srcField) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row and written by another. Drop it, or write it, not both."
+    );
+  }
+
+  /**
+   * A {@code compute} row filling {@code tgtField} through {@code reference}, which Java binds as a
+   * supplier taking no argument, while {@code sourceForm}, a form of the same name, takes the
+   * source. The supplier is rarely the one meant, and nothing in the call says which is.
+   */
+  public static String computeSupplierHasASourceForm(
+    final String source,
+    final String target,
+    final String tgtField,
+    final String reference,
+    final String sourceForm
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": compute(...) fills '" +
+      tgtField +
+      "' from " +
+      reference +
+      ", which Java binds as a supplier taking no argument, though " +
+      sourceForm +
+      " takes the source " +
+      source +
+      ". Hold the one meant in a static final Supplier or FromSource field, or give the form taking the" +
+      " source a name of its own."
+    );
+  }
+
+  /**
+   * A {@code compute} row filling {@code tgtField} through {@code reference}, a function that takes
+   * {@code takes}, which the source is not an instance of.
+   */
+  public static String computeFunctionOffSource(
+    final String source,
+    final String target,
+    final String tgtField,
+    final String reference,
+    final String takes
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": compute(...) fills '" +
+      tgtField +
+      "' from " +
+      reference +
+      ", which takes " +
+      takes +
+      ", and the source " +
+      source +
+      " is not one. Name a method taking " +
+      source +
+      ", or a method of " +
+      source +
+      "."
+    );
+  }
+
+  /**
+   * A source property one row drops while another reads the source path {@code path} through it,
+   * which backward writes back.
+   */
+  public static String droppedAndReadThrough(
+    final String source,
+    final String target,
+    final String srcField,
+    final String path
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source property '" +
+      srcField +
+      "' is dropped by one row, and another reads the path '" +
+      path +
+      "' through it. Drop it, or read through it, not both."
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class no write strategy builds, so a null
+   * object of that class on the path cannot be built to take the value.
+   */
+  public static String pathIntermediateUnbuildable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and no write strategy builds it. Give it" +
+      " a public no-argument constructor, a public constructor taking its properties or a static builder()."
+    );
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class the write strategy a hint names for
+   * it, {@code strategy} ({@code CONSTRUCTOR}, {@code BUILDER} or {@code SETTERS}), does not build.
+   */
+  public static String pathIntermediateUnbuiltBy(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", which a write through the path builds where it is null, and writeStrategy = " +
+      strategy +
+      " for it finds " +
+      unbuiltReason(strategy)
+    );
+  }
+
+  /**
+   * A pair a mapper converts whose side {@code bean} the mapper builds, and the write strategy the
+   * mapper's {@code writeBeans} default names, {@code strategy} ({@code CONSTRUCTOR}, {@code
+   * BUILDER} or {@code SETTERS}), does not build it.
+   */
+  public static String beanUnbuiltBy(
+    final String source,
+    final String target,
+    final String bean,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the mapper builds " +
+      bean +
+      ", and writeStrategy = " +
+      strategy +
+      ", which the mapper's writeBeans default names for it, finds " +
+      unbuiltReason(strategy)
+    );
+  }
+
+  /** What {@code strategy} finds missing on a class it does not build, and what to do instead. */
+  private static String unbuiltReason(final String strategy) {
+    return switch (strategy) {
+      case "CONSTRUCTOR" -> "no public constructor whose parameter names match its properties. Switch to AUTO," +
+      " BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or" +
+      " SETTERS, or add a builder().";
+      default -> "no no-argument constructor a rebuild can call. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a" +
+      " no-argument constructor the mapper's package can call.";
+    };
+  }
+
+  /**
+   * A path a mapper writes through that steps through a class the write strategy it is built
+   * through, {@code strategy} as a hint names it or null for the one it takes, writes no {@code
+   * property} into, so the value written through the path would be dropped.
+   */
+  public static String pathIntermediateUnwritable(
+    final String source,
+    final String target,
+    final String path,
+    final String intermediate,
+    final String property,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the path '" +
+      path +
+      "' steps through " +
+      intermediate +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
+      property +
+      "' into it, so a write through the path would drop the value. Give " +
+      intermediate +
+      " a member that writes '" +
+      property +
+      "', or name a strategy that writes it."
+    );
+  }
+
+  /**
+   * A pair a mapper converts whose side {@code bean} is built through {@code strategy} as a hint
+   * names it, or, where {@code strategy} is null, through the one the shared order takes for it,
+   * and that strategy writes no {@code property} into it although the mapper writes a value there,
+   * so the value would be dropped.
+   */
+  public static String beanPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property,
+    final String strategy
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": the mapper writes '" +
+      property +
+      "' into " +
+      bean +
+      ", and " +
+      (strategy == null ? "the write strategy it takes" : "writeStrategy = " + strategy + " for it") +
+      " writes no '" +
+      property +
+      "' into it, so the value would be dropped. Give " +
+      bean +
+      " a member that writes '" +
+      property +
+      "', or name a strategy that writes it."
+    );
+  }
+
+  /**
+   * A mapper's {@code into} handed a {@code bean} with no setter that takes {@code property}, a
+   * property the mapper writes. {@code into} updates the object it is given through its setters, so
+   * it cannot update that property in place.
+   */
+  public static String intoPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into writes '" +
+      property +
+      "' into the " +
+      bean +
+      " it is given through a setter, and " +
+      bean +
+      " has no setter that takes it, so into cannot update it in place. Give " +
+      bean +
+      " a setter for '" +
+      property +
+      "', or call forward(source) for a new " +
+      bean +
+      "."
+    );
+  }
+
+  /**
+   * A mapper's {@code into} handed a {@code record}, which it cannot update in place: a record's
+   * components are fixed once its canonical constructor has run.
+   */
+  public static String intoRecordTarget(final String source, final String target, final String record) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into updates the object it is given in place, and " +
+      record +
+      " is a record, so it cannot: records are immutable. Call forward(source) for a new " +
+      record +
+      ", or make " +
+      record +
+      " a bean with a setter for each property the mapper writes."
+    );
+  }
+
+  /** Duplicate override row claiming an already-claimed target field. */
+  public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": duplicate override row for target field '" +
+      tgtField +
+      "'. Each (source, target) type pair may declare at most one row per target field."
+    );
+  }
+
+  /**
+   * A row that writes the mapper's target ({@code constant}, {@code compute}, {@code to} or {@code
+   * zip}) whose target names a property of a class the mapper's target neither is nor extends. Such
+   * a row always writes on the mapper's target, so the property it names is not one the target has.
+   */
+  public static String targetRowOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String owner,
+    final String tgtField
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row writes '" +
+      tgtField +
+      "' of " +
+      owner +
+      ", which " +
+      target +
+      " neither is nor extends. Name the property through " +
+      target +
+      " or a class it extends."
+    );
+  }
+
+  /**
+   * A row whose target path narrows the mapper's target, with {@code as(...)}, to a class the
+   * target neither is nor extends. The narrowing never matches the target the mapper builds, so the
+   * row would never write.
+   */
+  public static String targetPathNarrowsOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String narrowed
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path narrows to " +
+      narrowed +
+      ", which " +
+      target +
+      " neither is nor extends, so it never writes on " +
+      target +
+      ". Narrow to " +
+      target +
+      " or a class it extends."
+    );
+  }
+
+  /**
+   * A row whose target path starts at a class the mapper's target neither is, extends, nor is
+   * extended by, and that cannot be started again at the target because its first step off the root
+   * is not an accessor navigation: the path starts at a lens, reaches its first property through an
+   * iso or a bridge, or writes the root value itself. Such a path can never write the target.
+   */
+  public static String targetPathNotOnTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String root
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path starts at " +
+      root +
+      ", which " +
+      target +
+      " neither is nor extends nor is extended by, and cannot be started again at " +
+      target +
+      " because its first step off the root is not an accessor navigation such as field(...)." +
+      " Start the path at " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A {@code constant} row that replaces the mapper's target with its value, through a path started
+   * at a supertype or subtype of the target, whose value is not an instance of the target.
+   */
+  public static String targetValueOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String valueClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row replaces the whole " +
+      target +
+      " with a value of class " +
+      valueClass +
+      ", which is not a " +
+      target +
+      ". Use a value of class " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A write through a row's target path, started at a supertype or subtype of the mapper's target
+   * or at a class that is not known, that returned something other than a target instance or null:
+   * a lens setter, iso or bridge that built another class in place of the target it was given.
+   */
+  public static String targetPathWroteOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String writtenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path returned " +
+      writtenClass +
+      " from a write on " +
+      target +
+      ", which is not a " +
+      target +
+      ". A lens or iso started at another class must return the instance it is given, or another " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A row that reads the mapper's source through a path ({@code to} or {@code zip}) whose first
+   * component hop names a property of a class the mapper's source neither is nor extends. A source
+   * the mapper is given is not certain to be an instance of that class, and a subclass's property
+   * is read only after narrowing to the subclass.
+   */
+  public static String sourceRowOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String owner,
+    final String srcField
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row reads '" +
+      srcField +
+      "' of " +
+      owner +
+      ", which " +
+      source +
+      " neither is nor extends. Name the property through " +
+      source +
+      " or a class it extends, and narrow with as(...) first to read a property only a subclass of " +
+      source +
+      " has."
+    );
+  }
+
+  /**
+   * A row whose source path narrows the mapper's source, with {@code as(...)}, to a class the
+   * source neither is, extends, nor is extended by. The narrowing never matches a source the mapper
+   * is given, so the row would never read.
+   */
+  public static String sourcePathNarrowsOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String narrowed
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path narrows to " +
+      narrowed +
+      ", which " +
+      source +
+      " neither is nor extends nor is extended by, so it never reads a " +
+      source +
+      ". Narrow to " +
+      source +
+      ", a class it extends, or a subclass of it."
+    );
+  }
+
+  /**
+   * A row whose source path starts at a class the mapper's source neither is, extends, nor is
+   * extended by, and that cannot be started again at the source because its first step off the root
+   * is not an accessor navigation: the path starts at a lens, reaches its first property through an
+   * iso or a bridge, or reads the root value itself. Such a path can never read the source.
+   */
+  public static String sourcePathNotOnSource(
+    final String source,
+    final String target,
+    final String row,
+    final String root
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path starts at " +
+      root +
+      ", which " +
+      source +
+      " neither is nor extends nor is extended by, and cannot be started again at " +
+      source +
+      " because its first step off the root is not an accessor navigation such as field(...)." +
+      " Start the path at " +
+      source +
+      "."
+    );
+  }
+
+  /**
+   * A row's source path, started at a subtype of the mapper's source or at an interface a source
+   * may implement, given a source that is not an instance of that class: the path reads only that
+   * class.
+   */
+  public static String sourcePathGivenOffRoot(
+    final String source,
+    final String target,
+    final String row,
+    final String root,
+    final String givenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path starts at " +
+      root +
+      " and was given a " +
+      givenClass +
+      ", which is not a " +
+      root +
+      ". Give the mapper only a " +
+      root +
+      " here, or start the path at " +
+      source +
+      "."
+    );
+  }
+
+  /**
+   * A write through a row's source path, started at a supertype of the mapper's source or at a
+   * class that is not known, that returned something other than a source instance or null: a lens
+   * setter, iso or bridge that built another class in place of the source it was given.
+   */
+  public static String sourcePathWroteOffSource(
+    final String source,
+    final String target,
+    final String row,
+    final String writtenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's source path returned " +
+      writtenClass +
+      " from a write on " +
+      source +
+      ", which is not a " +
+      source +
+      ". A lens or iso started at another class must return the instance it is given, or another " +
+      source +
+      "."
+    );
+  }
+
+  /** Strict-bijection failure: a target field has no same-name source and no row. */
+  public static String noSameNameSource(
+    final String source,
+    final String target,
+    final String tgtSlot,
+    final String srcSlot,
+    final String name
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": target " +
+      tgtSlot +
+      " '" +
+      name +
+      "' has no same-name source " +
+      srcSlot +
+      ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
+      name +
+      "'."
+    );
+  }
+
+  /**
+   * Strict-bijection failure: a target field no row writes, whose same-name source a row renames or
+   * drops, so nothing pairs with it by name.
+   */
+  public static String sameNameSourceRead(
+    final String source,
+    final String target,
+    final String tgtSlot,
+    final String srcSlot,
+    final String name
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": target " +
+      tgtSlot +
+      " '" +
+      name +
+      "' is not paired with the source " +
+      srcSlot +
+      " of its name, which another row reads or drops. Add a row that writes '" +
+      name +
+      "'."
+    );
+  }
+
+  /** Strict-bijection failure: a source field has no same-name target and no row. */
+  public static String noSameNameTarget(
+    final String source,
+    final String target,
+    final String srcSlot,
+    final String tgtSlot,
+    final String name
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source " +
+      srcSlot +
+      " '" +
+      name +
+      "' has no same-name target " +
+      tgtSlot +
+      ". Add a rename row to(sourceAccessor, targetAccessor) that consumes '" +
+      name +
+      "'."
+    );
+  }
+
+  /**
+   * Strict-bijection failure: a source field no row at its pair reads, whose same-name target a row
+   * reading another field writes, named by a {@code drop} given no target class. Such a drop is
+   * keyed to the mapper's own target class, so it applies at no pair whose target is another class;
+   * the drop naming the pair's target class applies at the pair.
+   *
+   * @param dropOwner the simple name of the class the drop's accessor is applied to
+   * @param dropMethod the name of the method the drop's accessor reads
+   */
+  public static String keptFieldDroppedAtTop(
+    final String source,
+    final String target,
+    final String srcSlot,
+    final String tgtSlot,
+    final String name,
+    final String dropOwner,
+    final String dropMethod
+  ) {
+    final var accessor = dropOwner + "::" + dropMethod;
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": source " +
+      srcSlot +
+      " '" +
+      name +
+      "' has no same-name target " +
+      tgtSlot +
+      ". drop(" +
+      accessor +
+      ") applies only where the mapper's own target is written; use drop(" +
+      accessor +
+      ", " +
+      target +
+      ".class) to drop '" +
+      name +
+      "' here."
+    );
+  }
+
+  /**
+   * Map-valued pair whose key types differ — auto-lifting preserves source keys, so keys must
+   * match.
+   */
+  public static String incompatibleMapKeys(final String componentName, final String srcKey, final String tgtKey) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' has incompatible Map key types — source " +
+      srcKey +
+      " vs target " +
+      tgtKey +
+      ". Key types must match exactly; auto-lifting preserves the source keys."
+    );
+  }
+
+  /**
+   * A generic container used raw, paired with a container that fixes element types other than
+   * {@code Object}: nothing says the raw side's elements are of those types.
+   */
+  public static String unprovableRawElements(final String componentName, final String rawType, final String fixedType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      rawType +
+      ", a generic container used raw, with " +
+      fixedType +
+      ", which fixes its element types. Nothing says the raw side's elements are of those types, so they " +
+      "cannot be copied across unconverted. Declare the raw side's type arguments, or convert the component " +
+      "with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /** A sorted set target whose converted element class does not implement {@code Comparable}. */
+  public static String unorderableSortedElement(
+    final String componentName,
+    final String containerType,
+    final String elementType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      containerType +
+      ", a sorted set whose element " +
+      elementType +
+      " does not implement Comparable. The source's elements are converted to it, so no" +
+      " comparator the source carries can order them either. Make " +
+      elementType +
+      " Comparable, declare the field as a set that keeps no order, or supply an explicit" +
+      " Mapping.via(...) row that builds the set with a comparator."
+    );
+  }
+
+  /**
+   * A sorted set whose elements are converted, rebuilt from a source ordered by a comparator, which
+   * orders the type being converted away from.
+   */
+  public static String comparatorAcrossConversion() {
+    return (
+      "Deep map: a custom sorted-set comparator cannot be reused with changed element types." +
+      " Supply an explicit Mapping.via(...) row with a target comparator."
+    );
+  }
+
+  /**
+   * A sorted container rebuilt from a source ordered by a comparator, where the class built has no
+   * public constructor that can be handed that comparator.
+   */
+  public static String noComparatorConstructor(final String implName) {
+    return (
+      "Deep map: " +
+      implName +
+      " declares no public constructor taking a Comparator, so the source's ordering cannot be carried" +
+      " into it. Declare one, declare the field as the interface, or convert it with an explicit" +
+      " Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A sorted map target whose key class does not implement {@code Comparable} and whose class
+   * cannot be handed the comparator a source might carry.
+   */
+  public static String unorderableSortedKey(
+    final String componentName,
+    final String containerType,
+    final String keyType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      containerType +
+      ", a sorted map whose key " +
+      keyType +
+      " does not implement Comparable, and which cannot be handed the comparator a source carries," +
+      " so nothing can order its keys. Make " +
+      keyType +
+      " Comparable, declare the field as a map that keeps no order, declare a constructor taking a" +
+      " Comparator, or supply an explicit Mapping.via(...) row that builds the map with a comparator."
+    );
+  }
+
+  /**
+   * An interface or abstract container type whose family builds a class that is not one of it, so
+   * nothing a rebuild can make fits the field.
+   */
+  public static String noDefaultImplementation(final String declared, final String familyDefault) {
+    return (
+      "Deep map: " +
+      declared +
+      " has no instance of its own, and the class a rebuild builds in its place, " +
+      familyDefault +
+      ", is not a " +
+      declared +
+      ". Declare the field as a concrete container, or convert it with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /**
+   * A container class with no no-argument constructor that the code rebuilding it can call: none at
+   * all, a private one, or a package-private or protected one declared in a package the rebuild is
+   * not generated into.
+   */
+  public static String noReachableConstructor(final String declared) {
+    return (
+      "Deep map: " +
+      declared +
+      " has no no-argument constructor a rebuild can call. A public one is called from anywhere, and a" +
+      " package-private or protected one only by a rebuild generated into its own package. Declare one," +
+      " or convert the field with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /** A container built from the class of its keys, declared without naming one. */
+  public static String noKeyClass(final String declared) {
+    return (
+      "Deep map: " +
+      declared +
+      " is built from the class of its keys, and this declaration names none. Declare its key type, or" +
+      " convert the field with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /**
+   * The start of the refusal a sorted container's insert earns, up to the class of the element or
+   * key it could not order, which only the value being inserted can name. A renderer that has the
+   * value appends its class, {@link #unorderableInsertComparable}, and {@link
+   * #unorderableInsertAdvice}; one writing code for a value it does not have writes the same three
+   * pieces around the expression that will.
+   */
+  public static String unorderableInsertHead(final String container, final boolean map) {
+    return "Deep map: " + container + (map ? " keeps its keys in order, and " : " keeps its elements in order, and ");
+  }
+
+  /** The middle of that refusal, after the class of the value it could not order. */
+  public static String unorderableInsertComparable(final boolean comparable) {
+    return comparable
+      ? " could not be ordered there, though its type implements Comparable"
+      : " could not be ordered there, and its type does not implement Comparable";
+  }
+
+  /**
+   * The middle of that refusal where no value can be named: a bulk insert failed, and inserting the
+   * same source one value at a time met nothing that failed.
+   */
+  public static String unorderableInsertUnnamed(final boolean map) {
+    return (
+      (map ? "a key" : "an element") +
+      " could not be ordered there, which a second pass over the source did not meet again to name"
+    );
+  }
+
+  /** The end of that refusal: where an ordering could come from instead. */
+  public static String unorderableInsertAdvice(final boolean map) {
+    return (
+      (map ? ". Supply an ordering these keys accept" : ". Supply an ordering these elements accept") +
+      " through a Mapping.via(...) row, or declare the target as a " +
+      (map ? "map" : "set") +
+      " that keeps no order. The cause is the cast itself."
+    );
+  }
+
+  /**
+   * Two enums whose constants do not line up by name in a direction the mapper converts. {@code
+   * missingOnTarget} lists the source constants forward has nowhere to send, and {@code
+   * missingOnSource} the target constants backward has nowhere to send; the caller passes an empty
+   * list for a direction the mapper does not run.
+   */
+  public static String unmatchedEnumConstants(
+    final String componentName,
+    final String srcType,
+    final String tgtType,
+    final List<String> missingOnTarget,
+    final List<String> missingOnSource
+  ) {
+    final var sb = new StringBuilder("Component '")
+      .append(componentName)
+      .append("' maps enum ")
+      .append(srcType)
+      .append(" to enum ")
+      .append(tgtType)
+      .append(" by constant name, but");
+    if (!missingOnTarget.isEmpty()) {
+      sb.append(" ").append(tgtType).append(" has no constant named ").append(String.join(", ", missingOnTarget));
+      if (!missingOnSource.isEmpty()) sb.append(", and");
+    }
+    if (!missingOnSource.isEmpty()) {
+      sb
+        .append(" ")
+        .append(srcType)
+        .append(" has no constant named ")
+        .append(String.join(", ", missingOnSource))
+        .append(", which the backward direction needs");
+    }
+    sb.append(". Add the missing constants, or convert the component explicitly");
+    if (missingOnTarget.isEmpty()) {
+      sb.append(", or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))");
+    }
+    return sb.append(".").toString();
+  }
+
+  /** The row that converts a pair both ways, as a refusal names it. */
+  private static final String TWO_WAY_ROW = "to(source, target, forward, backward)";
+
+  /** The row that converts a pair forward only, as a refusal names it. */
+  private static final String ONE_WAY_ROW = "toOneWay(source, target, forward)";
+
+  /**
+   * A number widened to a type that holds each of its values, on a mapper that also converts back,
+   * where the way back would narrow.
+   */
+  public static String wideningOneWay(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' widens " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which converts forward only: the way back would narrow " +
+      tgtType +
+      " to " +
+      srcType +
+      " and can lose the value. Convert it both ways with a " +
+      TWO_WAY_ROW +
+      " row, or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))."
+    );
+  }
+
+  /** A number converted to a type that does not hold each of its values. */
+  public static String narrowing(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' would narrow " +
+      srcType +
+      " to " +
+      tgtType +
+      ", which can lose the value, so it is not converted without a row. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /** A {@code String} paired with a date or time, whose text has no one format. */
+  public static String textNeedsFormat(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", and text converts to and from a date or time only in a format, which nothing here names. " +
+      "Convert it with a " +
+      TWO_WAY_ROW +
+      " row that parses and formats in the format the text uses, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A value a built-in conversion cannot convert: a {@code String} that is no {@code what}, read
+   * from {@code componentName}. {@code what} is the phrase {@link #scalarPhrase} gives, and the
+   * message reads {@code 'total' got "12x", not a BigDecimal}. An element of a container is named
+   * by the property holding it.
+   */
+  public static String notAValue(final String componentName, final String value, final String what) {
+    return notAValueHead(componentName) + value + notAValueTail(what);
+  }
+
+  /** The text {@link #notAValue} puts before the value, which generated code writes as is. */
+  public static String notAValueHead(final String componentName) {
+    final var bracket = componentName.indexOf('[');
+    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket)) + "' got \"";
+  }
+
+  /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
+  public static String notAValueTail(final String what) {
+    return "\", not " + what;
+  }
+
+  /**
+   * What a value converted to {@code scalar} has to be, with its article: {@code an int}, {@code a
+   * Long}, {@code a BigDecimal}, {@code a boolean}, or for an enum {@code a constant of Status}, by
+   * {@code enumName}, the enum's name in source.
+   */
+  public static String scalarPhrase(final Scalar scalar, final boolean primitive, final String enumName) {
+    final String noun;
+    if (scalar == Scalar.ENUM) noun = "constant of " + enumName;
+    else if (primitive) noun = scalar.primitive();
+    else noun = scalar.className().substring(scalar.className().lastIndexOf('.') + 1);
+    return ("aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ") + noun;
+  }
+
+  /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
+  public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' has incompatible source/target shapes — " +
+      srcType +
+      " vs " +
+      tgtType +
+      ". Shapes must match: same scalar, both records/beans, or both same-kind container. For " +
+      "differing scalar types, add a to(src, tgt, forward, backward) row to supply the conversion."
+    );
+  }
+
+  /**
+   * A bean property whose setter cannot take a value of the type its getter returns, on a path that
+   * writes such a value: a mapper filling the property from a source, a lens, a navigator, or a
+   * patch.
+   */
+  public static String setterCannotTake(
+    final String owner,
+    final String property,
+    final String setter,
+    final String readType,
+    final String writeType
+  ) {
+    return (
+      "Property '" +
+      property +
+      "' of " +
+      owner +
+      " is read as " +
+      readType +
+      ", but its setter " +
+      setter +
+      " takes " +
+      writeType +
+      ", so a value of the property's type cannot be written through it. Declare the setter with" +
+      " the getter's type, or write the property through a conversion that produces " +
+      writeType +
+      "."
+    );
+  }
+
+  /** A bean property with several setters, none of which Java would bind its value to alone. */
+  public static String ambiguousSetters(
+    final String owner,
+    final String property,
+    final String readType,
+    final List<String> setters
+  ) {
+    return (
+      "Property '" +
+      property +
+      "' of " +
+      owner +
+      " has several setters, " +
+      String.join(", ", setters) +
+      ", and no single one takes its type " +
+      readType +
+      " more specifically than the rest. Remove the extra setters, or add one that takes " +
+      readType +
+      "."
+    );
+  }
+
+  /**
+   * One {@code cases} row in a diagnostic, by the simple names of the two cases it pairs, as the
+   * row is written at its call site.
+   */
+  public static String caseRow(final String sourceCase, final String targetCase) {
+    return "cases(" + sourceCase + ".class, " + targetCase + ".class)";
+  }
+
+  /** A {@code cases} row naming a class no sealed interface permits, so it pairs nothing. */
+  public static String notACase(final String row, final String className) {
+    return (
+      row +
+      ": " +
+      className +
+      " is not a permitted subclass of a sealed interface. A cases row pairs a case of a sealed" +
+      " source with a case of the sealed target it converts to."
+    );
+  }
+
+  /**
+   * Two sealed interfaces given type arguments that are not the same, one by one, on both sides. A
+   * case converts as its class pairs with the other side's, which passes each type variable across
+   * unchanged, so only a pair whose arguments agree holds them on the far side.
+   */
+  public static String sealedArgumentsDiffer(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", sealed interfaces whose type arguments are not the same, one by one. A case converts as its" +
+      " class pairs with the other side's, passing each type variable across unchanged, so it converts" +
+      " only between arguments that are the same type. Give both sides the same type arguments, or convert" +
+      " the component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A value one side holds as {@code receivingType}, a type given arguments its class fixes, handed
+   * across unchanged from a side that holds it as {@code sendingType}, whose arguments cannot be
+   * shown to be of those classes. Nothing checks a value's type arguments as it is written, a
+   * container's elements included, so the pair is refused while it is planned.
+   */
+  public static String fixedArgumentsDoNotFit(
+    final String componentName,
+    final String sendingType,
+    final String receivingType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is handed across unchanged from a side that holds it as " +
+      sendingType +
+      " to a side that holds it as " +
+      receivingType +
+      ", whose class fixes the type arguments the value must fit. Nothing shows the value handed" +
+      " across to have arguments of those classes, and a value's type arguments, a container's" +
+      " elements included, are not checked as it is written, so the pair is refused. A value that is" +
+      " not copied across, a copied container's elements included, is held by both sides, so its" +
+      " arguments have to be the receiving side's own or contained by a wildcard there. Give both" +
+      " sides the same type arguments, hold the value through a wildcard such as ? extends, or" +
+      " convert the component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A container one side holds as {@code receivingType}, copied across from a side that holds it as
+   * {@code sendingType}, whose arguments fit a fresh copy except the one a sorted container orders
+   * by. The declared type can hold a sorted set or map, or a priority queue, and a copy of one
+   * keeps the comparator the source orders by, which takes only the sending side's type.
+   */
+  public static String orderedCopyArgumentDiffers(
+    final String componentName,
+    final String sendingType,
+    final String receivingType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is copied across from a side that holds it as " +
+      sendingType +
+      " to a side that holds it as " +
+      receivingType +
+      ". The declared type can hold a sorted set or map, or a priority queue, and the copy keeps the" +
+      " comparator the source orders it by, which takes only the sending side's element type, or a" +
+      " map's key type, so that argument has to be the same on both sides. Give both sides the same" +
+      " type argument, declare the container as a class that keeps no comparator, such as HashSet or" +
+      " HashMap, hold it through a wildcard such as ? extends on the receiving side, or convert the" +
+      " component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A value of class {@code foundClass}, which a conversion of the row's own returned for the
+   * property {@code propertyName} of {@code ownerClass}, written through the member the property's
+   * type chooses, which takes {@code expectedClass}, a class the value is not of. The conversion is
+   * typed wider than that member, so only the value's own class says whether it fits.
+   */
+  public static String resultClassMismatch(
+    final String ownerClass,
+    final String propertyName,
+    final String foundClass,
+    final String expectedClass
+  ) {
+    return (
+      "Deep map: property '" +
+      propertyName +
+      "' of " +
+      ownerClass +
+      " is written through the member its type chooses, which takes " +
+      expectedClass +
+      ", but the value its conversion returned is a " +
+      foundClass +
+      ". Return a value of the property's type from the conversion."
+    );
+  }
+
+  /**
+   * A value of class {@code foundClass}, read from the property {@code propertyName} of {@code
+   * ownerClass}, handed to a conversion of the row's own that takes {@code expectedClass}, a class
+   * the value is not of. The property is declared with a type variable, which the class does not
+   * fix, and the conversion takes a class narrower than the variable's bound, so only the value's
+   * own class says whether it fits.
+   */
+  public static String argumentClassMismatch(
+    final String ownerClass,
+    final String propertyName,
+    final String foundClass,
+    final String expectedClass
+  ) {
+    return (
+      "Deep map: property '" +
+      propertyName +
+      "' of " +
+      ownerClass +
+      " is handed to a conversion that takes " +
+      expectedClass +
+      ", but the value it holds is a " +
+      foundClass +
+      ". Give the class a type argument the conversion takes, or have the conversion take the" +
+      " property's declared type."
+    );
+  }
+
+  /**
+   * A value of class {@code foundClass} written into the property {@code propertyName} of {@code
+   * ownerClass}, which fixes the type variable the property is declared with to {@code fixedClass},
+   * a class the value is not of. The other side passes the variable through, so only the value's
+   * own class says whether it fits.
+   */
+  public static String fixedClassMismatch(
+    final String ownerClass,
+    final String propertyName,
+    final String foundClass,
+    final String fixedClass
+  ) {
+    return (
+      "Deep map: property '" +
+      propertyName +
+      "' of " +
+      ownerClass +
+      " is fixed to " +
+      fixedClass +
+      ", but the value handed across for it is a " +
+      foundClass +
+      ". The other side passes the type variable through, and the value it holds there is not of the" +
+      " class this side fixes. Give both sides the same type argument, or convert the property with an" +
+      " explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * Two records or beans given type arguments that are not the same, one by one, on both sides. The
+   * two classes convert as they pair with each other, passing each type variable across unchanged,
+   * so only a pair whose arguments agree holds them on the far side.
+   */
+  public static String genericArgumentsDiffer(final String componentName, final String srcType, final String tgtType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      srcType +
+      " with " +
+      tgtType +
+      ", generic classes whose type arguments are not the same, one by one. A generic class converts as" +
+      " it pairs with the other side's, passing each type variable across unchanged, so it converts only" +
+      " between arguments that are the same type. Give both sides the same type arguments, or convert the" +
+      " component with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * A case of a sealed interface that gives the interface type arguments other than the ones the
+   * component's type gives it, or ones that cannot be told apart from them without binding a type
+   * variable inside another type.
+   */
+  public static String caseOutsideArguments(
+    final String componentName,
+    final String componentType,
+    final String caseName,
+    final String caseGives
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      componentType +
+      ", and its case " +
+      caseName +
+      " gives the interface the type arguments " +
+      caseGives +
+      ", which are not the component's. A case converts as its class pairs with the other side's, not as" +
+      " the component's type arguments read it, so it is refused rather than converted for a type it does" +
+      " not hold. Remove the case from the permits clause, or convert the component with an explicit" +
+      " Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
+  /**
+   * Two paired cases of generic sealed interfaces that give the interfaces different type
+   * arguments, with the target case's type variables read as the source case's in the order each
+   * declares them. A value converted through the pair would hold arguments its interface does not
+   * give it.
+   */
+  public static String caseArgumentsDiffer(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String sourceGives,
+    final String targetGives
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " gives " +
+      source +
+      " the type arguments " +
+      sourceGives +
+      ", and the case " +
+      targetCase +
+      " it pairs with gives " +
+      target +
+      " " +
+      targetGives +
+      ", with " +
+      targetCase +
+      "'s type variables read as " +
+      sourceCase +
+      "'s in the order each declares them. A value converted through the pair would not hold the type" +
+      " arguments its interface gives it. Pair " +
+      sourceCase +
+      " with a case that gives the same type arguments."
+    );
+  }
+
+  /**
+   * A case of a sealed source that nothing pairs with a case of the sealed target: it has no
+   * {@code @Bridge} to one, and no {@code cases} row names it.
+   */
+  public static String unpairedCase(final String source, final String target, final String sourceCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " of " +
+      source +
+      " pairs with no case of " +
+      target +
+      ". Give " +
+      sourceCase +
+      " a @Bridge to a case of " +
+      target +
+      ", or add a cases(" +
+      sourceCase +
+      ".class, ...) row naming the case it converts to."
+    );
+  }
+
+  /**
+   * A case with a generated bridge to a case of the sealed target only under the long-form name,
+   * whose bridge does not declare its pair, which the runtime does not pair cases through.
+   */
+  public static String undeclaredCaseBridge(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String bridgeName
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " of " +
+      source +
+      " has a bridge to " +
+      targetCase +
+      " only as " +
+      bridgeName +
+      ", which does not declare its pair: the processor derives a bridge under that name for a pair" +
+      " another bridge reaches, with that bridge's configuration rather than the case's, and a" +
+      " bridge an older processor generated does not say whether it declares one. Give " +
+      sourceCase +
+      " a @Bridge to " +
+      targetCase +
+      " or re-run the @Bridge processor, or add a cases(" +
+      sourceCase +
+      ".class, " +
+      targetCase +
+      ".class) row."
+    );
+  }
+
+  /**
+   * A case paired through its own bridge whose conversion the mapper walks instead, for {@code
+   * reason}, and whose walk then failed with {@code refusal}.
+   */
+  public static String caseBridgePassedOver(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final String targetCase,
+    final String reason,
+    final String refusal
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " pairs with " +
+      targetCase +
+      " through " +
+      sourceCase +
+      "'s own @Bridge, but the mapper passes that bridge over because " +
+      reason +
+      ", and matching " +
+      sourceCase +
+      " to " +
+      targetCase +
+      " property by property instead fails: " +
+      refusal
+    );
+  }
+
+  /** A case whose bridges reach more than one case of the sealed target. */
+  public static String ambiguousCase(
+    final String source,
+    final String target,
+    final String sourceCase,
+    final List<String> targetCases
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " has a bridge to more than one case of " +
+      target +
+      " " +
+      targetCases +
+      ". Add a cases(" +
+      sourceCase +
+      ".class, ...) row naming the one it converts to."
+    );
+  }
+
+  /** Two {@code cases} rows pairing the same case of a sealed source. */
+  public static String caseRowPairedTwice(final String source, final String target, final String sourceCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": case " +
+      sourceCase +
+      " is paired by more than one cases(...) row. Each case of " +
+      source +
+      " pairs with one case of " +
+      target +
+      "."
+    );
+  }
+
+  /** A case of the sealed target that no case of the sealed source pairs with. */
+  public static String targetCaseUnpaired(final String source, final String target, final String targetCase) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": no case of " +
+      source +
+      " pairs with case " +
+      targetCase +
+      " of " +
+      target +
+      ", which the backward direction needs. Pair a case with it through the case's @Bridge or" +
+      " a cases(...) row, or map forward only (Telescope.mapperForward)."
+    );
+  }
+
+  /** A case of the sealed target that more than one case of the sealed source pairs with. */
+  public static String targetCasePairedTwice(
+    final String source,
+    final String target,
+    final String targetCase,
+    final List<String> sourceCases
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": cases " +
+      sourceCases +
+      " of " +
+      source +
+      " all pair with case " +
+      targetCase +
+      " of " +
+      target +
+      ", so the backward direction cannot tell which to build. Pair each with a case of its own," +
+      " or map forward only (Telescope.mapperForward)."
+    );
+  }
+
+  /**
+   * {@code cases} rows no sealed pair the mapper converts takes, because no pair it dispatches on
+   * has a source permitting the row's first class and a target permitting its second. {@code rows}
+   * come from {@link #caseRow}.
+   */
+  public static String caseRowsNeverDispatched(
+    final String topSource,
+    final String topTarget,
+    final List<String> rows
+  ) {
+    return (
+      "cases(...) rows the mapper (" +
+      topSource +
+      " → " +
+      topTarget +
+      ") never dispatches on — they would be silently ignored: " +
+      String.join(", ", rows) +
+      ". Each row names a case of a sealed source and a case of the sealed target the mapper" +
+      " converts it to."
+    );
+  }
+}

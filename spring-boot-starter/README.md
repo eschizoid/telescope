@@ -20,8 +20,8 @@ both artifacts.
 // Gradle
 dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.1"))
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.telescopeorganization:telescope-spring-boot-starter:2.1.0")
+    annotationProcessor("io.github.telescopeorganization:telescope-codegen:2.1.0")
 }
 ```
 
@@ -31,7 +31,7 @@ applies the Spring Boot plugin or imports the same BOM.
 ```xml
 <!-- Maven -->
 <dependency>
-  <groupId>io.github.eschizoid</groupId>
+  <groupId>io.github.telescopeorganization</groupId>
   <artifactId>telescope-spring-boot-starter</artifactId>
   <version>2.1.0</version>
 </dependency>
@@ -49,7 +49,7 @@ In Maven, put the processor on the compiler plugin's processor path:
       <configuration>
         <annotationProcessorPaths>
           <path>
-            <groupId>io.github.eschizoid</groupId>
+            <groupId>io.github.telescopeorganization</groupId>
             <artifactId>telescope-codegen</artifactId>
             <version>2.1.0</version>
           </path>
@@ -144,15 +144,15 @@ interface, the processor stops with this error on the interface:
 The examples below use these imports:
 
 ```java
-import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.annotations.Bridge;
-import io.github.eschizoid.telescope.annotations.TelescopeMapper;
-import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
-import io.github.eschizoid.telescope.conversion.MapperBuilder;
-import io.github.eschizoid.telescope.inject.TelescopeCustomizer;
-import io.github.eschizoid.telescope.inject.TelescopeProjection;
-import io.github.eschizoid.telescope.inject.TelescopeTransformation;
-import io.github.eschizoid.telescope.inject.Transformation;
+import io.github.telescopeorganization.telescope.Telescope;
+import io.github.telescopeorganization.telescope.annotations.Bridge;
+import io.github.telescopeorganization.telescope.annotations.TelescopeMapper;
+import io.github.telescopeorganization.telescope.annotations.TelescopeTransformer;
+import io.github.telescopeorganization.telescope.conversion.MapperBuilder;
+import io.github.telescopeorganization.telescope.inject.TelescopeCustomizer;
+import io.github.telescopeorganization.telescope.inject.TelescopeProjection;
+import io.github.telescopeorganization.telescope.inject.TelescopeTransformation;
+import io.github.telescopeorganization.telescope.inject.Transformation;
 ```
 
 ### Step by step
@@ -259,11 +259,11 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
 }
 ```
 
-`drop`, `constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection
-that converts both ways pairs every property, so `contact`, which the summary does not hold, is dropped by name. A
-projection that overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and in
-`patch`. On a `@Bridge` field the same rows declare the pair's generated bridge, which a projection with no `translate`
-override calls.
+`drop`, `constant` and `compute` are static methods on `io.github.telescopeorganization.telescope.mapping.Mapping`. A
+projection that converts both ways pairs every property, so `contact`, which the summary does not hold, is dropped by
+name. A projection that overrides `translate` maps through a core `Mapper` instead of the bridge, in every direction and
+in `patch`. On a `@Bridge` field the same rows declare the pair's generated bridge, which a projection with no
+`translate` override calls.
 
 ### Bridge or core mapper
 
@@ -524,12 +524,12 @@ it. With springdoc on the classpath, the API documentation shows the response ty
 
 On the module path, open the package that holds your controllers and the types they return and map to every module, with
 an unqualified `opens`. Spring invokes the handler, Jackson writes the response type, and telescope's runtime mapper
-reads the source. The `opens ... to io.github.eschizoid.telescope.internal` that
+reads the source. The `opens ... to io.github.telescopeorganization.telescope.internal` that
 [docs/codegen.md](../docs/codegen.md#jpms--modular-consumers) describes covers only the last of the three.
 
 ```java
 module com.acme.app {
-  requires io.github.eschizoid.telescope.spring;
+  requires io.github.telescopeorganization.telescope.spring;
   requires spring.web;
 
   opens com.acme.api;

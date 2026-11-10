@@ -1,0 +1,933 @@
+package io.github.telescopeorganization.telescope.codegen;
+
+import static io.github.telescopeorganization.telescope.codegen.ProcessorHarness.source;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.telescopeorganization.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
+import javax.tools.JavaFileObject;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Drives {@link BeanFocusProcessor} through the shared {@link ProcessorHarness}. Asserts on the
+ * shape of the generated fluent navigator: {@code <Pojo>Telescope<R>} with {@code of()}, {@code
+ * get()}, and per-property methods (scalar terminal / sub-bean navigator / container step), for
+ * both rebuild strategies (static {@code builder()} and no-arg constructor + setters), plus the
+ * guards.
+ */
+class BeanFocusProcessorTest {
+
+  private static Compilation compile(final JavaFileObject... sources) {
+    return NavigatorCompiler.warningFree(List.of(new BeanFocusProcessor(), new BridgeProcessor()), sources);
+  }
+
+  @Nested
+  @DisplayName("Happy path — navigator shape across rebuild strategies")
+  class HappyPath {
+
+    @Test
+    @DisplayName("builder() POJO: navigator method rebuilds via builder(), swapping only the focused" + " property")
+    void builderStrategy() {
+      final var compilation = compile(
+        source(
+          "demo.BuilderPojo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderPojo {
+            private final String id;
+            private final String email;
+            private BuilderPojo(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder email(String email) { this.email = email; return this; }
+              public BuilderPojo build() { return new BuilderPojo(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.BuilderPojoTelescope");
+      assertNotNull(generated, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(generated.contains("public final class BuilderPojoTelescope<R>"), generated);
+      assertTrue(generated.contains("public static BuilderPojoTelescope<BuilderPojo> of()"), generated);
+      assertTrue(generated.contains("public Telescope<R, String> id()"), generated);
+      assertTrue(
+        generated.contains("Telescope.componentLens(BuilderPojo.class, \"id\", BuilderPojo::getId,"),
+        generated
+      );
+      assertTrue(generated.contains("BuilderPojo.builder()"), generated);
+      assertTrue(generated.contains(".build()"), generated);
+      // The focused property takes v; siblings are read back from p, null-guarded so a null
+      // previous instance (the lens writing into a never-constructed nested intermediate) defaults
+      // the sibling instead of NPE-ing on the off-path read.
+      assertTrue(generated.contains("id(v)"), generated);
+      assertTrue(generated.contains("email(v)"), generated);
+      assertTrue(generated.contains("email((p == null ? null : p.getEmail()))"), generated);
+    }
+
+    @Test
+    @DisplayName("setter POJO: navigator method rebuilds via no-arg ctor + setX")
+    void setterStrategy() {
+      final var compilation = compile(
+        source(
+          "demo.SetterPojo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class SetterPojo {
+            private String id;
+            private String email;
+            public SetterPojo() {}
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public void setId(String id) { this.id = id; }
+            public void setEmail(String email) { this.email = email; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.SetterPojoTelescope");
+      assertNotNull(generated, () -> "SetterPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(generated.contains("public final class SetterPojoTelescope<R>"), generated);
+      assertTrue(generated.contains("new SetterPojo()"), generated);
+      assertTrue(generated.contains("c.setId(v)"), generated);
+      assertTrue(generated.contains("c.setEmail(v)"), generated);
+      // The off-path read is null-guarded so a null previous instance (writing into a
+      // never-constructed nested intermediate) defaults the sibling rather than NPE-ing.
+      assertTrue(generated.contains("c.setEmail((p == null ? null : p.getEmail()))"), generated);
+      assertTrue(generated.contains("return c;"), generated);
+    }
+
+    @Test
+    @DisplayName("int property surfaces as Telescope<R, Integer> on the navigator method")
+    void primitiveIsBoxed() {
+      final var compilation = compile(
+        source(
+          "demo.Counter",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Counter {
+            private int count;
+            public Counter() {}
+            public int getCount() { return count; }
+            public void setCount(int count) { this.count = count; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.CounterTelescope");
+      assertNotNull(generated, () -> "CounterTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(generated.contains("public Telescope<R, Integer> count()"), generated);
+      assertFalse(generated.contains("Telescope<R, int>"), generated);
+    }
+
+    @Test
+    @DisplayName("a List property emits a Step whose each() returns a terminal Telescope")
+    void listOfScalarsEachReturnsTerminal() {
+      final var compilation = compile(
+        source(
+          "demo.Roster",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Roster {
+            private java.util.List<String> names;
+            public Roster() {}
+            public java.util.List<String> getNames() { return names; }
+            public void setNames(java.util.List<String> names) { this.names = names; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var step = compilation.generated().get("demo.RosterNamesStep");
+      assertNotNull(step, () -> "RosterNamesStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(step.contains("public final class RosterNamesStep<R>"), step);
+      assertTrue(step.contains("public Telescope<R, String> each()"), step);
+
+      final var path = compilation.generated().get("demo.RosterTelescope");
+      assertNotNull(path);
+      assertTrue(path.contains("public RosterNamesStep<R> names()"), path);
+    }
+
+    @Test
+    @DisplayName("Bridge hop: a POJO with @BeanFocus + @Bridge gets as<Target>() chaining the bridge")
+    void bridgeHop() {
+      final var compilation = compile(
+        source(
+          "demo.UserBean",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.Bridge;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          @Bridge(demo.UserDto.class)
+          public class UserBean {
+            private String id;
+            public UserBean() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+          }
+          """
+        ),
+        source(
+          "demo.UserDto",
+          """
+          package demo;
+          public record UserDto(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.UserBeanTelescope");
+      assertNotNull(generated, () -> "UserBeanTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Target is not @Focus'd (just a record) → terminal Telescope. The bridge hop records a
+      // Bridge node in the introspection trail.
+      assertTrue(generated.contains("public Telescope<R, demo.UserDto> asUserDto()"), generated);
+      assertTrue(
+        generated.contains("return path.then(UserBeanBridge.BRIDGE).hop(new OpticNode.Bridge(\"UserDto\"));"),
+        generated
+      );
+    }
+
+    @Test
+    @DisplayName("a Map property's step exposes eachValue(); an Optional property's step exposes" + " whenPresent()")
+    void mapAndOptionalUseDistinctStepMethods() {
+      final var compilation = compile(
+        source(
+          "demo.Store",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Store {
+            private java.util.Map<String, String> labels;
+            private java.util.Optional<String> note;
+            public Store() {}
+            public java.util.Map<String, String> getLabels() { return labels; }
+            public java.util.Optional<String> getNote() { return note; }
+            public void setLabels(java.util.Map<String, String> labels) { this.labels = labels; }
+            public void setNote(java.util.Optional<String> note) { this.note = note; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+
+      final var labelsStep = compilation.generated().get("demo.StoreLabelsStep");
+      assertNotNull(labelsStep, () -> "StoreLabelsStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(labelsStep.contains("public Telescope<R, String> eachValue()"), labelsStep);
+
+      final var noteStep = compilation.generated().get("demo.StoreNoteStep");
+      assertNotNull(noteStep, () -> "StoreNoteStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(noteStep.contains("public Telescope<R, String> whenPresent()"), noteStep);
+    }
+  }
+
+  @Nested
+  @DisplayName("Rejections — guards raise compile errors")
+  class Rejections {
+
+    @Test
+    @DisplayName("@BeanFocus on a record is an error (records use @Focus)")
+    void recordIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.RecPojo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public record RecPojo(String a) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a record @BeanFocus should fail");
+      assertTrue(
+        compilation.hasError("@BeanFocus is only supported on classes"),
+        () -> "expected records-use-@Focus diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@BeanFocus on a nested class is an error")
+    void nestedClassIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Outer",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          public class Outer {
+            @BeanFocus
+            public static class Inner {
+              public Inner() {}
+              public String getA() { return null; }
+              public void setA(String a) {}
+            }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a nested @BeanFocus class should fail");
+      assertTrue(
+        compilation.hasError("@BeanFocus is only supported on top-level classes"),
+        () -> "expected top-level diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("no readable properties is an error")
+    void noPropertiesIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Empty",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Empty {
+            public Empty() {}
+            public void run() {}
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a property-less @BeanFocus class should fail");
+      assertTrue(
+        compilation.hasError("has no readable properties"),
+        () -> "expected no-properties diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("no builder, no name-matched constructor and no no-arg constructor is an error")
+    void noStrategyIsRejected() {
+      // The constructor's parameter is not named after the property, so nothing says which
+      // property it takes, and the runtime writer refuses the same class.
+      final var compilation = compile(
+        source(
+          "demo.Immutable",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Immutable {
+            private final String a;
+            public Immutable(String other) { this.a = other; }
+            public String getA() { return a; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a class with no usable strategy should fail");
+      assertTrue(
+        compilation.hasError(
+          "needs a static builder(), a public constructor whose parameters are named after its properties," +
+            " or a no-arg constructor with setters"
+        ),
+        () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("an all-args-only class whose constructor names its properties is rebuilt through it")
+    void nameMatchedConstructorIsAccepted() {
+      final var compilation = compile(
+        source(
+          "demo.Immutable",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Immutable {
+            private final String a;
+            public Immutable(String a) { this.a = a; }
+            public String getA() { return a; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), compilation::errorMessages);
+      assertTrue(
+        compilation.generated().get("demo.ImmutableFieldOptics").contains("return new Immutable((String)"),
+        () -> "construct() should call the constructor; saw " + compilation.generated().get("demo.ImmutableFieldOptics")
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Metadata holder emission — sibling <X>FieldOptics")
+  class MetadataHolder {
+
+    @Test
+    @DisplayName("emits a sibling <X>FieldOptics holder with one typed Telescope constant per property")
+    void generatesTelescopeHolderForBean() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
+      assertNotNull(holder, () -> "PersonFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      // Holder is a top-level public final class in the user's package, no instances permitted.
+      assertTrue(holder.contains("public final class PersonFieldOptics"), holder);
+      assertTrue(holder.contains("private PersonFieldOptics() {}"), holder);
+
+      // One static-final constant per property, with the property type as the Telescope's second
+      // type parameter (primitive `int` is boxed to Integer).
+      assertTrue(holder.contains("public static final Telescope<Person, String> name"), holder);
+      assertTrue(holder.contains("public static final Telescope<Person, Integer> age"), holder);
+
+      // Each constant uses Telescope.lens(...) with the same no-arg-ctor + setX rebuild expression
+      // the navigator would emit.
+      assertTrue(holder.contains("Telescope.lens(Person::getName,"), holder);
+      assertTrue(holder.contains("Telescope.lens(Person::getAge,"), holder);
+      assertTrue(holder.contains("new Person()"), holder);
+      assertTrue(holder.contains("c.setName("), holder);
+      assertTrue(holder.contains("c.setAge("), holder);
+
+      // Standard javadoc and Telescope import.
+      assertTrue(holder.contains("import io.github.telescopeorganization.telescope.Telescope;"), holder);
+      assertTrue(holder.contains("Per-property Telescope constants for runtime hybrid dispatch"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO: constants rebuild via the builder chain (same as the navigator)")
+    void telescopeHolderForBuilderBean() {
+      final var compilation = compile(
+        source(
+          "demo.BuilderPojo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderPojo {
+            private final String id;
+            private final String email;
+            private BuilderPojo(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder email(String email) { this.email = email; return this; }
+              public BuilderPojo build() { return new BuilderPojo(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderPojoFieldOptics");
+      assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static final Telescope<BuilderPojo, String> id"), holder);
+      assertTrue(holder.contains("public static final Telescope<BuilderPojo, String> email"), holder);
+      assertTrue(holder.contains("BuilderPojo.builder()"), holder);
+      assertTrue(holder.contains(".build()"), holder);
+    }
+
+    @Test
+    @DisplayName("a container-shaped property surfaces as a raw Telescope<X, Container<E>> constant (not" + " lifted)")
+    void telescopeHolderForBeanContainerProperty() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Bag {
+            private List<String> tags;
+            public Bag() {}
+            public List<String> getTags() { return tags; }
+            public void setTags(List<String> tags) { this.tags = tags; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BagFieldOptics");
+      assertNotNull(holder, () -> "BagFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      // Raw container lens on the holder — the navigator's container step lifts; the holder does
+      // not.
+      // Consumers compose via .then(...) if they want element-level navigation.
+      assertTrue(holder.contains("public static final Telescope<Bag, List<String>> tags"), holder);
+      assertTrue(holder.contains("import java.util.List;"), holder);
+    }
+
+    @Test
+    @DisplayName(
+      "a sub-@BeanFocus property surfaces as Telescope<X, SubBean> — terminal-to-sub-bean, not" + " composed"
+    )
+    void telescopeHolderForBeanSubBeanProperty() {
+      final var compilation = compile(
+        source(
+          "demo.UserA",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class UserA {
+            private String name;
+            private demo.AddressB address;
+            public UserA() {}
+            public String getName() { return name; }
+            public demo.AddressB getAddress() { return address; }
+            public void setName(String name) { this.name = name; }
+            public void setAddress(demo.AddressB address) { this.address = address; }
+          }
+          """
+        ),
+        source(
+          "demo.AddressB",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class AddressB {
+            private String city;
+            public AddressB() {}
+            public String getCity() { return city; }
+            public void setCity(String city) { this.city = city; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.UserAFieldOptics");
+      assertNotNull(holder, () -> "UserATelescope not generated; saw " + compilation.generated().keySet());
+
+      // Sub-bean property is just a typed lens to the sub-value; no composition with the
+      // sub-bean's own holder (consumers compose via .then(...) themselves).
+      assertTrue(holder.contains("public static final Telescope<UserA, demo.AddressB> address"), holder);
+      assertTrue(holder.contains("Telescope.lens(UserA::getAddress,"), holder);
+    }
+
+    @Test
+    @DisplayName("a property with wildcard-bound generics is rejected with a precise diagnostic")
+    void wildcardBeanGenericsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Wild",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Wild {
+            private List<? extends Comparable<?>> values;
+            public Wild() {}
+            public List<? extends Comparable<?>> getValues() { return values; }
+            public void setValues(List<? extends Comparable<?>> values) { this.values = values; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "compilation should have failed for wildcard-bound generics");
+      assertTrue(
+        compilation.hasError("cannot emit metadata constant"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertTrue(
+        compilation.hasError("wildcard or self-referential bounds"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertFalse(
+        compilation.generated().containsKey("demo.WildFieldOptics"),
+        "no Telescope holder should be generated for a rejected type"
+      );
+    }
+
+    @Test
+    @DisplayName("a property inherited from a generic superclass is typed as the subclass fixes it")
+    void anInheritedTypeVariablePropertyIsTypedAsTheSubclassFixesIt() {
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new BeanFocusProcessor()),
+        List.of(),
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T extends Base<T>> {
+            private String name;
+            private T next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Node extends Base<Node> {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var navigator = compilation.generated().get("demo.NodeTelescope");
+      assertNotNull(navigator, () -> "NodeTelescope missing; saw " + compilation.generated().keySet());
+      assertTrue(navigator.contains("public demo.NodeTelescope<R> next()"), navigator);
+      assertFalse(navigator.contains("<R, T>"), () -> "no generated member may name the superclass's T: " + navigator);
+    }
+
+    @Test
+    @DisplayName("a property a generic subclass types by its own variable is refused by name")
+    void aPropertyTypedByTheSubclassOwnVariableIsRefusedByName() {
+      final var compilation = compile(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T> {
+            private T next;
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Page",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Page<X> extends Base<X> {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "the class should be refused");
+      assertTrue(
+        compilation.hasError("@BeanFocus: cannot emit metadata constant for property 'next' of type 'X'"),
+        () ->
+          "expected the refusal naming the property and the subclass's variable, saw: " + compilation.errorMessages()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Metadata holder construct(...) emission")
+  class MetadataHolderConstruct {
+
+    @Test
+    @DisplayName("setter POJO: construct calls the no-arg ctor then setX per property")
+    void setterPojoConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // construct() signature.
+      assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
+      // No-arg ctor + setX per property. The setter strategy chosen by emitBeanNavigator is
+      // mirrored here verbatim.
+      assertTrue(holder.contains("final var c = new Person();"), holder);
+      assertTrue(holder.contains("c.setName((String) values.apply(\"name\"));"), holder);
+      // Primitive setter takes the instanceof-pattern null-guard form so a null entry in `values`
+      // substitutes the JLS default (0 for int) instead of NPEing on the implicit Integer->int
+      // unbox.
+      assertTrue(holder.contains("c.setAge(values.apply(\"age\") instanceof Integer __v ? __v : 0);"), holder);
+      assertTrue(holder.contains("return c;"), holder);
+      // Imports + @SuppressWarnings present.
+      assertTrue(holder.contains("import java.util.function.Function;"), holder);
+      assertTrue(holder.contains("@SuppressWarnings(\"unchecked\")"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO: construct chains builder().setX(...).setY(...).build()")
+    void builderPojoConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.BuilderPojo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderPojo {
+            private final String id;
+            private final String email;
+            private BuilderPojo(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder email(String email) { this.email = email; return this; }
+              public BuilderPojo build() { return new BuilderPojo(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderPojoFieldOptics");
+      assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Builder chain mirrors the per-property lens setter strategy.
+      assertTrue(holder.contains("public static BuilderPojo construct(final Function<String, Object> values)"), holder);
+      assertTrue(holder.contains("return BuilderPojo.builder()"), holder);
+      assertTrue(holder.contains(".id((String) values.apply(\"id\"))"), holder);
+      assertTrue(holder.contains(".email((String) values.apply(\"email\"))"), holder);
+      assertTrue(holder.contains(".build();"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO with a primitive field: the chain takes the instanceof null-guard form")
+    void builderPojoConstructWithPrimitiveField() {
+      // Builder-strategy rebuild paths must apply the same primitive null-guard form as the
+      // setter-strategy paths — the static builder() chain emits one .x(...) call per property
+      // and each primitive arg takes the instanceof-pattern guard.
+      final var compilation = compile(
+        source(
+          "demo.BuilderWithPrim",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderWithPrim {
+            private final String label;
+            private final int attemptCount;
+            private BuilderWithPrim(String label, int attemptCount) {
+              this.label = label; this.attemptCount = attemptCount;
+            }
+            public String getLabel() { return label; }
+            public int getAttemptCount() { return attemptCount; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String label;
+              private int attemptCount;
+              public Builder label(String label) { this.label = label; return this; }
+              public Builder attemptCount(int attemptCount) { this.attemptCount = attemptCount; return this; }
+              public BuilderWithPrim build() { return new BuilderWithPrim(label, attemptCount); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderWithPrimFieldOptics");
+      assertNotNull(holder, () -> "BuilderWithPrimFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains(".label((String) values.apply(\"label\"))"), holder);
+      assertTrue(
+        holder.contains(".attemptCount(values.apply(\"attemptCount\") instanceof Integer __v ? __v : 0)"),
+        holder
+      );
+    }
+
+    @Test
+    @DisplayName("All 8 primitive kinds emit the right JLS-default literal in the null-guard fallback")
+    void everyPrimitiveKindHasItsJlsDefaultLiteral() {
+      // Covers boolean / byte / short / int / long / char / float / double in one fixture so a
+      // refactor of the primitiveDefaultLiteral table can't silently break a kind. Char in
+      // particular needs the source literal '\0' to escape correctly through the codegen writer.
+      final var compilation = compile(
+        source(
+          "demo.AllPrim",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class AllPrim {
+            private boolean b;
+            private byte by;
+            private short s;
+            private int i;
+            private long l;
+            private char c;
+            private float f;
+            private double d;
+            public AllPrim() {}
+            public boolean isB() { return b; }
+            public byte getBy() { return by; }
+            public short getS() { return s; }
+            public int getI() { return i; }
+            public long getL() { return l; }
+            public char getC() { return c; }
+            public float getF() { return f; }
+            public double getD() { return d; }
+            public void setB(boolean v) { this.b = v; }
+            public void setBy(byte v) { this.by = v; }
+            public void setS(short v) { this.s = v; }
+            public void setI(int v) { this.i = v; }
+            public void setL(long v) { this.l = v; }
+            public void setC(char v) { this.c = v; }
+            public void setF(float v) { this.f = v; }
+            public void setD(double v) { this.d = v; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.AllPrimFieldOptics");
+      assertNotNull(holder, () -> "AllPrimFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("c.setB(values.apply(\"b\") instanceof Boolean __v ? __v : false);"), holder);
+      assertTrue(holder.contains("c.setBy(values.apply(\"by\") instanceof Byte __v ? __v : (byte) 0);"), holder);
+      assertTrue(holder.contains("c.setS(values.apply(\"s\") instanceof Short __v ? __v : (short) 0);"), holder);
+      assertTrue(holder.contains("c.setI(values.apply(\"i\") instanceof Integer __v ? __v : 0);"), holder);
+      assertTrue(holder.contains("c.setL(values.apply(\"l\") instanceof Long __v ? __v : 0L);"), holder);
+      assertTrue(holder.contains("c.setC(values.apply(\"c\") instanceof Character __v ? __v : '\\0');"), holder);
+      assertTrue(holder.contains("c.setF(values.apply(\"f\") instanceof Float __v ? __v : 0.0f);"), holder);
+      assertTrue(holder.contains("c.setD(values.apply(\"d\") instanceof Double __v ? __v : 0.0d);"), holder);
+    }
+  }
+
+  @Nested
+  @DisplayName("Metadata holder constants() emission")
+  class MetadataHolderConstantsMap {
+
+    @Test
+    @DisplayName("multi-property bean: emits Map.ofEntries with one entry per property")
+    void multiPropertyConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      assertTrue(holder.contains("Map.ofEntries("), holder);
+      assertTrue(holder.contains("Map.entry(\"name\", name)"), holder);
+      assertTrue(holder.contains("Map.entry(\"age\", age)"), holder);
+      assertTrue(holder.contains("import java.util.Map;"), holder);
+    }
+
+    @Test
+    @DisplayName("single-property bean: emits Map.of(...) instead of Map.ofEntries")
+    void singlePropertyConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Solo",
+          """
+          package demo;
+          import io.github.telescopeorganization.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Solo {
+            private String only;
+            public Solo() {}
+            public String getOnly() { return only; }
+            public void setOnly(String only) { this.only = only; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.SoloFieldOptics");
+      assertNotNull(holder, () -> "SoloTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      assertTrue(holder.contains("return Map.of(\"only\", only);"), holder);
+      assertFalse(holder.contains("Map.ofEntries"), "single-entry holders should use Map.of, not Map.ofEntries");
+    }
+  }
+}

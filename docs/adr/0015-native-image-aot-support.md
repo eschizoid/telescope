@@ -95,11 +95,12 @@ the JVM hot path is byte-for-byte the ADR-0005 LMF path.
 
 ### 2. Telescope's own build-time init → `native-image.properties` in `telescope-core`
 
-`telescope-core` ships `META-INF/native-image/io.github.eschizoid/telescope-core/native-image.properties` with the
-`--initialize-at-build-time` args for the telescope packages (`io.github.eschizoid.telescope`, `...internal`,
-`...internal.optics`). native-image auto-loads it from the jar, so an adopter needs **no build args for telescope
-itself** — the `@Bridge` / `@FromMap` heap constants and the optic wrappers (all stateless `MethodHandle` / `Function`
-holders) initialize at build time automatically. This is the idiomatic "a library ships its own image metadata" pattern.
+`telescope-core` ships `META-INF/native-image/io.github.telescopeorganization/telescope-core/native-image.properties`
+with the `--initialize-at-build-time` args for the telescope packages (`io.github.telescopeorganization.telescope`,
+`...internal`, `...internal.optics`). native-image auto-loads it from the jar, so an adopter needs **no build args for
+telescope itself** — the `@Bridge` / `@FromMap` heap constants and the optic wrappers (all stateless `MethodHandle` /
+`Function` holders) initialize at build time automatically. This is the idiomatic "a library ships its own image
+metadata" pattern.
 
 ### 3. Adopter DTO reflection + Wall A → app-level reachability metadata (standard GraalVM)
 

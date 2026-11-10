@@ -99,7 +99,8 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   in order of how often they fit — see below.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
-  `opens ... to io.github.eschizoid.telescope.internal;` — a module-descriptor requirement, not a native-image one.
+  `opens ... to io.github.telescopeorganization.telescope.internal;` — a module-descriptor requirement, not a
+  native-image one.
 
 ## A container field whose class the runtime does not name
 
@@ -226,7 +227,7 @@ does not check the order, so a real image's order is not verified. It matters on
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's
-   [`reflect-config.json`](../examples/graphql/src/main/resources/META-INF/native-image/io.github.eschizoid/telescope-examples-graphql/reflect-config.json)
+   [`reflect-config.json`](../examples/graphql/src/main/resources/META-INF/native-image/io.github.telescopeorganization/telescope-examples-graphql/reflect-config.json)
    is eight readable entries and doubles as the template. One gotcha: nested types get their own entry with the binary
    name (`AccountBuilderBean$Builder`) — the builder write path unreflects the builder class too.
 2. **Framework hints — the route for the starter users.** Both frameworks telescope ships starters for generate this
@@ -318,9 +319,9 @@ surface on every push to `main` and weekly against GraalVM updates, so a regress
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 
 Today the internal optic lattice ships as a separate `telescope-internal` JPMS module whose packages are
-qualified-exported only to `io.github.eschizoid.telescope`; a downstream `import ...internal.optics.Lens` fails to
-compile with "package is not visible". The question is whether we could instead **shade** `:internal`'s bytecode into
-`telescope-core` at publish time so consumers physically cannot reference the lattice types.
+qualified-exported only to `io.github.telescopeorganization.telescope`; a downstream `import ...internal.optics.Lens`
+fails to compile with "package is not visible". The question is whether we could instead **shade** `:internal`'s
+bytecode into `telescope-core` at publish time so consumers physically cannot reference the lattice types.
 
 Short answer: a Gradle `com.gradleup.shadow` (shadow-jar) merge is mechanically possible but **fights the JPMS model and
 is not worth it** — the current qualified-export already delivers the exact "users cannot type `Lens`" guarantee, at

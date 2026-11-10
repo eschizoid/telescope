@@ -1,0 +1,24 @@
+package io.github.telescopeorganization.telescope.codegen.lombok.fixtures;
+
+/**
+ * Fixture: a same-package, same-compilation-pass consumer of a Lombok-emitted {@code <X>Telescope}
+ * navigator. Pins that the navigator is visible to user code in the SAME module's source
+ * compilation — the failure mode this guards against is the round-deferred emission that used to
+ * land the navigator only on {@code processingOver()}, after the compiler had already finished
+ * symbol resolution for round-1 sources like this one.
+ *
+ * <p>If this class compiles, the same-module-main-code constraint is gone. If it doesn't, the
+ * timing of {@link io.github.telescopeorganization.telescope.codegen.lombok.LombokFocusProcessor}'s
+ * emission regressed.
+ */
+public final class SameRoundConsumer {
+
+  private SameRoundConsumer() {}
+
+  /** Shouts the email through the typed DataUserTelescope navigator. */
+  public static DataUser shoutEmail(final DataUser user) {
+    return DataUserTelescope.of()
+      .email()
+      .update(user, s -> s == null ? null : s.toUpperCase());
+  }
+}

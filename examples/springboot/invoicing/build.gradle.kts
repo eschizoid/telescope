@@ -10,7 +10,7 @@ plugins {
 // automatically). Pure compile-time-bound — no Telescope.mapper(...) call at runtime, no
 // reflective field-name probe; just direct method calls on the generated bridge classes.
 
-group = "io.github.eschizoid.telescope.demo.invoicing"
+group = "io.github.telescopeorganization.telescope.demo.invoicing"
 version = "0.0.1-SNAPSHOT"
 
 java {
@@ -24,7 +24,7 @@ repositories {
 }
 
 springBoot {
-    mainClass.set("io.github.eschizoid.telescope.demo.invoicing.DemoApplication")
+    mainClass.set("io.github.telescopeorganization.telescope.demo.invoicing.DemoApplication")
 }
 
 dependencies {

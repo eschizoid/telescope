@@ -4,7 +4,7 @@
  * Jackson writes the response, and telescope reads the source, each from its own module.
  */
 module telescope.spring.smoke {
-  requires io.github.eschizoid.telescope.spring;
+  requires io.github.telescopeorganization.telescope.spring;
   requires jakarta.servlet;
   requires spring.test;
   requires spring.web;
@@ -13,5 +13,5 @@ module telescope.spring.smoke {
   requires static org.springdoc.openapi.common;
   requires static io.swagger.v3.oas.models;
 
-  opens io.github.eschizoid.telescope.spring.smoke;
+  opens io.github.telescopeorganization.telescope.spring.smoke;
 }

@@ -68,11 +68,11 @@ traverse / convert / lift-through-an-effect using one type.
 
 Two layers, hard line between them:
 
-- **Public** — `io.github.eschizoid.telescope.*` — what users name. One DSL class (`Telescope<S, A>`), three codegen
-  entry-point annotations plus per-field modifiers, two sealed effect types, one Indexed record.
-- **Internal** — `io.github.eschizoid.telescope.internal.*` — the proven optic lattice, the Kind / Applicative
-  HKT-emulation, the reflection helpers. Package-private at the file level and encapsulated by `module-info.java`. Users
-  never see Lens / Prism / Affine / Iso / Traversal / Getter / Setter / Fold.
+- **Public** — `io.github.telescopeorganization.telescope.*` — what users name. One DSL class (`Telescope<S, A>`), three
+  codegen entry-point annotations plus per-field modifiers, two sealed effect types, one Indexed record.
+- **Internal** — `io.github.telescopeorganization.telescope.internal.*` — the proven optic lattice, the Kind /
+  Applicative HKT-emulation, the reflection helpers. Package-private at the file level and encapsulated by
+  `module-info.java`. Users never see Lens / Prism / Affine / Iso / Traversal / Getter / Setter / Fold.
 
 ---
 
@@ -91,13 +91,13 @@ docs/adr/              architecture decision records
 AGENTS.md              this file
 ```
 
-All modules use Java package `io.github.eschizoid.telescope` (starters live under `.quarkus` / `.spring`); Maven group
-is `io.github.eschizoid`. **Don't reintroduce the unowned `org.telescope` package** — the group is not ours to publish
-under.
+All modules use Java package `io.github.telescopeorganization.telescope` (starters live under `.quarkus` / `.spring`);
+Maven group is `io.github.telescopeorganization`. **Don't reintroduce the unowned `org.telescope` package** — the group
+is not ours to publish under.
 
-Published artifacts (group `io.github.eschizoid`): `telescope-core` (main entry), `telescope-internal` (substrate;
-published for runtime bytecode, not for direct depend-on), `telescope-codegen`, `telescope-lombok`, `telescope-quarkus`,
-`telescope-spring-boot-starter`. JReleaser config in root `build.gradle.kts`; release pipeline is
+Published artifacts (group `io.github.telescopeorganization`): `telescope-core` (main entry), `telescope-internal`
+(substrate; published for runtime bytecode, not for direct depend-on), `telescope-codegen`, `telescope-lombok`,
+`telescope-quarkus`, `telescope-spring-boot-starter`. JReleaser config in root `build.gradle.kts`; release pipeline is
 `.github/workflows/release.yaml` (`workflow_dispatch` with `releaseType` patch/minor/major).
 
 ---
@@ -106,10 +106,10 @@ published for runtime bytecode, not for direct depend-on), `telescope-codegen`, 
 
 `:core` exposes the public DSL; `:internal` carries the lattice + reflection helpers `:core` is built on. `:internal`
 qualified-exports its packages only to `:core` via JPMS, so lattice types never appear in `:core`'s public surface even
-though both modules ship as artifacts (`import io.github.eschizoid.telescope.internal.optics.Lens` from a downstream
-module won't compile).
+though both modules ship as artifacts (`import io.github.telescopeorganization.telescope.internal.optics.Lens` from a
+downstream module won't compile).
 
-### `:core` — public surface (`io.github.eschizoid.telescope`)
+### `:core` — public surface (`io.github.telescopeorganization.telescope`)
 
 Seven exported packages (`module-info.java`): the root, `annotations`, `conversion`, `effects`, `inject`,
 `introspection`, `mapping`. `runtime.instances` stays unexported (core-internal effect witnesses).
@@ -175,7 +175,7 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
     against the subclass it names.
 - **Indexed chain:** `withIndex()` → `WithIndex<S, A>` for indexed traversal terminals.
 
-### `:internal` — substrate (`io.github.eschizoid.telescope.internal`)
+### `:internal` — substrate (`io.github.telescopeorganization.telescope.internal`)
 
 | File / package                                       | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -205,9 +205,9 @@ optics, and `Getter` is the one weakening that still composes, read-side only. C
 result type; the lattice's resolution rules are in the composition table further down. The lattice is what makes the
 public DSL composable without users seeing optic types.
 
-`:internal`'s `module-info.java` qualified-exports every `internal.*` package to `io.github.eschizoid.telescope` only
-(`pairing` also to the codegen module for the compile-time verifier) — JPMS enforces the boundary; downstream modules
-cannot compile against lattice types.
+`:internal`'s `module-info.java` qualified-exports every `internal.*` package to
+`io.github.telescopeorganization.telescope` only (`pairing` also to the codegen module for the compile-time verifier) —
+JPMS enforces the boundary; downstream modules cannot compile against lattice types.
 
 ---
 
@@ -216,8 +216,8 @@ cannot compile against lattice types.
 The four public `update*` methods (`updateAsync` / `updateOptional` / `updateEither` / `updateValidated`) all delegate
 to `Traversal#modifyF(Applicative<F>, S source, Function<A, Kind<F, A>> fn)`. `Kind<F, A>` emulates HKT;
 `Applicative<F>` is the (`pure`, `map2`) dispatch table. Effects ship as singleton witnesses — the `*K` classes live in
-`:core` (`io.github.eschizoid.telescope.runtime.instances`), not `:internal`, because each names the public `:core` sum
-type it wraps (`Either` / `Validated`):
+`:core` (`io.github.telescopeorganization.telescope.runtime.instances`), not `:internal`, because each names the public
+`:core` sum type it wraps (`Either` / `Validated`):
 
 | Witness              | Wraps                                           |
 | -------------------- | ----------------------------------------------- |
@@ -450,21 +450,21 @@ keyed by the projection type, never by bean name, and the list is fixed once the
 deliberately not in `TelescopeMapperRegistry`: a projection is not a `Mapper`. The Quarkus starter has no equivalent
 yet.
 
-**Spring only: mapped responses (ADR-0020).** Package `io.github.eschizoid.telescope.spring.web`. The five composed
-annotations (`@TelescopeGetMapping` …) are meta-annotated with `@RequestMapping(method = ...)` and `@TelescopeResponse`;
-`@TelescopeResponse` targets annotation types only. `TelescopeWebMvcAutoConfiguration` (servlet web apps with Spring MVC
-on the classpath) registers `TelescopeResponses`, a `SmartInitializingSingleton` that resolves every annotated handler's
-mapping and `ResponseShape` at startup and fails startup with the method named; `TelescopeResponseHandlers`, a
-`BeanPostProcessor` that wraps the adapter's `RequestResponseBodyMethodProcessor`, `ResponseEntityReturnValueHandler`
-and `HttpEntityMethodProcessor` so the value is mapped, and the declared type swapped through `MappedReturnType`, before
-a converter is chosen; and, with springdoc present, `TelescopeOpenApiCustomizer`, a global customizer that documents the
-response type in every document. The handler's Java return value is never changed. Request bodies are the same feature
-in the other direction (ADR-0021): `@TelescopeRequestBody` on a parameter, or a `TelescopeRequest<S, T>` parameter;
-`TelescopeRequests` resolves each at startup, and `TelescopeRequestBodyResolver`, placed first among the adapter's
-argument resolvers, reads the body through Spring's `RequestResponseBodyMethodProcessor` as the wire type
-(`WireParameter`, which carries a synthesized `@RequestBody` and the parameter's own `@Valid`) before mapping it. Both
-directions find their mapper through `MapperLookup`. Spring MVC, Spring Data and springdoc are `compileOnly`, each
-behind a class condition.
+**Spring only: mapped responses (ADR-0020).** Package `io.github.telescopeorganization.telescope.spring.web`. The five
+composed annotations (`@TelescopeGetMapping` …) are meta-annotated with `@RequestMapping(method = ...)` and
+`@TelescopeResponse`; `@TelescopeResponse` targets annotation types only. `TelescopeWebMvcAutoConfiguration` (servlet
+web apps with Spring MVC on the classpath) registers `TelescopeResponses`, a `SmartInitializingSingleton` that resolves
+every annotated handler's mapping and `ResponseShape` at startup and fails startup with the method named;
+`TelescopeResponseHandlers`, a `BeanPostProcessor` that wraps the adapter's `RequestResponseBodyMethodProcessor`,
+`ResponseEntityReturnValueHandler` and `HttpEntityMethodProcessor` so the value is mapped, and the declared type swapped
+through `MappedReturnType`, before a converter is chosen; and, with springdoc present, `TelescopeOpenApiCustomizer`, a
+global customizer that documents the response type in every document. The handler's Java return value is never changed.
+Request bodies are the same feature in the other direction (ADR-0021): `@TelescopeRequestBody` on a parameter, or a
+`TelescopeRequest<S, T>` parameter; `TelescopeRequests` resolves each at startup, and `TelescopeRequestBodyResolver`,
+placed first among the adapter's argument resolvers, reads the body through Spring's
+`RequestResponseBodyMethodProcessor` as the wire type (`WireParameter`, which carries a synthesized `@RequestBody` and
+the parameter's own `@Valid`) before mapping it. Both directions find their mapper through `MapperLookup`. Spring MVC,
+Spring Data and springdoc are `compileOnly`, each behind a class condition.
 
 **Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
 codegen-generated. No `@QuarkusTest` integration tests. The registries are covered by unit tests, the Spring registry
@@ -483,7 +483,7 @@ constructors, their nested `@Configuration` classes and their bean methods publi
 
 ## Testing infrastructure
 
-### `:core` tests (`core/src/test/java/io/github/eschizoid/telescope/`)
+### `:core` tests (`core/src/test/java/io/github/telescopeorganization/telescope/`)
 
 Plain JUnit 5, no special harness: the DSL surface, the indexed traversal, the effectful update variants, the
 from/to/using factory, the read-terminal consistency matrix, and the bean navigation path. The optic laws live one layer
@@ -492,8 +492,8 @@ defined, and the DSL is proven where it is exposed.
 
 ### `:codegen` tests — in-memory compilation harness
 
-`codegen/src/testFixtures/java/io/github/eschizoid/telescope/codegen/ProcessorHarness.java` — exposed via the
-`java-test-fixtures` Gradle plugin so it's reusable from `:lombok`. Drives one or more annotation processors through
+`codegen/src/testFixtures/java/io/github/telescopeorganization/telescope/codegen/ProcessorHarness.java` — exposed via
+the `java-test-fixtures` Gradle plugin so it's reusable from `:lombok`. Drives one or more annotation processors through
 `ToolProvider.getSystemJavaCompiler()` over in-memory source strings (`-proc:only`, no `.class` files emitted), captures
 generated `SOURCE`-kind outputs in a wrapping `CapturingFileManager`, returns a `Compilation` record with success /
 diagnostics / generated map.
@@ -507,7 +507,7 @@ integration tests where order matters.
 ### `:lombok` tests — file-based integration via Gradle
 
 The in-memory harness **does not work for Lombok** (see the round-ordering note above). Lombok integration tests live as
-real files in `lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/`:
+real files in `lombok/src/test/java/io/github/telescopeorganization/telescope/codegen/lombok/`:
 
 - `fixtures/DataUser.java`, `BuilderUser.java`, `ValueBuilderUser.java`, `DataTeam.java` — real Lombok-annotated POJOs
   that get compiled by Gradle's standard `compileTestJava` pipeline with both Lombok and `LombokFocusProcessor` on the

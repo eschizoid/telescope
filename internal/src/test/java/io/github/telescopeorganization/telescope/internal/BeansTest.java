@@ -1,0 +1,1986 @@
+package io.github.telescopeorganization.telescope.internal;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.telescopeorganization.telescope.internal.optics.Lens;
+import java.lang.invoke.MethodHandle;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests {@link Beans} reflection helpers + the four {@code BeanWriter} strategies + the {@link
+ * Beans#autoWriter} ladder including the 4th-rung constructor fallback. Each test exercises one
+ * surface of the bean machinery so that a regression in any rung surfaces independently from the
+ * end-to-end {@code Telescope.map} / {@code Telescope.ofBean} paths.
+ */
+class BeansTest {
+
+  // ----- Fixtures -----
+
+  static final class WithGetters {
+
+    private final String id;
+    private final boolean active;
+    private final Boolean flag;
+    private final String url;
+
+    WithGetters(final String id, final boolean active, final Boolean flag, final String url) {
+      this.id = id;
+      this.active = active;
+      this.flag = flag;
+      this.url = url;
+    }
+
+    public String getId() {
+      return id;
+    }
+
+    public boolean isActive() {
+      return active;
+    }
+
+    public Boolean isFlag() {
+      return flag;
+    }
+
+    // "URL" — JavaBeans 'two leading caps' rule keeps the property name as "URL", not "uRL".
+    public String getURL() {
+      return url;
+    }
+  }
+
+  /**
+   * Primitive-return getter fixture for the LambdaMetafactory auto-boxing path. {@code int
+   * getAge()} crosses the {@code Function<Object, Object>::apply} SAM as a boxed {@link Integer}
+   * thanks to the bridge the metafactory generates from the {@code instantiatedMethodType} passed
+   * to {@link Beans} on cache build.
+   */
+  static final class WithPrimitives {
+
+    private final int age;
+    private final long count;
+    private final boolean flagged;
+
+    WithPrimitives(final int age, final long count, final boolean flagged) {
+      this.age = age;
+      this.count = count;
+      this.flagged = flagged;
+    }
+
+    public int getAge() {
+      return age;
+    }
+
+    public long getCount() {
+      return count;
+    }
+
+    public boolean isFlagged() {
+      return flagged;
+    }
+  }
+
+  // Fixture pair for the inherited-accessor LambdaMetafactory path. ChildBean inherits `getId()`
+  // and `setId(String)` from ParentBean; the LMF cache build must use the setter / getter's
+  // declaring class (ParentBean) for `privateLookupIn` and the instantiated receiver type — using
+  // ChildBean (the inheritor) would still happen to work in the same package but is semantically
+  // wrong, and breaks when the parent lives in a separate module whose package is opened to
+  // telescope (and the child's isn't, or vice-versa).
+  static class ParentBean {
+
+    private String id;
+
+    public String getId() {
+      return id;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+  }
+
+  static final class ChildBean extends ParentBean {
+
+    private String name;
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+  }
+
+  static final class NoArgFields {
+
+    private String name;
+    private int score;
+
+    public NoArgFields() {}
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+  }
+
+  static final class NoArgSetters {
+
+    private String name;
+    private int score;
+
+    public NoArgSetters() {}
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+
+    public void setScore(final int score) {
+      this.score = score;
+    }
+  }
+
+  static final class WithBuilder {
+
+    private final String name;
+    private final int score;
+
+    private WithBuilder(final String name, final int score) {
+      this.name = name;
+      this.score = score;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+      private int score;
+
+      // Cover the three setter-name conventions consumed by BuilderWriter: bare name, setX, withX.
+      public Builder name(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public Builder setScore(final int s) {
+        this.score = s;
+        return this;
+      }
+
+      public WithBuilder build() {
+        return new WithBuilder(name, score);
+      }
+    }
+  }
+
+  // The Lombok `@Data @Builder` shape: a public no-arg ctor + setters AND a static builder(), with
+  // the all-args constructor the builder calls kept package-private. Pins the auto order's
+  // preference for BUILDER over SETTERS when both apply.
+  static final class DataAndBuilder {
+
+    private String name;
+    private int score;
+
+    public DataAndBuilder() {}
+
+    DataAndBuilder(final String name, final int score) {
+      this.name = name;
+      this.score = score;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+
+    public void setScore(final int score) {
+      this.score = score;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+      private int score;
+
+      public Builder name(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public Builder score(final int s) {
+        this.score = s;
+        return this;
+      }
+
+      public DataAndBuilder build() {
+        return new DataAndBuilder(name, score);
+      }
+    }
+  }
+
+  // An abstract base whose static builder() every subclass inherits, and whose build() is declared
+  // as the base while always making one particular subclass. Rebuilding a sibling through it is the
+  // shape no declaration can separate from the legitimate generic-builder case.
+  abstract static class Animal {
+
+    private final String name;
+
+    Animal(final String name) {
+      this.name = name;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+
+      public Builder name(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public Animal build() {
+        return new Dog(name);
+      }
+    }
+  }
+
+  // A builder whose build() makes nothing at all. Before the guard this returned null through the
+  // caller's checkcast, which null always passes, so a mapper answered null for a non-null source
+  // with no diagnostic anywhere.
+  static final class NeverBuilt {
+
+    private String name;
+
+    public String getName() {
+      return name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      public Builder name(final String n) {
+        return this;
+      }
+
+      public NeverBuilt build() {
+        return null;
+      }
+    }
+  }
+
+  static final class Dog extends Animal {
+
+    Dog(final String name) {
+      super(name);
+    }
+  }
+
+  static final class Ferret extends Animal {
+
+    Ferret(final String name) {
+      super(name);
+    }
+  }
+
+  static final class WithBuilderWithSetter {
+
+    private final String name;
+
+    private WithBuilderWithSetter(final String name) {
+      this.name = name;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+
+      // Exercise the "withX" setter-name pattern that BuilderWriter falls through to last.
+      public Builder withName(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public WithBuilderWithSetter build() {
+        return new WithBuilderWithSetter(name);
+      }
+    }
+  }
+
+  static final class ImmutableCtor {
+
+    private final String label;
+    private final int count;
+
+    public ImmutableCtor(final String label, final int count) {
+      this.label = label;
+      this.count = count;
+    }
+
+    public String getLabel() {
+      return label;
+    }
+
+    public int getCount() {
+      return count;
+    }
+  }
+
+  // Multi-primitive fixture pinning the spread-MethodHandle auto-unboxing path used by
+  // ConstructorWriter (and by Records.RecordInfo.ctorFn — see PrimitiveRecord). LMF rejects the
+  // asSpreader adapter ("not direct or cannot be cracked"), so the ctor invoker is a cached
+  // MethodHandle invoked via `invokeExact` rather than an LMF-synthesized Function. Boxed
+  // `int`/`long`/`double`/`boolean` values flowing in via the Object[] get unboxed by the
+  // implicit conversions the spread handle applies, the same way a direct constructor call would.
+  static final class PrimitiveCtor {
+
+    private final int i;
+    private final long l;
+    private final double d;
+    private final boolean b;
+
+    public PrimitiveCtor(final int i, final long l, final double d, final boolean b) {
+      this.i = i;
+      this.l = l;
+      this.d = d;
+      this.b = b;
+    }
+
+    public int getI() {
+      return i;
+    }
+
+    public long getL() {
+      return l;
+    }
+
+    public double getD() {
+      return d;
+    }
+
+    public boolean isB() {
+      return b;
+    }
+  }
+
+  // No-arg ctor plus an all-args ctor whose parameter names (`n`, `s`) match no getter.
+  static final class NoArgPlusMismatchedCtor {
+
+    private String name;
+    private int score;
+
+    public NoArgPlusMismatchedCtor() {}
+
+    public NoArgPlusMismatchedCtor(final String n, final int s) {
+      this.name = n;
+      this.score = s;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+  }
+
+  // Its one setter is package-private, which neither path calls.
+  static final class PackagePrivateSetter {
+
+    private String name;
+
+    public PackagePrivateSetter() {}
+
+    public String getName() {
+      return name;
+    }
+
+    void setName(final String name) {
+      this.name = name;
+    }
+  }
+
+  static final class TwoCtorsSameArity {
+
+    private final String a;
+
+    public TwoCtorsSameArity(final String a) {
+      this.a = a;
+    }
+
+    public TwoCtorsSameArity(final Integer ignored) {
+      this.a = String.valueOf(ignored);
+    }
+
+    public String getA() {
+      return a;
+    }
+  }
+
+  /**
+   * A public class with a public no-argument constructor whose package its module does not export,
+   * or {@code null} when the running image has none of the candidates.
+   */
+  private static Class<?> firstPublicCtorInAnUnexportedPackage() {
+    for (final var name : List.of("sun.nio.ch.Util", "sun.net.www.MessageHeader", "sun.security.util.Length")) {
+      try {
+        final var candidate = Class.forName(name);
+        final var module = candidate.getModule();
+        if (module.isExported(candidate.getPackageName())) continue;
+        if (!Modifier.isPublic(candidate.getModifiers())) continue;
+        if (!Modifier.isPublic(candidate.getDeclaredConstructor().getModifiers())) continue;
+        return candidate;
+      } catch (final ClassNotFoundException | NoSuchMethodException ignored) {
+        // Not in this image, or not of the shape — try the next candidate.
+      }
+    }
+    return null;
+  }
+
+  /** Abstract and unconstructable, but its static {@code builder()} builds something concrete. */
+  abstract static class AbstractWithBuilder {
+
+    protected AbstractWithBuilder() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Concrete extends AbstractWithBuilder {}
+
+    static final class Builder {
+
+      public AbstractWithBuilder build() {
+        return new Concrete();
+      }
+    }
+  }
+
+  /**
+   * Abstract, with a public no-argument constructor — the shape whose constructor binds fine and
+   * then raises {@code InstantiationError} on invocation.
+   */
+  abstract static class AbstractWithPublicCtor {
+
+    public AbstractWithPublicCtor() {}
+  }
+
+  static final class NothingBuildable {
+
+    private final String x;
+
+    private NothingBuildable(final String x) {
+      this.x = x;
+    }
+
+    public String getX() {
+      return x;
+    }
+  }
+
+  static final class NoStaticBuilder {
+
+    private String id;
+
+    public NoStaticBuilder() {}
+
+    public String getId() {
+      return id;
+    }
+
+    public Object builder() {
+      // Instance method, not static — autoWriter's hasStaticBuilder check must reject it.
+      return new Object();
+    }
+  }
+
+  static final class BuilderWithoutBuild {
+
+    private final String id;
+
+    private BuilderWithoutBuild(final String id) {
+      this.id = id;
+    }
+
+    public String getId() {
+      return id;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      public Builder id(final String id) {
+        return this;
+      }
+      // Deliberately missing build() — BuilderWriter must reject.
+    }
+  }
+
+  // Fixture pinning support for void-returning builder setters (classic JavaBean-style builders,
+  // where setters mutate the builder in place rather than returning `this`). BuilderWriter binds
+  // such setters as a BiConsumer<Object, Object> through LambdaMetafactory and dispatches them
+  // alongside fluent BiFunction-shaped setters; build() works the same regardless of setter
+  // return type.
+  static final class BuilderWithVoidSetter {
+
+    private final String id;
+
+    private BuilderWithVoidSetter(final String id) {
+      this.id = id;
+    }
+
+    public String getId() {
+      return id;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String id;
+
+      // void-returning setter — supported via the BiConsumer binding path.
+      public void id(final String id) {
+        this.id = id;
+      }
+
+      public BuilderWithVoidSetter build() {
+        return new BuilderWithVoidSetter(id);
+      }
+    }
+  }
+
+  // Fixture extending java.util.ArrayList: its inherited getters (size(), isEmpty(), ...) come from
+  // the java.base module. scanGetters must skip everything declared in java.*/jdk.* modules — both
+  // because privateLookupIn cannot reach into a sealed platform module, and because no caller
+  // wants
+  // their domain POJO surfaced as having an `empty` property because it extends Collection.
+  // No serialVersionUID: test-only fixture, never serialized. Extending ArrayList is load-bearing
+  // here (the whole point is to exercise the platform-module skip in scanGetters), so composing
+  // around it would defeat the test.
+  @SuppressWarnings("serial")
+  static final class ListBackedBean extends ArrayList<String> {
+
+    private String label;
+
+    public String getLabel() {
+      return label;
+    }
+
+    public void setLabel(final String label) {
+      this.label = label;
+    }
+  }
+
+  // Fixture pinning every primitive variant in Beans#wrap. Each setter forces SettersWriter to bind
+  // an LMF invoker whose instantiated method type ends in the matching wrapper class — the unbox
+  // bridge LMF generates is what `wrap` exists to enable.
+  static final class AllPrimitives {
+
+    private long longVal;
+    private double doubleVal;
+    private float floatVal;
+    private byte byteVal;
+    private short shortVal;
+    private char charVal;
+
+    public AllPrimitives() {}
+
+    public long getLongVal() {
+      return longVal;
+    }
+
+    public double getDoubleVal() {
+      return doubleVal;
+    }
+
+    public float getFloatVal() {
+      return floatVal;
+    }
+
+    public byte getByteVal() {
+      return byteVal;
+    }
+
+    public short getShortVal() {
+      return shortVal;
+    }
+
+    public char getCharVal() {
+      return charVal;
+    }
+
+    public void setLongVal(final long v) {
+      this.longVal = v;
+    }
+
+    public void setDoubleVal(final double v) {
+      this.doubleVal = v;
+    }
+
+    public void setFloatVal(final float v) {
+      this.floatVal = v;
+    }
+
+    public void setByteVal(final byte v) {
+      this.byteVal = v;
+    }
+
+    public void setShortVal(final short v) {
+      this.shortVal = v;
+    }
+
+    public void setCharVal(final char v) {
+      this.charVal = v;
+    }
+  }
+
+  // ----- Getter scan / property metadata -----
+
+  @Nested
+  @DisplayName("Getter scanning and property metadata")
+  class GetterScan {
+
+    @Test
+    @DisplayName("getX / isX / boolean and Boolean isX / URL two-caps rule all resolve to expected property" + " names")
+    void propertyNamesCoverConventions() {
+      final var names = Arrays.asList(Beans.propertyNames(WithGetters.class));
+      assertTrue(names.contains("id"));
+      assertTrue(names.contains("active")); // isActive (boolean)
+      assertTrue(names.contains("flag")); // isFlag (Boolean)
+      assertTrue(names.contains("URL")); // two leading caps preserved
+    }
+
+    @Test
+    @DisplayName("readProperty returns the getter value")
+    void readPropertyHappy() {
+      final var pojo = new WithGetters("u1", true, Boolean.FALSE, "https://x");
+      assertEquals("u1", Beans.readProperty(pojo, "id"));
+      assertEquals(true, Beans.readProperty(pojo, "active"));
+      assertEquals(Boolean.FALSE, Beans.readProperty(pojo, "flag"));
+      assertEquals("https://x", Beans.readProperty(pojo, "URL"));
+    }
+
+    @Test
+    @DisplayName("readProperty throws IllegalArgumentException for a property that has no getter")
+    void readPropertyMissingThrows() {
+      final var pojo = new WithGetters("u1", true, null, "x");
+      final var ex = assertThrows(IllegalArgumentException.class, () -> Beans.readProperty(pojo, "ghost"));
+      assertTrue(ex.getMessage().contains("ghost"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("hasProperty reflects scan results")
+    void hasPropertyReflectsScan() {
+      assertTrue(Beans.hasProperty(WithGetters.class, "id"));
+      assertFalse(Beans.hasProperty(WithGetters.class, "ghost"));
+    }
+
+    @Test
+    @DisplayName("propertyType returns the generic return type of the getter")
+    void propertyTypeHappy() {
+      assertEquals(String.class, Beans.propertyType(WithGetters.class, "id"));
+      assertEquals(boolean.class, Beans.propertyType(WithGetters.class, "active"));
+    }
+
+    @Test
+    @DisplayName(
+      "memberPropertyType answers an inherited getter with the type the subclass gives the superclass's variable"
+    )
+    void memberPropertyTypeSubstitutesAnInheritedTypeVariable() {
+      assertEquals(Linked.class, Beans.memberPropertyType(Linked.class, "next"));
+      final var peers = assertInstanceOf(ParameterizedType.class, Beans.memberPropertyType(Linked.class, "peers"));
+      assertEquals(List.class, peers.getRawType());
+      assertEquals(List.of(Linked.class), List.of(peers.getActualTypeArguments()));
+    }
+
+    /** A superclass whose properties are typed by its own variable. */
+    public static class Chained<T extends Chained<T>> {
+
+      public T getNext() {
+        return null;
+      }
+
+      public List<T> getPeers() {
+        return List.of();
+      }
+    }
+
+    /** Fixes the superclass's variable to itself. */
+    public static final class Linked extends Chained<Linked> {}
+
+    /** Passes a variable of its own through to the superclass. */
+    public static class Passing<X extends Passing<X>> extends Chained<X> {}
+
+    @Test
+    @DisplayName("memberPropertyType throws, naming the property and the class, when there is no getter")
+    void memberPropertyTypeMissingThrows() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.memberPropertyType(Linked.class, "ghost")
+      );
+      assertTrue(
+        ex.getMessage().contains("'ghost'") && ex.getMessage().contains(Linked.class.getName()),
+        ex.getMessage()
+      );
+    }
+
+    /** Fixes, two levels down, the variable its superclass passes through. */
+    public static final class Deep extends Passing<Deep> {}
+
+    @Test
+    @DisplayName("memberPropertyType follows a variable passed through one level and fixed at the next")
+    void memberPropertyTypeFollowsAVariableThroughTwoLevels() {
+      assertEquals(Deep.class, Beans.memberPropertyType(Deep.class, "next"));
+    }
+
+    @Test
+    @DisplayName("memberPropertyType answers as declared when the subclass passes its own variable through")
+    void memberPropertyTypeKeepsTheDeclaredVariableWhenTheSubclassPassesItsOwnThrough() {
+      assertEquals(Chained.class.getTypeParameters()[0], Beans.memberPropertyType(Passing.class, "next"));
+    }
+
+    @Test
+    @DisplayName("propertyType throws when the named property has no getter")
+    void propertyTypeMissingThrows() {
+      assertThrows(IllegalArgumentException.class, () -> Beans.propertyType(WithGetters.class, "ghost"));
+    }
+
+    @Test
+    @DisplayName("propertyOf strips get/is prefix; unknown prefix is returned unchanged")
+    void propertyOfPrefixStripping() {
+      assertEquals("name", Beans.propertyOf("getName"));
+      assertEquals("active", Beans.propertyOf("isActive"));
+      assertEquals("name", Beans.propertyOf("name")); // no prefix → returned as-is
+      assertEquals("URL", Beans.propertyOf("getURL")); // two-caps rule preserved
+    }
+
+    @Test
+    @DisplayName("readProperty(null, name) returns null instead of NPEing on persistentClassOf")
+    void readPropertyNullPojoIsNullSafe() {
+      // When a multi-hop telescope path reads through a null intermediate, the next lens hop
+      // calls Beans.readProperty(null, "..."). persistentClassOf(null) returns null, then
+      // ClassValue.get(null) would NPE. Short-circuit at the readProperty entry so the optic
+      // pipeline propagates the null gracefully through intermediate hops.
+      assertNull(Beans.readProperty(null, "anything"));
+    }
+
+    @Test
+    @DisplayName("propertyOf(null) returns null instead of throwing NPE")
+    void propertyOfNullIsNullSafe() {
+      // Defensive null-safety on the public Beans surface — nested-telescope sub-shapes
+      // (FromTelescopeTo / TelescopeToTelescope whose sourceField() returns null by design)
+      // are peeled in DeepMap.populateIso before normalising, but propertyOf is part of the
+      // public API and should not NPE when handed a null lambda probe.
+      assertNull(Beans.propertyOf(null));
+    }
+
+    @Test
+    @DisplayName(
+      "readProperty auto-boxes primitive getter returns (int → Integer, long → Long, boolean →" + " Boolean)"
+    )
+    void readPropertyAutoBoxesPrimitives() {
+      // Pins the LambdaMetafactory instantiatedMethodType bridge: the (P -> int) MethodHandle
+      // surfaces through Function<Object, Object>::apply as a boxed Integer without a per-call
+      // reflective boxing dance.
+      final var pojo = new WithPrimitives(42, 1_000_000_000_000L, true);
+      final Object age = Beans.readProperty(pojo, "age");
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(42, age);
+      final Object count = Beans.readProperty(pojo, "count");
+      assertEquals(Long.class, count.getClass());
+      assertEquals(1_000_000_000_000L, count);
+      final Object flagged = Beans.readProperty(pojo, "flagged");
+      assertEquals(Boolean.class, flagged.getClass());
+      assertEquals(Boolean.TRUE, flagged);
+    }
+
+    @Test
+    @DisplayName("getter Getter<P, Object> also auto-boxes primitive returns (lattice-shape path)")
+    void getterAutoBoxesPrimitives() {
+      // Same auto-boxing guarantee through the lattice-primitive Getter<P, Object>, so the
+      // capturing-lambda path stays equivalent to the direct readProperty path.
+      final var pojo = new WithPrimitives(7, 99L, false);
+      final var ageGetter = Beans.getter(WithPrimitives.class, "age");
+      final Object age = ageGetter.get(pojo);
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(7, age);
+      final var flaggedGetter = Beans.getter(WithPrimitives.class, "flagged");
+      final Object flagged = flaggedGetter.get(pojo);
+      assertEquals(Boolean.class, flagged.getClass());
+      assertEquals(Boolean.FALSE, flagged);
+    }
+
+    @Test
+    @DisplayName("inherited getter resolves through the parent's declaring class (no cross-class lookup" + " error)")
+    void getterOnInheritedAccessor() {
+      // ChildBean inherits getId() from ParentBean. The LMF cache must build the invoker via a
+      // lookup pinned to ParentBean (the declaring class), not ChildBean — otherwise an
+      // inheritor whose own package isn't open to telescope would fail to bind an accessor whose
+      // declaring package IS open. This pins both the readProperty hot-path and the
+      // lattice-primitive Getter.
+      final var child = new ChildBean();
+      child.setId("inherited-id");
+      child.setName("only-on-child");
+      assertEquals("inherited-id", Beans.readProperty(child, "id"));
+      assertEquals("only-on-child", Beans.readProperty(child, "name"));
+      assertEquals("inherited-id", Beans.getter(ChildBean.class, "id").get(child));
+    }
+  }
+
+  // ----- SettersWriter -----
+
+  @Nested
+  @DisplayName("SettersWriter — no-arg ctor + public setX(value)")
+  class Setters {
+
+    @Test
+    @DisplayName("round-trip via settersWriter invokes setX for each name")
+    void settersRoundTrip() {
+      final var writer = Beans.settersWriter(NoArgSetters.class);
+      final var values = Map.<String, Object>of("name", "bob", "score", 5);
+      final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
+      assertEquals("bob", pojo.getName());
+      assertEquals(5, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("settersWriter throws when no no-arg constructor exists")
+    void settersRequiresNoArgCtor() {
+      assertThrows(IllegalStateException.class, () -> Beans.settersWriter(ImmutableCtor.class));
+    }
+
+    @Test
+    @DisplayName("construct silently skips a name without a matching setter (no-op consumer)")
+    void settersMissingSetterIsSilentlySkipped() {
+      // Getter-only / computed / immutable target properties would otherwise throw
+      // IllegalArgumentException("no setter setX") at write time. MapStruct silently ignores
+      // unwritable target fields; we match by installing a no-op BiConsumer for missing
+      // setters. The property's underlying field stays at its JLS default (here:
+      // NoArgFields.name stays null, the source value "x" is dropped).
+      final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
+      final var pojo = writer.construct(new String[] { "name" }, n -> "x");
+      assertNotNull(pojo);
+      // The constructed instance has the JLS-default null for `name` (no setter fired).
+      assertNull(pojo.name);
+    }
+
+    @Test
+    @DisplayName("settersWriter round-trips a value through an inherited setter (declared on a parent" + " class)")
+    void settersOnInheritedSetter() {
+      // ChildBean inherits setId(String) from ParentBean. The LMF builder must use the setter's
+      // declaring class (ParentBean) for privateLookupIn and the instantiated receiver — using
+      // ChildBean's class would fail when the parent and child live in modules with different
+      // opens directives. This test pins the inheritance-correctness contract.
+      final var writer = Beans.settersWriter(ChildBean.class);
+      final var values = Map.<String, Object>of("id", "parent-id", "name", "child-name");
+      final var pojo = writer.construct(new String[] { "id", "name" }, values::get);
+      assertEquals("parent-id", pojo.getId());
+      assertEquals("child-name", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("the setter invoker auto-unboxes a boxed Integer source value into a setX(int) setter")
+    void settersAutoUnboxesPrimitiveArg() {
+      // NoArgSetters has setScore(int). The source map carries an Object value (boxed Integer);
+      // the LambdaMetafactory-built BiConsumer<Object, Object> must auto-unbox to int. This pins
+      // the primitive bridge that LambdaMetafactory's instantiatedMethodType (cls, Integer) ->
+      // void generates — a Method.invoke regression would still work here, so the test value is
+      // in exercising the unboxing bridge end-to-end.
+      final var writer = Beans.settersWriter(NoArgSetters.class);
+      final Map<String, Object> values = Map.of("name", "evan", "score", 42);
+      final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
+      assertEquals("evan", pojo.getName());
+      assertEquals(42, pojo.getScore());
+    }
+  }
+
+  // ----- BuilderWriter -----
+
+  @Nested
+  @DisplayName("BuilderWriter — static builder() + named/setX/withX setters + build()")
+  class Builders {
+
+    @Test
+    @DisplayName("round-trip via builderWriter resolves bare-name + setX setters and calls build()")
+    void builderRoundTripMixedSetterStyles() {
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var values = Map.<String, Object>of("name", "carol", "score", 7);
+      final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
+      assertEquals("carol", pojo.getName());
+      assertEquals(7, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("builderWriter resolves the withX setter convention as the last fallback")
+    void builderWithXFallback() {
+      final var writer = Beans.builderWriter(WithBuilderWithSetter.class);
+      final var pojo = writer.construct(new String[] { "name" }, n -> "dora");
+      assertEquals("dora", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("builderWriter throws if class has no static builder() factory")
+    void builderRequiresStaticBuilder() {
+      assertThrows(IllegalStateException.class, () -> Beans.builderWriter(NoArgFields.class));
+    }
+
+    @Test
+    @DisplayName("builderWriter throws if the builder type has no build() method")
+    void builderRequiresBuildMethod() {
+      assertThrows(IllegalStateException.class, () -> Beans.builderWriter(BuilderWithoutBuild.class));
+    }
+
+    @Test
+    @DisplayName("construct refuses a build() result that is not an instance of the bean rebuilt")
+    void builderReturningAForeignTypeIsRefused() {
+      // Ferret inherits Animal.builder(), whose build() is declared as Animal and always makes a
+      // Dog. The result is bound to Object so the caller's own checkcast stays out of the way:
+      // without the guard this returns a Dog and throws nothing at all, so an assertion that
+      // accepted any throwable would pass on the unguarded path too.
+      final var writer = Beans.builderWriter(Ferret.class);
+      final var failure = assertThrows(IllegalStateException.class, () -> {
+        final Object built = writer.construct(new String[] { "name" }, n -> "fen");
+      });
+      assertTrue(failure.getMessage().contains(Ferret.class.getName()), failure.getMessage());
+      assertTrue(failure.getMessage().contains(Dog.class.getName()), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("construct refuses a build() that makes nothing, rather than returning null")
+    void builderReturningNullIsRefused() {
+      // null passes any checkcast, so before the guard this came back as a null bean and the
+      // mapper answered null for a non-null source with nothing to read. The refusal has to name
+      // the null itself, which is the one branch of the diagnostic no other fixture reaches.
+      final var writer = Beans.builderWriter(NeverBuilt.class);
+      final var failure = assertThrows(IllegalStateException.class, () -> {
+        final Object built = writer.construct(new String[] { "name" }, n -> "gone");
+      });
+      assertTrue(failure.getMessage().contains("null"), failure.getMessage());
+      assertTrue(failure.getMessage().contains(NeverBuilt.class.getName()), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("construct admits a build() result that is a subtype of the bean rebuilt")
+    void builderReturningASubtypeIsAdmitted() {
+      // The control for the refusal above, and the reason it tests the value rather than the
+      // declared return type: an abstract bean whose build() makes a concrete subclass is the
+      // ordinary shape, and a guard that refused it would refuse every generic builder too.
+      final var writer = Beans.builderWriter(Animal.class);
+      final var built = writer.construct(new String[] { "name" }, n -> "rex");
+      assertEquals("rex", built.getName());
+      assertInstanceOf(Dog.class, built);
+    }
+
+    @Test
+    @DisplayName("construct silently skips a name without a matching builder setter (no-op consumer)")
+    void builderMissingSetterIsSilentlySkipped() {
+      // Mirrors SettersWriter's silent-skip contract on the builder path. The `names` array
+      // fed to construct(...) is derived from the target's getter set (Beans.propertyNames),
+      // so a computed/read-only getter on the target POJO would surface here as a builder
+      // method that doesn't exist. Without alignment, two POJOs differing only by the presence
+      // of a `builder()` factory would have opposite mapping semantics on the same
+      // source/target pair. Silently skip the unmatched name, leaving the builder slot at its
+      // default.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var pojo = writer.construct(new String[] { "ghost", "name" }, n -> n.equals("name") ? "alice" : "x");
+      assertNotNull(pojo);
+      assertEquals("alice", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("primitive-arg setter (setScore(int)) auto-unboxes the boxed Integer value")
+    void builderPrimitiveSetterUnboxes() {
+      // Pin the LMF auto-unboxing path: the setter signature is `setScore(int)` but the value
+      // flows through valueByName as a boxed `Integer`. The LMF-built BiFunction must unbox it
+      // before dispatching to the primitive-int setter.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var pojo = writer.construct(new String[] { "name", "score" }, n ->
+        n.equals("name") ? "x" : Integer.valueOf(42)
+      );
+      assertEquals("x", pojo.getName());
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("builderWriter supports a void-returning setter via its BiConsumer binding")
+    void builderSupportsVoidSetter() {
+      // Classic JavaBean-style builder: setter mutates the builder in place and returns void.
+      // BuilderWriter binds it as a BiConsumer<Object, Object> through LambdaMetafactory and
+      // dispatches it alongside fluent BiFunction setters. build() doesn't care about the setter
+      // return type.
+      final var writer = Beans.builderWriter(BuilderWithVoidSetter.class);
+      final var pojo = writer.construct(new String[] { "id" }, n -> "x");
+      assertEquals("x", pojo.getId());
+    }
+
+    @Test
+    @DisplayName(
+      "construct propagates dispatch-time failures raw (matching the other writer strategies and" +
+        " pre-LMF BuilderWriter)"
+    )
+    void builderConstructPropagatesDispatchFailures() {
+      // A String value flows into a setter expecting an int — the LMF auto-unbox bridge throws
+      // ClassCastException at setter-dispatch time. Dispatch-time exceptions propagate raw,
+      // matching the SETTERS / CONSTRUCTOR strategies; no `ReflectiveOperationException` arises on
+      // the LMF hot path. Class-context information lives in the bind-time failure messages, not
+      // the dispatch path.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      assertThrows(ClassCastException.class, () ->
+        writer.construct(new String[] { "name", "score" }, n -> n.equals("score") ? "not-an-int" : "x")
+      );
+    }
+
+    @Test
+    @DisplayName("repeated construct calls reuse the same writer (setter invokers cached per name)")
+    void builderReusesAcrossConstructs() {
+      // The setter invokers map is populated lazily on first use of each name and reused on
+      // subsequent calls. A second construct on the same writer must not rebuild the LMF call site.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var first = writer.construct(new String[] { "name", "score" }, n -> n.equals("name") ? "a" : 1);
+      final var second = writer.construct(new String[] { "name", "score" }, n -> n.equals("name") ? "b" : 2);
+      assertEquals("a", first.getName());
+      assertEquals(1, first.getScore());
+      assertEquals("b", second.getName());
+      assertEquals(2, second.getScore());
+    }
+  }
+
+  // ----- ConstructorWriter -----
+
+  @Nested
+  @DisplayName("ConstructorWriter — all-args ctor (named with -parameters, positional fallback otherwise)")
+  class Constructors {
+
+    @Test
+    @DisplayName("round-trip via constructorWriter populates each ctor arg")
+    void constructorRoundTrip() {
+      final var writer = Beans.constructorWriter(ImmutableCtor.class, 2);
+      final var values = Map.<String, Object>of("label", "x", "count", 11);
+      final var pojo = writer.construct(new String[] { "label", "count" }, values::get);
+      assertEquals("x", pojo.getLabel());
+      assertEquals(11, pojo.getCount());
+    }
+
+    @Test
+    @DisplayName("constructorWriter throws when no constructor of the requested arity exists")
+    void constructorMissingArityThrows() {
+      assertThrows(IllegalStateException.class, () -> Beans.constructorWriter(ImmutableCtor.class, 99));
+    }
+
+    @Test
+    @DisplayName("constructorWriter throws when more than one constructor matches the arity")
+    void constructorAmbiguousArityThrows() {
+      assertThrows(IllegalStateException.class, () -> Beans.constructorWriter(TwoCtorsSameArity.class, 1));
+    }
+
+    @Test
+    @DisplayName("primitive-typed ctor args auto-unbox through the cached spread MethodHandle")
+    void constructorAutoUnboxesPrimitives() {
+      final var writer = Beans.constructorWriter(PrimitiveCtor.class, 4);
+      // Boxed wrappers arrive via valueByName; the spread MH unboxes them per the implicit
+      // conversions a direct constructor call would apply. Order matches the constructor
+      // parameter order (positional fallback when -parameters is not present at test compile
+      // time, or by-name when it is — both produce the same result here).
+      final var values = Map.<String, Object>of("i", 5, "l", 99L, "d", 2.5, "b", Boolean.TRUE);
+      final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
+      assertEquals(5, pojo.getI());
+      assertEquals(99L, pojo.getL());
+      assertEquals(2.5, pojo.getD());
+      assertTrue(pojo.isB());
+    }
+  }
+
+  // ----- autoWriter ladder -----
+
+  @Nested
+  @DisplayName("autoWriter — strategy ladder + cache + 4th-rung constructor fallback")
+  class AutoWriter {
+
+    @Test
+    @DisplayName("autoWriter picks BuilderWriter when a static builder() is present (no setters)")
+    void autoPicksBuilder() {
+      final var writer = Beans.autoWriter(WithBuilder.class);
+      assertEquals("BuilderWriter", writer.getClass().getSimpleName());
+      // Functional confirmation: produces a working instance.
+      final var pojo = writer.construct(new String[] { "name", "score" }, n -> Objects.equals(n, "name") ? "x" : 1);
+      assertNotNull(pojo);
+    }
+
+    @Test
+    @DisplayName("autoWriter picks SettersWriter when no-arg ctor + setters exist (no builder)")
+    void autoPicksSetters() {
+      final var writer = Beans.autoWriter(NoArgSetters.class);
+      final var pojo = writer.construct(new String[] { "name" }, n -> "e");
+      assertEquals("e", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers BuilderWriter over SettersWriter when both apply (@Data @Builder shape)")
+    void autoPrefersBuilderOverSetters() {
+      final var writer = Beans.autoWriter(DataAndBuilder.class);
+      assertEquals("BuilderWriter", writer.getClass().getSimpleName());
+      final var pojo = writer.construct(new String[] { "name", "score" }, n -> Objects.equals(n, "name") ? "y" : 42);
+      assertEquals("y", pojo.getName());
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers a name-matched all-args constructor over setters")
+    void autoPrefersConstructorOverSetters() {
+      final var writer = Beans.autoWriter(CtorAndSetters.class);
+      assertEquals("ConstructorWriter", writer.getClass().getSimpleName());
+      assertEquals("y[ctor]", writer.construct(new String[] { "name" }, n -> "y").getName());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers a builder over a name-matched all-args constructor")
+    void autoPrefersBuilderOverConstructor() {
+      final var writer = Beans.autoWriter(AllThreeRoutes.class);
+      assertEquals("BuilderWriter", writer.getClass().getSimpleName());
+      assertEquals("y[builder]", writer.construct(new String[] { "name" }, n -> "y").getName());
+    }
+
+    @Test
+    @DisplayName("autoWriter refuses a class writable only through its private fields, naming the class and the fix")
+    void autoRefusesPrivateFieldsOnly() {
+      // NoArgFields has a no-arg constructor and getters, but no setter, no static builder() and no
+      // all-args constructor: its private fields are its only write path.
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoArgFields.class));
+      final var message = ex.getMessage();
+      assertTrue(message.contains(NoArgFields.class.getName()), message);
+      assertTrue(message.contains("does not write private fields"), message);
+      assertTrue(message.contains("Add public setters, an all-args constructor"), message);
+      assertTrue(message.contains("static builder()"), message);
+      assertTrue(message.contains("explicit Mapping row"), message);
+    }
+
+    @Test
+    @DisplayName("autoWriter gives constructor advice when a no-arg class also declares an unmatched all-args ctor")
+    void autoGivesConstructorAdviceWhenAConstructorExists() {
+      // NoArgPlusMismatchedCtor has an all-args constructor whose parameter names do not line up
+      // with its getters. It has a constructor write path, so the advice is about that
+      // constructor (-parameters, the CONSTRUCTOR hint), not to add one it already has.
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoArgPlusMismatchedCtor.class));
+      final var message = ex.getMessage();
+      assertTrue(message.contains("No name-based write strategy"), message);
+      assertTrue(message.contains("-parameters"), message);
+      assertFalse(message.contains("does not write private fields"), message);
+    }
+
+    @Test
+    @DisplayName("autoWriter refuses a class whose only setters are package-private, as having no public setters")
+    void autoRefusesPackagePrivateSettersOnly() {
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(PackagePrivateSetter.class));
+      assertTrue(ex.getMessage().contains("no public setters"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("autoWriter 4th-rung: a single public all-args ctor compiled with -parameters works")
+    void autoFourthRungConstructorFallback() {
+      // ImmutableCtor has no builder, no no-arg ctor, exactly one public 2-arg ctor.
+      final var writer = Beans.autoWriter(ImmutableCtor.class);
+      final var values = Map.<String, Object>of("label", "z", "count", 3);
+      final var pojo = writer.construct(new String[] { "label", "count" }, values::get);
+      assertEquals("z", pojo.getLabel());
+      assertEquals(3, pojo.getCount());
+    }
+
+    @Test
+    @DisplayName("autoWriter refuses ambiguous multi-ctor POJO with a descriptive message")
+    void autoRefusesAmbiguousCtor() {
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(TwoCtorsSameArity.class));
+      assertTrue(ex.getMessage().contains("writeBean") || ex.getMessage().contains("name-based"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("autoWriter refuses class with no builder, no no-arg ctor, only a non-public ctor")
+    void autoRefusesUnreachable() {
+      // NothingBuildable has a private ctor only — solePublicConstructor returns null → throws.
+      assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NothingBuildable.class));
+    }
+
+    @Test
+    @DisplayName("autoWriter cache returns the same writer instance on repeated calls")
+    void autoCacheReusesWriter() {
+      final var a = Beans.autoWriter(NoArgSetters.class);
+      final var b = Beans.autoWriter(NoArgSetters.class);
+      assertSame(a, b);
+    }
+
+    @Test
+    @DisplayName("autoWriter ignores a non-static builder() method")
+    void autoIgnoresNonStaticBuilder() {
+      // NoStaticBuilder declares an INSTANCE builder() (not static), a no-arg ctor and no setters.
+      // hasStaticBuilder rejects the instance method, so nothing but its private fields remains and
+      // autoWriter refuses it rather than calling the instance builder().
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoStaticBuilder.class));
+      assertTrue(ex.getMessage().contains(NoStaticBuilder.class.getName()), ex.getMessage());
+      assertTrue(ex.getMessage().contains("does not write private fields"), ex.getMessage());
+    }
+  }
+
+  // ----- lens (single-property Lens) -----
+
+  @Nested
+  @DisplayName("Beans.lens — Lens<P, A> over a single bean property")
+  class LensFactory {
+
+    @Test
+    @DisplayName("get reads via the getter, set rebuilds with the new value, other props carry over")
+    void lensReadWriteRebuild() {
+      final io.github.telescopeorganization.telescope.internal.optics.Lens<NoArgSetters, String> lens = Beans.lens(
+        NoArgSetters.class,
+        "name",
+        Beans.autoWriter(NoArgSetters.class)
+      );
+      final var base = new NoArgSetters();
+      base.setName("old");
+      base.setScore(42);
+      final var updated = lens.set(base, "new");
+      assertEquals("new", updated.getName());
+      assertEquals(42, updated.getScore()); // off-path value preserved through the rebuild
+      assertEquals("old", base.getName()); // base was not mutated
+    }
+
+    @Test
+    @DisplayName("modify applies a function over the read value")
+    void lensModify() {
+      final io.github.telescopeorganization.telescope.internal.optics.Lens<NoArgSetters, String> lens = Beans.lens(
+        NoArgSetters.class,
+        "name",
+        Beans.autoWriter(NoArgSetters.class)
+      );
+      final var base = new NoArgSetters();
+      base.setName("alice");
+      base.setScore(1);
+      final var upper = lens.modify(base, String::toUpperCase);
+      assertEquals("ALICE", upper.getName());
+    }
+
+    @Test
+    @DisplayName("unknown property fails at construction time, not at first read")
+    void lensRejectsUnknownPropertyEagerly() {
+      // The reader is resolved at construction time; an unknown property must surface immediately
+      // (rather than on the first get/set), so a misconfigured lens fails at build time.
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.lens(NoArgSetters.class, "doesNotExist", Beans.autoWriter(NoArgSetters.class))
+      );
+      assertTrue(ex.getMessage().contains("doesNotExist"), ex.getMessage());
+      assertTrue(ex.getMessage().contains(NoArgSetters.class.getName()), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("subclass polymorphism: lens applied to a subclass instance reads via the slow path")
+    void lensWorksOnSubclassInstance() {
+      // The fast path is the monomorphic case (source.getClass() == pojoClass). A Lens<Parent, ?>
+      // applied to a ChildBean instance must fall through to readProperty so subclass polymorphism
+      // is preserved — the captured reader was built for ParentBean but ChildBean inherits the
+      // getter and readProperty resolves the GETTER_INVOKERS entry for the runtime class.
+      final io.github.telescopeorganization.telescope.internal.optics.Lens<ParentBean, String> lens = Beans.lens(
+        ParentBean.class,
+        "id",
+        Beans.autoWriter(ParentBean.class)
+      );
+      final var child = new ChildBean();
+      child.setId("p1");
+      child.setName("alice");
+      assertEquals("p1", lens.get(child));
+    }
+  }
+
+  @Nested
+  @DisplayName("persistentClassOf — HibernateProxy-aware cache key unwrap")
+  class PersistentClass {
+
+    static class PlainBean {
+
+      private String name;
+
+      public PlainBean() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    // Subclass that pretends to be a Hibernate-style proxy. Doesn't implement HibernateProxy
+    // (Hibernate isn't on the test classpath), so persistentClassOf takes the fall-through path
+    // and returns the runtime class. This pins the no-Hibernate-classpath behaviour: zero-cost
+    // when the framework isn't there.
+    static final class ProxyShape extends PlainBean {}
+
+    @Test
+    @DisplayName("falls through to getClass() when the value is null")
+    void nullSafe() {
+      assertNull(Beans.persistentClassOf(null));
+    }
+
+    @Test
+    @DisplayName("plain POJO: returns getClass() unchanged")
+    void plainPojoReturnsItsOwnClass() {
+      final var bean = new PlainBean();
+      assertEquals(PlainBean.class, Beans.persistentClassOf(bean));
+    }
+
+    @Test
+    @DisplayName("subclass without HibernateProxy interface: returns the subclass (fall-through)")
+    void noHibernateOnClasspath() {
+      // ProxyShape doesn't implement HibernateProxy — there's no Hibernate dep in :core's tests.
+      // The unwrap helper must return the runtime class, not crash, not call any Hibernate API.
+      final var proxy = new ProxyShape();
+      assertEquals(ProxyShape.class, Beans.persistentClassOf(proxy));
+    }
+
+    @Test
+    @DisplayName("readProperty routes through persistentClassOf so a subclass shares the parent's cache" + " entry")
+    void readPropertyUnwrapsToParentCache() {
+      // Even without a real HibernateProxy, prove readProperty works on a subclass instance —
+      // the cache lookup uses the runtime class (or the unwrapped persistent class). This is the
+      // regression for the cache-key shape: a single instance should read correctly via either
+      // its own class or a parent class's cached getter.
+      final var proxy = new ProxyShape();
+      proxy.setName("alice");
+      assertEquals("alice", Beans.readProperty(proxy, "name"));
+    }
+  }
+
+  @Nested
+  @DisplayName("capturedWriter — single-property write through a cached setter invoker")
+  class CapturedWriter {
+
+    @Test
+    @DisplayName("happy path: writes a reference-typed property and the getter reflects the new value")
+    void writesReferenceTypedProperty() {
+      final var pojo = new NoArgSetters();
+      Beans.capturedWriter(NoArgSetters.class, "name").accept(pojo, "alice");
+      assertEquals("alice", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the invoker")
+    void primitiveSetterUnboxesBoxedSource() {
+      // The cached invoker is built from a BiConsumer<Object, Object> SAM whose instantiated
+      // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
+      // this exercises that bridge end-to-end.
+      final var pojo = new NoArgSetters();
+      Beans.capturedWriter(NoArgSetters.class, "score").accept(pojo, 42);
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("a getter-only property has no writer, which leaves its refusal to the caller")
+    void getterOnlyPropertyHasNoWriter() {
+      // NoArgFields has a `name` field and a getter but no setter, so nothing can write it in
+      // place.
+      assertNull(Beans.capturedWriter(NoArgFields.class, "name"));
+    }
+
+    @Test
+    @DisplayName("inherited setter: a setter declared on the superclass is discovered and the write" + " lands")
+    void inheritedSetterIsDiscoveredAndWrites() {
+      // What this pins is discovery and that the write reaches the parent's private field:
+      // ChildBean inherits setId(String) from ParentBean, so the name scan has to reach a method
+      // the child does not declare, and getMethods() surfaces it. The invoker is built against the
+      // setter's declaring class so a parent in a separately-opened package still resolves — but
+      // both classes sit in this package, so the test cannot distinguish which class the Lookup
+      // was taken against. That would need a two-module fixture.
+      final var pojo = new ChildBean();
+      Beans.capturedWriter(ChildBean.class, "id").accept(pojo, "parent-id");
+      assertEquals("parent-id", pojo.getId());
+    }
+  }
+
+  @Nested
+  @DisplayName("fieldLens — class-deferred Lens<P, A> driving Telescope.fieldByName(String)")
+  class FieldLensByName {
+
+    @Test
+    @DisplayName("get reads the focused property from the source via readProperty's class-deferred dispatch")
+    void getReadsFromAnyMatchingSource() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var pojo = new NoArgSetters();
+      pojo.setName("alice");
+      assertEquals("alice", nameLens.get(pojo));
+    }
+
+    @Test
+    @DisplayName("set rebuilds the POJO with the focused property replaced; off-path values are carried" + " through")
+    void setReplacesFocusedPropertyAndCarriesOffPath() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var src = new NoArgSetters();
+      src.setName("alice");
+      src.setScore(7);
+      final var rebuilt = nameLens.set(src, "bob");
+      assertEquals("bob", rebuilt.getName());
+      assertEquals(7, rebuilt.getScore(), "off-path score must round-trip untouched");
+    }
+
+    @Test
+    @DisplayName("set(null, value) returns null — the documented null-source guard")
+    void setOnNullSourceReturnsNull() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      assertNull(nameLens.set(null, "ignored"));
+    }
+
+    @Test
+    @DisplayName("modify(null, fn) returns null without invoking the function on a null get result")
+    void modifyOnNullSourceReturnsNull() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      assertNull(
+        nameLens.modify(null, v -> {
+          throw new AssertionError("function must not be invoked on null source");
+        })
+      );
+    }
+
+    @Test
+    @DisplayName("modify(non-null, fn) applies fn to the current value and rebuilds the POJO with the" + " result")
+    void modifyOnNonNullSourceAppliesFnAndRebuilds() {
+      // The non-null branch of modify reads the current value through get, applies the function,
+      // and delegates to set for the rebuild. Off-path properties round-trip through the writer's
+      // standard rebuild path; the lens-law set/modify duality holds on reference-typed properties.
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var src = new NoArgSetters();
+      src.setName("alice");
+      src.setScore(11);
+      final var rebuilt = nameLens.modify(src, String::toUpperCase);
+      assertEquals("ALICE", rebuilt.getName(), "modify must apply fn to the current value and write the result");
+      assertEquals(11, rebuilt.getScore(), "off-path score must round-trip untouched");
+    }
+
+    @Test
+    @DisplayName("set on a subtype source rebuilds using the subtype's class (writer is resolved at call" + " time)")
+    void setOnSubtypeRebuildsAsSubtype() {
+      // fieldLens is class-deferred: the writer is resolved against source.getClass() per call,
+      // not captured at lens build time. A ChildBean carrying both inherited and own properties
+      // rebuilds as ChildBean — same lens instance can be applied across the hierarchy.
+      final Lens<ParentBean, String> idLens = Beans.fieldLens("id");
+      final var child = new ChildBean();
+      child.setId("p");
+      child.setName("c");
+      final var rebuilt = idLens.set(child, "p2");
+      assertInstanceOf(ChildBean.class, rebuilt, "rebuilt instance must be the subtype, not the supertype");
+      assertEquals("p2", rebuilt.getId());
+      assertEquals("c", ((ChildBean) rebuilt).getName(), "off-path subtype property must carry through");
+    }
+
+    @Test
+    @DisplayName("set(s, null) on a primitive property substitutes the JLS default via SettersWriter's" + " null-guard")
+    void setNullOnPrimitiveSubstitutesJlsDefault() {
+      // Documented contract on Beans.fieldLens: when the focused property is a Java primitive,
+      // set(s, null) substitutes the JLS default (0 for int) rather than throwing on the
+      // unbox — the value flows through SettersWriter which null-guards primitive setters.
+      // Lens law `set(s, null).get == null` does NOT hold here; user must use a boxed wrapper
+      // type if null round-trip matters.
+      final Lens<NoArgSetters, Integer> scoreLens = Beans.fieldLens("score");
+      final var src = new NoArgSetters();
+      src.setScore(5);
+      final var rebuilt = scoreLens.set(src, null);
+      assertEquals(0, rebuilt.getScore());
+    }
+  }
+
+  @Nested
+  @DisplayName("intermediateAllocator — DeepMap.recursiveDefault's per-class default-instance Supplier")
+  class IntermediateAllocator {
+
+    @Test
+    @DisplayName("class with a public no-arg ctor yields a fresh instance via the bound ctor Supplier")
+    void noArgCtorYieldsFreshInstance() {
+      final Supplier<Object> supplier = Beans.intermediateAllocator(NoArgFields.class);
+      final var built = supplier.get();
+      assertInstanceOf(NoArgFields.class, built);
+      assertNull(((NoArgFields) built).getName(), "fresh instance must hold ctor-default field values");
+      // Each call to get() must allocate a new instance — the supplier is not memoising state.
+      assertNotSame(built, supplier.get(), "supplier must allocate a fresh instance per get()");
+    }
+
+    @Test
+    @DisplayName(
+      "class lacking a public no-arg ctor but exposing static builder().build() yields a built" + " instance"
+    )
+    void staticBuilderChainYieldsBuiltInstance() {
+      // WithBuilder's ctor is private — the no-arg attempt fails and falls through to the
+      // builder() lookup. The chained LMF Supplier composes builder() with build() and produces
+      // a default-built WithBuilder. Off-path values take the builder's own field defaults.
+      final Supplier<Object> supplier = Beans.intermediateAllocator(WithBuilder.class);
+      final var built = supplier.get();
+      assertInstanceOf(WithBuilder.class, built);
+      assertNull(((WithBuilder) built).getName(), "builder default for name (unset) is null");
+      assertEquals(0, ((WithBuilder) built).getScore(), "builder default for score (unset) is 0");
+    }
+
+    @Test
+    @DisplayName("class with neither a public no-arg ctor nor a static builder() yields a null supplier")
+    void neitherCtorNorBuilderYieldsNullSupplier() {
+      // NothingBuildable has a private all-args ctor and no builder() factory. Both probe arms
+      // fall through; the cached Supplier is `() -> null` rather than throwing — DeepMap reads
+      // null as "no intermediate available" and skips that branch of the default tree.
+      final Supplier<Object> supplier = Beans.intermediateAllocator(NothingBuildable.class);
+      assertNotNull(supplier, "the allocator Supplier itself must be cached even when it returns null");
+      assertNull(supplier.get(), "no-buildable class yields a null result, not a thrown exception");
+    }
+
+    @Test
+    @DisplayName("a class in a module that does not open itself still allocates through its public ctor")
+    void javaBaseClassAllocatesThroughPublicLookup() {
+      // privateLookupIn needs the target's module to open the package to us, and java.base opens
+      // nothing. Calling a public constructor never needed that access -- only binding one through
+      // LambdaMetafactory does -- so refusing here told adopters to add an --add-opens for a module
+      // they do not control, for a constructor that was callable the whole time.
+      for (final var cls : List.of(Properties.class, ArrayList.class, LinkedHashMap.class)) {
+        final var built = Beans.intermediateAllocator(cls).get();
+        assertInstanceOf(cls, built, () -> cls.getName() + " has a public no-arg constructor");
+      }
+    }
+
+    @Test
+    @DisplayName("a public constructor the public lookup cannot reach either yields no allocator")
+    void publicConstructorInAnUnexportedPackageYieldsNoAllocator() {
+      // The public-lookup arm exists for a type whose module declines privateLookupIn. Declining it
+      // is not sufficient on its own: the public lookup binds a public constructor only where the
+      // declaring package is exported, so a public class in a package its module keeps to itself
+      // satisfies neither lookup. The answer then has to be that there is no allocator, not an
+      // exception out of the asking -- the builder arm below still gets its turn.
+      //
+      // Only the platform has classes of this shape. Anything on the class path is in the unnamed
+      // module, which opens every package, so privateLookupIn succeeds and this arm is never
+      // reached. The candidates are scanned rather than fixed so that one being removed from a
+      // future release does not fail this for a reason unrelated to what it checks.
+      final var unreachable = firstPublicCtorInAnUnexportedPackage();
+      assertNotNull(
+        unreachable,
+        "no candidate had the shape this covers; add one from a non-exported package of any" + " platform module"
+      );
+
+      assertNull(
+        Beans.intermediateAllocator(unreachable).get(),
+        () -> unreachable.getName() + " is reachable through neither lookup, so there is no allocator"
+      );
+    }
+
+    @Test
+    @DisplayName("an abstract class with a static builder() still allocates, through the builder")
+    void abstractClassWithBuilderStillAllocates() {
+      // Abstractness stops a constructor from producing an instance. It does not stop a builder:
+      // build() returns something concrete, and what it was declared to return says nothing about
+      // what it makes. A guard placed before both arms rather than inside the constructor one
+      // refuses this type -- deleting a capability, in the direction of doing less.
+      final var built = Beans.intermediateAllocator(AbstractWithBuilder.class).get();
+
+      assertNotNull(built, "the builder arm does not care that the declared type is abstract");
+      assertInstanceOf(AbstractWithBuilder.class, built);
+    }
+
+    @Test
+    @DisplayName("an abstract class answers no, rather than yielding a supplier that raises a linkage error")
+    void abstractClassAnswersNullRatherThanThrowing() {
+      // An abstract class declares a constructor like any other and binds like any other, so the
+      // supplier builds and then raises InstantiationError when something calls it. Callers use
+      // this to ask whether a type can be allocated; the answer is no, and it has to arrive as a
+      // value rather than as an error thrown out of the asking.
+      final var supplier = Beans.intermediateAllocator(AbstractWithPublicCtor.class);
+
+      assertNotNull(supplier, "the allocator Supplier itself is still cached");
+      assertNull(supplier.get(), "an abstract class cannot be instantiated, so the answer is null");
+    }
+  }
+
+  @Nested
+  @DisplayName("Beans.lens — slow-path read fires when the source's runtime class differs from pojoClass")
+  class LensSubtypeSlowPath {
+
+    @Test
+    @DisplayName("set on a subtype instance reads off-path values through readProperty and rebuilds as" + " pojoClass")
+    void setOnSubtypeUsesSlowPathReadAndRebuildsAsCapturedClass() {
+      // Lens<ParentBean, String> captures the writer + reader-map for ParentBean. When set is
+      // called with a ChildBean instance, source.getClass() != pojoClass, so the fast-path
+      // capturedReaders.get(name).apply(source) is bypassed in favour of readProperty(source,
+      // name) which routes through the GETTER_INVOKERS ClassValue keyed by the runtime class.
+      // The writer is the captured ParentBean writer, so the rebuild produces a ParentBean.
+      final Lens<ParentBean, String> idLens = Beans.lens(ParentBean.class, "id", Beans.settersWriter(ParentBean.class));
+      final var child = new ChildBean();
+      child.setId("inherited");
+      child.setName("child-only");
+      final var rebuilt = idLens.set(child, "updated");
+      assertEquals(ParentBean.class, rebuilt.getClass(), "rebuild uses the captured writer's class, not the source's");
+      assertEquals("updated", rebuilt.getId(), "focused property replaced through the slow-path-aware writer call");
+    }
+  }
+
+  @Nested
+  @DisplayName("scanGetters — inherited platform-module methods are skipped, not surfaced as properties")
+  class ScanGettersModuleSkip {
+
+    @Test
+    @DisplayName("a POJO extending java.util.ArrayList does not surface the inherited isEmpty/size as" + " properties")
+    void platformInheritedAccessorsDoNotLeakAsProperties() {
+      // Defence-in-depth against any caller that touches a JDK-derived class directly. Without
+      // the java.*/jdk.* skip, propertyNames would include `empty` (from isEmpty) and downstream
+      // LMF binding via privateLookupIn(ArrayList.class) would fail because java.base does not
+      // grant private lookup to application code. The skip leaves only the POJO's own getter.
+      final var names = Beans.propertyNames(ListBackedBean.class);
+      final var collected = Arrays.asList(names);
+      assertTrue(collected.contains("label"), "the POJO's own getter must survive the scan");
+      assertFalse(collected.contains("empty"), "inherited isEmpty from java.util must be skipped");
+      assertFalse(collected.contains("class"), "Object.getClass() must remain skipped (declared by Object)");
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "SettersWriter — primitive-variant unbox bridges for every long/double/float/byte/short/char" + " setter"
+  )
+  class PrimitiveSetterDispatch {
+
+    @Test
+    @DisplayName(
+      "long/double/float/byte/short/char setters each bind an LMF unbox bridge end-to-end through" + " SettersWriter"
+    )
+    void sixPrimitiveVariantsRoundTripThroughSettersWriter() {
+      // Each setter forces wrap() to map its primitive type to the matching wrapper class; the
+      // SettersWriter then binds an LMF invoker whose instantiatedMethodType ends in that
+      // wrapper. The metafactory generates the unbox bridge from Object to the primitive. The
+      // int setter arm of wrap is covered by NoArgSetters.setScore elsewhere in this suite; this
+      // test exercises the six remaining primitive setter variants end-to-end.
+      final var writer = Beans.settersWriter(AllPrimitives.class);
+      final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
+      final Map<String, Object> values = Map.of(
+        "longVal",
+        9_223_372_036L,
+        "doubleVal",
+        3.14d,
+        "floatVal",
+        2.5f,
+        "byteVal",
+        (byte) 7,
+        "shortVal",
+        (short) 1234,
+        "charVal",
+        'Z'
+      );
+      final var built = writer.construct(names, values::get);
+      assertEquals(9_223_372_036L, built.getLongVal());
+      assertEquals(3.14d, built.getDoubleVal());
+      assertEquals(2.5f, built.getFloatVal());
+      assertEquals((byte) 7, built.getByteVal());
+      assertEquals((short) 1234, built.getShortVal());
+      assertEquals('Z', built.getCharVal());
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "capturedReader — pre-bound LMF reader, invokevirtual-dispatched (holder positional-read" + " substrate)"
+  )
+  class CapturedReader {
+
+    @Test
+    @DisplayName(
+      "returns the raw cached Function directly — same instance across calls, no per-call capture" + " lambda"
+    )
+    void returnsSameCachedFunctionInstance() {
+      // capturedReader hands back the raw cached Function from GETTER_INVOKERS (unlike getter(),
+      // which wraps a fresh capturing lambda each call). Two calls for the same (class, name) must
+      // return the identical instance so a positional-read loop can bind it once at assembly time.
+      final var a = Beans.capturedReader(NoArgSetters.class, "name");
+      final var b = Beans.capturedReader(NoArgSetters.class, "name");
+      assertSame(a, b, "capturedReader must return the cached Function, not a fresh wrapper per call");
+    }
+
+    @Test
+    @DisplayName("a reader bound to the parent class reads a subtype instance correctly (invokevirtual" + " dispatch)")
+    void readerBoundToParentReadsSubtype() {
+      // The reader is bound to ParentBean's getId(), but dispatches invokevirtual — so applying it
+      // to a ChildBean instance still reads the right value even though the reader was resolved
+      // against the declared parent class. This is the documented reason capturedReader can be
+      // bound once for the declared class and sidestep the per-proxy-subclass cache bloat.
+      final var reader = Beans.capturedReader(ParentBean.class, "id");
+      final var child = new ChildBean();
+      child.setId("via-subtype");
+      assertEquals("via-subtype", reader.apply(child));
+    }
+
+    @Test
+    @DisplayName("auto-boxes a primitive getter return through the Function<Object, Object> boundary")
+    void autoBoxesPrimitiveReturn() {
+      final var reader = Beans.capturedReader(WithPrimitives.class, "age");
+      final var age = reader.apply(new WithPrimitives(21, 0L, false));
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(21, age);
+    }
+
+    @Test
+    @DisplayName("unknown property throws IllegalArgumentException at bind time, naming the property and" + " class")
+    void unknownPropertyThrows() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.capturedReader(NoArgSetters.class, "ghost")
+      );
+      assertTrue(ex.getMessage().contains("ghost"), ex::getMessage);
+      assertTrue(ex.getMessage().contains(NoArgSetters.class.getName()), ex::getMessage);
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "isSetterConstructible — MhIso build-time shape gate (no-arg ctor + a setter per required" + " property)"
+  )
+  class SetterConstructible {
+
+    @Test
+    @DisplayName("true when a no-arg ctor exists and every required property has a public setter")
+    void trueWhenNoArgCtorAndAllSetters() {
+      assertTrue(Beans.isSetterConstructible(NoArgSetters.class, new String[] { "name", "score" }));
+    }
+
+    @Test
+    @DisplayName("false when a required property has no public setter (getter-only field)")
+    void falseWhenRequiredPropertyHasNoSetter() {
+      // NoArgFields has a no-arg ctor and getters but no setters — a required property with no
+      // matching setX gates the whole bean out of the setter fold.
+      assertFalse(Beans.isSetterConstructible(NoArgFields.class, new String[] { "name" }));
+    }
+
+    @Test
+    @DisplayName("false when the bean has no no-arg constructor even if setters exist")
+    void falseWhenNoNoArgConstructor() {
+      // ImmutableCtor has getters but no no-arg ctor — the setter fold constructs via the no-arg
+      // ctor first, so a missing one rules the strategy out regardless of setter presence.
+      assertFalse(Beans.isSetterConstructible(ImmutableCtor.class, new String[] { "label" }));
+    }
+
+    @Test
+    @DisplayName("empty required-property set with a no-arg ctor is trivially constructible")
+    void trueForEmptyRequiredSetWithNoArgCtor() {
+      assertTrue(Beans.isSetterConstructible(NoArgSetters.class, new String[] {}));
+    }
+  }
+
+  @Nested
+  @DisplayName("BeanMhInfo raw handles — beanAccessorHandles / beanSetterHandle / beanNoArgCtorHandle" + " (unboxed)")
+  class RawBeanHandles {
+
+    @Test
+    @DisplayName("accessor handles keep the getter's unboxed primitive return type and read the right value")
+    void accessorHandlesAreUnboxed() throws Throwable {
+      final var names = Beans.propertyNames(WithPrimitives.class);
+      final var handles = Beans.beanAccessorHandles(WithPrimitives.class);
+      assertEquals(names.length, handles.length);
+      final var ageIdx = indexOf(names, "age");
+      assertEquals(int.class, handles[ageIdx].type().returnType(), "handle keeps the unboxed int return type");
+      final var pojo = new WithPrimitives(9, 5L, true);
+      assertEquals(9, (int) handles[ageIdx].invoke(pojo));
+    }
+
+    @Test
+    @DisplayName("setterHandle keeps the setter's unboxed parameter type and writes through it")
+    void setterHandleIsUnboxedAndWrites() throws Throwable {
+      final MethodHandle setter = Beans.beanSetterHandle(NoArgSetters.class, "score");
+      assertNotNull(setter, "a property with a public setX must expose a raw setter handle");
+      assertEquals(int.class, setter.type().parameterType(1), "handle keeps the unboxed int parameter type");
+      final var pojo = new NoArgSetters();
+      setter.invoke(pojo, 42);
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("setterHandle is null for a getter-only property (no public setX)")
+    void setterHandleNullForGetterOnly() {
+      // NoArgFields exposes getName/getScore but no setters — the raw setter handle map must not
+      // carry an entry, so MhIso's supports() probe (via isSetterConstructible) can gate the bean
+      // out.
+      assertNull(Beans.beanSetterHandle(NoArgFields.class, "name"));
+    }
+
+    @Test
+    @DisplayName("noArgCtorHandle builds a fresh instance; absent (null) when the bean has no no-arg ctor")
+    void noArgCtorHandlePresenceMatchesCtorAvailability() throws Throwable {
+      final MethodHandle ctor = Beans.beanNoArgCtorHandle(NoArgSetters.class);
+      assertNotNull(ctor);
+      assertInstanceOf(NoArgSetters.class, ctor.invoke());
+      assertNull(Beans.beanNoArgCtorHandle(ImmutableCtor.class), "no no-arg ctor → null handle");
+    }
+
+    private static int indexOf(final String[] arr, final String needle) {
+      for (var i = 0; i < arr.length; i++) if (arr[i].equals(needle)) return i;
+      throw new IllegalArgumentException("not found: " + needle);
+    }
+  }
+
+  @Nested
+  @DisplayName("ClassValue caches key by class — distinct classes never bleed getter/property state")
+  class ClassValueKeying {
+
+    @Test
+    @DisplayName("propertyNames of two distinct classes are independent (no cross-class cache bleed)")
+    void distinctClassesHaveIndependentPropertyNames() {
+      // Both classes flow through the same GETTERS ClassValue. A keying regression that returned
+      // one
+      // class's entry for the other would surface here: NoArgSetters exposes name/score,
+      // WithGetters
+      // exposes id/active/flag/URL — disjoint sets, so a bleed is unambiguous.
+      final var setters = Arrays.asList(Beans.propertyNames(NoArgSetters.class));
+      final var getters = Arrays.asList(Beans.propertyNames(WithGetters.class));
+      assertTrue(setters.contains("name") && setters.contains("score"));
+      assertFalse(setters.contains("URL"), "WithGetters' property must not leak into NoArgSetters' entry");
+      assertTrue(getters.contains("URL"));
+      assertFalse(getters.contains("score"), "NoArgSetters' property must not leak into WithGetters' entry");
+    }
+
+    @Test
+    @DisplayName("a getter and a same-named setter on different classes resolve to their own class's" + " members")
+    void capturedReaderIsPerClass() {
+      // capturedReader for the same property name on two classes must return distinct Functions
+      // reading each class's own field — a shared-key regression would return one for both.
+      final var child = new ChildBean();
+      child.setName("child-name");
+      final var parent = new ParentBean();
+      parent.setId("parent-id");
+      assertEquals("child-name", Beans.capturedReader(ChildBean.class, "name").apply(child));
+      assertEquals("parent-id", Beans.capturedReader(ParentBean.class, "id").apply(parent));
+    }
+  }
+
+  /**
+   * A no-arg constructor with a setter, and a public all-args constructor; each tags what it built.
+   */
+  public static final class CtorAndSetters {
+
+    private String name;
+
+    public CtorAndSetters() {}
+
+    public CtorAndSetters(final String name) {
+      this.name = name + "[ctor]";
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name + "[setters]";
+    }
+  }
+
+  /** A builder, a public all-args constructor, and setters; each tags what it built. */
+  public static final class AllThreeRoutes {
+
+    private String name;
+
+    public AllThreeRoutes() {}
+
+    public AllThreeRoutes(final String name) {
+      this.name = name + "[ctor]";
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name + "[setters]";
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      private String name;
+
+      public Builder name(final String name) {
+        this.name = name;
+        return this;
+      }
+
+      public AllThreeRoutes build() {
+        final var built = new AllThreeRoutes();
+        built.name = name + "[builder]";
+        return built;
+      }
+    }
+  }
+}

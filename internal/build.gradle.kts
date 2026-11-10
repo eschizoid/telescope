@@ -27,7 +27,7 @@ tasks.withType<JavaCompile>().configureEach {
     options.release = 21
     options.encoding = "UTF-8"
     // -Xlint:-module suppresses the "qualified-export target module not found" warning that fires
-    // because :core (io.github.eschizoid.telescope) requires :internal, not the other way around,
+    // because :core (io.github.telescopeorganization.telescope) requires :internal, not the other way around,
     // so javac compiling :internal can't see :core on the modulepath. Runtime resolution and
     // :core's own compile catch any actual export mistakes.
     //
@@ -96,7 +96,7 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-internal"
             from(components["java"])
 
@@ -107,7 +107,7 @@ publishing {
                         "HKT-emulation (Kind/Applicative), per-effect witnesses, and reflection helpers. " +
                         "Qualified-exported to telescope-core only — do NOT depend on this artifact directly."
                 )
-                url.set("https://github.com/eschizoid/telescope")
+                url.set("https://github.com/telescopeorganization/telescope")
                 inceptionYear.set("2026")
 
                 licenses {
@@ -122,11 +122,16 @@ publishing {
                         name.set("Mariano Gonzalez")
                         email.set("mariano.gonzalez.mx@gmail.com")
                     }
+                    developer {
+                        id.set("xchopin")
+                        name.set("Xavier Chopin")
+                        email.set("xavierchopin.ca@gmail.com")
+                    }
                 }
                 scm {
-                    connection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    developerConnection.set("scm:git:git@github.com:eschizoid/telescope.git")
-                    url.set("https://github.com/eschizoid/telescope")
+                    connection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    developerConnection.set("scm:git:git@github.com:telescopeorganization/telescope.git")
+                    url.set("https://github.com/telescopeorganization/telescope")
                 }
             }
         }

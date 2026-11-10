@@ -7,7 +7,7 @@ metadata:
     - "mapping"
     - "records"
     - "bidirectional"
-  guide: "https://github.com/eschizoid/telescope"
+  guide: "https://github.com/telescopeorganization/telescope"
   categories:
     - "data"
   status: "experimental"

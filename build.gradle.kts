@@ -51,7 +51,7 @@ scmVersion {
 }
 
 allprojects {
-    group = "io.github.eschizoid"
+    group = "io.github.telescopeorganization"
     version = rootProject.scmVersion.version
 }
 
@@ -154,10 +154,10 @@ jreleaser {
     project {
         name.set("telescope")
         description.set("Deep-copy DSL for Java records and POJOs.")
-        authors.set(listOf("Mariano Gonzalez"))
+        authors.set(listOf("Mariano Gonzalez", "Xavier Chopin"))
         license.set("Apache-2.0")
         links {
-            homepage.set("https://github.com/eschizoid/telescope")
+            homepage.set("https://github.com/telescopeorganization/telescope")
         }
         inceptionYear.set("2026")
         tags.set(listOf("records", "optics", "lens", "immutable", "java"))

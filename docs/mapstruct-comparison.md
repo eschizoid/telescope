@@ -56,8 +56,8 @@ mapper. The field then runs the generated code, and the call site does not chang
 and add `@Bridge` later, when that code needs the speed.
 
 ```java
-import static io.github.eschizoid.telescope.Telescope.mapper;
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.Telescope.mapper;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
 
 public record InvoiceDto(Long invoiceId, String customer, String currency, long totalCents) {}
 

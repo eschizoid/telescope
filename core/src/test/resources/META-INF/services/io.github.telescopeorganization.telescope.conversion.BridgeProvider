@@ -1,0 +1,10 @@
+io.github.telescopeorganization.telescope.conversion.RegistryFixtures$Provider
+io.github.telescopeorganization.telescope.conversion.RegistryFixtures$NullBridgeProvider
+io.github.telescopeorganization.telescope.conversion.RegistryFixtures$DupProviderA
+io.github.telescopeorganization.telescope.conversion.RegistryFixtures$DupProviderB
+io.github.telescopeorganization.telescope.conversion.RegistryFixtures$RenamingProvider
+io.github.telescopeorganization.telescope.declaredbridge.DeclaredFixtures$PointProvider
+io.github.telescopeorganization.telescope.declaredbridge.DeclaredFixtures$StaleProvider
+io.github.telescopeorganization.telescope.declaredbridge.DeclaredFixtures$ForwardProvider
+io.github.telescopeorganization.telescope.declaredbridge.DeclaredFixtures$MovedProvider
+io.github.telescopeorganization.telescope.declaredbridge.DeclaredFixtures$LazyProvider

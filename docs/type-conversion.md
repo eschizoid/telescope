@@ -88,8 +88,8 @@ spell the _differences_.
 > value, naming the property and the value. Narrowing, and text against a date or time, still take a row.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.via;
 
 // All same-name, no overrides — the pure-copy 1-liner:
 final Telescope<UserEntity, UserDto> userConversion = Telescope.map(UserEntity.class, UserDto.class);
@@ -135,7 +135,7 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 Example — three of those rows together:
 
 ```java
-import static io.github.eschizoid.telescope.mapping.Mapping.*;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.*;
 
 Telescope.mapper(
   UserEntity.class,
