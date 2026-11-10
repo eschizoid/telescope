@@ -23,7 +23,7 @@ public interface CustomerMapper {
 
 ```java
 // telescope — one value, both directions
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
 
 Mapper<Customer, CustomerDto> MAPPER = Telescope.mapper(
   Customer.class,
@@ -77,7 +77,7 @@ Every mapping row above is expanded — with evidence and limitations — in the
 telescope's introspection makes each migrated mapper self-checking:
 
 ```java
-import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
+import io.github.telescopeorganization.telescope.introspection.OpticNode.Mapped;
 
 // the migrated mapper maps everything the old one did — nothing silently dropped
 assertThat(mapper.explain().skipped()).isEmpty();

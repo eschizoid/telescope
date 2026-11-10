@@ -31,11 +31,11 @@ ADR-0013 wanted, now automatic.
 "flip a level, see it" demands, and it is free when off. `forward()` gains a benign, level-gated log side-effect — the
 Hibernate-logs-SQL-at-DEBUG posture — which we accept over an opt-in `mapper.logged()` view.
 
-**Hierarchical, type-pair logger names.** `io.github.eschizoid.telescope.mapper.<Source>.<Target>` (both `Mapper` and
-`ForwardMapper` share the `.mapper.` namespace). A user enables one mapper, or the whole library by prefix, from their
-existing logging config — no telescope-specific configuration and no code change. `<Source>` / `<Target>` are the
-**simple** class names (`Class#getSimpleName()`) — chosen for readable, greppable logger names over verbose FQNs. The
-trade-off: two mappers whose source (or target) types share a simple name across different packages land on the same
+**Hierarchical, type-pair logger names.** `io.github.telescopeorganization.telescope.mapper.<Source>.<Target>` (both
+`Mapper` and `ForwardMapper` share the `.mapper.` namespace). A user enables one mapper, or the whole library by prefix,
+from their existing logging config — no telescope-specific configuration and no code change. `<Source>` / `<Target>` are
+the **simple** class names (`Class#getSimpleName()`) — chosen for readable, greppable logger names over verbose FQNs.
+The trade-off: two mappers whose source (or target) types share a simple name across different packages land on the same
 logger, so they can't be level-controlled independently. Distinct simple names — the common case — get independent
 control; on a genuine clash, enable the shared logger (both fire) or the `.mapper.` prefix.
 
@@ -48,14 +48,14 @@ deferred follow-up if a good naming story appears.
 
 ```xml
 <!-- logback.xml — no code change: -->
-<logger name="io.github.eschizoid.telescope.mapper.UserDto.User" level="TRACE"/>  <!-- one mapper, values per conversion -->
-<logger name="io.github.eschizoid.telescope.mapper" level="DEBUG"/>               <!-- every mapper's structure at build -->
+<logger name="io.github.telescopeorganization.telescope.mapper.UserDto.User" level="TRACE"/>  <!-- one mapper, values per conversion -->
+<logger name="io.github.telescopeorganization.telescope.mapper" level="DEBUG"/>               <!-- every mapper's structure at build -->
 ```
 
 ```properties
 # …or Spring Boot application.properties:
-logging.level.io.github.eschizoid.telescope.mapper.UserDto.User=TRACE
-logging.level.io.github.eschizoid.telescope.mapper=DEBUG
+logging.level.io.github.telescopeorganization.telescope.mapper.UserDto.User=TRACE
+logging.level.io.github.telescopeorganization.telescope.mapper=DEBUG
 ```
 
 ```

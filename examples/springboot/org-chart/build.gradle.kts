@@ -13,7 +13,7 @@ plugins {
 //     IdentityHashMap seen-set in DeepMap.cycleSafe yields null on re-entry, lifted to
 //     Optional.empty() / empty List for the affected slots)
 
-group = "io.github.eschizoid.telescope.demo.orgchart"
+group = "io.github.telescopeorganization.telescope.demo.orgchart"
 version = "0.0.1-SNAPSHOT"
 
 java {
@@ -27,7 +27,7 @@ repositories {
 }
 
 springBoot {
-    mainClass.set("io.github.eschizoid.telescope.demo.orgchart.DemoApplication")
+    mainClass.set("io.github.telescopeorganization.telescope.demo.orgchart.DemoApplication")
 }
 
 dependencies {

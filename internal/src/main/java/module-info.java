@@ -1,6 +1,7 @@
 /**
  * Internal substrate of the telescope optics DSL — qualified-exported to {@code
- * io.github.eschizoid.telescope} (the public {@code telescope-core} module) and to nothing else.
+ * io.github.telescopeorganization.telescope} (the public {@code telescope-core} module) and to
+ * nothing else.
  *
  * <p>External consumers of telescope add {@code telescope-core} to their build and get the public
  * surface. The {@code telescope-internal} artifact comes along transitively but its packages are
@@ -27,20 +28,21 @@
  *
  * <p>The per-effect {@code Applicative} witnesses ({@code CompletableFutureK}, {@code OptionalK},
  * {@code EitherK}, {@code ValidatedK}) live in {@code :core} under {@code
- * io.github.eschizoid.telescope.runtime.instances} — they couple to the public {@code Either} /
- * {@code Validated} effect types and so are naturally housed alongside them.
+ * io.github.telescopeorganization.telescope.runtime.instances} — they couple to the public {@code
+ * Either} / {@code Validated} effect types and so are naturally housed alongside them.
  *
  * <p>Do NOT add {@code telescope-internal} as a direct dependency. The artifact only exists because
  * publishing the optic lattice as a separate JPMS module is the JPMS-blessed way to keep internal
  * types invisible to user code while still letting {@code telescope-core} type-safely reference
  * them.
  */
-module io.github.eschizoid.telescope.internal {
-  exports io.github.eschizoid.telescope.internal to io.github.eschizoid.telescope;
-  exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;
-  exports io.github.eschizoid.telescope.internal.optics.collections to io.github.eschizoid.telescope;
+module io.github.telescopeorganization.telescope.internal {
+  exports io.github.telescopeorganization.telescope.internal to io.github.telescopeorganization.telescope;
+  exports io.github.telescopeorganization.telescope.internal.optics to io.github.telescopeorganization.telescope;
+  exports io.github.telescopeorganization.telescope.internal.optics.collections
+    to io.github.telescopeorganization.telescope;
   // The shared pairing decision spec: the runtime (:core) and the compile-time verifier (:codegen)
   // consume one rule set so construction-time and compile-time diagnostics cannot drift.
-  exports io.github.eschizoid.telescope.internal.pairing
-    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.codegen;
+  exports io.github.telescopeorganization.telescope.internal.pairing
+    to io.github.telescopeorganization.telescope, io.github.telescopeorganization.telescope.codegen;
 }

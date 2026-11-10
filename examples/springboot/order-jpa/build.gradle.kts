@@ -7,7 +7,7 @@ plugins {
 // Spring Boot 4.x — brings Spring Framework 7.0, Jakarta EE 10 (`jakarta.persistence.*`), and
 // Hibernate 7. This module compiles with --release 21 on the Java 25 toolchain.
 
-group = "io.github.eschizoid.telescope.demo"
+group = "io.github.telescopeorganization.telescope.demo"
 version = "0.0.1-SNAPSHOT"
 
 java {
@@ -21,7 +21,7 @@ repositories {
 }
 
 springBoot {
-    mainClass.set("io.github.eschizoid.telescope.demo.spring.DemoApplication")
+    mainClass.set("io.github.telescopeorganization.telescope.demo.spring.DemoApplication")
 }
 
 dependencies {

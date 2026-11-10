@@ -29,7 +29,7 @@ tasks.withType<JavaCompile>().configureEach {
     modularity.inferModulePath = true
 }
 
-val internalExportCompileFlag = "--add-exports=io.github.eschizoid.telescope.internal/io.github.eschizoid.telescope.internal=io.github.eschizoid.telescope.benchmarks"
+val internalExportCompileFlag = "--add-exports=io.github.telescopeorganization.telescope.internal/io.github.telescopeorganization.telescope.internal=io.github.telescopeorganization.telescope.benchmarks"
 
 tasks.named<JavaCompile>("compileJmhJava") {
     // A task action may only close over values the configuration cache can serialise, and a

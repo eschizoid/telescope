@@ -7,8 +7,8 @@
 [![JVM 21+](https://img.shields.io/badge/JVM-21%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Build](https://github.com/telescopeorganization/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/telescopeorganization/telescope/actions/workflows/ci.yaml)
 [![Codecov](https://codecov.io/gh/telescopeorganization/telescope/graph/badge.svg?token=a235ea8b-e6dc-45c6-8fea-e5050940c5d4)](https://codecov.io/gh/telescopeorganization/telescope)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.eschizoid/telescope-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.eschizoid/telescope-core)
-[![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.telescopeorganization/telescope-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.telescopeorganization/telescope-core)
+[![Javadoc](https://javadoc.io/badge2/io.github.telescopeorganization/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.telescopeorganization/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Telescope maps and updates Java records and POJOs with method references instead of strings. You write a mapper as an
@@ -208,15 +208,15 @@ than a sealed one. The [full comparison](docs/mapstruct-comparison.md) and the
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:2.1.0")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0") // optional: generated mappers and navigators
+  implementation("io.github.telescopeorganization:telescope-core:2.1.0")
+  annotationProcessor("io.github.telescopeorganization:telescope-codegen:2.1.0") // optional: generated mappers and navigators
 }
 ```
 
 ```xml
 <!-- Maven -->
 <dependency>
-  <groupId>io.github.eschizoid</groupId>
+  <groupId>io.github.telescopeorganization</groupId>
   <artifactId>telescope-core</artifactId>
   <version>2.1.0</version>
 </dependency>
@@ -227,12 +227,32 @@ Release 2.0.0 predates `path(...)`, `compute` rows that read the source, `to` an
 the compiler plugin's `annotationProcessorPaths`. [docs/codegen.md](docs/codegen.md) has that setup, Lombok on the
 processor path, and JPMS.
 
+### Migrating from `io.github.eschizoid`
+
+From 3.0.0 the project publishes under `io.github.telescopeorganization`, and the Java packages and JPMS modules carry
+the same name. Artifact IDs are unchanged. Releases up to 2.1.0 stay on Central under `io.github.eschizoid`, which
+receives no further releases.
+
+- **Coordinates.** Replace the group `io.github.eschizoid` with `io.github.telescopeorganization` on every `telescope-*`
+  dependency and annotation-processor path, and move to 3.0.0 or later.
+- **Imports.** Replace `io.github.eschizoid.telescope` with `io.github.telescopeorganization.telescope` across your
+  sources. Generated navigators and bridges follow on the next compile.
+- **Modules.** On the module path, rename every `requires io.github.eschizoid.telescope…` to
+  `requires io.github.telescopeorganization.telescope…` (`.internal`, `.codegen`, `.lombok`, `.quarkus`, `.spring`).
+- **Native image.** The metadata telescope-core ships moved to
+  `META-INF/native-image/io.github.telescopeorganization/telescope-core/`. Update any build argument or configuration
+  that names the old path, and any class name in your own `reflect-config.json` or `serialization-config.json` that
+  points into telescope.
+
+Maven users of the old coordinates are pointed to the new group by a relocation POM. Gradle ignores relocation, so the
+group has to be changed by hand.
+
 ## Quick start
 
 The records and statements below run as written inside a `main` method, with the import at the top of the file.
 
 ```java
-import io.github.eschizoid.telescope.Telescope;
+import io.github.telescopeorganization.telescope.Telescope;
 
 record Address(String city, String zip) {}
 
@@ -280,7 +300,7 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
 
 ## Published artifacts
 
-Everything is on Maven Central under `io.github.eschizoid`.
+Everything is on Maven Central under `io.github.telescopeorganization`.
 
 | Artifact                        | What it is                                                                                                       |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |

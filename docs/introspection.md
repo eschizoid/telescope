@@ -72,15 +72,15 @@ Loggers are named by type pair, so you enable one mapper or the whole library fr
 change. In Spring Boot `application.properties`:
 
 ```properties
-logging.level.io.github.eschizoid.telescope.mapper.UserDto.User=TRACE   # one mapper, values per conversion
-logging.level.io.github.eschizoid.telescope.mapper=DEBUG                 # every mapper's structure at build
+logging.level.io.github.telescopeorganization.telescope.mapper.UserDto.User=TRACE   # one mapper, values per conversion
+logging.level.io.github.telescopeorganization.telescope.mapper=DEBUG                 # every mapper's structure at build
 ```
 
 or directly in `logback.xml`:
 
 ```xml
-<logger name="io.github.eschizoid.telescope.mapper.UserDto.User" level="TRACE"/>
-<logger name="io.github.eschizoid.telescope.mapper" level="DEBUG"/>
+<logger name="io.github.telescopeorganization.telescope.mapper.UserDto.User" level="TRACE"/>
+<logger name="io.github.telescopeorganization.telescope.mapper" level="DEBUG"/>
 ```
 
 The log calls are always present and gated purely by level, so they cost nothing when off (guarded before the message is

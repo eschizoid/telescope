@@ -32,7 +32,7 @@ CompanyTelescope.of()
 ```
 
 ```java
-import io.github.eschizoid.telescope.annotations.Focus;
+import io.github.telescopeorganization.telescope.annotations.Focus;
 
 @Focus record Address(String city, String zip) {}
 @Focus record User(String name, int age, Address address) {}
@@ -98,8 +98,8 @@ or annotate the target with its own `@Bridge`.
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:2.1.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+implementation("io.github.telescopeorganization:telescope-core:2.1.0")
+annotationProcessor("io.github.telescopeorganization:telescope-codegen:2.1.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
@@ -115,7 +115,7 @@ path runs an order of magnitude slower than a generated `@Bridge` conversion in 
 the same reflection-free win for navigation.
 
 ```java
-import io.github.eschizoid.telescope.annotations.BeanFocus;
+import io.github.telescopeorganization.telescope.annotations.BeanFocus;
 
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
@@ -131,8 +131,8 @@ after its pair, in the package of the class declaring the field (`UserToUserDtoB
 returns a mapper over that bridge when the field is initialised. Nothing references the generated class.
 
 ```java
-import static io.github.eschizoid.telescope.Telescope.mapper;
-import static io.github.eschizoid.telescope.mapping.Mapping.*;
+import static io.github.telescopeorganization.telescope.Telescope.mapper;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.*;
 
 public record User(Long id, String email, String nickname, String passwordHash, Address address) {
   @Bridge
@@ -186,8 +186,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.telescopeorganization:telescope-core:2.1.0")
+    annotationProcessor("io.github.telescopeorganization:telescope-codegen:2.1.0")
 }
 ```
 
@@ -195,7 +195,7 @@ Maven:
 
 ```xml
 <dependency>
-  <groupId>io.github.eschizoid</groupId>
+  <groupId>io.github.telescopeorganization</groupId>
   <artifactId>telescope-core</artifactId>
   <version>2.1.0</version>
 </dependency>
@@ -208,7 +208,7 @@ Maven:
       <configuration>
         <annotationProcessorPaths>
           <path>
-            <groupId>io.github.eschizoid</groupId>
+            <groupId>io.github.telescopeorganization</groupId>
             <artifactId>telescope-codegen</artifactId>
             <version>2.1.0</version>
           </path>
@@ -235,7 +235,7 @@ annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsCon
     <version>1.18.48</version>
   </path>
   <path>
-    <groupId>io.github.eschizoid</groupId>
+    <groupId>io.github.telescopeorganization</groupId>
     <artifactId>telescope-lombok</artifactId>
     <version>2.1.0</version>
   </path>
@@ -245,7 +245,7 @@ annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsCon
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.48")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:2.1.0")
+  annotationProcessor("io.github.telescopeorganization:telescope-lombok:2.1.0")
 }
 ```
 
@@ -259,21 +259,21 @@ package containing your records / beans / POJOs:
 
 ```java
 module com.acme.app {
-  requires io.github.eschizoid.telescope;
+  requires io.github.telescopeorganization.telescope;
 
   // Needed by typed paths and runtime mappers (Telescope.of, .ofBean, .map, .mapper, .fromMap, .merge) and by the
   // navigators @Focus / @BeanFocus generate. Generated @Bridge converters and @FromMap binders need none.
-  opens com.acme.model to io.github.eschizoid.telescope.internal;
+  opens com.acme.model to io.github.telescopeorganization.telescope.internal;
 }
 ```
 
-The `opens` target is **your** package, and the module it opens to is `io.github.eschizoid.telescope.internal`, which
-builds every accessor that typed paths and runtime mappers use; an unqualified `opens com.acme.model;` works too.
-Telescope's modules do not require yours, so telescope adds the read edge to your module itself the first time it
-touches one of your classes; you declare nothing for that. Without the `opens`, the private lookup is refused and the
-message names the directive:
+The `opens` target is **your** package, and the module it opens to is
+`io.github.telescopeorganization.telescope.internal`, which builds every accessor that typed paths and runtime mappers
+use; an unqualified `opens com.acme.model;` works too. Telescope's modules do not require yours, so telescope adds the
+read edge to your module itself the first time it touches one of your classes; you declare nothing for that. Without the
+`opens`, the private lookup is refused and the message names the directive:
 
-> `Cannot access <YourClass> to build its accessors. Add 'opens <pkg> to io.github.eschizoid.telescope.internal;' (or an unqualified 'opens <pkg>;') to the module-info.java of module <your module>, which telescope's accessors are built in.`
+> `Cannot access <YourClass> to build its accessors. Add 'opens <pkg> to io.github.telescopeorganization.telescope.internal;' (or an unqualified 'opens <pkg>;') to the module-info.java of module <your module>, which telescope's accessors are built in.`
 
 On the module path, typed paths and runtime mappers call your accessors through method handles rather than through
 classes it spins with `LambdaMetafactory`: a lookup into another named module keeps private access but not the full
@@ -289,8 +289,8 @@ constructors, builders and setters directly, with no `privateLookupIn`, no `Lamb
 requirement. If adding the `opens` is awkward (e.g., a downstream module you don't own), those two sidestep the JPMS
 constraint entirely. A navigator generated by `@Focus` or `@BeanFocus` does not: it builds its lenses from method
 references when its class initializes, and reading a method reference back needs the package open to
-`io.github.eschizoid.telescope.internal`, like a runtime mapper. Without it, the navigator's first use fails with the
-same `opens` message. See
+`io.github.telescopeorganization.telescope.internal`, like a runtime mapper. Without it, the navigator's first use fails
+with the same `opens` message. See
 [Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
 
 **Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically. The
@@ -303,8 +303,8 @@ name is not enough. Each binder nests a `Provider` implementing `FromMapProvider
 `META-INF/services`. The class path and a native image need nothing more.
 
 A named module ignores `META-INF/services`. On the module path, its `module-info` must declare
-`provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for each binder.
-The processor warns with the exact line when the module it compiles lacks it.
+`provides io.github.telescopeorganization.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for
+each binder. The processor warns with the exact line when the module it compiles lacks it.
 
 A fat jar has to merge the service files of the jars it combines. Use the shade plugin's `ServicesResourceTransformer`
 in Maven or `mergeServiceFiles()` in the Gradle Shadow plugin. Without that, the jar loses the registrations of all but

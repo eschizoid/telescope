@@ -1,0 +1,20 @@
+package io.github.telescopeorganization.telescope.benchmarks;
+
+import io.github.telescopeorganization.telescope.conversion.BridgeFn;
+
+/** A transform typed as the property it fills, handing each value back as it is. */
+public class BenchTxFn implements BridgeFn<String, String> {
+
+  /** The one instance the fixtures convert through. */
+  public static final BenchTxFn INSTANCE = new BenchTxFn();
+
+  @Override
+  public String forward(final String value) {
+    return value;
+  }
+
+  @Override
+  public String backward(final String value) {
+    return value;
+  }
+}

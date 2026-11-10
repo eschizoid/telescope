@@ -22,9 +22,9 @@ nested POJOs recurse, and container hops auto-lift. The POJO mechanics this sect
 lever (`writeBean` / `writeBeans`) for when the auto-detect ladder can't pick a strategy.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.writeBeans;
 
 class LegacyUser {
   /* getId(), getEmail(), getName() + no-arg ctor + setters */
@@ -67,8 +67,8 @@ public setters, an all-args constructor or a static `builder()`, or supply an ex
 Package-private setters do not count; neither path calls them.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.writeBean;
 
 // OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
 // refuse without -parameters or -g. The hint forces the CONSTRUCTOR strategy explicitly.
@@ -115,10 +115,10 @@ construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibe
 `X`. At most one `writeBeans(...)` default per call.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.writeBean;
+import static io.github.telescopeorganization.telescope.mapping.WriteHint.writeBeans;
 
 final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
   Order.class,
@@ -176,7 +176,7 @@ record⇄record, record⇄POJO, POJO⇄POJO. Fields match by name (a bijection);
 strategy is a compile error, not a runtime one:
 
 ```java
-import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.telescopeorganization.telescope.annotations.Bridge;
 
 @Bridge(UserDto.class)
 record UserEntity(String id, String email) {}
@@ -243,4 +243,5 @@ deep-mapping conversions are cheaper than deep navigation-and-update — the cur
 via `Mapping.to(srcAcc, tgtAcc)`); nested collections recurse automatically. Neither path writes a private field: the
 runtime writes through setters, a static `builder()` or a constructor, the same members `@Bridge` generates calls to,
 and both refuse a POJO that offers none of them. The runtime reaches those members through a private lookup, so under
-JPMS a POJO package that is exported but not opened needs `opens <package> to io.github.eschizoid.telescope.internal`.
+JPMS a POJO package that is exported but not opened needs
+`opens <package> to io.github.telescopeorganization.telescope.internal`.

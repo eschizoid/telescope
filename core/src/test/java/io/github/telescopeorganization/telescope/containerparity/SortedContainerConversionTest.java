@@ -1,0 +1,485 @@
+package io.github.telescopeorganization.telescope.containerparity;
+
+import static io.github.telescopeorganization.telescope.mapping.Mapping.compute;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.via;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.telescopeorganization.telescope.Telescope;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * A set that keeps its elements in order needs them orderable, and a conversion changes what the
+ * elements are. Two questions follow: whether the new element type can be ordered at all, and
+ * whether an ordering the source carried can come across with it.
+ *
+ * <p>Both are only questions for the side being <em>built</em>. A target that keeps no order needs
+ * neither, so asking there refuses a conversion that would have worked.
+ *
+ * <p>Every source here holds an element. An empty one converts cleanly whatever the implementation
+ * does, because nothing is ever inserted and the insert is where both questions are answered — so a
+ * fixture written with an empty set pins nothing at all.
+ */
+class SortedContainerConversionTest {
+
+  record Plain(String v) {}
+
+  record Renamed(String v) {}
+
+  record Ordered(String v) implements Comparable<Ordered> {
+    @Override
+    public int compareTo(final Ordered other) {
+      return v.compareTo(other.v);
+    }
+  }
+
+  record AlsoOrdered(String v) implements Comparable<AlsoOrdered> {
+    @Override
+    public int compareTo(final AlsoOrdered other) {
+      return v.compareTo(other.v);
+    }
+  }
+
+  record PlainSetSrc(Set<Plain> items) {}
+
+  record SortedSetDst(SortedSet<Renamed> items) {}
+
+  record PlainSetDst(Set<Renamed> items) {}
+
+  record TreeSrc(TreeSet<Plain> items) {}
+
+  record TreeDst(TreeSet<Renamed> items) {}
+
+  /**
+   * A converted element a sorted set can order, so a carried comparator is the only problem left.
+   */
+  record OrderedRenamed(String v) implements Comparable<OrderedRenamed> {
+    @Override
+    public int compareTo(final OrderedRenamed other) {
+      return v.compareTo(other.v());
+    }
+  }
+
+  record OrderedTreeDst(TreeSet<OrderedRenamed> items) {}
+
+  // Deliberately not Comparable, and deliberately identical on both sides: when the element type
+  // does not change the conversion carries the source's comparator into the new container, and a
+  // container ordered by a comparator never asks its elements to order themselves. Every other
+  // fixture here changes the element type, so this is the only one that reaches that path.
+  //
+  // The declared container types have to differ for the pair below to reach a lift at all. Same
+  // element type AND same raw container is short-circuited before one is built, so squaring the
+  // two sides up would leave this reaching none of the code it is here to hold.
+  record Unordered(String name) {}
+
+  record CarriedComparatorSrc(SortedSet<Unordered> items) {}
+
+  record CarriedComparatorDst(TreeSet<Unordered> items) {}
+
+  // Stamped by a supplier that counts, so the number of times an element is converted is readable
+  // off the result rather than inferred. Comparable, so a sorted target accepts it.
+  record Stamped(String v, int seq) implements Comparable<Stamped> {
+    @Override
+    public int compareTo(final Stamped other) {
+      return v.compareTo(other.v);
+    }
+  }
+
+  record StampedSrc(Set<Ordered> items) {}
+
+  record StampedSortedDst(SortedSet<Stamped> items) {}
+
+  // Ordered against a type it will never be compared with. It satisfies an instanceof Comparable
+  // test and still cannot be put in a sorted container, which is why the question belongs to the
+  // insert rather than to the element.
+  record Foreign(String v) implements Comparable<String> {
+    @Override
+    public int compareTo(final String other) {
+      return v.compareTo(other);
+    }
+  }
+
+  // Comparable against its own kind, so it has said it can be ordered -- and its compareTo has a
+  // bad cast inside it. The fault is the element's own, not the container's, and describing it as
+  // an ordering problem would send the reader to supply an ordering that already exists.
+  record BuggyCompare(String v) implements Comparable<BuggyCompare> {
+    @Override
+    public int compareTo(final BuggyCompare other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  // Comparable without a type argument, which says nothing about what it can be ordered against.
+  // Routed to the refusal, because the safer reading of silence is that the ordering is ours to
+  // describe -- the refusal names the element and keeps the cast, so being wrong costs a sentence.
+  @SuppressWarnings("rawtypes")
+  record RawlyComparable(String v) implements Comparable {
+    @Override
+    public int compareTo(final Object other) {
+      // Casts to the wrong thing, so it fails against its own kind as well as anything else.
+      return v.compareTo((String) other);
+    }
+  }
+
+  record RawlySrc(Set<Ordered> items) {}
+
+  record RawlySortedDst(SortedSet<RawlyComparable> items) {}
+
+  // Comparable reached through an interface rather than declared on the element itself, which is
+  // ordinary domain modelling. It has still said what it can be ordered against, so a cast from
+  // inside its compareTo is its own -- the walk has to look past the class's own interfaces to
+  // see that.
+  interface Orderable extends Comparable<Orderable> {}
+
+  record ViaInterface(String v) implements Orderable {
+    @Override
+    public int compareTo(final Orderable other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record ViaInterfaceSrc(Set<Ordered> items) {}
+
+  record ViaInterfaceSortedDst(SortedSet<ViaInterface> items) {}
+
+  // Carries a generic interface that is not Comparable, so the walk meets a parameterized type
+  // it has to step past rather than answer from. Its own Comparable is the one that decides.
+  record AlsoSupplies(String v) implements Supplier<String>, Comparable<AlsoSupplies> {
+    @Override
+    public String get() {
+      return v;
+    }
+
+    @Override
+    public int compareTo(final AlsoSupplies other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record SuppliesSrc(Set<Ordered> items) {}
+
+  record SuppliesSortedDst(SortedSet<AlsoSupplies> items) {}
+
+  record BuggySrc(Set<Ordered> items) {}
+
+  record BuggySortedDst(SortedSet<BuggyCompare> items) {}
+
+  record ForeignSrc(Set<Ordered> items) {}
+
+  record ForeignSortedDst(SortedSet<Foreign> items) {}
+
+  record OrderedSrc(Set<Ordered> items) {}
+
+  record OrderedSortedDst(SortedSet<AlsoOrdered> items) {}
+
+  private static Set<Plain> onePlain() {
+    final var one = new LinkedHashSet<Plain>();
+    one.add(new Plain("x"));
+    return one;
+  }
+
+  private static TreeSet<Plain> withComparator() {
+    final var byV = new TreeSet<Plain>(Comparator.comparing(Plain::v));
+    byV.add(new Plain("x"));
+    return byV;
+  }
+
+  @Test
+  @DisplayName("an element type that cannot be ordered is refused by name, not by a bare cast")
+  void unorderableElementIsRefusedByName() {
+    // Decided when the mapper is built, from the element class alone, so the refusal carries no
+    // cause: no cast was allowed to happen. What it names instead is the element class, which the
+    // cast it replaces never did.
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(PlainSetSrc.class, SortedSetDst.class).forward(new PlainSetSrc(onePlain()))
+    );
+
+    assertTrue(
+      thrown.getMessage().contains("SortedSet"),
+      () -> "the refusal should name the container that needs the ordering: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("Comparable"),
+      () -> "and what the element type is missing: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains(Renamed.class.getName()),
+      () -> "and which element type is missing it: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a cast raised for another reason keeps its own cause, and is not called an ordering problem")
+  void unrelatedCastIsNotReportedAsAnOrderingProblem() {
+    // Both element types here implement Comparable, so ordering is not what fails. The cast comes
+    // from the element conversion reading a component off a value that is not the type it was
+    // declared as — the same shape a bridge handing back the wrong type produces. Naming Comparable
+    // here would name a cause that is not the cause, and send the reader to add a comparator that
+    // would change nothing.
+    final var raw = new LinkedHashSet<Object>();
+    raw.add("not an Ordered");
+    @SuppressWarnings("unchecked")
+    final var polluted = (Set<Ordered>) (Set<?>) raw;
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(OrderedSrc.class, OrderedSortedDst.class).forward(new OrderedSrc(polluted))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("Comparable"),
+      () -> "a cast from elsewhere should not be dressed up as an ordering refusal: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a cast from an element past the first is not called an ordering problem either")
+  void aLaterElementsCastIsNotReportedAsAnOrderingProblem() {
+    // The sibling above pollutes the first element, so the refusal it proves is the one guarding
+    // the element the check looks at. This pollutes a later one, which the check never sees: the
+    // cast comes from the insert loop itself. Without this, an implementation that wrapped the
+    // whole build back up in the old blanket catch would pass the sibling and go unnoticed, since
+    // nothing would ever reach the catch.
+    final var raw = new LinkedHashSet<Object>();
+    raw.add(new Ordered("a"));
+    raw.add("not an Ordered");
+    @SuppressWarnings("unchecked")
+    final var polluted = (Set<Ordered>) (Set<?>) raw;
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(OrderedSrc.class, OrderedSortedDst.class).forward(new OrderedSrc(polluted))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("Comparable"),
+      () -> "a cast from the build should keep its own cause: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("building a sorted target converts each element exactly once")
+  void aSortedTargetConvertsEachElementOnce() {
+    // The ordering question is asked of a converted element, so where it is asked decides how many
+    // times that element is converted. Asked from outside the loop, the first element would be
+    // converted twice -- once to test and once to insert -- and a conversion that counts, stamps an
+    // id or reads a clock would give the first element a different value than it would have had.
+    // The seq values are the count: a doubled first conversion reads 2 and 3 rather than 1 and 2.
+    final var counter = new AtomicInteger();
+    final var elementMapper = Telescope.mapper(
+      Ordered.class,
+      Stamped.class,
+      to(Ordered::v, Stamped::v),
+      compute(Stamped::seq, counter::incrementAndGet)
+    );
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+    items.add(new Ordered("b"));
+
+    final var out = Telescope.mapper(
+      StampedSrc.class,
+      StampedSortedDst.class,
+      via(StampedSrc::items, StampedSortedDst::items, elementMapper)
+    ).forward(new StampedSrc(items));
+
+    assertEquals(List.of(new Stamped("a", 1), new Stamped("b", 2)), List.copyOf(out.items()));
+    assertEquals(2, counter.get(), "two elements should mean two conversions");
+  }
+
+  @Test
+  @DisplayName("an element comparable without a type argument is described rather than left bare")
+  void rawComparableRoutesToTheRefusal() {
+    // A raw Comparable has not said what it can be ordered against, so nothing here can tell its
+    // fault from the container's. The refusal is the safer of the two readings: it names the
+    // element and carries the cast as its cause, so a wrong guess costs a sentence and not the
+    // diagnosis.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+    items.add(new Ordered("b"));
+
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(RawlySrc.class, RawlySortedDst.class).forward(new RawlySrc(items))
+    );
+
+    assertInstanceOf(ClassCastException.class, thrown.getCause(), "with the cast kept as the cause");
+  }
+
+  @Test
+  @DisplayName("a compareTo fault keeps its cast when Comparable arrives through an interface too")
+  void aFaultIsNotRelabelledWhenComparableComesFromAnInterface() {
+    // The same property as the row below, reached the way a domain model usually reaches it. A
+    // walk that looked only at the element's own class and its superclasses would miss this and
+    // relabel the element's own fault as an ordering one.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(ViaInterfaceSrc.class, ViaInterfaceSortedDst.class).forward(new ViaInterfaceSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "an interface-inherited Comparable is still the element saying it can be ordered: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a generic interface that is not Comparable is stepped past, not answered from")
+  void anUnrelatedGenericInterfaceDoesNotDecide() {
+    // The walk meets Supplier<String> before it meets Comparable<AlsoSupplies>. Answering from
+    // the first parameterized type it sees would call this element unorderable and relabel its
+    // own fault; stepping past it reaches the declaration that actually decides.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(SuppliesSrc.class, SuppliesSortedDst.class).forward(new SuppliesSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "its own Comparable is what decides, not the first generic interface: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a fault inside an element's own compareTo keeps its cast, and is not called an ordering" + " problem")
+  void aFaultInsideCompareToIsNotRelabelled() {
+    // The mirror of the row below. There the element is ordered against another type and cannot be
+    // ordered at all, which is ours to describe; here it is ordered against its own kind and the
+    // cast comes from its own logic, which is not. The two arrive at the same catch, so what
+    // separates them is the declared type argument rather than where the throw came from.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(BuggySrc.class, BuggySortedDst.class).forward(new BuggySrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "the element's own fault should not be dressed as an ordering refusal: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("an element ordered against another type is refused by name, not by a bare cast")
+  void foreignComparableIsRefusedByName() {
+    // One element, which is the point: a sorted container compares its first key with itself, so
+    // this fails with nothing to compare against. No check run ahead of the insert could see it --
+    // the element does implement Comparable, and what it cannot do is be compared with its own
+    // kind.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(ForeignSrc.class, ForeignSortedDst.class).forward(new ForeignSrc(items))
+    );
+
+    assertTrue(
+      thrown.getMessage().contains(Foreign.class.getName()),
+      () -> "the refusal should name the element it could not order: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("could not be ordered there"),
+      () -> "and say what failed, rather than that Comparable is missing: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("though its type implements Comparable"),
+      () -> "since here it is present and still not enough: " + thrown.getMessage()
+    );
+    assertInstanceOf(
+      ClassCastException.class,
+      thrown.getCause(),
+      "with the cast it replaces kept, since this one is genuinely raised by the insert"
+    );
+  }
+
+  @Test
+  @DisplayName("a carried comparator crosses with the elements, and orders them in the new container")
+  void carriedComparatorCrossesWithTheElements() {
+    // What this holds is the comparator crossing, not anything about the ordering check: the
+    // insert simply does not raise here, so no check is consulted either way. It guarded the check
+    // when one ran ahead of the insert, and it no longer does -- the assertion on the comparator
+    // is the whole of its value now.
+    final var byName = new TreeSet<Unordered>(Comparator.comparing(Unordered::name));
+    byName.add(new Unordered("beth"));
+    byName.add(new Unordered("al"));
+
+    final var out = Telescope.mapper(CarriedComparatorSrc.class, CarriedComparatorDst.class).forward(
+      new CarriedComparatorSrc(byName)
+    );
+
+    assertEquals(List.of(new Unordered("al"), new Unordered("beth")), List.copyOf(out.items()));
+    assertNotNull(out.items().comparator(), "the comparator should cross with the elements");
+  }
+
+  @Test
+  @DisplayName("a target that keeps no order accepts a source that carried a custom comparator")
+  void unorderedTargetAcceptsAComparatorItDoesNotNeed() {
+    // The comparator cannot come across, because it orders the source's element type and the
+    // target's is a different one. That only matters where the target has an order to keep. Here
+    // it does not, so there is nothing to carry and nothing to refuse.
+    final var out = Telescope.mapper(TreeSrc.class, PlainSetDst.class).forward(new TreeSrc(withComparator()));
+
+    assertEquals(List.of(new Renamed("x")), List.copyOf(out.items()));
+    assertFalse(out.items() instanceof SortedSet, "and the target is not silently given an order");
+  }
+
+  @Test
+  @DisplayName("a target that does keep an order still refuses the comparator it cannot reuse")
+  void orderedTargetStillRefusesACarriedComparator() {
+    // The control for the row above, and the reason it cannot simply drop the check: this target
+    // needs an ordering, the only one on offer is written for the type being converted away from,
+    // and quietly falling back to natural ordering would reorder the set without saying so.
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(TreeSrc.class, OrderedTreeDst.class).forward(new TreeSrc(withComparator()))
+    );
+
+    // On the word alone this holds whichever refusal was raised, because the other one's remedy
+    // sentence also says "comparator" -- so deleting the comparator check entirely would leave it
+    // green. Neither refusal carries a cause any more, both being reached before anything is
+    // inserted, so what separates them is that only the one about ordering names Comparable.
+    assertFalse(
+      thrown.getMessage().contains("Comparable"),
+      () -> "this is the comparator refusal, not the one about ordering: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("cannot be reused"),
+      () -> "and says which of the two problems it is: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("an orderable element type converts into a sorted target, in order")
+  void orderableElementsConvert() {
+    // The other control. A change that refused every sorted target would satisfy the two rows
+    // above and break the case the whole shape exists to serve.
+    final var src = new LinkedHashSet<Ordered>();
+    src.add(new Ordered("b"));
+    src.add(new Ordered("a"));
+
+    final var out = Telescope.mapper(OrderedSrc.class, OrderedSortedDst.class).forward(new OrderedSrc(src));
+
+    assertEquals(
+      List.of(new AlsoOrdered("a"), new AlsoOrdered("b")),
+      List.copyOf(out.items()),
+      "the target's own ordering applies, so the insertion order does not survive"
+    );
+  }
+}

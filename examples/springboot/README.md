@@ -204,8 +204,8 @@ transaction.
 ### Mapper logging
 
 `MapperLoggingRoutingTest` shows that a mapper's log lines reach Logback through Spring Boot's logging setup. The mapper
-logs to `io.github.eschizoid.telescope.mapper.Employee.EmployeeEntity`. At `DEBUG` that logger prints the mapping
-structure once, when the mapper is built, and at `TRACE` it also prints the field values of each conversion.
+logs to `io.github.telescopeorganization.telescope.mapper.Employee.EmployeeEntity`. At `DEBUG` that logger prints the
+mapping structure once, when the mapper is built, and at `TRACE` it also prints the field values of each conversion.
 
 ## `invoicing`
 

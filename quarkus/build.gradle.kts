@@ -51,7 +51,7 @@ tasks.withType<JavaCompile>().configureEach {
 // in this artifact still wins for consumers on a clean modular classpath.
 tasks.jar {
     manifest {
-        attributes(mapOf("Automatic-Module-Name" to "io.github.eschizoid.telescope.quarkus"))
+        attributes(mapOf("Automatic-Module-Name" to "io.github.telescopeorganization.telescope.quarkus"))
     }
 }
 
@@ -135,7 +135,7 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-quarkus"
             from(components["java"])
 

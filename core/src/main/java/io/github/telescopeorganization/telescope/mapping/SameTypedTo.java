@@ -1,0 +1,34 @@
+package io.github.telescopeorganization.telescope.mapping;
+
+import io.github.telescopeorganization.telescope.Telescope.Accessor;
+import io.github.telescopeorganization.telescope.internal.LambdaIntrospection;
+
+/**
+ * Same-typed correspondence row from {@link Mapping#to(Accessor, Accessor)}. Both accessors carry
+ * the same leaf type {@code X}; {@code DeepMap} reads the public components and contributes an
+ * identity leaf-level Iso itself, so no internal optic type appears on this record's surface.
+ *
+ * <p>Internal — users construct via {@link Mapping#to(Accessor, Accessor)} and never see this type
+ * at the call site.
+ */
+public record SameTypedTo<A, B, X>(Accessor<A, X> src, Accessor<B, X> tgt) implements Mapping<A, B> {
+  @Override
+  public Class<A> sourceClass() {
+    return LambdaIntrospection.receiverClassOf(src);
+  }
+
+  @Override
+  public Class<B> targetClass() {
+    return LambdaIntrospection.receiverClassOf(tgt);
+  }
+
+  @Override
+  public String sourceField() {
+    return LambdaIntrospection.methodNameOf(src);
+  }
+
+  @Override
+  public String targetField() {
+    return LambdaIntrospection.methodNameOf(tgt);
+  }
+}

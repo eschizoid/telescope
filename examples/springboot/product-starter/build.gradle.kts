@@ -9,7 +9,7 @@ plugins {
 // TelescopeMapperRegistry. The registry indexes every Mapper<A, B> @Bean in the context by
 // (sourceClass, targetClass), enabling polymorphic dispatch from a single generic service.
 
-group = "io.github.eschizoid.telescope.demo.starter"
+group = "io.github.telescopeorganization.telescope.demo.starter"
 version = "0.0.1-SNAPSHOT"
 
 java {
@@ -23,7 +23,7 @@ repositories {
 }
 
 springBoot {
-    mainClass.set("io.github.eschizoid.telescope.demo.starter.DemoApplication")
+    mainClass.set("io.github.telescopeorganization.telescope.demo.starter.DemoApplication")
 }
 
 dependencies {

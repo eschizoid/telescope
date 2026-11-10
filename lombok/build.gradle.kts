@@ -83,7 +83,7 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-lombok"
             from(components["java"])
 

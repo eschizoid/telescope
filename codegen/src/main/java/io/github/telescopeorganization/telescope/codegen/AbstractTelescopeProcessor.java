@@ -1,0 +1,2471 @@
+package io.github.telescopeorganization.telescope.codegen;
+
+import com.sun.source.tree.VariableTree;
+import com.sun.source.util.Trees;
+import io.github.telescopeorganization.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.telescopeorganization.telescope.internal.pairing.PairingRules;
+import io.github.telescopeorganization.telescope.internal.pairing.PropertyNames;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.WeakHashMap;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Stream;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.FilerException;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+
+/**
+ * Shared machinery for the telescope annotation processors ({@link FocusProcessor}, {@link
+ * BeanFocusProcessor}, {@link BridgeProcessor}, and any out-of-tree extensions such as the {@code
+ * telescope-lombok} module's {@code LombokFocusProcessor}): generated-source emission, the
+ * bean-style navigator emit pipeline ({@link #emitBeanNavigator}), and the {@code javax.lang.model}
+ * probes (setter/builder discovery, no-arg-constructor and static-factory checks, name casing,
+ * primitive boxing) they all rely on. Each concrete processor keeps only its own element discovery;
+ * the body it writes is shared here.
+ *
+ * <p>Public so an external module can subclass it and reuse {@link #emitBeanNavigator} without
+ * needing to live in this package.
+ */
+public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
+
+  /** For subclasses; this type is not instantiated directly. */
+  protected AbstractTelescopeProcessor() {
+    super();
+  }
+
+  /**
+   * The newest source level the running compiler supports. javac warns, with no source file, about
+   * a processor that claims an older level than the compilation's, which fails a {@code -Werror}
+   * build.
+   *
+   * <p>No processor walks elements or types with a version-specific visitor, and each one admits
+   * only the element kinds it names, so an element of a kind a newer level adds is refused. Two
+   * paths also refuse a component or property type of a kind they do not model: a navigator is
+   * written only after {@link #isEmittableAsTypedConstant} accepts every component or property
+   * type, and the map binder refuses a type the shared value classification calls unsupported. The
+   * bridge and mapper processors run neither check, so a type kind they do not model takes
+   * whichever branch their code has for an unrecognised shape.
+   */
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    return SourceVersion.latestSupported();
+  }
+
+  /**
+   * A discovered bean-style property: its lowercase name (e.g. {@code email}), its public getter
+   * (e.g. {@code getEmail} or {@code isActive}), and its declared return type. Used by {@link
+   * #emitBeanNavigator} to drive both the per-property method emission and the rebuild expression
+   * construction.
+   */
+  protected record Prop(String name, String getter, TypeMirror type) {}
+
+  /**
+   * How a navigator or holder names the class it navigates. {@code ref} is the reference the
+   * emitted source uses, and {@code wildcards} is {@code <?>}, one wildcard per type parameter, or
+   * empty for a class that declares none.
+   *
+   * <p>Every declared type names a generic class raw. A static member cannot name the class's type
+   * variables, and a wildcard is no substitute in a public signature: a {@code Telescope<Box<?>,
+   * String>} is not assignable to the {@code Telescope<Box, String>} a caller declares, and an
+   * {@code update} returning {@code Box<?>} cannot be assigned to the {@code Box<String>} the
+   * caller passed in. The raw type accepts both. A member declaring a raw type carries {@link
+   * #RAW_TYPES_SUPPRESSION} and nothing wider.
+   *
+   * <p>A lens body reads and builds the class through the wildcard form instead. A component or
+   * property whose type names a type variable is refused before anything is emitted, so every
+   * component type is the same in each parameterisation, and reading one through {@code Box<?>}
+   * yields that type where reading it through the raw {@code Box} yields its erasure and an
+   * unchecked conversion.
+   */
+  protected record OwnerRef(String ref, String wildcards) {
+    /** {@code type} as generated code names it, by the reference {@code ref}. */
+    static OwnerRef of(final TypeElement type, final String ref) {
+      final var parameters = type.getTypeParameters().size();
+      return new OwnerRef(
+        ref,
+        parameters == 0 ? "" : "<" + String.join(", ", Collections.nCopies(parameters, "?")) + ">"
+      );
+    }
+
+    /** Whether the class declares type parameters, so its declared types name it raw. */
+    boolean generic() {
+      return !wildcards.isEmpty();
+    }
+
+    /** A method reference to the instance method {@code member}. */
+    String methodRef(final String member) {
+      return ref + wildcards + "::" + member;
+    }
+
+    /** {@code receiver}, an expression of the raw type, as a receiver its members are read from. */
+    String receiver(final String receiver) {
+      return generic() ? "((" + ref + wildcards + ") " + receiver + ")" : receiver;
+    }
+
+    /** The class instance creation {@code new <ref>(arguments)}, inferring any type arguments. */
+    String creation(final String arguments) {
+      return "new " + ref + (generic() ? "<>" : "") + "(" + arguments + ")";
+    }
+
+    /** The suppression line a member declaring the raw type carries, or empty. */
+    String suppression(final String indent) {
+      return rawTypesSuppression(generic(), indent);
+    }
+  }
+
+  /** The suppression a generated member carries when it names a generic class raw. */
+  protected static final String RAW_TYPES_SUPPRESSION = "@SuppressWarnings(\"rawtypes\")";
+
+  /**
+   * {@link #RAW_TYPES_SUPPRESSION} on a line of its own at {@code indent} when {@code raw}, else
+   * empty.
+   */
+  protected static String rawTypesSuppression(final boolean raw, final String indent) {
+    return raw ? indent + RAW_TYPES_SUPPRESSION + "\n" : "";
+  }
+
+  /**
+   * Whether {@code type} is, or has among its type arguments at any depth, a generic class used
+   * raw.
+   */
+  protected static boolean namesRaw(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case DECLARED -> {
+        final var declared = (DeclaredType) type;
+        final var element = (TypeElement) declared.asElement();
+        if (declared.getTypeArguments().isEmpty() && !element.getTypeParameters().isEmpty()) yield true;
+        for (final var arg : declared.getTypeArguments()) {
+          if (namesRaw(arg)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> namesRaw(((ArrayType) type).getComponentType());
+      default -> false;
+    };
+  }
+
+  /**
+   * Emits exactly the given {@code imports} — no implicit {@code Telescope}. A generator whose body
+   * references {@code Telescope} must include it in {@code imports}; one that doesn't (e.g. a
+   * {@code ForwardMapper} converter) omits it and gets no dead import. Use simple names in the body
+   * and list their FQNs here.
+   */
+  protected void writeClass(
+    final String qualifiedName,
+    final String simpleName,
+    final Set<String> imports,
+    final String javadoc,
+    final Element origin,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedName, origin);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        final var sorted = new TreeSet<>(imports);
+        for (final var imp : sorted) out.println("import " + imp + ";");
+        out.println();
+        out.println("/** " + javadoc + " */");
+        out.println("public final class " + simpleName + " {");
+        out.println();
+        out.println("  private " + simpleName + "() {}");
+        out.println();
+        body.accept(out);
+        out.println("}");
+      }
+    } catch (final IOException e) {
+      error(origin, writeFailureMessage(qualifiedName, e));
+    }
+  }
+
+  /**
+   * Phrase a failed emission. A {@link FilerException} for a name already taken is the one case
+   * with an action attached: some other type in the compilation already owns the name the processor
+   * derives, and the fix is to change a name rather than to read a stack trace. Every other {@code
+   * IOException} is a genuine write failure and is reported as it arrives.
+   */
+  private static String writeFailureMessage(final String qualifiedName, final IOException e) {
+    if (e instanceof FilerException) {
+      return (
+        "Cannot generate " +
+        qualifiedName +
+        " — that name is already taken in this compilation. Rename the existing type, or rename" +
+        " the source or target so the derived name differs. (" +
+        e.getMessage() +
+        ")"
+      );
+    }
+    return "Failed to write " + qualifiedName + ": " + e.getMessage();
+  }
+
+  /**
+   * The zero-argument methods every generated navigator declares for itself, whatever type it
+   * navigates. A property of the same name emits a second method with the same erasure, so the
+   * generated file does not compile — and javac reports it against the generated source, which the
+   * author never wrote. A property matching a forwarder that takes arguments is fine: those
+   * overload cleanly.
+   *
+   * <p>A navigator for a type that also carries {@code @Bridge} declares one more zero-argument
+   * method, {@code as<Target>()}, whose name depends on that target. It cannot live in this set, so
+   * callers pass it through {@code alsoReserved}.
+   */
+  private static final Set<String> RESERVED_NAVIGATOR_METHODS = Set.of("of", "get", "explain");
+
+  /**
+   * The type variables a navigator declares: {@code R} for the root it navigates from, and {@code
+   * E} and {@code B} on the effectful-update and composition forwarders. A focused type whose own
+   * simple name is one of these is shadowed by the variable at every use, and the resulting
+   * signatures are between meaningless and uncompilable — {@code Telescope<B, B>} names one type
+   * twice where two were meant.
+   *
+   * <p>Adding a variable here without adding it to this set reopens that, for a class name the
+   * author had every right to choose.
+   */
+  private static final Set<String> NAVIGATOR_TYPE_VARIABLES = Set.of("R", "E", "B");
+
+  /**
+   * How the navigator names the type it focuses. The package-relative form reads better and is what
+   * a same-package navigator normally wants, but it is shadowed when it collides with one of the
+   * navigator's own type variables. A qualified name cannot be shadowed, so the collision case
+   * takes one.
+   */
+  protected static String navigatorTypeRefOf(final TypeElement type) {
+    return NAVIGATOR_TYPE_VARIABLES.contains(type.getSimpleName().toString())
+      ? type.getQualifiedName().toString()
+      : packageRelativeTypeRefOf(type);
+  }
+
+  /**
+   * Reports any property whose name would collide with a method the navigator declares for itself,
+   * and answers whether emission should be abandoned for this type. Callers check before writing
+   * the navigator: emitting it anyway leaves the author with a javac error inside a file they
+   * cannot edit. {@code alsoReserved} carries the names that depend on the type being emitted.
+   */
+  protected boolean hasReservedPropertyName(
+    final Element site,
+    final String triggerLabel,
+    final List<String> propertyNames,
+    final Set<String> alsoReserved
+  ) {
+    for (final var name : propertyNames) {
+      if (RESERVED_NAVIGATOR_METHODS.contains(name) || alsoReserved.contains(name)) {
+        error(
+          site,
+          triggerLabel +
+            ": property '" +
+            name +
+            "' collides with the generated navigator's own " +
+            name +
+            "() method. Rename the property, or drop the annotation and use the runtime" +
+            " path."
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
+  protected void error(final Element element, final String message) {
+    processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, message, element);
+  }
+
+  // The name of the property's setter, as setterChoice picks it, or null.
+  protected String setterName(final TypeElement type, final String property) {
+    return setterChoice(type, property).member() == null ? null : "set" + capitalize(property);
+  }
+
+  /**
+   * The declared parameter type of the property's setter, as {@link #setterChoice} picks it, or
+   * {@code null} where there is none.
+   */
+  protected TypeMirror setterParameter(final TypeElement type, final String property) {
+    final var member = setterChoice(type, property).member();
+    return member == null ? null : member.getParameters().getFirst().asType();
+  }
+
+  /**
+   * The setter choice for {@code property} of {@code type}, made by the rule the runtime writers
+   * apply, so a generated call and a reflective one write through the same method.
+   */
+  MirrorSetters.SetterChoice setterChoice(final TypeElement type, final String property) {
+    return mirrorSetters().choose(type, property, getterType(type, property));
+  }
+
+  /**
+   * Why {@code property} of {@code type} cannot be written through its setter, or null: several
+   * setters bind its value equally, or, unless {@code writeOnly}, the setter takes a type a value
+   * of the property's own type cannot be passed to without a cast. A write-only caller converts its
+   * value to the setter's own type, so only an ambiguous choice refuses it. The messages are the
+   * ones the runtime writers refuse with.
+   */
+  protected String setterRefusal(final TypeElement type, final String property, final boolean writeOnly) {
+    return mirrorSetters().refusal(
+      type,
+      property,
+      getterType(type, property),
+      writeOnly ? MirrorSetters.Write.CONVERTED : MirrorSetters.Write.GENERATED
+    );
+  }
+
+  // The property's type, its getter's return type as a member of `type`, or null with no getter.
+  private TypeMirror getterType(final TypeElement type, final String property) {
+    for (final var p : beanProperties(type)) {
+      if (p.name().equals(property)) return p.type();
+    }
+    return null;
+  }
+
+  private MirrorSetters mirrorSetters() {
+    if (mirrorSetters == null) {
+      mirrorSetters = new MirrorSetters(processingEnv.getTypeUtils(), processingEnv.getElementUtils(), mirrorProps());
+    }
+    return mirrorSetters;
+  }
+
+  MirrorProps mirrorProps() {
+    if (mirrorProps == null) {
+      mirrorProps = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
+    }
+    return mirrorProps;
+  }
+
+  // The builder method that writes property of bean (builderSetterMember), by name, or null.
+  protected String builderSetter(final TypeElement bean, final TypeElement builderType, final String property) {
+    final var member = builderSetterMember(bean, builderType, property);
+    return member == null ? null : member.getSimpleName().toString();
+  }
+
+  /**
+   * The parameter type of the builder member that carries the property, or {@code null} where there
+   * is none. Matched by name and arity, so the parameter may be a type the property's own value
+   * does not fit — a {@code String} builder method behind an {@code Object} getter. Callers that
+   * emit a call to it have to look.
+   */
+  protected TypeMirror builderSetterParameter(
+    final TypeElement bean,
+    final TypeElement builderType,
+    final String property
+  ) {
+    final var member = builderSetterMember(bean, builderType, property);
+    return member == null ? null : member.getParameters().getFirst().asType();
+  }
+
+  /**
+   * The builder member that writes {@code property} of {@code bean}: among the builder's public
+   * single-argument methods named {@code property}, {@code setX} or {@code withX}, the one {@link
+   * PairingRules#chooseSetter} picks for the property's type, as the runtime builder writer picks
+   * it. Where the bean has no getter for the property, or no one member is chosen, the first in a
+   * fixed order stands, so the answer does not depend on the order the builder declares them in.
+   */
+  protected ExecutableElement builderSetterMember(
+    final TypeElement bean,
+    final TypeElement builderType,
+    final String property
+  ) {
+    final var set = "set" + capitalize(property);
+    final var with = "with" + capitalize(property);
+    final var candidates = new ArrayList<ExecutableElement>();
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
+      if (!isPublicInstance(m) || m.getParameters().size() != 1) continue;
+      final var name = m.getSimpleName().toString();
+      if (name.equals(property) || name.equals(set) || name.equals(with)) candidates.add(m);
+    }
+    if (candidates.size() <= 1) return candidates.isEmpty() ? null : candidates.getFirst();
+    final var types = processingEnv.getTypeUtils();
+    // The runtime orders them by their generic signature, which names each parameter in full.
+    candidates.sort(
+      Comparator.comparing(
+        m -> m.getSimpleName() + "(" + types.erasure(m.getParameters().getFirst().asType()).toString() + ")"
+      )
+    );
+    final var read = bean == null ? null : getterType(bean, property);
+    if (read == null) return candidates.getFirst();
+    final var erased = new ArrayList<TypeMirror>(candidates.size());
+    final var components = new ArrayList<TypeMirror>(candidates.size());
+    for (final var m : candidates) {
+      final var parameter = types.erasure(m.getParameters().getFirst().asType());
+      erased.add(parameter);
+      components.add(m.isVarArgs() && parameter instanceof ArrayType array ? array.getComponentType() : null);
+    }
+    final var index = new PairingRules<>(mirrorProps()).chooseSetter(types.erasure(read), erased, components);
+    return candidates.get(index < 0 ? 0 : index);
+  }
+
+  // The directly-declared public static no-arg builder() factory on `type`, or null. Only used to
+  // detect builder-style classes for the @BeanFocus / Lombok @Builder path and for the bridge
+  // processor; if a future processor needs a different name, generalize back to taking a String.
+  protected static ExecutableElement staticBuilderMethod(final TypeElement type) {
+    for (final var m : ElementFilter.methodsIn(type.getEnclosedElements())) {
+      if (
+        m.getModifiers().contains(Modifier.PUBLIC) &&
+        m.getModifiers().contains(Modifier.STATIC) &&
+        m.getParameters().isEmpty() &&
+        m.getSimpleName().contentEquals("builder")
+      ) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The builder type a usable static {@code builder()} on {@code type} returns, or {@code null}.
+   * Usable means the builder has a public no-arg {@code build()}, which is what the runtime writer
+   * asks of a builder before it takes one.
+   */
+  protected TypeElement usableBuilderType(final TypeElement type) {
+    final var builder = staticBuilderMethod(type);
+    if (builder == null || builder.getReturnType().getKind() != TypeKind.DECLARED) return null;
+    final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+    return hasBuildMethod(builderType) ? builderType : null;
+  }
+
+  /**
+   * The strategy an unhinted rebuild of {@code type} takes, as {@link BeanWriteStrategy#auto}
+   * decides it from this world's view of the bean. {@code hasSetters} is the caller's, since it
+   * turns on which no-arg constructor the generated code can call: a navigator emitted beside the
+   * bean reaches any non-private one, a bridge reaches a public one or one declared in the package
+   * it is emitted into.
+   */
+  Optional<BeanWriteStrategy> autoBeanStrategy(
+    final TypeElement type,
+    final List<String> properties,
+    final Function<String, TypeMirror> propertyType,
+    final boolean hasSetters
+  ) {
+    final var builderType = usableBuilderType(type);
+    final var hasConstructor = nameMatchedConstructor(type, properties) != null;
+    return BeanWriteStrategy.auto(
+      new BeanWriteStrategy.Shape() {
+        @Override
+        public List<String> properties() {
+          return properties;
+        }
+
+        @Override
+        public boolean hasBuilder() {
+          return builderType != null;
+        }
+
+        @Override
+        public BeanWriteStrategy.Member builderMember(final String property) {
+          final var parameter = builderSetterParameter(type, builderType, property);
+          if (parameter == null) return BeanWriteStrategy.Member.ABSENT;
+          return memberAccepts(parameter, propertyType.apply(property))
+            ? BeanWriteStrategy.Member.ACCEPTS
+            : BeanWriteStrategy.Member.REJECTS;
+        }
+
+        @Override
+        public boolean hasConstructor() {
+          return hasConstructor;
+        }
+
+        @Override
+        public boolean hasSetters() {
+          return hasSetters;
+        }
+
+        @Override
+        public boolean setterWrites(final String property) {
+          return !setterChoice(type, property).candidates().isEmpty();
+        }
+
+        @Override
+        public boolean stored(final String property) {
+          return storedField(type, property);
+        }
+      }
+    );
+  }
+
+  /**
+   * Whether {@code field} is given a value where it is declared, or empty when this compilation
+   * cannot say: the field comes from a compiled class rather than source, or the processing
+   * environment is not javac's.
+   */
+  protected Optional<Boolean> initialisedInSource(final VariableElement field) {
+    try {
+      final var tree = Trees.instance(processingEnv).getTree(field);
+      if (!(tree instanceof VariableTree variable)) return Optional.empty();
+      return Optional.of(variable.getInitializer() != null);
+    } catch (final IllegalArgumentException e) {
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Whether {@code type} or a superclass declares an instance field named {@code name} that only a
+   * write strategy can give a value: one that is not final, or a final one this compilation can see
+   * is not given a value where it is declared. A final field with an initializer is written by
+   * nothing, so no strategy can lose it. The runtime cannot see initializers and counts no final
+   * field; for a final field without one, a builder with no member for it is refused here and taken
+   * there.
+   */
+  protected boolean storedField(final TypeElement type, final String name) {
+    for (var t = type; t != null; ) {
+      for (final var field : ElementFilter.fieldsIn(t.getEnclosedElements())) {
+        if (!field.getSimpleName().contentEquals(name) || field.getModifiers().contains(Modifier.STATIC)) continue;
+        if (!field.getModifiers().contains(Modifier.FINAL)) return true;
+        return initialisedInSource(field)
+          .map(initialised -> !initialised)
+          .orElse(false);
+      }
+      final var parent = t.getSuperclass();
+      t = parent.getKind() == TypeKind.DECLARED ? (TypeElement) ((DeclaredType) parent).asElement() : null;
+      if (t != null && t.getQualifiedName().contentEquals("java.lang.Object")) t = null;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a builder member taking {@code parameter} can hold a value of {@code property}'s type,
+   * by the rule the runtime writer applies to the erased types: a primitive on either side must be
+   * the same primitive, and otherwise the parameter must be assignable from the property. A varargs
+   * member's parameter is an array, which only an array property is assignable to.
+   */
+  private boolean memberAccepts(final TypeMirror parameter, final TypeMirror property) {
+    final var types = processingEnv.getTypeUtils();
+    if (parameter.getKind().isPrimitive() || property.getKind().isPrimitive()) {
+      return types.isSameType(parameter, property);
+    }
+    return types.isAssignable(types.erasure(property), types.erasure(parameter));
+  }
+
+  /**
+   * The constructor an unhinted rebuild calls, or {@code null}: the only constructor {@code type}
+   * declares with one parameter per property, public, with every parameter named after a property.
+   * The runtime writer applies the same rule, except that it can read parameter names only from a
+   * class compiled with {@code -parameters} or {@code -g}; a processor reads them from the
+   * compilation unit.
+   */
+  protected static ExecutableElement nameMatchedConstructor(final TypeElement type, final List<String> properties) {
+    ExecutableElement found = null;
+    for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
+      if (ctor.getParameters().size() != properties.size()) continue;
+      if (found != null) return null;
+      found = ctor;
+    }
+    if (found == null || !found.getModifiers().contains(Modifier.PUBLIC)) return null;
+    for (final var parameter : found.getParameters()) {
+      if (!properties.contains(parameter.getSimpleName().toString())) return null;
+    }
+    return found;
+  }
+
+  /**
+   * Whether a no-argument constructor exists that the generated navigator can call. The navigator
+   * is emitted into the bean's own package, so protected and package-private both reach; only
+   * private does not. The reflective writer asks the same question through {@code
+   * getDeclaredConstructor}, which is why a stricter test here leaves the two paths disagreeing for
+   * the very common bean that hides its no-arg constructor behind an access modifier.
+   */
+  protected static boolean hasAccessibleNoArgConstructor(final TypeElement type) {
+    for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PRIVATE) && ctor.getParameters().isEmpty()) return true;
+    }
+    return false;
+  }
+
+  protected static boolean isPublicInstance(final ExecutableElement m) {
+    return m.getModifiers().contains(Modifier.PUBLIC) && !m.getModifiers().contains(Modifier.STATIC);
+  }
+
+  protected static String capitalize(final String s) {
+    return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
+  }
+
+  /**
+   * Describes a container-shaped component: its concrete element type, the runtime-DSL method name
+   * the generated container step exposes ({@code each} / {@code eachValue} / {@code whenPresent}),
+   * and the container family ({@code "list"} / {@code "set"} / {@code "map"} / {@code "optional"} /
+   * {@code "iterable"}) used to pick which {@code Telescope.asX(...)} static factory the codegen
+   * emits. Returned by {@link #traversalKind}; {@code null} when the type isn't a traversable
+   * container.
+   *
+   * @param rebuildable whether a write through this step can succeed. A rebuild produces an
+   *     unmodifiable {@code List} or {@code Set}, so a declaration that fits neither -- a concrete
+   *     container class, a sub-interface of either, a {@code Deque} or {@code Queue}, an adopter's
+   *     own {@code Iterable} subtype -- reads correctly and throws on update. The four typed kinds
+   *     claim only declarations that do fit, so it is always true for them.
+   */
+  protected record TraversalShape(String elementType, String stepMethod, String containerKind, boolean rebuildable) {}
+
+  /**
+   * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
+   * traversable. {@code Map<K,V>} yields its <em>value</em> type with step method {@code eachValue}
+   * (keys preserved); {@code Optional<E>} yields {@code E} with {@code whenPresent}; {@code
+   * List}/{@code Set}/{@code Iterable<E>} yield {@code E} with {@code each}. Mirrors the runtime
+   * {@code Telescope.each} / {@code eachValue} / {@code whenPresent} naming so the generated
+   * navigator reads the same way as the reflective DSL.
+   */
+  protected TraversalShape traversalKind(final TypeMirror type) {
+    if (type.getKind() != TypeKind.DECLARED) return null;
+    final var declared = (DeclaredType) type;
+    final var types = processingEnv.getTypeUtils();
+    final var elements = processingEnv.getElementUtils();
+    final var args = declared.getTypeArguments();
+    final var erasure = types.erasure(declared);
+
+    final var map = elements.getTypeElement("java.util.Map");
+    if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
+      final var elem = concreteArg(args, 1);
+      return elem == null ? null : new TraversalShape(elem, "eachValue", "map", true);
+    }
+    final var optional = elements.getTypeElement("java.util.Optional");
+    if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "whenPresent", "optional", true);
+    }
+    // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
+    // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
+    // The list and set branches claim a declared type only when the rebuild they produce can be
+    // stored back. The rebuild is the interface's normalised form, so the test is whether the
+    // interface is assignable to the declared type -- true for List itself and its supertypes,
+    // false for a concrete subclass and for a sub-interface, neither of which a normalised rebuild
+    // satisfies. Those fall through to the polymorphic branch, which binds any Iterable subtype.
+    //
+    // The map branch above does not make this test, so a concrete Map subtype still emits a step
+    // that does not compile. Nothing it could fall through to exists yet.
+    final var list = elements.getTypeElement("java.util.List");
+    if (list != null && isKindOf(erasure, list) && storesRebuildOf(list, erasure)) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "list", true);
+    }
+    final var set = elements.getTypeElement("java.util.Set");
+    if (set != null && isKindOf(erasure, set) && storesRebuildOf(set, erasure)) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "set", true);
+    }
+    final var iterable = elements.getTypeElement("java.lang.Iterable");
+    if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "iterable", rebuildableIterable(erasure));
+    }
+    return null;
+  }
+
+  /**
+   * Whether a write through the polymorphic iterable step can succeed for this declared type. A
+   * rebuild produces an unmodifiable wrapper over the element traversal's result, whose only {@code
+   * Iterable} supertypes are {@code List} and {@code Set} and theirs — so a declaration neither of
+   * those fits has nowhere to store what a write produces. Reads are unaffected: every {@code
+   * Iterable} enumerates.
+   *
+   * <p>The test is on the interfaces rather than on the implementations the traversal happens to
+   * allocate. Those differ: an {@code ArrayList} is assignable to {@code AbstractCollection} and a
+   * {@code List} is not, and the wrapper the write actually produces is neither.
+   */
+  private boolean rebuildableIterable(final TypeMirror erasure) {
+    final var elements = processingEnv.getElementUtils();
+    return Stream.of("java.util.List", "java.util.Set")
+      .map(elements::getTypeElement)
+      .filter(Objects::nonNull)
+      .anyMatch(iface -> storesRebuildOf(iface, erasure));
+  }
+
+  /** Whether the declared type is one of {@code iface}'s, so that traversal is the right one. */
+  private boolean isKindOf(final TypeMirror declaredErasure, final TypeElement iface) {
+    final var types = processingEnv.getTypeUtils();
+    return types.isAssignable(declaredErasure, types.erasure(iface.asType()));
+  }
+
+  /**
+   * Whether a value rebuilt as {@code iface}'s normalised form can be stored in a field declared
+   * {@code declaredErasure}. Container rebuilds normalise to the interface rather than preserving
+   * the declared class, so this is assignability in the direction that surprises people: the
+   * question is whether the interface fits the declaration, not whether the declaration is one.
+   */
+  private boolean storesRebuildOf(final TypeElement iface, final TypeMirror declaredErasure) {
+    final var types = processingEnv.getTypeUtils();
+    return types.isAssignable(types.erasure(iface.asType()), declaredErasure);
+  }
+
+  /**
+   * The fully-qualified name of the {@code @Bridge} target on {@code source}, or {@code null} if
+   * {@code source} doesn't carry an {@code @Bridge} annotation. Drives the "bridge hop" emission on
+   * a Path navigator — if the type also carries {@code @Focus} or {@code @BeanFocus}, the navigator
+   * gains an {@code as<Target>()} method that chains the generated {@code <Source>Bridge.BRIDGE}
+   * constant.
+   */
+  protected String bridgeTargetFqn(final TypeElement source) {
+    final var annotated = annotatedBridgeTargetFqn(source);
+    if (annotated != null) return annotated;
+    final var declared = fieldBridges.get(source.getQualifiedName().toString());
+    return declared == null || declared.isEmpty() ? null : declared.keySet().iterator().next();
+  }
+
+  /** The target a {@code @Bridge} on {@code source} itself names, or null. */
+  private String annotatedBridgeTargetFqn(final TypeElement source) {
+    final var anno = processingEnv
+      .getElementUtils()
+      .getTypeElement("io.github.telescopeorganization.telescope.annotations.Bridge");
+    if (anno == null) return null;
+    for (final var am : source.getAnnotationMirrors()) {
+      if (!am.getAnnotationType().asElement().equals(anno)) continue;
+      for (final var entry : am.getElementValues().entrySet()) {
+        if (entry.getKey().getSimpleName().contentEquals("value")) {
+          final var value = (TypeMirror) entry.getValue().getValue();
+          if (value.getKind() == TypeKind.DECLARED) {
+            return ((TypeElement) ((DeclaredType) value).asElement()).getQualifiedName().toString();
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The bridges {@code @Bridge} fields declare, by the qualified name of their source, then of
+   * their target, to the qualified name of the bridge. A field's bridge is its pair's own bridge,
+   * so a navigator of the source hops through it as it hops through a bridge its own
+   * {@code @Bridge} declares. Accumulated across rounds, since a navigator may be written in a
+   * later round than the field is read.
+   */
+  private final Map<String, Map<String, String>> fieldBridges = new HashMap<>();
+
+  /**
+   * Records the pair of each {@code @Bridge} field of this round, read from the class literals its
+   * mapper call names. Without the javac tree API no field's call can be read, and nothing is
+   * recorded.
+   */
+  protected final void readFieldBridges(final RoundEnvironment roundEnv) {
+    final var anno = processingEnv
+      .getElementUtils()
+      .getTypeElement("io.github.telescopeorganization.telescope.annotations.Bridge");
+    if (anno == null) return;
+    final Trees trees;
+    try {
+      trees = Trees.instance(processingEnv);
+    } catch (final IllegalArgumentException e) {
+      return;
+    }
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
+      if (!(element instanceof VariableElement field) || element.getKind() != ElementKind.FIELD) continue;
+      final var call = rows.initializerCall(field);
+      final var path = trees.getPath(field);
+      if (call == null || path == null || call.getArguments().size() < 2) continue;
+      final var unit = path.getCompilationUnit();
+      final var owner = (TypeElement) field.getEnclosingElement();
+      // Resolved by name: attributing the call would resolve its accessor references too, which
+      // reports an error for a getter Lombok has not written yet.
+      final var source = rows.classLiteralByName(unit, call.getArguments().get(0), owner);
+      final var target = rows.classLiteralByName(unit, call.getArguments().get(1), owner);
+      if (source == null || target == null) continue;
+      final var pkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
+      fieldBridges
+        .computeIfAbsent(source.getQualifiedName().toString(), unused -> new LinkedHashMap<>())
+        .putIfAbsent(
+          target.getQualifiedName().toString(),
+          (pkg.isEmpty() ? "" : pkg + ".") + FieldRows.bridgeSimpleName(source, target)
+        );
+    }
+  }
+
+  /**
+   * The {@code @Bridge} target of {@code source} as a type, or an empty list when it has none: the
+   * type a navigator's bridge hop would descend into.
+   */
+  protected final List<TypeMirror> bridgeTargetTypes(final TypeElement source) {
+    final var fqn = bridgeTargetFqn(source);
+    final var target = fqn == null ? null : processingEnv.getElementUtils().getTypeElement(fqn);
+    return target == null ? List.of() : List.of(target.asType());
+  }
+
+  /**
+   * Whether the type named by {@code qualifiedName} is itself navigable — i.e. has a generated
+   * {@code <X>Telescope<R>} via {@code @Focus} (on records), {@code @BeanFocus} (on classes), or
+   * one of the Lombok bean annotations ({@code @lombok.Data} / {@code @lombok.Value} /
+   * {@code @lombok.Builder}) when the {@code telescope-lombok} module is on the processor path.
+   * Drives the bridge hop's return type: navigable target → {@code <Target>Telescope<R>}; otherwise
+   * terminal {@code Telescope<R, Target>}. A target whose navigator is not {@linkplain
+   * #navigatorWrittenInTime written in time} to be named is not navigable here, whichever
+   * annotation it carries. Lombok annotations are looked up by string FQN so this module incurs no
+   * compile-time Lombok dependency.
+   */
+  protected boolean isNavigablePath(final String qualifiedName) {
+    final var elements = processingEnv.getElementUtils();
+    final var element = elements.getTypeElement(qualifiedName);
+    if (element == null) return false;
+    if (!navigatorWrittenInTime(element)) return false;
+    if (element.getKind() == ElementKind.RECORD) {
+      return hasAnnotation(element, "io.github.telescopeorganization.telescope.annotations.Focus");
+    }
+    if (element.getKind() == ElementKind.CLASS) {
+      if (hasAnnotation(element, "io.github.telescopeorganization.telescope.annotations.BeanFocus")) return true;
+      for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
+        if (hasAnnotation(element, fqn)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Lombok annotations that the {@code telescope-lombok} processor treats as bean-style triggers.
+   * Kept here as bare strings (looked up reflectively via {@link
+   * javax.lang.model.util.Elements#getTypeElement}) so this module — and its consumers — never gain
+   * a hard Lombok dependency. {@link #isNavigablePath} consults this set to recognise that a
+   * Lombok-annotated sub-component has its own generated Path.
+   */
+  protected static final Set<String> LOMBOK_BEAN_ANNOTATIONS = Set.of("lombok.Data", "lombok.Value", "lombok.Builder");
+
+  private static final String BEAN_FOCUS = "io.github.telescopeorganization.telescope.annotations.BeanFocus";
+
+  private static final String LOMBOK_PROCESSOR =
+    "io.github.telescopeorganization.telescope.codegen.lombok.LombokFocusProcessor";
+
+  // The classes telescope-lombok's processor has taken as targets, keyed by their compilation's
+  // type utilities: one instance per compilation, shared by every processor in it, and held weakly
+  // so a finished compilation drops out.
+  private static final Map<Types, Set<String>> LOMBOK_TARGETS = Collections.synchronizedMap(new WeakHashMap<>());
+
+  // Whether the round this processor is in is the final one. Every file written in the final round
+  // can name every other file written in it, so a navigator written then can descend into any
+  // child whose navigator is written at all.
+  private boolean inFinalRound;
+
+  private MirrorSetters mirrorSetters;
+
+  private MirrorProps mirrorProps;
+
+  /**
+   * Records whether {@code roundEnv} is the final round, and the pairs its {@code @Bridge} fields
+   * declare. A processor that writes bean navigators calls this at the start of every round; one
+   * that does not is treated as never being in it.
+   */
+  protected final void enterRound(final RoundEnvironment roundEnv) {
+    inFinalRound = roundEnv.processingOver();
+    readFieldBridges(roundEnv);
+  }
+
+  /**
+   * Records that telescope-lombok's processor writes the navigator for {@code pojo}. That processor
+   * takes a class as its target in the round the class appears, and writes every target it takes:
+   * as soon as the members Lombok adds are visible, or in the final round if they never are.
+   */
+  protected final void markWrittenByLombok(final TypeElement pojo) {
+    LOMBOK_TARGETS.computeIfAbsent(processingEnv.getTypeUtils(), k ->
+      Collections.synchronizedSet(new LinkedHashSet<>())
+    ).add(pojo.getQualifiedName().toString());
+  }
+
+  /**
+   * Whether telescope-lombok's processor has taken {@code pojo} as a target in this compilation.
+   */
+  protected final boolean writtenByLombok(final TypeElement pojo) {
+    final var targets = LOMBOK_TARGETS.get(processingEnv.getTypeUtils());
+    return targets != null && targets.contains(pojo.getQualifiedName().toString());
+  }
+
+  /** Whether {@code element} carries one of {@link #LOMBOK_BEAN_ANNOTATIONS}. */
+  protected final boolean carriesLombokBeanTrigger(final Element element) {
+    for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
+      if (hasAnnotation(element, fqn)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether the navigator of {@code element}, a type a navigator would descend into, is written in
+   * time to be named from the navigator being written now. javac does not resolve a name in an
+   * earlier round's file against a file written in the final round, so before the final round only
+   * a navigator written before it qualifies; in the final round any navigator written at all does.
+   * A class carrying a Lombok annotation is written by telescope-lombok's processor when that
+   * processor has taken the class as a target, and otherwise by the {@code @BeanFocus} processor in
+   * the final round, if it carries {@code @BeanFocus}. Every other navigator is written in the
+   * round its type appears.
+   */
+  protected final boolean navigatorWrittenInTime(final Element element) {
+    if (element.getKind() != ElementKind.CLASS || !carriesLombokTrigger(element)) return true;
+    if (writtenByLombok((TypeElement) element)) return true;
+    return inFinalRound && hasAnnotation(element, BEAN_FOCUS);
+  }
+
+  /**
+   * Whether telescope-lombok's processor may still take {@code element} as a target: it carries a
+   * Lombok bean annotation, the processor is on the path, and it has not taken the class so far.
+   * The processor takes a class in the round the class appears, so by the next round this is
+   * settled — taken, or never to be.
+   */
+  protected final boolean mayBeWrittenByLombok(final Element element) {
+    return (
+      element.getKind() == ElementKind.CLASS &&
+      carriesLombokBeanTrigger(element) &&
+      !writtenByLombok((TypeElement) element) &&
+      loadable(LOMBOK_PROCESSOR)
+    );
+  }
+
+  /**
+   * Whether a navigator with hops to {@code hopTypes} would descend into a type whose navigator
+   * telescope-lombok's processor may still take on — a property's type, a container property's
+   * element type, or a bridge hop's target. Emitting the navigator now would decide that hop before
+   * the answer is known, so the caller holds the navigator back one round, after which the answer
+   * is settled.
+   */
+  protected final boolean awaitsLombokTarget(final List<TypeMirror> hopTypes) {
+    final var elements = processingEnv.getElementUtils();
+    final var named = new ArrayList<Element>();
+    for (final var type : hopTypes) {
+      if (type.getKind() == TypeKind.DECLARED) named.add(((DeclaredType) type).asElement());
+      final var shape = traversalKind(type);
+      final var element = shape == null ? null : elements.getTypeElement(shape.elementType());
+      if (element != null) named.add(element);
+    }
+    return named.stream().anyMatch(this::mayBeWrittenByLombok);
+  }
+
+  /**
+   * The annotations that give a bean its own generated navigator, which a navigator descends into
+   * rather than ending at: {@code @BeanFocus}, and the Lombok bean annotations when
+   * telescope-lombok sits on the processor path, since only then is a navigator written for them.
+   * Both bean processors pass this one set, so a class gets the same navigator whichever of them
+   * writes it. javac loads every discovered processor through one class loader, so
+   * telescope-lombok's processor being loadable from this one's is the test for its being on the
+   * path.
+   */
+  protected final Set<String> navigableBeanAnnotations() {
+    final var navigable = new LinkedHashSet<String>();
+    navigable.add(BEAN_FOCUS);
+    if (loadable(LOMBOK_PROCESSOR)) navigable.addAll(LOMBOK_BEAN_ANNOTATIONS);
+    return navigable;
+  }
+
+  private static boolean loadable(final String className) {
+    try {
+      Class.forName(className, false, AbstractTelescopeProcessor.class.getClassLoader());
+      return true;
+    } catch (final ClassNotFoundException | LinkageError e) {
+      return false;
+    }
+  }
+
+  /**
+   * Broader set of Lombok annotations that synthesize members readable by {@link
+   * javax.lang.model.util.Elements#getAllMembers}. Used by {@link #carriesLombokTrigger} to decide
+   * whether emission must be round-deferred (Lombok installs lazy AST visitors that may not have
+   * fired by round 1; querying member lists too early returns the un-patched view).
+   *
+   * <p>Superset of {@link #LOMBOK_BEAN_ANNOTATIONS}. The wider scope is intentional —
+   * {@code @Getter} on a class with explicit fields generates the same un-patched read symptom as
+   * {@code @Data}, and {@code @RequiredArgsConstructor} matters for the canonical-ctor rebuild
+   * path.
+   *
+   * <p>This is NOT the {@code LombokFocusProcessor} navigator-emission trigger set — that stays at
+   * {@link #LOMBOK_BEAN_ANNOTATIONS} (only {@code @Data} / {@code @Value} / {@code @Builder}
+   * indicate "navigate me as a bean"; {@code @Getter} alone on a field doesn't).
+   */
+  protected static final Set<String> LOMBOK_SYNTHESIZING_ANNOTATIONS = Set.of(
+    "lombok.Data",
+    "lombok.Value",
+    "lombok.Builder",
+    "lombok.Getter",
+    "lombok.Setter",
+    "lombok.With",
+    "lombok.RequiredArgsConstructor",
+    "lombok.AllArgsConstructor",
+    "lombok.NoArgsConstructor",
+    "lombok.experimental.SuperBuilder",
+    "lombok.experimental.Accessors",
+    "lombok.experimental.FieldDefaults"
+  );
+
+  protected boolean hasAnnotation(final Element element, final String annotationFqn) {
+    final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+    if (anno == null) return false;
+    for (final var am : element.getAnnotationMirrors()) {
+      if (am.getAnnotationType().asElement().equals(anno)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * True when {@code element} (or any of its enclosed fields) carries any of {@link
+   * #LOMBOK_SYNTHESIZING_ANNOTATIONS}. Used by {@code BridgeProcessor} to decide whether emission
+   * must be round-deferred. Probed via string FQN, so a graceful {@code false} is returned when
+   * Lombok isn't on the consumer's classpath at all.
+   *
+   * <p>Checks the type itself AND its enclosed fields — {@code @Getter} / {@code @Setter} are
+   * frequently declared on individual fields rather than at the class level, and either form
+   * synthesizes accessors that won't be visible to {@code getAllMembers} until Lombok's AST patches
+   * have fired.
+   */
+  protected boolean carriesLombokTrigger(final Element element) {
+    for (final var fqn : LOMBOK_SYNTHESIZING_ANNOTATIONS) {
+      if (hasAnnotation(element, fqn)) return true;
+    }
+    for (final var enclosed : element.getEnclosedElements()) {
+      if (enclosed.getKind() != ElementKind.FIELD) continue;
+      for (final var fqn : LOMBOK_SYNTHESIZING_ANNOTATIONS) {
+        if (hasAnnotation(enclosed, fqn)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The simple name of a fully-qualified type — the part after the last {@code .} (or the whole
+   * name).
+   */
+  protected static String simpleNameOf(final String qualifiedName) {
+    return Coercion.simple(qualifiedName);
+  }
+
+  /**
+   * Flatten the enclosing-class hierarchy of {@code element} into a single concatenated base name.
+   * For a top-level class {@code Foo} returns {@code "Foo"}; for a nested class {@code Outer.Inner}
+   * returns {@code "OuterInner"}; for double-nested {@code A.B.C} returns {@code "ABC"}. Used to
+   * derive collision-free file-level names for emitted Path / Step / Telescope classes when the
+   * source type is nested — telescope-codegen always emits at the package level, never as a nested
+   * sibling, so we encode the outer hierarchy into the name to keep things unique.
+   */
+  protected static String flattenedNameOf(final Element element) {
+    final var sb = new StringBuilder(element.getSimpleName().toString());
+    var enclosing = element.getEnclosingElement();
+    while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
+      sb.insert(0, enclosing.getSimpleName());
+      enclosing = enclosing.getEnclosingElement();
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Build a Java type reference for {@code element} as it would appear in source code sitting in
+   * the same package — {@code "Foo"} for top-level, {@code "Outer.Inner"} for nested. Use this
+   * anywhere the emitted Path / Step source needs to spell the source type's class identifier (the
+   * {@code Telescope<R, X>} parameter, method references like {@code X::getY}, etc).
+   */
+  protected static String packageRelativeTypeRefOf(final Element element) {
+    final var sb = new StringBuilder(element.getSimpleName().toString());
+    var enclosing = element.getEnclosingElement();
+    while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
+      sb.insert(0, enclosing.getSimpleName() + ".");
+      enclosing = enclosing.getEnclosingElement();
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Emit a bridge hop method on a Path navigator: {@code as<TargetSimpleName>()} that chains the
+   * generated {@code <SourceSimpleName>Bridge.BRIDGE} constant onto the current path. The return
+   * type is the target's Path when navigable, else a terminal Telescope. Bridge constant is
+   * referenced by simple name because {@code @Bridge} always emits the bridge class in the source's
+   * package — the same package as the navigator.
+   */
+  protected void emitBridgeHop(
+    final PrintWriter out,
+    final TypeElement source,
+    final String sourceSimpleName,
+    final String targetFqn
+  ) {
+    final var targetSimple = simpleNameOf(targetFqn);
+    final var declared = fieldBridges.getOrDefault(source.getQualifiedName().toString(), Map.of()).get(targetFqn);
+    // A bridge a field declares lives beside the field's class, so it is named in full.
+    final var bridgeName =
+      annotatedBridgeTargetFqn(source) == null && declared != null ? declared : sourceSimpleName + "Bridge";
+    final var methodName = "as" + targetSimple;
+    // Record the cross-paradigm conversion as a Bridge hop in the introspection trail.
+    final var bridgeHop = ".hop(new OpticNode.Bridge(\"" + targetSimple + "\"))";
+    if (isNavigablePath(targetFqn)) {
+      out.println("  public " + targetFqn + "Telescope<R> " + methodName + "() {");
+      out.println(
+        "    return new " + targetFqn + "Telescope<>(path.then(" + bridgeName + ".BRIDGE)" + bridgeHop + ");"
+      );
+      out.println("  }");
+    } else {
+      // The bridge names the target raw, so a terminal hop's declared type does too.
+      final var target = processingEnv.getElementUtils().getTypeElement(targetFqn);
+      out.print(rawTypesSuppression(target != null && !target.getTypeParameters().isEmpty(), "  "));
+      out.println("  public Telescope<R, " + targetFqn + "> " + methodName + "() {");
+      out.println("    return path.then(" + bridgeName + ".BRIDGE)" + bridgeHop + ";");
+      out.println("  }");
+    }
+    out.println();
+  }
+
+  /**
+   * The fully-qualified name of {@code type}'s element if it's a top-level type carrying the
+   * annotation named by {@code annotationFqn} and of the given {@code requiredKind} (typically
+   * {@link ElementKind#RECORD} for {@code @Focus} or {@link ElementKind#CLASS} for
+   * {@code @BeanFocus}); otherwise {@code null}. Drives the navigator's "descend into a sub-Path"
+   * emission: only types that have their own generated {@code <Sub>Telescope<R>} are routed there;
+   * everything else becomes a terminal {@code Telescope<R, T>}.
+   */
+  protected String navigableType(final TypeMirror type, final ElementKind requiredKind, final String annotationFqn) {
+    if (type.getKind() != TypeKind.DECLARED) return null;
+    final var element = ((DeclaredType) type).asElement();
+    if (element.getKind() != requiredKind) return null;
+    final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+    if (anno == null) return null;
+    for (final var am : element.getAnnotationMirrors()) {
+      if (am.getAnnotationType().asElement().equals(anno)) {
+        return ((TypeElement) element).getQualifiedName().toString();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Emit forwarding methods for every public {@link
+   * io.github.telescopeorganization.telescope.Telescope} operation on the wrapped {@code path}
+   * field whose focus type is {@code focusType}. Lets a generated {@code <X>Telescope<R>} or {@code
+   * <X><Cap>Step<R>} stand in for the wrapped {@code Telescope<R, focusType>}: callers can do
+   * {@code update} / {@code updateAsync} / {@code read} / {@code toList} / etc. (including the four
+   * effect methods and {@code then}) at any hop without first unwrapping with {@code get()}. The
+   * wrapped field is always named {@code path} by convention (see {@link #emitPathClassHeader} /
+   * {@link #emitContainerStep}). {@code suppression} is the line each forwarder naming {@code
+   * focusType} carries, or empty.
+   */
+  protected void emitTelescopeForwarders(final PrintWriter out, final String focusType, final String suppression) {
+    // Sync reads.
+    out.print(suppression);
+    out.println("  public " + focusType + " read(final R source) { return path.read(source); }");
+    out.println();
+    out.print(suppression);
+    out.println("  public Optional<" + focusType + "> find(final R source) { return path.find(source); }");
+    out.println();
+    out.print(suppression);
+    out.println("  public List<" + focusType + "> toList(final R source) { return path.toList(source); }");
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public List<Indexed<" + focusType + ">> toListIndexed(final R source) { return path.toListIndexed(source); }"
+    );
+    out.println();
+    out.println("  public long count(final R source) { return path.count(source); }");
+    out.println();
+    out.println("  public boolean exists(final R source) { return path.exists(source); }");
+    out.println();
+    // Sync writes.
+    out.print(suppression);
+    out.println("  public R set(final R source, final " + focusType + " value) { return path.set(source, value); }");
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public R update(final R source, final Function<" +
+        focusType +
+        ", " +
+        focusType +
+        "> fn) { return path.update(source, fn); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public R updateIndexed(final R source, final BiFunction<Integer, ? super " +
+        focusType +
+        ", ? extends " +
+        focusType +
+        "> fn) { return path.updateIndexed(source, fn); }"
+    );
+    out.println();
+    // Effectful writes.
+    out.print(suppression);
+    out.println(
+      "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
+        focusType +
+        ", ? extends CompletableFuture<" +
+        focusType +
+        ">> fn) { return path.updateAsync(source, fn); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
+        focusType +
+        ", ? extends CompletableFuture<" +
+        focusType +
+        ">> fn, final Executor executor) { return path.updateAsync(source, fn, executor); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public Optional<R> updateOptional(final R source, final Function<? super " +
+        focusType +
+        ", ? extends Optional<" +
+        focusType +
+        ">> fn) { return path.updateOptional(source, fn); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public <E> Either<E, R> updateEither(final R source, final Function<? super " +
+        focusType +
+        ", ? extends Either<E, " +
+        focusType +
+        ">> fn) { return path.updateEither(source, fn); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public <E> Validated<E, R> updateValidated(final R source, final Function<? super " +
+        focusType +
+        ", ? extends Validated<E, " +
+        focusType +
+        ">> fn) { return path.updateValidated(source, fn); }"
+    );
+    out.println();
+    // Composition with an external Telescope.
+    out.print(suppression);
+    out.println(
+      "  public <B> Telescope<R, B> then(final Telescope<" + focusType + ", B> next) { return path.then(next); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public Telescope<R, " +
+        focusType +
+        "> observe(final Consumer<? super " +
+        focusType +
+        "> observer) { return path.observe(observer); }"
+    );
+    out.println();
+    // Introspection — the generated navigator answers explain()/trace() from its composed path,
+    // whose trail the .hop("...") calls recorded at each navigator method.
+    out.println("  public OpticReport explain() { return path.explain(); }");
+    out.println("  public Trace trace(final R source) { return path.trace(source); }");
+    out.println(
+      "  public Trace trace(final R source, final TraceLimits limits) { return path.trace(source," + " limits); }"
+    );
+    out.println();
+  }
+
+  /**
+   * Emit the standard header members of a generated {@code <X>Telescope<R>} class: the private
+   * {@code path} field, a public constructor (so navigators in <em>other</em> packages — bridge
+   * hops, sub-navigators on records whose targets live in foreign packages — can still construct
+   * one), an {@code of()} static factory (symmetric with runtime {@link
+   * io.github.telescopeorganization.telescope.Telescope#of(Class)} — the navigator's name already
+   * names the type, so no class argument is needed), and a {@code get()} accessor. Used by every
+   * navigator-emitting processor (records via {@link FocusProcessor} and beans via {@link
+   * #emitBeanNavigator}) so the boilerplate lives in one place. Each member names {@code target}
+   * and carries its suppression line.
+   */
+  protected void emitPathClassHeader(final PrintWriter out, final String pathName, final OwnerRef target) {
+    final var targetTypeName = target.ref();
+    final var suppression = target.suppression("  ");
+    out.print(suppression);
+    out.println("  private final Telescope<R, " + targetTypeName + "> path;");
+    out.println();
+    out.print(suppression);
+    out.println("  public " + pathName + "(final Telescope<R, " + targetTypeName + "> path) { this.path = path; }");
+    out.println();
+    out.print(suppression);
+    out.println(
+      "  public static " +
+        pathName +
+        "<" +
+        targetTypeName +
+        "> of() { return new " +
+        pathName +
+        "<>(Telescope.of(" +
+        targetTypeName +
+        ".class)); }"
+    );
+    out.println();
+    out.print(suppression);
+    out.println("  public Telescope<R, " + targetTypeName + "> get() { return path; }");
+    out.println();
+  }
+
+  /**
+   * Shorten well-known FQNs to their imported short forms, assuming the standard import block
+   * emitted by {@link #writeInstanceClass} is present in the generated file. Cross-package types
+   * (the user's own records / POJOs / etc.) stay fully-qualified — only the auto-imported and
+   * always-imported standard names are collapsed.
+   */
+  protected static String shortenStdImports(final String typeName) {
+    if (typeName == null) return null;
+    return typeName
+      .replace("java.util.concurrent.CompletableFuture", "CompletableFuture")
+      .replace("java.util.concurrent.Executor", "Executor")
+      .replace("java.util.function.BiFunction", "BiFunction")
+      .replace("java.util.function.Function", "Function")
+      .replace("java.util.Optional", "Optional")
+      .replace("java.util.List", "List")
+      .replace("java.util.Map", "Map")
+      .replace("java.util.Set", "Set")
+      .replace("io.github.telescopeorganization.telescope.effects.Either", "Either")
+      .replace("io.github.telescopeorganization.telescope.effects.Validated", "Validated")
+      .replace("io.github.telescopeorganization.telescope.Indexed", "Indexed")
+      .replace("java.lang.String", "String")
+      .replace("java.lang.Integer", "Integer")
+      .replace("java.lang.Long", "Long")
+      .replace("java.lang.Double", "Double")
+      .replace("java.lang.Float", "Float")
+      .replace("java.lang.Boolean", "Boolean")
+      .replace("java.lang.Character", "Character")
+      .replace("java.lang.Byte", "Byte")
+      .replace("java.lang.Short", "Short")
+      .replace("java.lang.Object", "Object");
+  }
+
+  /**
+   * Emit a generated utility class with an extended import block: the package declaration, the
+   * standard {@code io.github.telescopeorganization.telescope.Telescope} import plus any
+   * caller-specified extra imports (typically container types like {@code java.util.List}), a
+   * one-line javadoc, a private constructor, then {@code body} writes the static-final constants,
+   * then the closing brace. Used by the {@code <X>Telescope} metadata-holder emission. IO failures
+   * are reported on {@code origin}.
+   */
+  protected void writeMetadataHolderClass(
+    final String qualifiedName,
+    final String simpleName,
+    final String javadoc,
+    final Element origin,
+    final Set<String> extraImports,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedName, origin);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        for (final var imp : extraImports) {
+          out.println("import " + imp + ";");
+        }
+        out.println("import io.github.telescopeorganization.telescope.Telescope;");
+        out.println();
+        out.println("/** " + javadoc + " */");
+        out.println("public final class " + simpleName + " {");
+        out.println();
+        out.println("  private " + simpleName + "() {}");
+        out.println();
+        body.accept(out);
+        out.println("}");
+      }
+    } catch (final IOException e) {
+      error(origin, writeFailureMessage(qualifiedName, e));
+    }
+  }
+
+  /**
+   * Whether the given {@code type} is safe to emit as a typed {@code Telescope<X, T>} constant on a
+   * metadata holder. Rejects wildcard-bound generics and type-variables at any depth — those would
+   * require the holder to expose either raw types or wildcards, neither of which composes cleanly
+   * with the runtime's {@code Telescope<X, FieldType>} expectations. Conservative posture matches
+   * the rest of the codegen story.
+   */
+  protected static boolean isEmittableAsTypedConstant(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case WILDCARD, TYPEVAR, ERROR, NONE, NULL, OTHER -> false;
+      case DECLARED -> {
+        final var declared = (DeclaredType) type;
+        for (final var arg : declared.getTypeArguments()) {
+          if (!isEmittableAsTypedConstant(arg)) yield false;
+        }
+        yield true;
+      }
+      case ARRAY -> isEmittableAsTypedConstant(((ArrayType) type).getComponentType());
+      // A primitive is boxed at the call site. Any other kind, including one a newer language
+      // level adds, has no typed constant form the holder could name.
+      default -> type.getKind().isPrimitive();
+    };
+  }
+
+  /**
+   * Why {@link #isEmittableAsTypedConstant} refused {@code type}, as a clause to follow the quoted
+   * type in a diagnostic. A wildcard or type variable anywhere in the type is the generic case; any
+   * other refusal is a kind the holder has no constant form for.
+   */
+  protected static String unemittableReason(final TypeMirror type) {
+    return mentionsWildcardOrVariable(type)
+      ? " — generics with wildcard or self-referential bounds are not supported"
+      : ", which has no constant form";
+  }
+
+  private static boolean mentionsWildcardOrVariable(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case WILDCARD, TYPEVAR -> true;
+      case DECLARED -> {
+        for (final var arg : ((DeclaredType) type).getTypeArguments()) {
+          if (mentionsWildcardOrVariable(arg)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> mentionsWildcardOrVariable(((ArrayType) type).getComponentType());
+      default -> false;
+    };
+  }
+
+  /**
+   * Emit a non-utility generated class — i.e., one with instance state and a non-{@code private}
+   * constructor. Header (package, single {@code
+   * io.github.telescopeorganization.telescope.Telescope} import, javadoc, class declaration with
+   * {@code typeParams}) is written before {@code body}, then the closing brace. The body is
+   * responsible for the class's constructor and members. IO failures are reported on {@code
+   * origin}.
+   */
+  protected void writeInstanceClass(
+    final String qualifiedName,
+    final String simpleName,
+    final String typeParams,
+    final String javadoc,
+    final Element origin,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedName, origin);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        out.println("import java.util.List;");
+        out.println("import java.util.Map;");
+        out.println("import java.util.Optional;");
+        out.println("import java.util.Set;");
+        out.println("import java.util.concurrent.CompletableFuture;");
+        out.println("import java.util.concurrent.Executor;");
+        out.println("import java.util.function.BiFunction;");
+        out.println("import java.util.function.Consumer;");
+        out.println("import java.util.function.Function;");
+        out.println("import io.github.telescopeorganization.telescope.effects.Either;");
+        out.println("import io.github.telescopeorganization.telescope.Indexed;");
+        out.println("import io.github.telescopeorganization.telescope.introspection.OpticNode;");
+        out.println("import io.github.telescopeorganization.telescope.introspection.OpticReport;");
+        out.println("import io.github.telescopeorganization.telescope.introspection.Trace;");
+        out.println("import io.github.telescopeorganization.telescope.introspection.TraceLimits;");
+        out.println("import io.github.telescopeorganization.telescope.Telescope;");
+        out.println("import io.github.telescopeorganization.telescope.effects.Validated;");
+        out.println();
+        out.println("/** " + javadoc + " */");
+        out.println("public final class " + simpleName + typeParams + " {");
+        out.println();
+        body.accept(out);
+        out.println("}");
+      }
+    } catch (final IOException e) {
+      error(origin, writeFailureMessage(qualifiedName, e));
+    }
+  }
+
+  // The type argument at {@code index} as a fully-qualified name, or null if absent or not a
+  // concrete (declared) type — so raw types and wildcards fall back to the runtime path.
+  private static String concreteArg(final List<? extends TypeMirror> args, final int index) {
+    if (args.size() <= index) return null;
+    final var arg = args.get(index);
+    return arg.getKind() == TypeKind.DECLARED ? arg.toString() : null;
+  }
+
+  // The Telescope type parameter must be a reference type; box primitive types to their wrappers.
+  protected static String boxedType(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case BOOLEAN -> "Boolean";
+      case BYTE -> "Byte";
+      case SHORT -> "Short";
+      case INT -> "Integer";
+      case LONG -> "Long";
+      case CHAR -> "Character";
+      case FLOAT -> "Float";
+      case DOUBLE -> "Double";
+      default -> type.toString();
+    };
+  }
+
+  /**
+   * Emit the full bean-style {@code <X>Telescope<R>} navigator plus one container step class per
+   * collection-shaped property. Shared between {@link BeanFocusProcessor} (driven by
+   * {@code @BeanFocus}) and the out-of-tree {@code LombokFocusProcessor} (driven by
+   * {@code @lombok.Data} / {@code @lombok.Value} / {@code @lombok.Builder}).
+   *
+   * @param pojo the annotated POJO to emit a navigator for
+   * @param triggerLabel display name of the triggering annotation, used in error messages (e.g.
+   *     {@code "@BeanFocus"} or {@code "@Data/@Value/@Builder"})
+   * @param navigableAnnotations annotation FQNs that mark a class as having its own generated Path,
+   *     so that sub-component navigation descends into {@code <Sub>Telescope<R>} rather than
+   *     terminating in {@code Telescope<R, Sub>}
+   */
+  protected void emitBeanNavigator(
+    final TypeElement pojo,
+    final String triggerLabel,
+    final Set<String> navigableAnnotations
+  ) {
+    final var elements = processingEnv.getElementUtils();
+    final var pkg = elements.getPackageOf(pojo).getQualifiedName().toString();
+    // Distinct names:
+    //   pojoName        Java type-reference inside the emitted source ("Foo" / "Outer.Inner").
+    //   pathBaseName    File-level base, with the outer hierarchy flattened ("Foo" / "OuterInner").
+    //   pathName        The Path class's simple name, derived from pathBaseName.
+    final var pojoName = navigatorTypeRefOf(pojo);
+    final var owner = OwnerRef.of(pojo, pojoName);
+    final var pathBaseName = flattenedNameOf(pojo);
+    final var pathName = pathBaseName + "Telescope";
+    final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
+
+    final var props = beanProperties(pojo);
+    if (props.isEmpty()) {
+      error(pojo, triggerLabel + ": " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
+      return;
+    }
+    final var hopTarget = bridgeTargetFqn(pojo);
+    final var reservedHop = hopTarget == null ? Set.<String>of() : Set.of("as" + simpleNameOf(hopTarget));
+    if (hasReservedPropertyName(pojo, triggerLabel, props.stream().map(Prop::name).toList(), reservedHop)) return;
+    // Both artifacts are rejected together, before either is written: a property that cannot be
+    // emitted as a typed constant also cannot be named in the navigator's type parameters, so
+    // emitting the navigator anyway hands the author a javac error inside a file they never wrote.
+    for (final var p : props) {
+      if (!isEmittableAsTypedConstant(p.type())) {
+        error(
+          pojo,
+          triggerLabel +
+            ": cannot emit metadata constant for property '" +
+            p.name() +
+            "' of type '" +
+            p.type() +
+            "'" +
+            unemittableReason(p.type()) +
+            ". Remove " +
+            triggerLabel +
+            " from this class to use the runtime path."
+        );
+        return;
+      }
+    }
+
+    final var rebuild = beanRebuildFor(pojo, props, triggerLabel, false);
+    if (rebuild == null) return;
+
+    for (final var p : props) {
+      final var shape = traversalKind(p.type());
+      // Step's class name is built from the flattened base name (nested-safe); the step source
+      // uses the dotted type-ref for the parent's type identifier when it spells it.
+      if (shape != null) emitBeanStep(pojo, pojoName, pathBaseName, pkg, p, shape, navigableAnnotations);
+    }
+
+    writeInstanceClass(
+      qualifiedPath,
+      pathName,
+      "<R>",
+      "Generated by telescope-codegen for " + triggerLabel + " POJO " + pojoName + ".",
+      pojo,
+      out -> {
+        emitPathClassHeader(out, pathName, owner);
+        for (var i = 0; i < props.size(); i++) {
+          emitBeanPropertyMethod(out, owner, props, rebuild, i, navigableAnnotations);
+        }
+        final var bridgeTarget = bridgeTargetFqn(pojo);
+        if (bridgeTarget != null) emitBridgeHop(out, pojo, pojoName, bridgeTarget);
+        emitTelescopeForwarders(out, pojoName, owner.suppression("  "));
+      }
+    );
+
+    // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
+    // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
+    // holder emission for that POJO only — the Path navigator above is unaffected.
+    emitBeanMetadataHolder(pojo, owner, pathBaseName, pkg, props, rebuild, triggerLabel);
+  }
+
+  /**
+   * How a generated bean rebuild builds the bean: the strategy, and the member each property goes
+   * through. {@code members[i]} is the builder method or setter for {@code props[i]}, unused by a
+   * constructor rebuild. {@code ctorOrder[j]} is the index of the property passed as the
+   * constructor's {@code j}th argument, unused by the other two. {@code nullGuarded[i]} marks a
+   * setter call that must skip a null. {@code argumentTypes[i]} is the type a setter call's
+   * argument is declared as, as {@link SetterChoice#argumentType} gives it, or null.
+   */
+  record BeanRebuild(
+    BeanWriteStrategy strategy,
+    String[] members,
+    int[] ctorOrder,
+    boolean[] nullGuarded,
+    String[] nullDefaults,
+    String[] argumentTypes
+  ) {
+    /**
+     * The statement calling property {@code i}'s setter {@code member} on {@code receiver} with
+     * {@code value}, a value of the property's type. Where overloads would otherwise let javac bind
+     * another method or find none most specific, the value is first assigned to a local of the
+     * chosen setter's parameter type, which binds that method; assignment is a boxing, an unboxing,
+     * a widening or the identity, all of which keep the value. A cast would not do: it types a
+     * conditional expression on its own, so one whose branches mix a primitive and a null unboxes
+     * the null.
+     */
+    String setterCall(final int i, final String receiver, final String member, final String value) {
+      final var type = argumentTypes.length == 0 ? null : argumentTypes[i];
+      if (type == null) return receiver + "." + member + "(" + value + ");";
+      return "{ final " + type + " __arg = " + value + "; " + receiver + "." + member + "(__arg); }";
+    }
+  }
+
+  /**
+   * The rebuild a generated navigator, holder or binder uses for {@code pojo}, or {@code null}
+   * after reporting why there is none. The strategy is the first in {@link
+   * BeanWriteStrategy#AUTO_ORDER} the bean offers, the order the runtime writer takes, because the
+   * holder this rebuild is emitted into stands in for that writer: deciding differently here makes
+   * the same call return a different value depending on whether the holder happened to be loadable.
+   *
+   * <p>{@code writeOnly} is true for a caller that converts each value only to write it, the
+   * binder, and false for one that writes back values the bean's getters return, a navigator. A
+   * property the chosen strategy has no member for is skipped, its {@code members} entry left null,
+   * when the strategy is a builder or for a write-only caller; otherwise a setters rebuild with no
+   * setter for it is refused. A setters rebuild is also refused for a property whose setter {@link
+   * #setterRefusal} refuses.
+   */
+  BeanRebuild beanRebuildFor(
+    final TypeElement pojo,
+    final List<Prop> props,
+    final String triggerLabel,
+    final boolean writeOnly
+  ) {
+    final var names = props.stream().map(Prop::name).toList();
+    final var builderType = usableBuilderType(pojo);
+    final var ctor = nameMatchedConstructor(pojo, names);
+    final var chosen = autoBeanStrategy(
+      pojo,
+      names,
+      name -> props.get(names.indexOf(name)).type(),
+      hasAccessibleNoArgConstructor(pojo)
+    );
+    if (chosen.isEmpty()) {
+      error(
+        pojo,
+        triggerLabel +
+          ": " +
+          pojo.getQualifiedName() +
+          " needs a static builder(), a public constructor whose parameters are named after its" +
+          " properties, or a no-arg constructor with setters"
+      );
+      return null;
+    }
+    final var strategy = chosen.get();
+    final var members = new String[props.size()];
+    final var nullGuarded = new boolean[props.size()];
+    final var nullDefaults = new String[props.size()];
+    if (strategy == BeanWriteStrategy.CONSTRUCTOR) {
+      final var params = ctor.getParameters();
+      final var ctorOrder = new int[params.size()];
+      for (var j = 0; j < params.size(); j++) {
+        final var index = names.indexOf(params.get(j).getSimpleName().toString());
+        ctorOrder[j] = index;
+        guardPrimitiveMember(params.get(j).asType(), props.get(index), index, nullGuarded, nullDefaults);
+      }
+      return new BeanRebuild(strategy, members, ctorOrder, nullGuarded, nullDefaults, new String[0]);
+    }
+    final var useBuilder = strategy == BeanWriteStrategy.BUILDER;
+    for (var i = 0; i < props.size(); i++) {
+      final var s = useBuilder
+        ? builderSetter(pojo, builderType, props.get(i).name())
+        : setterName(pojo, props.get(i).name());
+      // A builder is chosen only when every property it has no member for is one nothing else
+      // writes either, so the rebuild skips that property as the runtime builder writer does. A
+      // write-only caller skips one with no setter the same way.
+      if (!useBuilder) {
+        final var refusal = setterRefusal(pojo, props.get(i).name(), writeOnly);
+        if (refusal != null) {
+          error(pojo, triggerLabel + ": " + refusal);
+          return null;
+        }
+      }
+      if (s == null && (useBuilder || writeOnly)) continue;
+      if (s == null) {
+        error(
+          pojo,
+          triggerLabel +
+            ": no " +
+            (useBuilder ? "builder method" : "setter") +
+            " for property '" +
+            props.get(i).name() +
+            "' on " +
+            (useBuilder ? builderType.getQualifiedName() : pojo.getQualifiedName())
+        );
+        return null;
+      }
+      members[i] = s;
+    }
+    // A builder member that takes a primitive behind a boxed property cannot take every value the
+    // property holds, so the auto order never builds through such a builder; only setter calls can
+    // be handed a null they have to guard.
+    if (!useBuilder) {
+      for (var i = 0; i < props.size(); i++) {
+        if (members[i] == null) continue;
+        // A variable-arity setter a single value spreads into takes it as its component, so the
+        // component is what decides whether a null has to be skipped.
+        guardPrimitiveMember(
+          setterChoice(pojo, props.get(i).name()).argument(),
+          props.get(i),
+          i,
+          nullGuarded,
+          nullDefaults
+        );
+      }
+    }
+    final var argumentTypes = new String[props.size()];
+    if (!useBuilder) {
+      for (var i = 0; i < props.size(); i++) {
+        if (members[i] != null) argumentTypes[i] = setterChoice(pojo, props.get(i).name()).argumentType();
+      }
+    }
+    return new BeanRebuild(strategy, members, new int[0], nullGuarded, nullDefaults, argumentTypes);
+  }
+
+  /**
+   * Marks a member that takes a primitive behind a property that is not one. Such a member cannot
+   * be handed null -- it unboxes and throws -- so the emitted call guards it: a setter call is
+   * skipped, leaving the field at its JLS default, and a builder or constructor argument takes that
+   * default in place of null. The runtime writers do the same, so the two paths agree on a null.
+   */
+  private static void guardPrimitiveMember(
+    final TypeMirror param,
+    final Prop prop,
+    final int index,
+    final boolean[] nullGuarded,
+    final String[] nullDefaults
+  ) {
+    if (!param.getKind().isPrimitive() || prop.type().getKind().isPrimitive()) return;
+    nullGuarded[index] = true;
+    nullDefaults[index] = primitiveDefaultLiteral(param.getKind()).orElseThrow();
+  }
+
+  /**
+   * The arguments of a builder chain or constructor call, one per property in {@code order}, each
+   * read through {@code read}. A guarded argument is read once into a local declared in {@code
+   * prelude}, and takes the member's JLS default when that read is null.
+   */
+  static List<String> guardedArguments(
+    final List<Prop> props,
+    final int[] order,
+    final BeanRebuild rebuild,
+    final Function<Prop, String> read,
+    final StringBuilder prelude
+  ) {
+    final var args = new ArrayList<String>();
+    for (final var index : order) {
+      final var prop = props.get(index);
+      if (!rebuild.nullGuarded()[index]) {
+        args.add(read.apply(prop));
+        continue;
+      }
+      final var local = "__n_" + prop.name();
+      // Declared as the property's own boxed type, so a read that unboxes on the way still lands in
+      // a local that can be compared with null.
+      prelude
+        .append("final ")
+        .append(prop.type())
+        .append(" ")
+        .append(local)
+        .append(" = ")
+        .append(read.apply(prop))
+        .append("; ");
+      args.add("(" + local + " == null ? " + rebuild.nullDefaults()[index] + " : " + local + ")");
+    }
+    return args;
+  }
+
+  // Emits the sibling <X>Telescope holder for a bean POJO: one
+  // `public static final Telescope<X, PropertyType>` constant per discovered bean property.
+  // Containers are emitted as raw container lenses (Telescope<X, List<E>>, etc.) — the consumer
+  // composes via .then(...) to descend. The lens expression reuses the rebuild the <X>Telescope
+  // navigator above uses, so write semantics are identical.
+  private void emitBeanMetadataHolder(
+    final TypeElement pojo,
+    final OwnerRef owner,
+    final String pojoBaseName,
+    final String pkg,
+    final List<Prop> props,
+    final BeanRebuild rebuild,
+    final String triggerLabel
+  ) {
+    final var pojoName = owner.ref();
+    final var holderName = pojoBaseName + "FieldOptics";
+    final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
+
+    final Set<String> extraImports = new LinkedHashSet<>();
+    for (final var p : props) collectStdImports(p.type(), extraImports);
+    // The holder also exposes a static construct(Function<String, Object>) so the runtime forward
+    // branch in Reflective#structuralIso can skip the BeanWriter reflective path, and a static
+    // constants() returning the name → lens map so the probe skips the getDeclaredFields() scan.
+    extraImports.add("java.util.Map");
+    extraImports.add("java.util.function.Function");
+
+    writeMetadataHolderClass(
+      qualifiedHolder,
+      holderName,
+      "Generated by telescope-codegen for " +
+        triggerLabel +
+        " POJO " +
+        pojoName +
+        ". Per-property Telescope constants for runtime hybrid dispatch.",
+      pojo,
+      extraImports,
+      out -> {
+        for (final var p : props) {
+          final var fieldType = shortenStdImports(boxedType(p.type()));
+          final var lensArgs = owner.methodRef(p.getter()) + ", " + beanRebuild(p, props, rebuild, owner);
+          emitFieldConstant(out, owner, p.type(), fieldType, p.name(), lensArgs);
+        }
+        emitBeanConstruct(out, owner, props, rebuild);
+        emitConstantsMap(out, props.stream().map(Prop::name).toList());
+      }
+    );
+  }
+
+  /**
+   * Emit one {@code public static final Telescope<Owner, FieldType> name =
+   * Telescope.lens(lensArgs);} metadata constant. Shared by the {@code @Focus} record holder
+   * ({@link FocusProcessor}) and the bean holder ({@link #emitBeanMetadataHolder}) — only the
+   * {@code lensArgs} (canonical-ctor rebuild vs setter/builder rebuild) and the field-name source
+   * differ; the constant's shape is identical. The constant carries {@link #RAW_TYPES_SUPPRESSION}
+   * when it names the owner or a class in {@code fieldMirror} raw.
+   */
+  protected void emitFieldConstant(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final TypeMirror fieldMirror,
+    final String fieldType,
+    final String fieldName,
+    final String lensArgs
+  ) {
+    out.print(rawTypesSuppression(owner.generic() || namesRaw(fieldMirror), "  "));
+    out.println(
+      "  public static final Telescope<" +
+        owner.ref() +
+        ", " +
+        fieldType +
+        "> " +
+        fieldName +
+        " = Telescope.lens(" +
+        lensArgs +
+        ");"
+    );
+    out.println();
+  }
+
+  /**
+   * Emit the holder's {@code static Map<String, Telescope<?, ?>> constants()} — the name → lens
+   * table the runtime probe reads to skip the {@code getDeclaredFields()} scan. Shared by the
+   * record and bean holders; each supplies its field names in declaration order.
+   */
+  protected void emitConstantsMap(final PrintWriter out, final List<String> fieldNames) {
+    out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");
+    out.println("  public static Map<String, Telescope<?, ?>> constants() {");
+    if (fieldNames.isEmpty()) {
+      out.println("    return Map.of();");
+    } else if (fieldNames.size() == 1) {
+      final var onlyName = fieldNames.getFirst();
+      out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
+    } else {
+      out.println("    return Map.ofEntries(");
+      for (var i = 0; i < fieldNames.size(); i++) {
+        out.print("      Map.entry(\"" + fieldNames.get(i) + "\", " + fieldNames.get(i) + ")");
+        out.println(i < fieldNames.size() - 1 ? "," : "");
+      }
+      out.println("    );");
+    }
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * Emit a {@code public static <Pojo> construct(Function<String, Object> values)} on the bean
+   * holder. The emitted body takes the rebuild {@link #emitBeanNavigator} already picked for the
+   * {@code <X>Telescope<R>} lens setters — a builder chain, a constructor call, or a no-arg
+   * constructor plus per-property setters. The runtime hybrid dispatch in {@code
+   * MetadataHolderProbe} / {@code Reflective.structuralIso} (both internal to {@code :core}) routes
+   * here, bypassing the reflective {@code Beans.BeanWriter} path for annotated beans. The cast
+   * types match the constants' {@code fieldType} (boxed primitives, shortened std imports).
+   */
+  private void emitBeanConstruct(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final List<Prop> props,
+    final BeanRebuild rebuild
+  ) {
+    final var pojoName = owner.ref();
+    out.println("  /** Bean rebuild short-circuit for the runtime forward branch. */");
+    out.println(constructSuppression(owner, props.stream().map(Prop::type).toList()));
+    out.println("  public static " + pojoName + " construct(final Function<String, Object> values) {");
+    final var members = rebuild.members();
+    switch (rebuild.strategy()) {
+      case BUILDER -> {
+        out.print("    return " + pojoName + ".builder()");
+        for (var i = 0; i < props.size(); i++) {
+          if (members[i] != null) out.print("." + members[i] + "(" + valueExprForProp(props.get(i)) + ")");
+        }
+        out.println(".build();");
+      }
+      case CONSTRUCTOR -> {
+        final var prelude = new StringBuilder();
+        final var args = guardedArguments(props, rebuild.ctorOrder(), rebuild, this::valueExprForProp, prelude);
+        if (!prelude.isEmpty()) out.println("    " + prelude.toString().strip());
+        out.println("    return new " + pojoName + "(" + String.join(", ", args) + ");");
+      }
+      case SETTERS -> {
+        out.println("    final var c = new " + pojoName + "();");
+        for (var i = 0; i < props.size(); i++) {
+          final var p = props.get(i);
+          if (rebuild.nullGuarded()[i]) {
+            // valueExprForProp's own guard keys off the property's kind, which says nothing about
+            // the setter's. Where the property is a reference and the parameter is not, the value
+            // arrives as a box that may be null and unboxes on the call, so it is skipped the same
+            // way the lens skips it and the same way the reflective writer does.
+            final var local = "__s_" + p.name();
+            out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
+            out.println("    if (" + local + " != null) " + rebuild.setterCall(i, "c", members[i], local));
+          } else {
+            out.println("    " + rebuild.setterCall(i, "c", members[i], valueExprForProp(p)));
+          }
+        }
+        out.println("    return c;");
+      }
+    }
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * The suppression a holder's {@code construct} carries: {@code unchecked} for its casts from
+   * {@code Object} to each property's type, and {@code rawtypes} as well when it names the owner or
+   * a class in one of {@code types} raw.
+   */
+  protected static String constructSuppression(final OwnerRef owner, final List<? extends TypeMirror> types) {
+    return owner.generic() || types.stream().anyMatch(AbstractTelescopeProcessor::namesRaw)
+      ? "  @SuppressWarnings({\"unchecked\", \"rawtypes\"})"
+      : "  @SuppressWarnings(\"unchecked\")";
+  }
+
+  /**
+   * Build the "extract one property from {@code values}" expression that drives each setter /
+   * builder call inside the emitted {@code construct(Function)}. For primitive-typed properties
+   * this expands to an {@code instanceof}-pattern null-guard with the JLS default literal as the
+   * fallback, so a {@code null} entry in {@code values} cannot NPE through the implicit unbox on
+   * the setter argument. For reference-typed properties the expression stays a plain cast — null is
+   * a legal setter argument there, and the cast keeps the generated form trivial.
+   *
+   * <p>The pattern variable {@code __v} is scoped to a single ternary expression, so adjacent
+   * primitive setters in the same {@code construct()} body can reuse the name without conflict. The
+   * chosen identifier would only collide with a user-declared {@code Prop} named {@code __v} —
+   * vanishingly unlikely for a JavaBeans-shaped target.
+   */
+  private String valueExprForProp(final Prop p) {
+    final var apply = "values.apply(\"" + p.name() + "\")";
+    final var castType = shortenStdImports(boxedType(p.type()));
+    return primitiveDefaultLiteral(p.type().getKind())
+      .map(defaultLit -> apply + " instanceof " + castType + " __v ? __v : " + defaultLit)
+      .orElseGet(() -> "(" + castType + ") " + apply);
+  }
+
+  /**
+   * JLS-default literal in source form for each primitive kind, or {@link Optional#empty()} when
+   * {@code kind} is not a primitive — encoding the "primitive ↔ has-a-default" invariant in the
+   * return type rather than via a runtime guard at the {@code default} branch. Kept inline here so
+   * the generated bytecode is a constant push, not a reflective lookup. {@code char} alone uses the
+   * null character ({@code '\0'}); every other numeric kind narrows from {@code 0}.
+   *
+   * <p>The literal table must stay in sync with the <b>primitive-kind rows</b> of {@code
+   * NullDefaults#defaultFor} — the test {@code everyPrimitiveKindHasItsJlsDefaultLiteral} pins this
+   * side; {@code NullDefaultsTest} pins the runtime side. Reference-typed defaults ({@code String →
+   * ""}, {@code List → List.of()}, etc.) live only in {@code NullDefaults}; the codegen path emits
+   * a plain reference cast there and lets the runtime substitution kick in.
+   */
+  protected static Optional<String> primitiveDefaultLiteral(final TypeKind kind) {
+    return switch (kind) {
+      case BOOLEAN -> Optional.of("false");
+      case BYTE -> Optional.of("(byte) 0");
+      case SHORT -> Optional.of("(short) 0");
+      case INT -> Optional.of("0");
+      case LONG -> Optional.of("0L");
+      case CHAR -> Optional.of("'\\0'");
+      case FLOAT -> Optional.of("0.0f");
+      case DOUBLE -> Optional.of("0.0d");
+      default -> Optional.empty();
+    };
+  }
+
+  /**
+   * Collect {@code java.util.{List, Map, Optional, Set}} imports needed for a component or
+   * property's typed-constant type signature on a generated metadata holder. Only standard names
+   * that {@link #shortenStdImports} shortens need an import; user-package types stay
+   * fully-qualified in the generated source. Shared by every metadata-holder emitter (record via
+   * {@link FocusProcessor}, bean via {@link #emitBeanNavigator}'s metadata pass) so the
+   * import-collection rule lives in one place.
+   */
+  protected static void collectStdImports(final TypeMirror type, final Set<String> imports) {
+    final var raw = type.toString();
+    if (raw.contains("java.util.List")) imports.add("java.util.List");
+    if (raw.contains("java.util.Map")) imports.add("java.util.Map");
+    if (raw.contains("java.util.Optional")) imports.add("java.util.Optional");
+    if (raw.contains("java.util.Set")) imports.add("java.util.Set");
+  }
+
+  private void emitBeanPropertyMethod(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final List<Prop> props,
+    final BeanRebuild rebuild,
+    final int propertyIndex,
+    final Set<String> navigableAnnotations
+  ) {
+    final var target = props.get(propertyIndex);
+    final var lensArgs = owner.methodRef(target.getter()) + ", " + beanRebuild(target, props, rebuild, owner);
+    emitNavigatorMethod(out, owner, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
+  }
+
+  private void emitBeanStep(
+    final TypeElement pojo,
+    final String pojoName,
+    final String pojoBaseName,
+    final String pkg,
+    final Prop prop,
+    final TraversalShape shape,
+    final Set<String> navigableAnnotations
+  ) {
+    emitContainerStep(
+      pojo,
+      pojoBaseName,
+      pkg,
+      prop.name(),
+      prop.type(),
+      shape,
+      navigableAnnotations,
+      "Generated by telescope-codegen container hop " + pojoName + "." + prop.name() + "."
+    );
+  }
+
+  /**
+   * Emit one container-step class for a List/Set/Map/Optional/Iterable component or property. The
+   * step holds a {@code Telescope<R, ContainerType>} and exposes the matching typed terminal
+   * ({@code each} / {@code eachValue} / {@code whenPresent}) that descends into elements via the
+   * static {@code Telescope.asList/.asSet/.asMap/.asOptional} factory — no runtime container
+   * dispatch.
+   *
+   * <p>Shared by both record-flavored ({@link FocusProcessor}) and bean-flavored ({@link
+   * BeanFocusProcessor}, {@code LombokFocusProcessor}) navigators — the only difference between the
+   * two emission flavors used to be the navigable-element check, which is now expressed uniformly
+   * via the {@code navigableAnnotations} set.
+   *
+   * <p>Every member names the container type, so each carries {@link #RAW_TYPES_SUPPRESSION} when
+   * that type names a generic class raw.
+   */
+  protected void emitContainerStep(
+    final TypeElement origin,
+    final String enclosingSimpleName,
+    final String pkg,
+    final String componentName,
+    final TypeMirror containerMirror,
+    final TraversalShape shape,
+    final Set<String> navigableAnnotations,
+    final String javadoc
+  ) {
+    final var containerType = shortenStdImports(containerMirror.toString());
+    if (!shape.rebuildable()) {
+      // Reads enumerate any Iterable, so the step is useful and still emitted. Only a write has
+      // nowhere to put its result, and it fails at update time. This is the one moment that is
+      // knowable, and saying nothing here is what turns it into a surprise at run time.
+      processingEnv
+        .getMessager()
+        .printMessage(
+          Diagnostic.Kind.WARNING,
+          "telescope: reading '" +
+            componentName +
+            "' works, but updating through it throws. A rebuild produces an unmodifiable" +
+            " List or Set, which cannot be stored in a component declared " +
+            containerType +
+            "; and where the value is neither a List nor a Set, the rebuild is refused" +
+            " outright instead. Declare the component as List<E> or Set<E> so the rebuild" +
+            " fits.",
+          origin
+        );
+    }
+    final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
+    final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
+    final var rawElementType = shape.elementType();
+    final var elementType = shortenStdImports(rawElementType);
+    final var stepMethod = shape.stepMethod();
+    final var elementIsNavigable = isAnnotatedClass(rawElementType, navigableAnnotations);
+    final var elementResultType = elementIsNavigable
+      ? elementType + "Telescope<R>"
+      : "Telescope<R, " + elementType + ">";
+    final var stepCore = switch (shape.containerKind()) {
+      case "list" -> "Telescope.<R, " + elementType + ">asList(path).each()";
+      case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
+      case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
+      case "map" -> "Telescope.asMap(path).values()";
+      // Every remaining `? extends Iterable<E>` leaf: a bare `Iterable<E>`, a
+      // `Collection<E>`, or any subtype that is not List, Set, Map or Optional. The
+      // container type is pinned alongside the element type because this branch stands
+      // for every remaining shape, so it has no single container to name.
+      //
+      // The step reaches the element traversal through a public factory. Generated code
+      // lands in the consumer's package, where a package-private member of Telescope and
+      // a qualified-exported internal package are both out of reach.
+      //
+      // `Traversals.eachIterable()` rebuilds a List or a Set source and rejects any other
+      // at update time, so a model using a Queue or a Deque should declare the leaf as
+      // `List<E>` or `Set<E>` and land on a typed branch above.
+      default -> "Telescope.<R, " + containerType + ", " + elementType + ">asIterable(path).each()";
+    };
+    // One Traverse per container step, mirroring a hand-written .each(), .eachValue(), or
+    // .whenPresent(). The label names the runtime container family used by the hand-written hops.
+    final var containerLabel = switch (shape.containerKind()) {
+      case "map" -> "map values";
+      case "optional" -> "optional";
+      default -> "collection";
+    };
+    final var traverseHop = ".hop(new OpticNode.Traverse(\"" + componentName + "\", \"" + containerLabel + "\"))";
+    final var hoppedCore = stepCore + traverseHop;
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Telescope<>(" + hoppedCore + ")" : hoppedCore;
+
+    final var suppression = rawTypesSuppression(namesRaw(containerMirror), "  ");
+    writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
+      out.print(suppression);
+      out.println("  private final Telescope<R, " + containerType + "> path;");
+      out.println();
+      out.print(suppression);
+      out.println("  public " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
+      out.println();
+      out.print(suppression);
+      out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
+      out.println();
+      out.print(suppression);
+      out.println("  public " + elementResultType + " " + stepMethod + "() {");
+      out.println("    return " + elementBody + ";");
+      out.println("  }");
+      out.println();
+      emitTelescopeForwarders(out, containerType, suppression);
+    });
+  }
+
+  /**
+   * Emit one per-component navigator method on a {@code <X>Telescope<R>} class. Dispatches on the
+   * component's shape: container → step-class returning method; sub-navigable type → sub-path
+   * returning method; scalar → terminal {@code Telescope<R, T>} method.
+   *
+   * <p>Shared by both record and bean flavors. The caller supplies the lens-construction expression
+   * that goes inside {@code Telescope.componentLens(...)} — {@code "Record::comp, (r, v) -> ..."}
+   * for records, or {@code "Pojo::getX, beanRebuild..."} for beans — so the rest of the emission is
+   * identical. The navigated class and the component name go in as literals ahead of it, so {@code
+   * componentLens} records the fusion identity a hand-written {@code field(...)} records without
+   * loading a class by name, and {@code Telescope.all} fuses navigator paths like hand-written
+   * ones.
+   *
+   * <p>The per-component holder names the owner and the component type, and carries {@link
+   * #RAW_TYPES_SUPPRESSION} when either names a generic class raw. So does a terminal method, which
+   * names the component type alone.
+   */
+  protected void emitNavigatorMethod(
+    final PrintWriter out,
+    final OwnerRef owner,
+    final int componentIndex,
+    final String componentName,
+    final TypeMirror componentType,
+    final String lensArgs,
+    final Set<String> navigableAnnotations
+  ) {
+    // `.hop(new OpticNode.Focus("name"))` records the field in the composed telescope's
+    // introspection trail so the generated navigator answers explain()/trace() — codegen composes
+    // via lens/then, which the SerializedLambda-decoding field(...) hop-recording never sees. A
+    // container field records NO Focus here: the step's each() records a single Traverse instead,
+    // matching a hand-written .each(...).
+    // The lens and the Focus node are the same values on every call, so they are built once in a
+    // per-field holder rather than per navigation. The holder is nested and private, which is what
+    // keeps one field's initializer from deciding another's fate: a class-level static would put
+    // every field in one <clinit>, where a single unresolvable type takes them all down.
+    // `path` still varies per call, so composing it is not hoistable and is left alone.
+    // A nested holder is a class file of its own, so two holders whose names differ only in case
+    // overwrite each other on a case-insensitive filesystem — javac reports success and the
+    // earlier-declared accessor dies at run time. Property names really can differ that way:
+    // decapitalisation keeps a leading acronym, so getUrl and getURL yield url and URL. The index
+    // makes the names differ before the component name does, which case folding cannot collapse.
+    // A holder is a member type, so its simple name shadows whatever else that name resolves to
+    // inside the navigator. Two names qualify. One is the first segment of the navigated type's
+    // reference, which is dotted for a nested source — the lens bodies resolve that segment, not
+    // the whole reference. The other is the navigator's own class name, which a member class may
+    // not repeat at all. Where the holder would take either, it steps aside.
+    final var enclosingSimpleName = owner.ref();
+    var holder = "Optic_" + componentIndex + "_" + componentName;
+    final var dot = enclosingSimpleName.indexOf('.');
+    final var outerSegment = dot < 0 ? enclosingSimpleName : enclosingSimpleName.substring(0, dot);
+    final var navigatorName = enclosingSimpleName.replace(".", "") + "Telescope";
+    while (holder.equals(outerSegment) || holder.equals(navigatorName)) {
+      holder = holder + "_";
+    }
+    final var componentTypeStr = shortenStdImports(boxedType(componentType));
+    final var shape = traversalKind(componentType);
+    final var subFq = navigableType(componentType, navigableAnnotations);
+    final var recordsFocus = shape == null;
+    final var componentRaw = namesRaw(componentType);
+    out.print(rawTypesSuppression(owner.generic() || componentRaw, "  "));
+    out.println("  private static final class " + holder + " {");
+    out.println();
+    out.println("    private " + holder + "() {}");
+    out.println();
+    out.println(
+      "    private static final Telescope<" +
+        enclosingSimpleName +
+        ", " +
+        componentTypeStr +
+        "> LENS = Telescope.componentLens(" +
+        enclosingSimpleName +
+        ".class, \"" +
+        componentName +
+        "\", " +
+        lensArgs +
+        ");"
+    );
+    if (recordsFocus) {
+      out.println();
+      out.println("    private static final OpticNode HOP = new OpticNode.Focus(\"" + componentName + "\");");
+    }
+    out.println("  }");
+    out.println();
+    final var focusHop = recordsFocus ? ".hop(" + holder + ".HOP)" : "";
+    if (shape != null) {
+      final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
+      out.println("  public " + stepName + "<R> " + componentName + "() {");
+      out.println("    return new " + stepName + "<>(path.then(" + holder + ".LENS));");
+      out.println("  }");
+      out.println();
+      return;
+    }
+    if (subFq != null) {
+      out.println("  public " + subFq + "Telescope<R> " + componentName + "() {");
+      out.println("    return new " + subFq + "Telescope<>(path.then(" + holder + ".LENS)" + focusHop + ");");
+      out.println("  }");
+      out.println();
+      return;
+    }
+    out.print(rawTypesSuppression(componentRaw, "  "));
+    out.println("  public Telescope<R, " + componentTypeStr + "> " + componentName + "() {");
+    out.println("    return path.then(" + holder + ".LENS)" + focusHop + ";");
+    out.println("  }");
+    out.println();
+  }
+
+  // The rebuild expression for property `target`: a builder chain, a constructor call, or a no-arg
+  // ctor + per-property setters, with every other property read from `p` and `target` set to `v`.
+  private static String beanRebuild(
+    final Prop target,
+    final List<Prop> all,
+    final BeanRebuild rebuild,
+    final OwnerRef owner
+  ) {
+    final var members = rebuild.members();
+    return switch (rebuild.strategy()) {
+      case BUILDER -> {
+        final var read = readFor(target, owner);
+        final var sb = new StringBuilder("(p, v) -> " + owner.ref() + ".builder()");
+        for (var i = 0; i < all.size(); i++) {
+          if (members[i] != null) sb
+            .append(".")
+            .append(members[i])
+            .append("(")
+            .append(read.apply(all.get(i)))
+            .append(")");
+        }
+        yield sb.append(".build()").toString();
+      }
+      case CONSTRUCTOR -> {
+        final var prelude = new StringBuilder();
+        final var args = guardedArguments(all, rebuild.ctorOrder(), rebuild, readFor(target, owner), prelude);
+        yield lensBody(prelude, owner.creation(String.join(", ", args)));
+      }
+      case SETTERS -> {
+        final var sb = new StringBuilder("(p, v) -> { final var c = " + owner.creation("") + "; ");
+        for (var i = 0; i < all.size(); i++) {
+          final var prop = all.get(i);
+          final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop, owner);
+          if (rebuild.nullGuarded()[i]) {
+            // The setter takes a primitive and the property does not, so null cannot be passed: it
+            // unboxes and throws. The reflective writer skips the property instead, leaving the
+            // field at its JLS default, and this has to do the same or the two disagree on a null.
+            // The read is hoisted because the guard names it twice and a property must be read
+            // exactly once.
+            final var local = "__s_" + prop.name();
+            sb
+              .append("final var ")
+              .append(local)
+              .append(" = ")
+              .append(arg)
+              .append("; if (")
+              .append(local)
+              .append(" != null) ")
+              .append(rebuild.setterCall(i, "c", members[i], local))
+              .append(" ");
+          } else {
+            sb.append(rebuild.setterCall(i, "c", members[i], arg)).append(" ");
+          }
+        }
+        yield sb.append("return c; }").toString();
+      }
+    };
+  }
+
+  /** Reads the focused property from the incoming value and every other one from {@code p}. */
+  private static Function<Prop, String> readFor(final Prop target, final OwnerRef owner) {
+    return prop -> prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop, owner);
+  }
+
+  /** A lens rebuild lambda: an expression body, or a block when guarded reads need locals. */
+  private static String lensBody(final StringBuilder prelude, final String built) {
+    if (prelude.isEmpty()) return "(p, v) -> " + built;
+    return "(p, v) -> { " + prelude + "return " + built + "; }";
+  }
+
+  /**
+   * The "read one off-path property from the previous instance {@code p}" expression that carries
+   * an untouched property forward during a single-field lens rebuild. The previous instance is
+   * {@code null} whenever the lens writes into a nested intermediate that was never constructed (a
+   * null write-target at any depth), so the read is null-guarded: a reference property falls to
+   * {@code null} and a primitive to its JLS-default literal, exactly as the reflective {@code
+   * Beans.SettersWriter} rebuild leaves an off-path property when the source instance is null. The
+   * focused property is never routed here — it always takes the incoming value {@code v} — so a
+   * single-property bean emits no guard at all and its rebuild is unchanged. The guard makes every
+   * generated lens tolerate a null {@code p} independently, so it holds at arbitrary nesting depth.
+   */
+  private static String offPathRead(final Prop p, final OwnerRef owner) {
+    final var def = primitiveDefaultLiteral(p.type().getKind()).orElse("null");
+    return "(p == null ? " + def + " : " + owner.receiver("p") + "." + p.getter() + "())";
+  }
+
+  /**
+   * The "write the focused value into its setter" expression. The focused setter receives the
+   * incoming value {@code v}; for a primitive-typed setter a null {@code v} coalesces to the
+   * primitive's JLS default rather than NPE-ing on the implicit unbox — matching the runtime {@code
+   * SettersWriter}, which skips null on primitive setters so the field keeps its JLS default. A
+   * reference-typed setter passes {@code v} through (null is a legal reference value).
+   */
+  private static String focusedArg(final Prop target) {
+    return primitiveDefaultLiteral(target.type().getKind())
+      .map(def -> "(v == null ? " + def + " : v)")
+      .orElse("v");
+  }
+
+  /**
+   * Discover the bean-style readable properties of {@code pojo}: every public, no-arg, non-void
+   * instance method named {@code getX} or {@code isX} (the latter only for {@code boolean} / {@code
+   * Boolean} returns). Walks {@code getAllMembers}, so inherited and Lombok-synthesised getters are
+   * both picked up. The reserved property {@code class} (from {@link Object#getClass}) is filtered
+   * out. Insertion order is preserved.
+   *
+   * <p>Each property's type is its getter's return type as a member of {@code pojo}. A getter
+   * inherited from a generic superclass returns that superclass's type variable, which {@code class
+   * Node extends Base<Node>} fixes to {@code Node}; read as declared, the variable is out of scope
+   * in every generated class.
+   */
+  protected List<Prop> beanProperties(final TypeElement pojo) {
+    final Map<String, Prop> byName = new LinkedHashMap<>();
+    final var owner = (DeclaredType) pojo.asType();
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(pojo))) {
+      if (!isPublicInstance(m) || !m.getParameters().isEmpty() || m.getReturnType().getKind() == TypeKind.VOID) {
+        continue;
+      }
+      final var name = m.getSimpleName().toString();
+      final var afterGet = PropertyNames.afterGet(name);
+      final var afterIs = PropertyNames.afterIs(name);
+      final String prop;
+      if (afterGet != null) {
+        prop = afterGet;
+      } else if (
+        afterIs != null &&
+        (m.getReturnType().getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(m.getReturnType().toString()))
+      ) {
+        prop = afterIs;
+      } else {
+        continue;
+      }
+      if ("class".equals(prop) || byName.containsKey(prop)) continue;
+      final var asMember = (ExecutableType) processingEnv.getTypeUtils().asMemberOf(owner, m);
+      byName.put(prop, new Prop(prop, name, asMember.getReturnType()));
+    }
+    return new ArrayList<>(byName.values());
+  }
+
+  /** Whether {@code builderType} exposes a public no-arg {@code build()} method. */
+  protected boolean hasBuildMethod(final TypeElement builderType) {
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
+      if (isPublicInstance(m) && m.getParameters().isEmpty() && m.getSimpleName().contentEquals("build")) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether the class named by {@code qualifiedName} is annotated with any of {@code
+   * annotationFqns}. Used to decide a container step's element-result shape: a List/Set/Map element
+   * type whose class carries a navigable annotation gets routed into its own {@code
+   * <Element>Telescope<R>} rather than terminating in {@code Telescope<R, Element>}, provided that
+   * navigator is {@linkplain #navigatorWrittenInTime written in time} to be named.
+   */
+  protected boolean isAnnotatedClass(final String qualifiedName, final Set<String> annotationFqns) {
+    final var elements = processingEnv.getElementUtils();
+    final var element = elements.getTypeElement(qualifiedName);
+    if (element == null) return false;
+    final var kind = element.getKind();
+    // Accept both classes (@BeanFocus, Lombok @Data/@Value/@Builder targets) and records
+    // (@Focus targets); the per-annotation registration decides which is actually navigable.
+    if (kind != ElementKind.CLASS && kind != ElementKind.RECORD) return false;
+    if (!navigatorWrittenInTime(element)) return false;
+    for (final var fqn : annotationFqns) {
+      final var anno = elements.getTypeElement(fqn);
+      if (anno == null) continue;
+      for (final var am : element.getAnnotationMirrors()) {
+        if (am.getAnnotationType().asElement().equals(anno)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Overload of {@link #navigableType(TypeMirror, ElementKind, String)} that returns the first type
+   * whose element carries any of {@code annotationFqns} and is either a class or a record. Used by
+   * both {@link #emitBeanNavigator} (POJO targets) and {@link #emitNavigatorMethod} (record /
+   * cross-paradigm targets) so the same "is this sub-type navigable" check fires regardless of
+   * whether the sub-element is a record-flavored {@code @Focus} target or a bean-flavored
+   * {@code @BeanFocus} / Lombok target. A type whose navigator is not {@linkplain
+   * #navigatorWrittenInTime written in time} to be named yields {@code null}.
+   *
+   * <p>So does a parameterised type. Its class's navigator holds the class raw, and a path focused
+   * on {@code Box<String>} is not a path focused on {@code Box}, so the hop ends in a terminal, as
+   * it does for a container whose elements are parameterised.
+   */
+  protected String navigableType(final TypeMirror type, final Set<String> annotationFqns) {
+    if (type.getKind() == TypeKind.DECLARED && !((DeclaredType) type).getTypeArguments().isEmpty()) return null;
+    if (type.getKind() == TypeKind.DECLARED && !navigatorWrittenInTime(((DeclaredType) type).asElement())) return null;
+    for (final var fqn : annotationFqns) {
+      final var asClass = navigableType(type, ElementKind.CLASS, fqn);
+      if (asClass != null) return asClass;
+      final var asRecord = navigableType(type, ElementKind.RECORD, fqn);
+      if (asRecord != null) return asRecord;
+    }
+    return null;
+  }
+}

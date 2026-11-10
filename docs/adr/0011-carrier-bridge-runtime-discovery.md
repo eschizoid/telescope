@@ -30,7 +30,7 @@ probe fundamentally cannot locate a class in the carrier's package by name.
 ## Decision
 
 Add a package-agnostic discovery path: a `BridgeProvider` service-provider interface in
-`io.github.eschizoid.telescope.conversion`, and a `BridgeRegistry` lookup keyed by `(source, target)` over
+`io.github.telescopeorganization.telescope.conversion`, and a `BridgeRegistry` lookup keyed by `(source, target)` over
 `ServiceLoader`.
 
 - The `BridgeProcessor` carrier path emits a sibling `<Carrier>BridgeProvider implements BridgeProvider` (public no-arg

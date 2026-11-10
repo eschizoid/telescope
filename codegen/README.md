@@ -44,15 +44,15 @@ needed only at compile time.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.telescopeorganization:telescope-core:2.1.0")
+    annotationProcessor("io.github.telescopeorganization:telescope-codegen:2.1.0")
 }
 ```
 
 ```xml
 <!-- Maven -->
 <dependency>
-  <groupId>io.github.eschizoid</groupId>
+  <groupId>io.github.telescopeorganization</groupId>
   <artifactId>telescope-core</artifactId>
   <version>2.1.0</version>
 </dependency>
@@ -63,7 +63,7 @@ dependencies {
   <configuration>
     <annotationProcessorPaths>
       <path>
-        <groupId>io.github.eschizoid</groupId>
+        <groupId>io.github.telescopeorganization</groupId>
         <artifactId>telescope-codegen</artifactId>
         <version>2.1.0</version>
       </path>
@@ -236,8 +236,8 @@ pair, `<Source>To<Target>Bridge`, in the package of the class that declares the 
 over it when the field is initialised.
 
 ```java
-import static io.github.eschizoid.telescope.Telescope.mapper;
-import static io.github.eschizoid.telescope.mapping.Mapping.*;
+import static io.github.telescopeorganization.telescope.Telescope.mapper;
+import static io.github.telescopeorganization.telescope.mapping.Mapping.*;
 
 public final class Cents implements BridgeFn<BigDecimal, Long> {
 

@@ -1,0 +1,243 @@
+package io.github.telescopeorganization.telescope.codegen;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.telescopeorganization.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
+import javax.tools.JavaFileObject;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * A diagnostic is read by someone who cannot see the code that produced it, so naming the wrong
+ * annotation or describing a symptom instead of a cause sends them somewhere their source does not
+ * go. Each test below asserts the message that should appear <em>and</em> that the misleading one
+ * does not, because a processor that emitted both would satisfy the first assertion alone.
+ */
+class DiagnosticWordingTest {
+
+  private static Compilation compile(final JavaFileObject... sources) {
+    return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+  }
+
+  @Test
+  @DisplayName("a plain interface target is reported as an interface, not as a bijection failure")
+  void plainInterfaceTargetIsNamedAsSuch() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.ISrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(demo.IDst.class)
+        public record ISrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.IDst", "package demo; public interface IDst { String name(); }")
+    );
+
+    assertFalse(compilation.success(), "an interface target must not compile");
+    assertTrue(
+      compilation.hasError("is an interface with no permits"),
+      () -> "the cause is the target's kind, which the message should say: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("has []"),
+      () -> "the empty-component-set wording describes the symptom: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a name already taken by a hand-written type says what to rename")
+  void takenBridgeNameSaysWhatToRename() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.NSrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(demo.NDst.class)
+        public record NSrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.NDst", "package demo; public record NDst(String name) {}"),
+      // The adopter already owns the name the processor derives for this pair.
+      ProcessorHarness.source("demo.NSrcBridge", "package demo; public final class NSrcBridge {}")
+    );
+
+    assertFalse(compilation.success(), "the processor cannot write over a hand-written type");
+    assertTrue(
+      compilation.hasError("that name is already taken"),
+      () -> "the message should name the collision and an action: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("Failed to write"),
+      () -> "the generic write-failure wording gives the reader nothing to do: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a taken navigator name reports the same way a taken bridge name does")
+  void takenNavigatorNameSaysWhatToRename() {
+    // The navigator and the metadata holder are written by different emitters than the bridge, so
+    // each carries its own copy of the failure path.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new FocusProcessor()),
+      List.of(),
+      ProcessorHarness.source(
+        "demo.FSrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Focus;
+        @Focus
+        public record FSrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.FSrcTelescope", "package demo; public final class FSrcTelescope {}"),
+      // The metadata holder is written by the utility-class emitter, a third copy of the
+      // path.
+      ProcessorHarness.source("demo.FSrcFieldOptics", "package demo; public final class FSrcFieldOptics {}")
+    );
+
+    assertFalse(compilation.success(), "the processor cannot write over a hand-written navigator");
+    assertTrue(
+      compilation.hasError("that name is already taken"),
+      () -> "every emitter should phrase this the same way: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("an abstract target is reported, and no bridge is emitted for it")
+  void abstractTargetIsReported() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.ASrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(demo.ADst.class)
+        public record ASrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.ADst", "package demo; public abstract class ADst { public String name; }")
+    );
+
+    assertFalse(compilation.success(), "an abstract target has no constructor to rebuild through");
+    assertTrue(
+      compilation.hasError("@Bridge target ADst is abstract"),
+      () -> "the cause should be named where the annotation is: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("is abstract; cannot be instantiated"),
+      () -> "javac's error inside generated code is what this replaces: " + compilation.errorMessages()
+    );
+    assertTrue(
+      compilation.generated().isEmpty(),
+      () -> "nothing should be written: " + compilation.generated().keySet()
+    );
+  }
+
+  @Test
+  @DisplayName("an abstract source is reported too, since backward rebuilds it")
+  void abstractSourceIsReported() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.BSrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(demo.BDst.class)
+        public abstract class BSrc { public String name; }
+        """
+      ),
+      ProcessorHarness.source("demo.BDst", "package demo; public record BDst(String name) {}")
+    );
+
+    assertFalse(compilation.success(), "an abstract source cannot be rebuilt on backward");
+    assertTrue(
+      compilation.hasError("@Bridge source BSrc is abstract"),
+      () -> "the source side needs its own diagnostic: " + compilation.errorMessages()
+    );
+    assertTrue(
+      compilation.generated().isEmpty(),
+      () -> "nothing should be written: " + compilation.generated().keySet()
+    );
+  }
+
+  @Test
+  @DisplayName("an abstract type reached as a nested sub-pair is reported, not emitted against")
+  void abstractNestedSubPairIsReported() {
+    // The declared pair is concrete on both sides; the abstract type is discovered while planning
+    // the nested field, which is a different code path from the annotation scan.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.NRoot",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(demo.NRootDto.class)
+        public record NRoot(demo.NLeaf leaf) {}
+        """
+      ),
+      ProcessorHarness.source("demo.NRootDto", "package demo; public record NRootDto(demo.NAbsLeaf leaf) {}"),
+      ProcessorHarness.source("demo.NLeaf", "package demo; public record NLeaf(String v) {}"),
+      ProcessorHarness.source(
+        "demo.NAbsLeaf",
+        """
+        package demo;
+        // Pairs cleanly by name, so the only thing wrong with it is that it cannot be constructed.
+        public abstract class NAbsLeaf {
+          private String v;
+          public String getV() { return v; }
+          public void setV(final String v) { this.v = v; }
+        }
+        """
+      )
+    );
+
+    assertFalse(compilation.success(), "an abstract nested target has no constructor to rebuild through");
+    assertTrue(
+      compilation.hasError("which is abstract and has no constructor to rebuild through"),
+      () -> "the nested path needs its own diagnostic, naming the field: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("is abstract; cannot be instantiated"),
+      () -> "javac inside generated code is the failure mode being replaced: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a lenient bridge writes null into an unmatched collection slot, as the javadoc says")
+  void lenientUnmatchedCollectionIsWrittenNull() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.LSrc",
+        """
+        package demo;
+        import io.github.telescopeorganization.telescope.annotations.Bridge;
+        @Bridge(value = demo.LDst.class, lenient = true)
+        public record LSrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.LDst",
+        "package demo; import java.util.List; public record LDst(String name, List<String>" + " tags, int count) {}"
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "lenient should compile: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.LSrcBridge");
+    assertNotNull(bridge);
+    // The unmatched slots take the JLS default for their declared type, which for a collection is
+    // null rather than an empty container. Asserting the whole constructor call is what makes this
+    // fail if the collection slot changes: every generated bridge contains the word "null" in its
+    // guards, so a substring test for it alone would hold no matter what was written here. The
+    // primitive slot beside it is the control — it shows the two are decided by type, not by name.
+    assertTrue(
+      bridge.contains("new demo.LDst(__fs_name, null, 0)"),
+      () -> "the collection slot takes null and the primitive takes zero, in one constructor call: " + bridge
+    );
+  }
+}

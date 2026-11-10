@@ -1,0 +1,21 @@
+{
+  "lambdaCapturingTypes": [
+    {
+      "name": "io.github.telescopeorganization.telescope.examples.graphql.server.NativeVerify"
+    },
+    {
+      "name": "io.github.telescopeorganization.telescope.examples.graphql.model.UserTelescope"
+    },
+    {
+      "name": "io.github.telescopeorganization.telescope.examples.graphql.model.AddressTelescope"
+    },
+    {
+      "name": "io.github.telescopeorganization.telescope.examples.graphql.model.ShiftTelescope"
+    },
+    {
+      "name": "io.github.telescopeorganization.telescope.examples.graphql.model.CrewmateTelescope"
+    }
+  ],
+  "types": [],
+  "proxies": []
+}

@@ -51,7 +51,7 @@ scmVersion {
 }
 
 allprojects {
-    group = "io.github.eschizoid"
+    group = "io.github.telescopeorganization"
     version = rootProject.scmVersion.version
 }
 

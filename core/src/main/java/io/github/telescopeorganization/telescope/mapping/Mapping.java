@@ -1,0 +1,927 @@
+package io.github.telescopeorganization.telescope.mapping;
+
+import io.github.telescopeorganization.telescope.Edit;
+import io.github.telescopeorganization.telescope.Telescope;
+import io.github.telescopeorganization.telescope.Telescope.Accessor;
+import io.github.telescopeorganization.telescope.conversion.BridgeFn;
+import io.github.telescopeorganization.telescope.conversion.Mapper;
+import io.github.telescopeorganization.telescope.internal.LambdaIntrospection;
+import io.github.telescopeorganization.telescope.internal.pairing.EnumCorrespondence;
+import io.github.telescopeorganization.telescope.internal.pairing.ReflectionProps;
+import java.io.Serializable;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+/**
+ * One field correspondence in a {@link Telescope#map(Class, Class, MapStep...)} call — supplies an
+ * override for a specific {@code (sourceClass, targetClass)} type pair anywhere in the deep
+ * recursive traversal. Build with the static factories ({@link #to}, {@link #via}) — intended to be
+ * static-imported so the call site reads as a list of rows.
+ *
+ * <pre>{@code
+ * import static io.github.telescopeorganization.telescope.mapping.Mapping.to;
+ * import static io.github.telescopeorganization.telescope.mapping.Mapping.via;
+ *
+ * final Telescope<CompanyEntity, CompanyDto> companyMapper = Telescope.map(
+ *     CompanyEntity.class, CompanyDto.class,
+ *     to(CompanyEntity::founded, CompanyDto::since),        // top-level rename
+ *     to(UserEntity::name,       UserDto::fullName));       // applies wherever User↔UserDto recurses
+ * }</pre>
+ *
+ * <p>Symmetrical with {@link Edit#over(Telescope, Function)} / {@link Telescope#all(Edit[])} —
+ * varargs of typed rows, declarative, count-visible-at-a-glance.
+ *
+ * <p><b>Type-pair keying.</b> Each {@link #to to(srcAcc, tgtAcc)} / {@link #via via(srcAcc, tgtAcc,
+ * mapper)} row carries the receiver classes of its accessors via {@code SerializedLambda}. {@link
+ * Telescope#map(Class, Class, MapStep...)} keys overrides by {@code (sourceClass, targetClass)} so
+ * a single row applies wherever the recursion lands on that pair — top level or N levels deep.
+ *
+ * <p><b>Permitted impls.</b> Sealed over four package-private records in sibling files in this
+ * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}, {@link Drop}. Users
+ * construct via the static factories below; the record types are not public API.
+ */
+public sealed interface Mapping<A, B>
+  extends MapStep
+  permits
+    SameTypedTo,
+    TypedTransformTo,
+    ForwardOnlyTransformTo,
+    Via,
+    ViaMethods,
+    ViaClass,
+    Drop,
+    TelescopeTo,
+    FromTelescopeTo,
+    TelescopeToTelescope,
+    Constant,
+    Compute,
+    ComputeFromSource,
+    Conditional
+{
+  /**
+   * Source class this row keys against — the class the source accessor is applied to, recovered via
+   * {@code SerializedLambda}. For a getter inherited from a superclass that is the subclass the row
+   * names, not the superclass that declares the getter, so the row keys against a pair the mapper
+   * visits. May be {@code null} for permits whose source side is a {@code Telescope<A, ?>} (root
+   * class isn't recoverable at runtime — generics erased); the engine pins the row to the outer
+   * mapper pair instead.
+   *
+   * <p>Internal accessor exposed so {@code DeepMap} can key overrides by {@code (sourceClass,
+   * targetClass)} without a cross-interface cast. Not intended as a user-facing introspection
+   * surface — implementations live in package-private records.
+   */
+  Class<A> sourceClass();
+
+  /**
+   * Target class this row keys against — the class the target accessor is applied to. May be {@code
+   * null} for permits whose target side is a {@code Telescope<B, ?>}; same outer-pair pinning as
+   * for {@link #sourceClass}.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  Class<B> targetClass();
+
+  /**
+   * Source record component name this row claims — the source accessor's method name recovered via
+   * {@code SerializedLambda}. May be {@code null} for permits whose source side is a {@code
+   * Telescope<A, ?>}: the path's leaf isn't a top-level source field.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  String sourceField();
+
+  /**
+   * Target record component name this row claims — the target accessor's method name. May be {@code
+   * null} for permits whose target side is a {@code Telescope<B, ?>}: the path's leaf isn't a
+   * top-level target field.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  String targetField();
+
+  /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
+  static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
+    return new SameTypedTo<>(src, tgt);
+  }
+
+  /**
+   * Typed-transform correspondence: {@code src} has leaf {@code X}, {@code tgt} has leaf {@code Y};
+   * supply both directions of the conversion so the overall mapping stays a bijection
+   * (composition-safe).
+   *
+   * <pre>{@code
+   * to(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString, Instant::parse)
+   * }</pre>
+   */
+  static <A, B, X, Y> Mapping<A, B> to(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Function<? super X, ? extends Y> forward,
+    final Function<? super Y, ? extends X> backward
+  ) {
+    return new TypedTransformTo<>(src, tgt, forward, backward);
+  }
+
+  /**
+   * Typed-transform correspondence through one two-way conversion: {@code conversion}'s {@code
+   * forward} converts the source's leaf into the target's, and its {@code backward} converts back.
+   *
+   * <pre>{@code
+   * to(UserEntity::email, UserDto::contact, Emails.CONVERSION)
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the processor calls {@code conversion} from the generated
+   * bridge, so it must be a {@code static final} field the bridge can name.
+   */
+  static <A, B, X, Y> Mapping<A, B> to(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final BridgeFn<X, Y> conversion
+  ) {
+    Objects.requireNonNull(conversion, "Mapping.to: conversion is null");
+    return new TypedTransformTo<>(src, tgt, conversion::forward, conversion::backward);
+  }
+
+  /**
+   * As {@link #to(Accessor, Accessor, BridgeFn)}, naming the conversion's class, which is built
+   * through its no-argument constructor when the row is.
+   *
+   * <pre>{@code
+   * to(UserEntity::email, UserDto::contact, EmailFn.class)
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the generated bridge builds the class once, through its
+   * no-argument constructor, and converts through it.
+   */
+  static <A, B, X, Y> Mapping<A, B> to(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Class<? extends BridgeFn<X, Y>> conversion
+  ) {
+    Objects.requireNonNull(conversion, "Mapping.to: conversion class is null");
+    final var fn = new ConversionClass<X, Y>(conversion);
+    return new TypedTransformTo<>(src, tgt, fn::forward, fn::backward);
+  }
+
+  /**
+   * Forward-only typed-transform correspondence: same shape as {@link #to(Accessor, Accessor,
+   * Function, Function)} but carries ONLY a forward function — there is no backward field. The
+   * factory boundary closes the partial-Iso gap: {@link Telescope#mapper(Class, Class, MapStep...)
+   * Telescope.mapper(...)} refuses to build a bidirectional {@link Mapper} when a {@code toOneWay}
+   * row is present and tells the caller to use {@link Telescope#mapperForward
+   * Telescope.mapperForward(...)} instead. Use this for one-shot entity → DB-schema mappings whose
+   * backward direction is never called — the compile-time-typed forward-only contract is checked at
+   * the factory, not deferred to a runtime throw.
+   *
+   * <pre>{@code
+   * toOneWay(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)
+   * }</pre>
+   *
+   * <p>The name reads as the unidirectional sibling of {@link #to(Accessor, Accessor)} — both
+   * factories produce a row keyed off a {@code (sourceAccessor, targetAccessor)} pair; {@code to}
+   * is bidirectional, {@code toOneWay} carries only a forward function. Both intend to be
+   * static-imported alongside each other.
+   *
+   * <p>For the bidirectional variant, supply the inverse explicitly via {@link #to(Accessor,
+   * Accessor, Function, Function)}.
+   */
+  static <A, B, X, Y> Mapping<A, B> toOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Function<? super X, ? extends Y> fn
+  ) {
+    return new ForwardOnlyTransformTo<>(src, tgt, fn);
+  }
+
+  /**
+   * Enum correspondence by constant name. Maps each {@code SE} constant to the {@code TE} constant
+   * of the same {@link Enum#name() name}; backward direction is symmetric.
+   *
+   * <pre>{@code
+   * enumTo(UserEntity::status, UserDto::state, EntityStatus.class, DtoStatus.class)
+   * }</pre>
+   *
+   * <p>Two same-named fields of different enum types need no row: the mapper converts them by
+   * constant name on its own. This row states the same correspondence for a field that is also
+   * renamed.
+   *
+   * <p><b>Exhaustiveness validation runs at factory time.</b> Every constant of {@code srcEnum}
+   * must have a same-named constant in {@code tgtEnum}, and vice versa. Mismatches throw {@link
+   * IllegalArgumentException} naming the missing constants so the user sees a clear diff at
+   * mapper-build time instead of an {@link IllegalArgumentException} at the first call site that
+   * hits the unmatched constant. If your enums genuinely differ in cardinality, use {@link
+   * #to(Accessor, Accessor, Function, Function)} with explicit lambdas that handle the mismatch
+   * however you want (default, throw, map-to-null).
+   *
+   * <p><b>Lattice routing:</b> this is a thin convenience over {@link TypedTransformTo} — the
+   * forward and backward closures are {@code Enum.valueOf(targetClass, source.name())}. The
+   * existing lattice composition rules apply unchanged.
+   */
+  static <A, B, SE extends Enum<SE>, TE extends Enum<TE>> Mapping<A, B> enumTo(
+    final Accessor<A, SE> src,
+    final Accessor<B, TE> tgt,
+    final Class<SE> srcEnum,
+    final Class<TE> tgtEnum
+  ) {
+    validateEnumCorrespondence(srcEnum, tgtEnum);
+    return new TypedTransformTo<>(
+      src,
+      tgt,
+      (SE s) -> Enum.valueOf(tgtEnum, s.name()),
+      (TE t) -> Enum.valueOf(srcEnum, t.name())
+    );
+  }
+
+  private static <SE extends Enum<SE>, TE extends Enum<TE>> void validateEnumCorrespondence(
+    final Class<SE> srcEnum,
+    final Class<TE> tgtEnum
+  ) {
+    final var props = new ReflectionProps();
+    final var correspondence = EnumCorrespondence.of(props.enumConstants(srcEnum), props.enumConstants(tgtEnum));
+    if (correspondence.converts(false)) return;
+    final var missingInTarget = correspondence.missingOnTarget();
+    final var missingInSource = correspondence.missingOnSource();
+    final var msg = new StringBuilder("Mapping.enumTo(")
+      .append(srcEnum.getSimpleName())
+      .append(" ↔ ")
+      .append(tgtEnum.getSimpleName())
+      .append("): exhaustiveness check failed.");
+    if (!missingInTarget.isEmpty()) {
+      msg
+        .append(" Source constants missing on target: ")
+        .append(missingInTarget)
+        .append(" (add to ")
+        .append(tgtEnum.getSimpleName())
+        .append(" or use Mapping.to(src, tgt, fwd, bwd) with explicit fallback handling).");
+    }
+    if (!missingInSource.isEmpty()) {
+      msg
+        .append(" Target constants missing on source: ")
+        .append(missingInSource)
+        .append(" (add to ")
+        .append(srcEnum.getSimpleName())
+        .append(" or use Mapping.to(src, tgt, fwd, bwd) with explicit fallback handling).");
+    }
+    throw new IllegalArgumentException(msg.toString());
+  }
+
+  /**
+   * Null-coalescing same-typed correspondence: when the source accessor returns {@code null}, the
+   * target receives {@code defaultValue} instead. Source and target share the same leaf type {@code
+   * X}; non-null source values pass through unchanged. Closes MapStruct's {@code defaultValue} gap
+   * without the inline {@code n == null ? FALLBACK : n} lambda.
+   *
+   * <pre>{@code
+   * toOrElse(UserEntity::displayName, UserDto::displayName, "(unnamed)")
+   * }</pre>
+   *
+   * <p>Backward direction is identity — the default value, if it lands on the target, round-trips
+   * back to the source slot as that same value rather than the original null. Accept the asymmetry
+   * when the default is a domain-meaningful sentinel rather than a placeholder; reach for an
+   * explicit 4-arg {@link #to(Accessor, Accessor, Function, Function)} when both directions need
+   * bespoke logic.
+   */
+  static <A, B, X> Mapping<A, B> toOrElse(final Accessor<A, X> src, final Accessor<B, X> tgt, final X defaultValue) {
+    return new TypedTransformTo<>(src, tgt, x -> x == null ? defaultValue : x, y -> y);
+  }
+
+  /**
+   * Predicate-gated null-coalescing same-typed correspondence: the target receives {@code
+   * defaultValue} when {@code missing.test(srcValue)} returns true. Generalises {@link
+   * #toOrElse(Accessor, Accessor, Object)} (which is strict-null) to cover empty-string,
+   * empty-collection, zero-numeric, or any custom predicate-equivalent of "missing". MapStruct has
+   * no equivalent — {@code defaultValue} is strictly null-checked at the bytecode level.
+   *
+   * <pre>{@code
+   * toOrElse(Src::displayName, Dst::displayName, "(unnamed)", String::isBlank)
+   * toOrElse(Src::items,       Dst::items,       List.of(),  List::isEmpty)
+   * }</pre>
+   *
+   * <p>Backward direction is identity; the asymmetry of {@link #toOrElse(Accessor, Accessor,
+   * Object)} applies here too. Reach for the explicit 4-arg {@link #to(Accessor, Accessor,
+   * Function, Function)} when both directions need bespoke logic.
+   */
+  static <A, B, X> Mapping<A, B> toOrElse(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final X defaultValue,
+    final Predicate<? super X> missing
+  ) {
+    Objects.requireNonNull(missing, "Mapping.toOrElse: missing predicate is null");
+    // Null-short-circuit BEFORE the predicate fires so predicates like String::isBlank /
+    // List::isEmpty don't NPE on a null source value. Matches the 3-arg toOrElse's strict-null
+    // semantics for the leading-null case.
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? defaultValue : x, y -> y);
+  }
+
+  /**
+   * Lazy null-coalescing same-typed correspondence: like {@link #toOrElse(Accessor, Accessor,
+   * Object)} but the fallback comes from a {@link Supplier} so an expensive-to-construct default is
+   * only materialized when the source actually is {@code null}. Closes MapStruct's {@code
+   * defaultExpression = "java(…)"} gap.
+   *
+   * <pre>{@code
+   * toOrElseGet(UserEntity::createdAt, UserDto::createdAt, Instant::now)
+   * }</pre>
+   *
+   * <p>Same backward-is-identity trade-off as {@link #toOrElse(Accessor, Accessor, Object)} — the
+   * supplied value, once it lands on the target, round-trips back to the source slot as itself
+   * rather than the original null.
+   */
+  static <A, B, X> Mapping<A, B> toOrElseGet(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final Supplier<? extends X> supplier
+  ) {
+    return new TypedTransformTo<>(src, tgt, x -> x == null ? supplier.get() : x, y -> y);
+  }
+
+  /**
+   * Predicate-gated lazy null-coalescing same-typed correspondence: {@code supplier.get()} runs
+   * when {@code missing.test(srcValue)} returns true. Generalises {@link #toOrElseGet(Accessor,
+   * Accessor, Supplier)} the same way the 4-arg {@link #toOrElse(Accessor, Accessor, Object,
+   * Predicate)} generalises {@link #toOrElse(Accessor, Accessor, Object)}.
+   *
+   * <pre>{@code
+   * toOrElseGet(Src::traceId, Dst::traceId, UUID::randomUUID, String::isBlank)
+   * }</pre>
+   */
+  static <A, B, X> Mapping<A, B> toOrElseGet(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final Supplier<? extends X> supplier,
+    final Predicate<? super X> missing
+  ) {
+    Objects.requireNonNull(missing, "Mapping.toOrElseGet: missing predicate is null");
+    // Null-short-circuit BEFORE the predicate fires — see the parallel toOrElse overload for the
+    // rationale (String::isBlank / List::isEmpty would NPE on null).
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? supplier.get() : x, y -> y);
+  }
+
+  /**
+   * Nested-target correspondence: stamp a flat source field through a multi-hop {@link Telescope}
+   * on the target side. Closes the gap with MapStruct's {@code @Mapping(source = "flat", target =
+   * "a.b.c")} by letting the second argument be a real {@code Telescope<B, X>} built with the same
+   * {@code .field(...)} navigation users already know for read/update — the IDE refactor follows
+   * each hop and {@code javac} catches a missing accessor everywhere.
+   *
+   * <pre>{@code
+   * // Runtime form — Telescope.of(...).field(...).field(...)
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::getName,         OrderDto::getFullName),
+   *     to(Order::getCustomerName,
+   *        Telescope.of(OrderDto.class)
+   *            .field(OrderDto::getShipping)
+   *            .field(Shipping::getRecipient)
+   *            .field(Recipient::getFullName)));
+   *
+   * // Codegen form — @Focus-generated navigator, same Telescope value, fully typed each hop.
+   * // Mapping.to accepts both interchangeably; pick whichever the call site is closest to.
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::getCustomerName,
+   *        OrderDtoTelescope.of().shipping().recipient().fullName()));
+   * }</pre>
+   *
+   * <p>The engine applies this row at the <em>outer</em> {@code (source, target)} pair only — after
+   * the base auto-recursion produces a target value, {@code targetTelescope.set(b,
+   * srcAcc.apply(a))} overlays the leaf. Backward direction is the mirror: read at the target
+   * telescope, write to the source via the accessor's lens.
+   *
+   * <p><b>Null objects on the path.</b> For a path that steps through properties alone, with one
+   * {@code field} hop per property, forward rebuilds each object the path steps through, through
+   * the write strategy its class takes, and builds one that is null, with its other properties at
+   * their null value, when the value written is not null; when the value is null, an object that is
+   * null stays null. Backward reads a null object on the way as the leaf's null value: null for a
+   * reference, and the default for a primitive member of a record, a constructor or a builder,
+   * while a primitive setter is not called. {@code patch} takes a partial's non-null value read
+   * through the path. Every mapper refuses, when it is built, a path through a class no write
+   * strategy builds. A path of any other shape is written into a default-tree instance of the
+   * target property it starts at, and set and read through the lattice as it is.
+   *
+   * <p>The value goes across the path as it is: a container leaf, a {@code List} or a {@code Map},
+   * is the same instance on both sides, not the copy a row between two accessors makes.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
+   * Telescope.of(Target.class)} or {@code Telescope.ofBean(Target.class)} through {@code field}
+   * steps alone, each a method reference to a property, or as {@code Telescope.path(Target::a,
+   * A::b)}, which compiles to the same code: writes call each class's accessors and write strategy
+   * directly, and reads back become a null-safe chain of locals. Any other path, a lambda step
+   * among them, is refused on the row by name.
+   */
+  static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
+    return new TelescopeTo<>(src, targetTelescope);
+  }
+
+  /**
+   * Nested-source correspondence: source is a multi-hop {@link Telescope}, target is a flat
+   * accessor. Mirror of {@link #to(Accessor, Telescope)} — same fluent navigation on the source
+   * side, single accessor on the target. Closes MapStruct's {@code @Mapping(source = "a.b.c",
+   * target = "flat")} for that direction.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Telescope.of(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+   *        OrderDto::getRecipientEmail));
+   * }</pre>
+   *
+   * <p>Engine: applied at the outer {@code (source, target)} pair only. Forward reads the path's
+   * value and writes it into {@code tgt}'s property. Backward reads {@code tgt}'s property and
+   * writes it back through the path, and {@code patch} writes a partial's non-null value of it the
+   * same way, after the rest of the source is rebuilt.
+   *
+   * <p><b>Null objects on the path.</b> For a path that steps through properties alone, with one
+   * {@code field} hop per property, a null object on the way reads as the leaf's null value:
+   * forward writes null into a reference, the default into a primitive member of a record, a
+   * constructor or a builder, and leaves a primitive setter unwritten. A write back through the
+   * path rebuilds each object it steps through, through the write strategy its class takes, and
+   * builds one that is null with its other properties at their null value; when the value written
+   * is null, an object that is null stays null. A mapper that converts both ways refuses, when it
+   * is built, a path through a class no write strategy builds. A path of any other shape is read
+   * and set through the lattice as it is.
+   *
+   * <p>The value goes across the path as it is: a container leaf, a {@code List} or a {@code Map},
+   * is the same instance on both sides, not the copy a row between two accessors makes.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
+   * Telescope.of(Source.class)} or {@code Telescope.ofBean(Source.class)} through {@code field}
+   * steps alone, each a method reference to a property, or as {@code Telescope.path(Source::a,
+   * A::b)}, which compiles to the same code: reads become a null-safe chain of locals, one per
+   * object, and writes call the accessors and the write strategy directly. Any other path, a lambda
+   * step among them, is refused on the row by name.
+   */
+  static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Accessor<B, X> tgt) {
+    return new FromTelescopeTo<>(srcTelescope, tgt);
+  }
+
+  /**
+   * Both-nested correspondence: source and target sides are multi-hop {@link Telescope}s. Closes
+   * MapStruct's {@code @Mapping(source = "a.b.c", target = "x.y.z")} for the both-nested case.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Telescope.of(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+   *        Telescope.of(OrderDto.class).field(OrderDto::getShipping).field(Shipping::getEmail)));
+   * }</pre>
+   *
+   * <p>Engine: applied at the outer pair only. Forward overlay: {@code tgt.set(b, src.read(a))}.
+   * Backward overlay: {@code src.set(a, tgt.read(b))}.
+   *
+   * <p><b>Broadcast on many-focus telescopes.</b> When either side carries a many-focus telescope
+   * (built with {@code .each(...)} / {@code .eachValue(...)} / {@code .whenPresent(...)}), the
+   * lattice's intrinsic {@link Telescope#set} broadcasts the value to every focus on the target
+   * side, and {@link Telescope#read} returns the first focus on the source side. For positional N:N
+   * — Nth source value at Nth target focus — use {@link #zip(Telescope, Telescope)} instead.
+   */
+  static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
+    return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);
+  }
+
+  /**
+   * Positional N:N correspondence between two many-focus telescopes. The Nth source value lands at
+   * the Nth target focus; cardinality is enforced at apply time — a mismatch throws rather than
+   * silently truncating.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Cart.class, CartDto.class,
+   *     zip(Telescope.of(Cart.class).each(Cart::items).field(Item::name),
+   *         Telescope.of(CartDto.class).each(CartDto::lines).field(Line::label)));
+   * }</pre>
+   *
+   * <p>Distinct from {@link #to(Telescope, Telescope)}, which broadcasts on the many side. {@code
+   * zip} is the explicit positional semantic — the call-site reader knows which write semantic
+   * they're getting from the method name.
+   *
+   * <p>Engine: applied at the outer pair only. Forward fixup uses {@link Telescope#toList} on the
+   * source and {@link Telescope#updateIndexed} on the target with a cardinality check; backward
+   * fixup is the mirror.
+   */
+  static <A, B, X> Mapping<A, B> zip(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
+    return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.ZIP);
+  }
+
+  /**
+   * Nested correspondence: map {@code src}'s leaf through a pre-built {@link Mapper}. The mapper
+   * supplies both directions; any custom rules it bakes in (typed transforms, nested mappers of its
+   * own) survive — the deep recursion uses it as-is at this slot instead of building its own.
+   *
+   * <p>The mapper can be at <em>element-level</em> or at <em>accessor-level</em>; telescope detects
+   * which one the user passed and lifts through {@code List} / {@code Set} / {@code Optional} /
+   * {@code Map<K, V>} automatically when the accessor returns a container and the mapper's
+   * source/target classes are the element types. An element typed by a type variable counts when
+   * the variable's bound admits the mapper's class.
+   *
+   * <pre>{@code
+   * via(UserEntity::address,  UserDto::address,  addressMapper)   // scalar pair, no lift
+   * via(TeamEntity::members,  TeamDto::members,  userMapper)      // List pair, auto-lifts
+   * via(OrderEntity::giftWrap, OrderDto::giftWrap, addressMapper) // Optional pair, auto-lifts
+   * }</pre>
+   */
+  static <A, B> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Mapper<?, ?> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper);
+  }
+
+  /**
+   * Nested correspondence converted by two methods written by hand: {@code forward} turns a source
+   * value into a target value, and {@code backward} turns it back. As with {@link #via(Accessor,
+   * Accessor, Mapper)}, the two may convert one element, and the row then converts a {@code List},
+   * {@code Set}, {@code Optional} or the values of a {@code Map} element by element; they convert
+   * the whole property when {@code forward} takes the property's own type. A null value, or a null
+   * element, stays null and is not handed to either method.
+   *
+   * <p>What {@code backward} returns must be a value {@code forward} takes, which is what lets a
+   * generic {@code forward} be named without its type argument, and the compiler then types {@code
+   * forward} as taking exactly that class. The row is valid when that class admits everything the
+   * property holds, its elements when the row converts them one by one and the property itself
+   * otherwise; a {@code backward} returning a narrower class is refused by name, in a
+   * {@code @Bridge} mapper at compile time and otherwise when the mapper is built. Have {@code
+   * backward} return the wider class, or name the class with {@link #via(Accessor, Accessor,
+   * Class)}, which chooses its methods for the property's types.
+   *
+   * <pre>{@code
+   * via(Order::lines, OrderDto::lines, LineMapper::forward, LineMapper::backward) // each Line
+   * via(Order::buyer, OrderDto::buyer, Buyers::toDto, Buyers::fromDto)             // the property
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the two are the static {@code forward} and {@code backward}
+   * methods of one class, which the generated bridge calls on the same values.
+   *
+   * <p>The methods are read when the runtime path builds a mapper from the row; a mapper a
+   * {@code @Bridge} field declares, which runs its generated bridge, never reads them. Building
+   * that mapper throws {@link IllegalArgumentException} if either is not a method reference
+   * converting one value.
+   */
+  static <A, B, X, Y, U, V extends X> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Accessor<X, Y> forward,
+    final Accessor<U, V> backward
+  ) {
+    return new ViaMethods<>(src, tgt, forward, backward);
+  }
+
+  /**
+   * Nested correspondence converted by the static {@code forward} and {@code backward} methods of
+   * {@code using}, a class written by hand, chosen for the property's types. Where the two sides
+   * are containers of one kind, a {@code List}, {@code Set}, {@code Optional} or the values of a
+   * {@code Map}, and the class has a {@code forward} taking the source's element and a {@code
+   * backward} taking the target's, the row converts element by element; a class whose {@code
+   * forward} and {@code backward} each have an overload taking one side's container and giving the
+   * other side's converts the property as it is. Otherwise each direction calls the overload Java
+   * would bind for the property's value. The methods are those code in the row's package can call
+   * on the class: public, or package-private in that package, declared by the class or inherited
+   * from a superclass. A null value, or a null element, stays null and is not handed to either
+   * method.
+   *
+   * <pre>{@code
+   * via(Order::lines, OrderDto::lines, LineMapper.class) // LineMapper.forward(Line), backward(LineDto)
+   * }</pre>
+   *
+   * <p>Unlike {@link #via(Accessor, Accessor, Accessor, Accessor)}, naming the class leaves the
+   * choice of method to the property's types, so a class whose {@code backward} returns a narrower
+   * class than its {@code forward} takes, whose methods are generic in their result, or that has
+   * overloads for an element and for the whole container converts too. In a {@code @Bridge} mapper
+   * the generated bridge calls the chosen methods by name; the runtime path reads the class's
+   * methods only when it builds a mapper from the row.
+   */
+  static <A, B> Mapping<A, B> via(final Accessor<A, ?> src, final Accessor<B, ?> tgt, final Class<?> using) {
+    return new ViaClass<>(src, tgt, Objects.requireNonNull(using, "using"));
+  }
+
+  /**
+   * Drop a source field — declare it intentionally NOT mapped to the target so the strict deep-map
+   * factory accepts the pair without requiring a same-name target property. Use this when one side
+   * of a cross-paradigm pair carries fields the other side shouldn't (or doesn't) see — e.g.
+   * internal {@code metadata} that mustn't leak to a partner-facing DTO.
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, PartnerShippingLabel.class,
+   *     to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
+   *     via(Order::lineItems,  PartnerShippingLabel::getItems, partnerItemMapper),
+   *     drop(Order::metadata));   // PartnerShippingLabel has no metadata field; this is OK
+   * }</pre>
+   *
+   * <p>The dropped field is read-side-only: {@code forward(order)} simply does not propagate it to
+   * the target, and {@code backward(label)} reconstructs the record with the field set to whatever
+   * the source-side reflection chooses (typically {@code null} for nullable record components, or
+   * the type's default value otherwise — see the source-class's component-default contract).
+   *
+   * <p>A dropped field is written by no other row of its pair: the mapper refuses, by name and in
+   * either order, a drop beside a row reading the same field through its accessor, a target path
+   * its accessor feeds, or a source path of {@code field} hops alone that reads it or steps through
+   * it.
+   */
+  static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
+    return new Drop<>(src, null);
+  }
+
+  /**
+   * Drop a source field scoped to a specific nested {@code (source, target)} pair. Use this when
+   * the field to drop lives on a type the recursion lands on multiple times with different targets
+   * — only the (source, {@code target}) pair gets the field elided; other recursions on the same
+   * source class stay strict.
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, PartnerShippingLabel.class,
+   *     to(Order::orderNumber,   PartnerShippingLabel::getTrackingReference),
+   *     via(Order::lineItems,    PartnerShippingLabel::getItems, partnerItemMapper),
+   *     drop(Order::metadata),                       // top-level Order → PartnerShippingLabel
+   *     drop(Customer::tags, PartnerCustomer.class)); // nested Customer → PartnerCustomer
+   * }</pre>
+   *
+   * <p>Symmetrical with {@link #via(Accessor, Accessor, Mapper)} carrying both accessors — the
+   * difference is that there is no target accessor to recover the target class from, so the user
+   * supplies the class directly. Use the single-arg {@link #drop(Accessor)} when the drop scopes to
+   * the top-level mapper.
+   */
+  static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src, final Class<?> target) {
+    @SuppressWarnings("unchecked")
+    final var castTarget = (Class<B>) target;
+    return new Drop<>(src, castTarget);
+  }
+
+  /**
+   * Stamp a fixed value onto a target field at forward time. Closes MapStruct's
+   * {@code @Mapping(target = "tenant", constant = "production")} — the literal lives at the call
+   * site, statically typed against the target leaf, no string parser.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(OrderDto::tenant,    "production"),
+   *     constant(OrderDto::apiVersion, 7));
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> The source side has no slot for this value, so {@code
+   * mapper.backward(dto)} silently drops it — the rebuilt source carries the type default at the
+   * dual slot. Same retraction semantics as {@link #drop(Accessor)} on the source side.
+   *
+   * <p><b>Eager.</b> The literal is captured once at row construction; every forward call stamps
+   * the same reference. For values that should be re-evaluated per call (timestamps, fresh
+   * containers, IDs) use {@link #compute(Accessor, Supplier)} instead — a literal {@code
+   * constant(Tgt::metadata, new HashMap<>())} would share one map across every forward call, which
+   * is almost never what you want.
+   *
+   * <p><b>Written on the mapper's target.</b> The accessor may be a getter that a superclass or an
+   * interface of the target declares; the value is still written on the target class, which keeps
+   * every property the declaring type lacks. An accessor on a type the target neither is nor
+   * extends is refused when the mapper is built.
+   */
+  static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    return new Constant<>(Telescope.of(tgtClass).field(tgt), value);
+  }
+
+  /**
+   * Stamp a freshly-evaluated value onto a target field at every forward call. Closes MapStruct's
+   * {@code @Mapping(target = "createdAt", expression = "java(Instant.now())")} but in plain typed
+   * Java — the {@link Supplier} is type-checked against the target leaf by {@code javac}, no
+   * string-templated expression body.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id,       OrderDto::id),
+   *     compute(OrderDto::createdAt, Instant::now),     // fresh timestamp per call
+   *     compute(OrderDto::traceId,   UUID::randomUUID), // fresh ID per call
+   *     compute(OrderDto::metadata,  HashMap::new));    // fresh container per call
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> Same backward-drop semantics as {@link #constant(Accessor, Object)}.
+   * Note that this means {@code mapper.forward(mapper.backward(dto))} does NOT round-trip a {@code
+   * compute} row's value — by design: a supplier like {@code Instant::now} cannot be inverted.
+   * Document any roundtrip assumption explicitly.
+   *
+   * <p><b>Lazy.</b> The supplier fires on every forward call, not once at row construction. Use
+   * this whenever the value involves mutable state, time, randomness, or a fresh allocation; use
+   * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
+   *
+   * <p>Written on the mapper's target class, through a getter a superclass or interface of it
+   * declares if need be, as for {@link #constant(Accessor, Object)}.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    return new Compute<>(Telescope.of(tgtClass).field(tgt), supplier);
+  }
+
+  /**
+   * The same row as {@link #compute(Accessor, Supplier)}, for a method reference or lambda that
+   * takes no argument. Java binds such an argument here rather than to the {@code Supplier} form,
+   * since {@link Fresh} extends both {@code Supplier} and {@link FromSource}; the row then calls
+   * {@link Fresh#get()} on every forward call.
+   *
+   * <p>A reference whose name also has a form taking one argument the mapper's source is an
+   * instance of, as {@code Names::full} does when {@code Names} declares both {@code full()} and
+   * {@code full(User)}, binds here as the supplier too, which is rarely what was meant, so it is
+   * refused by name: in a {@code @Bridge} mapper at compile time, and otherwise when the mapper is
+   * built. A form whose parameter is {@code Object} or a type variable erasing to it, as {@code
+   * List.of(E)} and {@code new AtomicReference<>(V)} are, takes any value rather than the source,
+   * so {@code List::of} and {@code AtomicReference::new} run as suppliers. Hold the one meant in a
+   * {@code static final} {@code Supplier} or {@code FromSource} field, or give the form taking the
+   * source a name of its own.
+   *
+   * <p>The form is looked for in the class the reference names the method through and in each class
+   * and interface that class extends. For a reference bound to a receiver that class is the type of
+   * the expression before {@code ::}. For a static reference it is the class declaring the method,
+   * whatever class is written before {@code ::}, because the compiled reference names only the
+   * declaring class. So where {@code Base} declares {@code full()} and its subclass {@code Sub}
+   * declares {@code full(User)}, a bound {@code Sub.INSTANCE::full} is refused, while a static
+   * {@code Sub::full} runs {@code Base.full()} as the supplier on both paths.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Fresh<? extends X> supplier) {
+    final Supplier<? extends X> asSupplier = supplier;
+    return compute(tgt, asSupplier);
+  }
+
+  /**
+   * Fill a target property, on every forward call, with what {@code function} makes of the source.
+   * Closes MapStruct's {@code @Mapping(target = "fullName", expression = "java(Names.full(user))")}
+   * in plain typed Java: a target value built from several source properties, with no string body.
+   *
+   * <pre>{@code
+   * Telescope.mapper(User.class, UserDto.class,
+   *     compute(UserDto::fullName, Names::full),        // static String full(User user)
+   *     compute(UserDto::initials, User::initials));    // String initials() on User
+   * }</pre>
+   *
+   * <p>{@code function} is handed the source the mapper converts, never null: a mapper hands a null
+   * source back as null without calling it. What it returns is written into the target property as
+   * a value of {@link #constant(Accessor, Object)} is, a null included, and a null written into a
+   * primitive property writes the primitive's default.
+   *
+   * <p><b>Reads the whole source.</b> The row names no source property, so every source property
+   * still pairs with the target property of its name, or is refused by a strict mapper when it has
+   * none, as it would be without the row; the target property the row fills needs no source
+   * property of its name.
+   *
+   * <p><b>Forward-only.</b> A computed value has no inverse, so {@code backward} and {@code patch}
+   * skip the property, as they skip a {@link #compute(Accessor, Supplier)} row's, and a strict
+   * {@code Telescope.mapper} accepts the row.
+   *
+   * <p><b>Takes the source.</b> The class {@code function} takes must be the mapper's source or a
+   * type it extends. Building the mapper refuses any other by name, and in a {@code @Bridge}
+   * mapper, or under the compile-time verifier, so does the compiler. Inside a native image the
+   * function is not decoded, and one taking another class fails on its first call.
+   *
+   * <p><b>Inference.</b> Nothing in the call fixes the source class, so {@code function} must say
+   * which class it takes: a reference to a method with one form of its name, or a lambda whose
+   * parameter is given a type, {@code (User user) -> ...}. An overloaded helper, such as {@code
+   * Names.full(User)} beside {@code Names.full(Admin)}, cannot be resolved, and a lambda with an
+   * inferred parameter takes {@code Object}, so its body can use only what {@code Object} has; hold
+   * the one meant in a {@code static final FromSource<User, String>} field and pass the field, or
+   * {@code FULL::apply}. A function already held as a plain {@code Function} is passed as {@code
+   * function::apply}.
+   *
+   * <p>In a {@code @Bridge} mapper the processor calls {@code function} directly from the generated
+   * bridge: it must be a reference to a static method taking the source ({@code Names::full}), to
+   * an instance method of the source or of a type it extends ({@code User::initials}), to a
+   * constructor taking the source, or to a method of a {@code static final} field ({@code
+   * FULL::apply}), or else a {@code static final} field holding the function. An inline lambda is
+   * refused by name.
+   *
+   * <p>Written on the mapper's target class, through a getter a superclass or interface of it
+   * declares if need be, as for {@link #constant(Accessor, Object)}.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final FromSource<? super A, ? extends X> function) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    return new ComputeFromSource<>(Telescope.of(tgtClass).field(tgt), Objects.requireNonNull(function, "function"));
+  }
+
+  /**
+   * A function of the source a {@link #compute(Accessor, FromSource) compute} row fills its target
+   * property with, written as a method reference or a lambda: {@code Names::full}, {@code
+   * User::initials}, {@code (User user) -> ...}. It is {@code Serializable} so that building the
+   * mapper can read the class it takes and refuse one the source is not.
+   *
+   * @param <A> the class taken, the mapper's source or a type it extends
+   * @param <X> the value given
+   */
+  @FunctionalInterface
+  interface FromSource<A, X> extends Function<A, X>, Serializable {}
+
+  /**
+   * The parameter type of {@link #compute(Accessor, Fresh)}, which exists only so that {@code
+   * compute(OrderDto::createdAt, Instant::now)} resolves. Users never write it.
+   *
+   * <p>A method reference such as {@code Instant::now} or {@code HashMap::new}, whose name has both
+   * a form taking no argument and a form taking one, fits both {@link Supplier} and {@link
+   * FromSource}, and Java chooses between two overloads taking those only when one of the two types
+   * extends the other. This type extends both, so Java binds such a reference to it, as the
+   * supplier.
+   *
+   * @param <X> the value supplied
+   */
+  @FunctionalInterface
+  interface Fresh<X> extends Supplier<X>, FromSource<Object, X> {
+    /** Returns {@link #get()}, ignoring {@code ignored}; the {@code compute} row never calls it. */
+    @Override
+    default X apply(final Object ignored) {
+      return get();
+    }
+  }
+
+  /**
+   * Nested-target variant of {@link #constant(Accessor, Object)} — stamp a fixed value at a
+   * multi-hop target location via a {@link Telescope}. Closes MapStruct's {@code @Mapping(target =
+   * "a.b.c", constant = "...")} for nested targets.
+   *
+   * <pre>{@code
+   * // Runtime form
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(
+   *         Telescope.of(OrderDto.class).field(OrderDto::shipping).field(Shipping::country),
+   *         "US"));
+   *
+   * // Codegen form — same value-level Telescope, fully typed each hop
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(OrderDtoTelescope.of().shipping().country(), "US"));
+   * }</pre>
+   *
+   * <p>Forward-only. Intermediate hops without a same-name source counterpart are allocated as a
+   * recursive default-tree (records only), into which the value is set.
+   */
+  static <A, B, X> Mapping<A, B> constant(final Telescope<B, X> targetTelescope, final X value) {
+    return new Constant<>(targetTelescope, value);
+  }
+
+  /**
+   * Nested-target variant of {@link #compute(Accessor, Supplier)} — invoke the supplier per forward
+   * call and stamp the result at a multi-hop target location via a {@link Telescope}. Closes
+   * MapStruct's {@code @Mapping(target = "a.b.c", expression = "java(...)")} for nested targets.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now));
+   * }</pre>
+   *
+   * <p>Forward-only; same intermediate-allocation behavior as {@link #constant(Telescope, Object)}.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Telescope<B, X> targetTelescope, final Supplier<? extends X> supplier) {
+    return new Compute<>(targetTelescope, supplier);
+  }
+
+  /**
+   * Predicate-gated wrapper around a telescope-based row — closes MapStruct's {@code @Condition}
+   * for whole-source predicate gating. The inner row's forward effect applies only when {@code
+   * predicate.test(source)} returns {@code true}; otherwise it is skipped. The row is keyed to the
+   * type pair {@code inner} is keyed to, and {@code source} is the instance converted at that pair:
+   * the instance the source accessor reads for {@code to(srcAcc, targetTelescope)}, and an instance
+   * of the mapper's source for the other rows, which may be a nested one when the target accessor
+   * of {@code to(srcTelescope, tgtAcc)} names a nested pair. A row whose inner row is keyed to a
+   * pair the mapper never visits is refused when the mapper is built, as {@code inner} is
+   * unwrapped. The backward direction skips the row, as described below.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     when(order -> order.shipping() != null,
+   *         to(Telescope.of(Order.class).field(Order::shipping).field(Shipping::country),
+   *            OrderDto::shipCountry)),
+   *     when(order -> order.priority() == Priority.HIGH,
+   *         constant(OrderDto::expediteFlag, true)));
+   * }</pre>
+   *
+   * <p><b>Scope.</b> Inner row must be telescope-based: {@link #to(Accessor, Telescope)}, {@link
+   * #to(Telescope, Accessor)}, {@link #to(Telescope, Telescope)}, {@link #zip(Telescope,
+   * Telescope)}, {@link #constant(Telescope, Object)}, {@link #compute(Telescope, Supplier)},
+   * {@link #constant(Accessor, Object)}, or {@link #compute(Accessor, Supplier)}. Field-iso rows
+   * (plain {@code to(srcAcc, tgtAcc)}, {@code via}, {@code drop}) are rejected at construction —
+   * for field-level predicate gating use {@link #toOrElse(Accessor, Accessor, Object, Predicate)},
+   * which expresses "if predicate matches source value, use default" at the field level.
+   *
+   * <p><b>Codegen 1:1.</b> Because the codegen-emitted {@code <X>Telescope} navigators ARE {@link
+   * Telescope} instances, a {@code when(...)} row composes transparently with codegen targets:
+   * {@code when(p, constant(OrderDtoTelescope.of().audit().tenant(), "prod"))} uses the
+   * compile-checked codegen path inside the predicate-gated wrapper at zero extra cost.
+   *
+   * <p><b>Nesting rejected.</b> {@code when(p1, when(p2, ...))} throws at construction. Combine
+   * predicates at the {@link Predicate} layer: {@code when(p1.and(p2), inner)}.
+   *
+   * <p><b>Backward direction is lossy by design.</b> {@code when(...)} is forward-only — same
+   * retraction semantics as {@link #constant(Telescope, Object)} / {@link #compute(Telescope,
+   * Supplier)}. For inner rows that DO have a meaningful backward leg when used unwrapped (the
+   * {@code to(srcTelescope, tgtAcc)} / {@code to(srcTelescope, tgtTelescope)} / {@code
+   * zip(srcTelescope, tgtTelescope)} family), wrapping in {@code when(...)} silently drops that
+   * backward leg: {@code mapper.backward(t)} leaves the source-side slot at the {@code baseS}
+   * value. If you need bidirectional behavior and the predicate can be folded into the data,
+   * express it via {@link #toOrElse(Accessor, Accessor, Object)} at the field level (still
+   * bidirectional) instead of {@code when(...)} on a telescope row.
+   *
+   * <p><b>Predicate exceptions.</b> If {@code predicate.test(source)} throws at apply time, the
+   * exception is decorated with the failing row's inner-kind + source field and rethrown as an
+   * {@link IllegalStateException}. The decoration points the user back at the {@code when(...)}
+   * call site rather than at an opaque internal stack frame.
+   */
+  static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
+    return new Conditional<>(predicate, inner);
+  }
+}

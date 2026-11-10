@@ -43,7 +43,7 @@ val demoTasks = demos.map { demo ->
     tasks.register<JavaExec>("run$demo") {
         group = "demos"
         description = "Run $demo as a smoke test"
-        mainClass.set("io.github.eschizoid.telescope.examples.$demo")
+        mainClass.set("io.github.telescopeorganization.telescope.examples.$demo")
         classpath = sourceSets["main"].runtimeClasspath
     }
 }

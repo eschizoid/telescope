@@ -94,7 +94,7 @@ dependencies {
 publishing {
     publications {
         create<MavenPublication>("maven") {
-            groupId = "io.github.eschizoid"
+            groupId = "io.github.telescopeorganization"
             artifactId = "telescope-spring-boot-starter"
             from(components["java"])
 
@@ -182,7 +182,7 @@ fun JavaExec.moduleSmoke(mode: String, runtime: FileCollection) {
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
     classpath = files(tasks.jar) + moduleSmoke.output + runtime
     mainModule = "telescope.spring.smoke"
-    mainClass = "io.github.eschizoid.telescope.spring.smoke.ModuleSmoke"
+    mainClass = "io.github.telescopeorganization.telescope.spring.smoke.ModuleSmoke"
     args(mode)
     // Spring's jars are automatic modules, which declare no dependencies, so nothing pulls the named modules they load
     // (commons-logging among them) into the graph; the run adds every module on the path.

@@ -43,14 +43,14 @@ replaced by `<id>`):
 
 ```
 Exception in thread "main" java.lang.IllegalArgumentException: Expected a method reference to a record component / bean property accessor
-    at io.github.eschizoid.telescope.internal.LambdaIntrospection.decode
-    at io.github.eschizoid.telescope.internal.LambdaIntrospection$MetadataSlot.get
-    at io.github.eschizoid.telescope.internal.LambdaIntrospection.methodNameOf
-    at io.github.eschizoid.telescope.FromMap.build
-    at io.github.eschizoid.telescope.Telescope.fromMap
-    at io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer.converter
+    at io.github.telescopeorganization.telescope.internal.LambdaIntrospection.decode
+    at io.github.telescopeorganization.telescope.internal.LambdaIntrospection$MetadataSlot.get
+    at io.github.telescopeorganization.telescope.internal.LambdaIntrospection.methodNameOf
+    at io.github.telescopeorganization.telescope.FromMap.build
+    at io.github.telescopeorganization.telescope.Telescope.fromMap
+    at io.github.telescopeorganization.telescope.examples.graphql.server.RuntimeFromMapServer.converter
     ...
-Caused by: java.lang.NoSuchMethodException: io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer$$Lambda/0x<id>.writeReplace()
+Caused by: java.lang.NoSuchMethodException: io.github.telescopeorganization.telescope.examples.graphql.server.RuntimeFromMapServer$$Lambda/0x<id>.writeReplace()
 ```
 
 The generated converter does not decode method references, so it needs no registration. In short, `@FromMap` and
@@ -116,7 +116,7 @@ src/main/java/.../examples/graphql/
             RuntimeFromMapServer       server using the runtime Telescope.fromMap converter
             GeneratedFromMapServer     server using the generated UserFromMap converter
             NativeVerify               the native-image verifier and the image's main class
-src/main/resources/META-INF/native-image/io.github.eschizoid/telescope-examples-graphql/
+src/main/resources/META-INF/native-image/io.github.telescopeorganization/telescope-examples-graphql/
   reflect-config.json                  model types for the runtime mappers
   serialization-config.json            NativeVerify and the generated navigators (Wall A)
 src/test/java/.../examples/graphql/server/

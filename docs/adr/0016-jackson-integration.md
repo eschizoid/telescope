@@ -157,8 +157,8 @@ Two PRs: **PR 1** = module skeleton + `TelescopeModule` + streaming `JsonBinder`
 
 - `telescope-core` stays dependency-free and Jackson-free — including its API surface: no `fromJson` on `Telescope`.
 - **JPMS:** `:internal` adds qualified exports of the substrate packages the binder engine needs (`Records`, `Beans`,
-  `NullDefaults`, `LambdaIntrospection`, `pairing`) to `io.github.eschizoid.telescope.jackson` — the exact precedent of
-  `pairing`'s export to the codegen module. `telescope-jackson` declares `requires static` databind and
+  `NullDefaults`, `LambdaIntrospection`, `pairing`) to `io.github.telescopeorganization.telescope.jackson` — the exact
+  precedent of `pairing`'s export to the codegen module. `telescope-jackson` declares `requires static` databind and
   `requires transitive` jackson-core, so `fromJson`-only deployments can omit databind from the module path entirely
   (`TelescopeModule` users have databind present by definition).
 - **Native-image, honestly:** the runtime `JsonBinder` inherits Wall A (ADR-0015) exactly like runtime `fromMap` — its

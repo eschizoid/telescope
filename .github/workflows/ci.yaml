@@ -38,12 +38,12 @@ jobs:
           if [ -z "$VERSION" ]; then
             echo "No release tag yet — nothing to check."; exit 0
           fi
-          if ! grep -q "io.github.eschizoid:telescope-core:${VERSION}" README.md; then
+          if ! grep -q "io.github.telescopeorganization:telescope-core:${VERSION}" README.md; then
             echo "README install snippet does not pin ${VERSION} (latest release tag)"; exit 1
           fi
           # Every other telescope coordinate in any tracked Markdown file must pin the same
           # release: a Gradle coordinate, or the Maven <version> right after a telescope artifactId.
-          STALE=$(git ls-files '*.md' | xargs grep -noE "io\.github\.eschizoid:telescope-[a-z-]+:[0-9]+\.[0-9]+\.[0-9]+" \
+          STALE=$(git ls-files '*.md' | xargs grep -noE "io\.github\.telescopeorganization:telescope-[a-z-]+:[0-9]+\.[0-9]+\.[0-9]+" \
             | grep -vE ":${VERSION//./\\.}\$" || true)
           STALE="${STALE:+${STALE}$'\n'}$(git ls-files '*.md' | xargs awk -v v="$VERSION" '
             /<artifactId>telescope-/ { tele = 1; next }
