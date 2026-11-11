@@ -9864,6 +9864,48 @@ class CrossPathCorpusTest {
       "#0(ids=[\"2\"])",
       "#0(ids=[\"2\"])"
     ),
+    // Whether an element has an index to name is read from the property's declared type on
+    // both
+    // paths, so a list held by a property declared as no list gives none.
+    new EnumCell(
+      "an element of a Collection holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Collection<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a Deque holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.Deque<String> ids",
+          "new %1$sSrc(new java.util.LinkedList<>(java.util.List.of(\"1\", \"x\")))"
+        ),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    // An Iterable is no container either path lifts over, so the pair is refused before any
+    // element is read.
+    new EnumCell(
+      "an Iterable holding a list, against a list of numbers, is refused",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "Iterable<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      REFUSED + "'ids' has incompatible source/target shapes",
+      null,
+      null
+    ),
     new EnumCell(
       "an element of a set that is no number fails naming the property, the element having no position",
       Directions.BOTH,

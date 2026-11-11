@@ -234,6 +234,10 @@ final class ContainerLifts {
     final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
     final boolean loopForward = tgtSet && converts && keepsOrder(tgtRaw);
     final boolean loopBackward = srcSet && converts && keepsOrder(srcRaw);
+    // Whether an element has an index to name is read from the declared type of the side being
+    // read, as the generated path reads it, not from the class of the value it holds.
+    final var forwardIndexed = indexedName(srcRaw, componentName);
+    final var backwardIndexed = indexedName(tgtRaw, componentName);
     final Iso<Object, Object> filled =
       mh != null && !loopForward && !loopBackward
         ? mh
@@ -241,11 +245,11 @@ final class ContainerLifts {
             src ->
               mh != null && !loopForward
                 ? mh.to(src)
-                : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw, componentName),
+                : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw, forwardIndexed),
             tgt ->
               mh != null && !loopBackward
                 ? mh.from(tgt)
-                : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw, componentName)
+                : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw, backwardIndexed)
           );
     final var loop = copying(filled, srcCopy, tgtCopy);
     // A comparator is a problem only for the side being built. Carrying one across a conversion
@@ -331,6 +335,10 @@ final class ContainerLifts {
    * conversion that counts, generates an id or reads a clock sees every element exactly once. That
    * is why a sorted output whose elements change type does not take the fused MethodHandle loop —
    * it leaves nowhere to stand between converting and inserting.
+   *
+   * <p>{@code componentName}, where it is not null, is the container's component, and a value an
+   * element's conversion refuses is refused naming that element's index; see {@link #indexedName},
+   * which passes it only for a container declared as a list.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object buildConverted(
@@ -343,7 +351,7 @@ final class ContainerLifts {
     if (input == null) return null;
     final var fresh = (Collection) alloc.apply(input);
     final boolean ordered = keepsOrder(outRaw);
-    final boolean indexed = componentName != null && input instanceof List<?>;
+    final boolean indexed = componentName != null;
     var index = 0;
     for (final var x : (Collection<?>) input) {
       final var converted = indexed ? convertAt(convert, x, componentName, index) : convert.apply(x);
@@ -363,6 +371,15 @@ final class ContainerLifts {
       }
     }
     return fresh;
+  }
+
+  /**
+   * {@code componentName} where {@code declared}, the raw class a container is declared as on the
+   * side a loop reads, is a list, whose elements have an index to name, and null otherwise: a
+   * {@code Collection}, a {@code Deque} or a set gives no index, whatever class its value is.
+   */
+  private static String indexedName(final Class<?> declared, final String componentName) {
+    return componentName != null && List.class.isAssignableFrom(declared) ? componentName : null;
   }
 
   /**
