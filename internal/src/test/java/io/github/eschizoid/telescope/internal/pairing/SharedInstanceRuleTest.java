@@ -91,6 +91,68 @@ class SharedInstanceRuleTest {
     assertFalse(RULES.mayShareInstance(int.class, Long.class));
   }
 
+  @SuppressWarnings("unused")
+  private static void takes(
+    final Comparable<Integer> integers,
+    final Comparable<String> strings,
+    final Comparable<? super String> superStrings,
+    final List<Integer> integerList,
+    final Comparable<?> any
+  ) {}
+
+  /** The declared type of {@link #takes}'s parameter at {@code index}. */
+  private static Type taken(final int index) throws NoSuchMethodException {
+    return SharedInstanceRuleTest.class.getDeclaredMethod(
+      "takes",
+      Comparable.class,
+      Comparable.class,
+      Comparable.class,
+      List.class,
+      Comparable.class
+    ).getGenericParameterTypes()[index];
+  }
+
+  @Test
+  @DisplayName("a class that gives a supertype other type arguments is never an instance of it with these")
+  void aClassGivingOtherArgumentsNeverFits() throws NoSuchMethodException {
+    assertTrue(RULES.argumentsNeverFit(String.class, taken(0)));
+    assertTrue(RULES.argumentsNeverFit(int.class, taken(1)));
+    assertEquals(taken(0), RULES.viaParameterNeverFitting(String.class, List.of(taken(0))));
+  }
+
+  @Test
+  @DisplayName("arguments the parameter contains, an unbounded wildcard, or a class giving none ask nothing")
+  void argumentsThatFitOrAreUnknownDoNotRefuse() throws NoSuchMethodException {
+    assertFalse(RULES.argumentsNeverFit(String.class, taken(1)));
+    assertFalse(RULES.argumentsNeverFit(String.class, taken(2)));
+    assertFalse(RULES.argumentsNeverFit(String.class, taken(4)));
+    assertFalse(RULES.argumentsNeverFit(Object.class, taken(0)));
+    assertFalse(RULES.argumentsNeverFit(ArrayList.class, taken(3)));
+    assertNull(RULES.viaParameterNeverFitting(String.class, List.of(taken(0), taken(1))));
+  }
+
+  @Test
+  @DisplayName("a refusal names a parameter of another class by its simple name, and one of other arguments in full")
+  void theRefusalNamesTheReason() throws NoSuchMethodException {
+    assertEquals(
+      PairingMessages.viaMapperNeverFits("S", "T", "source", "a", "Integer"),
+      RULES.viaNeverFitsRefusal("S", "T", "source", "a", String.class, List.of(Integer.class), true, t -> "Integer")
+    );
+    assertEquals(
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "S",
+        "T",
+        "source",
+        "a",
+        "java.lang.String",
+        "java.lang.Comparable<java.lang.Integer>"
+      ),
+      RULES.viaNeverFitsRefusal("S", "T", "source", "a", String.class, List.of(taken(0)), true, t -> "Comparable")
+    );
+    assertNull(RULES.viaNeverFitsRefusal("S", "T", "source", "a", String.class, List.of(taken(1)), true, t -> "x"));
+    assertNull(RULES.viaNeverFitsRefusal("S", "T", "target", "a", String.class, List.of(taken(0)), false, t -> "x"));
+  }
+
   @Test
   @DisplayName("a property no parameter can take is refused by the first parameter")
   void aPropertyNoParameterTakesIsRefusedByTheFirst() {

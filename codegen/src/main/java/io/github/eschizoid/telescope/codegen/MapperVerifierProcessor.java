@@ -2194,7 +2194,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final MethodInvocationTree row,
       final ExpressionTree named,
       final Prop src,
-      final Prop tgt
+      final Prop tgt,
+      final boolean forwardOnly
     ) {
       final var using = classLiteral(named);
       if (using == null || !(types.asElement(using) instanceof TypeElement mapper)) {
@@ -2214,21 +2215,39 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var source = src.owner().getSimpleName().toString();
       final var target = tgt.owner().getSimpleName().toString();
-      final var forward = rules.viaParameterNeverFitting(src.type(), forwards);
+      final var forward = rules.viaNeverFitsRefusal(
+        source,
+        target,
+        "source",
+        src.name(),
+        src.type(),
+        forwards,
+        true,
+        this::boxedName
+      );
       if (forward != null) {
-        report(row, PairingMessages.viaMapperNeverFits(source, target, "source", src.name(), boxedName(forward)));
+        report(row, forward);
         return;
       }
-      final var backward = rules.viaParameterNeverFitting(tgt.type(), backwards);
+      final var backward = rules.viaNeverFitsRefusal(
+        source,
+        target,
+        "target",
+        tgt.name(),
+        tgt.type(),
+        backwards,
+        !forwardOnly,
+        this::boxedName
+      );
       if (backward != null) {
-        report(row, PairingMessages.viaMapperNeverFits(source, target, "target", tgt.name(), boxedName(backward)));
+        report(row, backward);
       }
     }
 
     /**
-     * The parameter types of the static methods of one parameter named {@code name} that {@code
-     * mapper} declares or inherits from a superclass, a method hiding one of its superclass's that
-     * takes the same class; null where one of them is not public.
+     * The parameter types, as declared, of the static methods of one parameter named {@code name}
+     * that {@code mapper} declares or inherits from a superclass, a method hiding one of its
+     * superclass's that takes the same class; null where one of them is not public.
      */
     private List<TypeMirror> viaParameters(final TypeElement mapper, final String name) {
       final var found = new ArrayList<TypeMirror>();
@@ -2252,7 +2271,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           if (!method.getModifiers().contains(Modifier.PUBLIC)) {
             return null;
           }
-          found.add(parameter);
+          found.add(method.getParameters().getFirst().asType());
         }
         type = types.asElement(type.getSuperclass()) instanceof TypeElement superclass ? superclass : null;
       }
@@ -2260,10 +2279,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
-     * The simple name of {@code type}'s wrapper where it is a primitive, and of its own otherwise.
+     * The simple name of {@code type}'s erasure, its wrapper where it is a primitive, as the
+     * runtime names a parameter's class.
      */
     private String boxedName(final TypeMirror type) {
-      return simpleName(props.boxed(type));
+      return simpleName(props.boxed(types.erasure(type)));
     }
 
     /** A row given two accessors, keyed to the classes they are applied to, or null. */
@@ -2312,7 +2332,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           if (src == null || tgt == null) return false;
           if ("via".equals(rowName) && rowArgs.size() == 3) {
-            verifyViaClass(row, rowArgs.get(2), src, tgt);
+            verifyViaClass(row, rowArgs.get(2), src, tgt, forwardOnly);
           }
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields

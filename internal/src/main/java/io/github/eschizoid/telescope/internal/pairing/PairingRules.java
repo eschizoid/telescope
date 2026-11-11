@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -1294,18 +1295,106 @@ public final class PairingRules<T> {
    * The parameter a {@code via} row's class is refused by when its methods of one name are handed a
    * property of type {@code property} as it is: the first of {@code parameters}, the types those
    * methods take, when no value of the property can be an instance of any of them, so every call
-   * would fail. Null when one of them can take some value, and when there are none.
+   * would fail. A value is no instance of a parameter whose class it cannot share an instance with
+   * ({@link #mayShareInstance}), nor of one whose type arguments it never has ({@link
+   * #argumentsNeverFit}). Null when one of them can take some value, and when there are none.
    */
   public T viaParameterNeverFitting(final T property, final List<T> parameters) {
+    return viaParameterNeverFitting(property, parameters, true);
+  }
+
+  /**
+   * {@link #viaParameterNeverFitting(Object, List)}, asking of the type arguments only where {@code
+   * called}: the methods are called, as a forward-only mapper never calls {@code backward}. Their
+   * classes are asked of either way.
+   */
+  public T viaParameterNeverFitting(final T property, final List<T> parameters, final boolean called) {
     if (parameters.isEmpty()) {
       return null;
     }
     for (final var parameter : parameters) {
-      if (mayShareInstance(property, parameter)) {
+      if (mayShareInstance(property, parameter) && !(called && argumentsNeverFit(property, parameter))) {
         return null;
       }
     }
     return parameters.getFirst();
+  }
+
+  /**
+   * The refusal of a {@code via} row whose class's methods of one name are handed the {@code
+   * side}'s {@code property}, of type {@code propertyType}, as it is, when {@link
+   * #viaParameterNeverFitting} finds none of {@code parameters} can take it, asking of their type
+   * arguments where {@code called}, or null. A parameter whose class no value of the property can
+   * be an instance of is named by {@code simpleName}, as {@link PairingMessages#viaMapperNeverFits}
+   * names it; one whose type arguments the property never has is named in full beside the
+   * property's type, as {@link PairingMessages#viaMapperArgumentsNeverFit} names it.
+   */
+  public String viaNeverFitsRefusal(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final T propertyType,
+    final List<T> parameters,
+    final boolean called,
+    final Function<T, String> simpleName
+  ) {
+    final var unfit = viaParameterNeverFitting(propertyType, parameters, called);
+    if (unfit == null) {
+      return null;
+    }
+    if (mayShareInstance(propertyType, unfit)) {
+      return PairingMessages.viaMapperArgumentsNeverFit(
+        source,
+        target,
+        side,
+        property,
+        props.typeName(propertyType),
+        props.typeName(unfit)
+      );
+    }
+    return PairingMessages.viaMapperNeverFits(source, target, side, property, simpleName.apply(unfit));
+  }
+
+  /**
+   * Whether no value of {@code property} has the type arguments {@code parameter} fixes: the
+   * property's class, a primitive read as its wrapper, extends the parameter's and gives it
+   * arguments, naming no type variable or wildcard, that the parameter's arguments do not contain.
+   * A class gives each of its supertypes one set of arguments, and every subclass keeps them, so a
+   * {@code String}, a {@code Comparable<String>}, is never a {@code Comparable<Integer>}. A
+   * parameter fixing no arguments, only unbounded wildcards, or arguments naming a type variable
+   * asks nothing here, and nor does a property whose class gives the parameter's class no arguments
+   * of its own.
+   */
+  public boolean argumentsNeverFit(final T property, final T parameter) {
+    final var wanted = props.typeArguments(parameter);
+    if (wanted.stream().allMatch(this::unboundedWildcard) || wanted.stream().anyMatch(props::mentionsTypeVariable)) {
+      return false;
+    }
+    final var sending = props.boxed(property);
+    if (props.isPrimitive(sending) || props.isTypeVariable(sending) || props.isWildcard(sending)) {
+      return false;
+    }
+    final var sendingClass = props.rawType(sending);
+    final var receivingClass = props.rawType(parameter);
+    if (!props.isAssignable(sendingClass, receivingClass)) {
+      return false;
+    }
+    final var given = props.sameType(sendingClass, receivingClass)
+      ? props.typeArguments(sending)
+      : seenAs(sending, receivingClass);
+    if (given.isEmpty() || given.size() != wanted.size()) {
+      return false;
+    }
+    if (given.stream().anyMatch(argument -> props.isWildcard(argument) || props.mentionsTypeVariable(argument))) {
+      return false;
+    }
+    for (int i = 0; i < wanted.size(); i++) {
+      if (!fitsArgument(given.get(i), wanted.get(i), false)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** {@link #chooseSetter(Object, List, List)} over methods none of which is variable arity. */

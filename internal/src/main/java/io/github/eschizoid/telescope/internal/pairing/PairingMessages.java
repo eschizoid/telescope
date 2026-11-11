@@ -331,6 +331,39 @@ public final class PairingMessages {
   }
 
   /**
+   * A {@code via} row whose mapper is handed one side's property as it is, though the parameter its
+   * methods take fixes type arguments no value of the property has: {@code propertyType} gives the
+   * parameter's class other ones, so every call would pass a value of the wrong type.
+   */
+  public static String viaMapperArgumentsNeverFit(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String propertyType,
+    final String parameterType
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row hands the " +
+      side +
+      "'s '" +
+      property +
+      "', a " +
+      propertyType +
+      ", to a mapper of " +
+      parameterType +
+      ", but a " +
+      propertyType +
+      " is never one, since it gives that class other type arguments. Give the row a mapper of the" +
+      " property's own type."
+    );
+  }
+
+  /**
    * A {@code via} row whose mapper's result is written into one side's property, though no value of
    * the class the mapper returns can be an instance of the class the property takes there, the
    * class that side fixes the property's type variable to among them: every write would fail.

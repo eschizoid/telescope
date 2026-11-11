@@ -6308,8 +6308,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The refusal of a {@code via} row not lifted over its property's elements whose mapper is handed
    * a property no value of which it can take, or null. The source's property is handed to {@code
    * forward} and the target's to {@code backward}; a side is refused when no method of that name
-   * takes a class a value of the property can be an instance of, as the reflective path refuses the
-   * same row, with the same message, naming the first such method's parameter.
+   * can take a value of the property, as the shared spec decides it for the reflective path too,
+   * with the same message.
    */
   private String viaNeverFits(
     final TypeElement source,
@@ -6321,45 +6321,56 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror targetOwn,
     final PackageElement bridgePackage
   ) {
-    final var forward = viaSideNeverFits(mapper, "forward", sourceOwn, bridgePackage);
+    final var forward = viaSideNeverFits(
+      source,
+      target,
+      "source",
+      field,
+      mapper,
+      "forward",
+      sourceOwn,
+      bridgePackage,
+      true
+    );
     if (forward != null) {
-      return PairingMessages.viaMapperNeverFits(
-        source.getSimpleName().toString(),
-        target.getSimpleName().toString(),
-        "source",
-        field,
-        forward
-      );
+      return forward;
     }
-    final var backward = viaSideNeverFits(mapper, "backward", targetOwn, bridgePackage);
-    return backward == null
-      ? null
-      : PairingMessages.viaMapperNeverFits(
-          source.getSimpleName().toString(),
-          target.getSimpleName().toString(),
-          "target",
-          tgtName,
-          backward
-        );
+    return viaSideNeverFits(source, target, "target", tgtName, mapper, "backward", targetOwn, bridgePackage, true);
   }
 
   /**
-   * The simple name of the class {@code mapper}'s first {@code name} method takes, when no method
-   * of that name takes a class a value of {@code own} can be an instance of, a primitive on either
-   * side counting as its wrapper; null otherwise, and for a mapper with no such method.
+   * The refusal of one side of a {@code via} row whose class's methods named {@code name} cannot
+   * take {@code property}, a value of {@code own}, or null, and null for a mapper with no such
+   * method; the parameters' type arguments are asked of only where the methods are {@code called}.
+   * The bridge writes a call to both its {@code forward} and its {@code backward}, whichever its
+   * mapper calls, so both are asked of here. A parameter's class is named as the reflective path
+   * names it, a primitive as its wrapper.
    */
   private String viaSideNeverFits(
+    final TypeElement source,
+    final TypeElement target,
+    final String side,
+    final String property,
     final TypeElement mapper,
     final String name,
     final TypeMirror own,
-    final PackageElement bridgePackage
+    final PackageElement bridgePackage,
+    final boolean called
   ) {
     final var takes = viaCandidates(mapper, name, bridgePackage)
       .stream()
-      .map(m -> boxedErasure(m.getParameters().getFirst().asType()))
+      .map(m -> m.getParameters().getFirst().asType())
       .toList();
-    final var unfit = rules.viaParameterNeverFitting(own, takes);
-    return unfit == null ? null : simpleNameOf(unfit);
+    return rules.viaNeverFitsRefusal(
+      source.getSimpleName().toString(),
+      target.getSimpleName().toString(),
+      side,
+      property,
+      own,
+      takes,
+      called,
+      unfit -> simpleNameOf(boxedErasure(unfit))
+    );
   }
 
   /**

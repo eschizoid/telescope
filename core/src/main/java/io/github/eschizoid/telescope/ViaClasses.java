@@ -72,7 +72,8 @@ final class ViaClasses {
     final String source,
     final String target,
     final String srcField,
-    final String tgtField
+    final String tgtField,
+    final boolean forwardOnly
   ) {
     final var using = row.using();
     // A method reference is spun in the package of the class it is written in, which is where the
@@ -128,8 +129,8 @@ final class ViaClasses {
     }
     final var srcHeld = DeepMap.heldClassOf(srcType);
     final var tgtHeld = DeepMap.heldClassOf(tgtType);
-    refuseNeverFits(forwards, srcHeld, source, target, "source", srcField);
-    refuseNeverFits(backwards, tgtHeld, source, target, "target", tgtField);
+    refuseNeverFits(forwards, srcType, source, target, "source", srcField, true);
+    refuseNeverFits(backwards, tgtType, source, target, "target", tgtField, !forwardOnly);
     final var forward = call(forwards, srcType, srcHeld);
     if (forward == null) {
       throw new IllegalArgumentException(
@@ -294,28 +295,36 @@ final class ViaClasses {
   }
 
   /**
-   * Refuses a direction none of whose {@code methods} takes a class a value of {@code held} can be
-   * an instance of, in the words a {@code via} row with a mapper is refused in.
+   * Refuses a direction none of whose {@code methods} can take a value of {@code own}, the
+   * property's type, as the shared spec decides it, asking of their type arguments where {@code
+   * called}, in the words a {@code via} row with a mapper is refused in.
    */
   private static void refuseNeverFits(
     final List<Method> methods,
-    final Class<?> held,
+    final Type own,
     final String source,
     final String target,
     final String side,
-    final String property
+    final String property,
+    final boolean called
   ) {
     final var parameters = methods
       .stream()
-      .<Type>map(method -> method.getParameterTypes()[0])
+      .map(method -> method.getGenericParameterTypes()[0])
       .toList();
-    final var unfit = DeepMap.PAIRING.viaParameterNeverFitting(held, parameters);
-    if (unfit == null) {
-      return;
-    }
-    throw new IllegalArgumentException(
-      PairingMessages.viaMapperNeverFits(source, target, side, property, boxed((Class<?>) unfit).getSimpleName())
+    final var refusal = DeepMap.PAIRING.viaNeverFitsRefusal(
+      source,
+      target,
+      side,
+      property,
+      own,
+      parameters,
+      called,
+      unfit -> boxed(methods.get(parameters.indexOf(unfit)).getParameterTypes()[0]).getSimpleName()
     );
+    if (refusal != null) {
+      throw new IllegalArgumentException(refusal);
+    }
   }
 
   /**

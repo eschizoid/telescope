@@ -9938,9 +9938,9 @@ class CrossPathCorpusTest {
       "#0(ids=[\"2\"])",
       "#0(ids=[\"2\"])"
     ),
-    // Whether an element has an index to name is read from the property's declared type on
-    // both
-    // paths, so a list held by a property declared as no list gives none.
+    // Both paths read whether an element has an index to name from the
+    // property's declared type, so a list held by a property declared as
+    // no list gives none.
     new EnumCell(
       "an element of a Collection holding a list fails naming the property, the declaration having no index",
       Directions.BOTH,
@@ -17257,9 +17257,30 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
     ),
-    // Containers of two kinds are not lifted over, so the class's methods are handed each
-    // whole
-    // property, which they cannot take.
+    // A String gives Comparable its own type, so it is never a
+    // Comparable<Integer>, though it is a Comparable.
+    new ViaNeverFits(
+      "a String property, to a class whose forward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final Comparable<Integer> c) { return 1; }\n" +
+          "  public static String backward(final Integer i) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "source",
+        "children",
+        "java.lang.String",
+        "java.lang.Comparable<java.lang.Integer>"
+      )
+    ),
+    // Containers of two kinds are not lifted over, so the class's methods are
+    // handed each whole property, which they cannot take.
     new ViaNeverFits(
       "a List of text into a Set of numbers, through a class converting one element",
       List.of(

@@ -1802,7 +1802,13 @@ public final class DeepMap {
         // least-upper-bound of the two accessors, so to(Integer-getter, String-getter) compiles and
         // would otherwise identity-pass an Integer into a String setter (ClassCastException at
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
-        final var resolution = resolvedRow(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
+        final var resolution = resolvedRow(
+          row,
+          srcType,
+          tgtType,
+          new RowSides(source, target, srcField, tgtField),
+          forwardOnly
+        );
         final var resolved = resolution.row();
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
@@ -3125,13 +3131,15 @@ public final class DeepMap {
    * property the source declares as {@code srcType} and the target as {@code tgtType}; see {@link
    * ViaClasses}. The class's methods are read here, while the runtime path builds a mapper, and
    * nowhere else. A via row of two methods, or one naming a class, carries what its methods return
-   * where they convert the property itself.
+   * where they convert the property itself. A mapper that is {@code forwardOnly} never calls the
+   * class's {@code backward}.
    */
   private static ResolvedRow resolvedRow(
     final Mapping<?, ?> row,
     final Type srcType,
     final Type tgtType,
-    final RowSides sides
+    final RowSides sides,
+    final boolean forwardOnly
   ) {
     final var srcView = PAIRING.containerViewOf(srcType);
     final var tgtView = PAIRING.containerViewOf(tgtType);
@@ -3160,7 +3168,8 @@ public final class DeepMap {
       sides.source().getSimpleName(),
       sides.target().getSimpleName(),
       sides.srcField(),
-      sides.tgtField()
+      sides.tgtField(),
+      forwardOnly
     );
     return new ResolvedRow(chosen.row(), chosen.forward(), chosen.backward());
   }
