@@ -2293,9 +2293,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       viaLifts,
       sourceRebuild,
       targetRebuild,
-      bridgePackage
+      bridgePackage,
+      cfg.lenient()
     );
     if (viaCasts == null) return;
+    // A property whose backward the bridge never calls is written back as a forward-only
+    // transform's is: at its default in backward, and from the base in patch.
+    final var unconvertedBack = new HashSet<>(forwardOnlyTransforms);
+    unconvertedBack.addAll(viaCasts.uncalledBackwards());
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -2405,9 +2410,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var backwardLocals = new LinkedHashMap<String, String>();
     final Function<String, String> readBackwardPlain = sourceName -> {
       if (effectiveDrops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
-      if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
-        fieldByName(sourceFields, sourceName).type()
-      );
+      if (unconvertedBack.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
       final var tf = fieldByName(paired.target(), tgtName);
       final var local = "__bt_" + sourceName;
@@ -2606,7 +2609,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           for (final var written : targetsOf.apply(v)) gatedForward.put(written, wrapper);
         }
       }
-      if (tf == null) continue;
+      if (tf == null || viaCasts.uncalledBackwards().contains(v)) continue;
       final var given = heldAs(tf.type());
       final var backward =
         resolvedFn(mapper, "backward", given, bridgePackage) instanceof Resolution.Bound bound
@@ -2759,7 +2762,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
       if (effectiveDrops.contains(sourceName)) return baseRead;
-      if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
+      if (unconvertedBack.contains(sourceName)) return baseRead;
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
       final var tf = fieldByName(paired.target(), tgtName);
       final var plan = fieldPlans.get(sourceName);
@@ -6110,13 +6113,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * Per source property a {@code via} row converts, the class its {@code forward} and its {@code
    * backward} call cast their argument to, where the call takes the value only through a cast, and
-   * the method each calls, where javac binds none to the value as the bridge holds it.
+   * the method each calls, where javac binds none to the value as the bridge holds it. {@code
+   * uncalledBackwards} are the source properties of a forward-only bridge whose row's {@code
+   * backward} cannot take the target's value, which the bridge never calls.
    */
   private record ViaCasts(
     Map<String, String> forwardCasts,
     Map<String, String> backwardCasts,
     Map<String, ExecutableType> forwardReached,
-    Map<String, ExecutableType> backwardReached
+    Map<String, ExecutableType> backwardReached,
+    Set<String> uncalledBackwards
   ) {}
 
   /**
@@ -6136,6 +6142,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * takes is passed as it is; one the parameter's erasure narrows is cast to that erasure, which
    * checks the class at the call; any other value, or a result the member it is written through
    * cannot take, refuses the row.
+   *
+   * <p>A {@code forwardOnly} bridge, the bridge of a forward-only mapper, which never calls a row's
+   * {@code backward}, asks nothing of the type arguments its {@code backward} takes, as the
+   * runtime's forward-only mapper does not. Where they never fit, the bridge writes no call to it,
+   * and its own {@code backward} leaves that property as a converted-away one, at its default.
    */
   private ViaCasts viaCalls(
     final TypeElement source,
@@ -6148,12 +6159,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, ViaLift> viaLifts,
     final Rebuild sourceRebuild,
     final Rebuild targetRebuild,
-    final PackageElement bridgePackage
+    final PackageElement bridgePackage,
+    final boolean forwardOnly
   ) {
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
     final var forwardReached = new HashMap<String, ExecutableType>();
     final var backwardReached = new HashMap<String, ExecutableType>();
+    final var uncalledBackwards = new HashSet<String>();
     for (final var entry : viaMappers.entrySet()) {
       final var field = entry.getKey();
       if (viaLifts.containsKey(field)) continue;
@@ -6163,10 +6176,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var targetOwn = fieldByName(targetFields, tgtName).type();
       final var mapper = processingEnv.getElementUtils().getTypeElement(entry.getValue());
       final var site = viaSite(field, source, target);
-      final var unfit = viaNeverFits(source, target, field, tgtName, mapper, sourceOwn, targetOwn, bridgePackage);
+      final var unfit = viaNeverFits(
+        source,
+        target,
+        field,
+        tgtName,
+        mapper,
+        sourceOwn,
+        targetOwn,
+        bridgePackage,
+        forwardOnly
+      );
       if (unfit != null) {
         error(source, unfit);
         return null;
+      }
+      final var uncalled =
+        forwardOnly &&
+        rules.viaParameterNeverFitting(
+          targetOwn,
+          viaCandidates(mapper, "backward", bridgePackage)
+            .stream()
+            .map(m -> m.getParameters().getFirst().asType())
+            .toList()
+        ) !=
+        null;
+      if (uncalled) {
+        uncalledBackwards.add(field);
       }
       final var sourceHeld = fieldByName(paired.source(), field).type();
       final var targetHeld = fieldByName(paired.target(), tgtName).type();
@@ -6192,6 +6228,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, refusal);
         return null;
       }
+      if (forward.cast() != null) {
+        forwardCasts.put(field, forward.cast());
+      }
+      if (forward.reached() != null) {
+        forwardReached.put(field, forward.reached());
+      }
+      if (uncalled) {
+        continue;
+      }
       final var backward = viaCall(mapper, "backward", targetOwn, targetHeld, bridgePackage);
       final var backRefusal =
         backward == null
@@ -6201,12 +6246,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, backRefusal);
         return null;
       }
-      if (forward.cast() != null) forwardCasts.put(field, forward.cast());
       if (backward.cast() != null) backwardCasts.put(field, backward.cast());
-      if (forward.reached() != null) forwardReached.put(field, forward.reached());
       if (backward.reached() != null) backwardReached.put(field, backward.reached());
     }
-    return new ViaCasts(forwardCasts, backwardCasts, forwardReached, backwardReached);
+    return new ViaCasts(forwardCasts, backwardCasts, forwardReached, backwardReached, Set.copyOf(uncalledBackwards));
   }
 
   /**
@@ -6309,7 +6352,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * a property no value of which it can take, or null. The source's property is handed to {@code
    * forward} and the target's to {@code backward}; a side is refused when no method of that name
    * can take a value of the property, as the shared spec decides it for the reflective path too,
-   * with the same message.
+   * with the same message, a {@code forwardOnly} bridge asking nothing of its {@code backward}'s
+   * type arguments.
    */
   private String viaNeverFits(
     final TypeElement source,
@@ -6319,7 +6363,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement mapper,
     final TypeMirror sourceOwn,
     final TypeMirror targetOwn,
-    final PackageElement bridgePackage
+    final PackageElement bridgePackage,
+    final boolean forwardOnly
   ) {
     final var forward = viaSideNeverFits(
       source,
@@ -6335,16 +6380,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (forward != null) {
       return forward;
     }
-    return viaSideNeverFits(source, target, "target", tgtName, mapper, "backward", targetOwn, bridgePackage, true);
+    return viaSideNeverFits(
+      source,
+      target,
+      "target",
+      tgtName,
+      mapper,
+      "backward",
+      targetOwn,
+      bridgePackage,
+      !forwardOnly
+    );
   }
 
   /**
    * The refusal of one side of a {@code via} row whose class's methods named {@code name} cannot
    * take {@code property}, a value of {@code own}, or null, and null for a mapper with no such
    * method; the parameters' type arguments are asked of only where the methods are {@code called}.
-   * The bridge writes a call to both its {@code forward} and its {@code backward}, whichever its
-   * mapper calls, so both are asked of here. A parameter's class is named as the reflective path
-   * names it, a primitive as its wrapper.
+   * A forward-only bridge's {@code backward} is not called, so its arguments ask nothing; see
+   * {@link #viaCalls}. A parameter's class is named as the reflective path names it, a primitive as
+   * its wrapper.
    */
   private String viaSideNeverFits(
     final TypeElement source,

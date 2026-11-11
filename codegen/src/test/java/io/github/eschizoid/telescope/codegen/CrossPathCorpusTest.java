@@ -6425,6 +6425,27 @@ class CrossPathCorpusTest {
   }
 
   private static final List<ResultRow> RESULT_ROWS = List.of(
+    // A forward-only mapper never calls a via class's backward, so a backward no value of the
+    // target's property can be handed is no reason to refuse it on either path.
+    new ResultRow(
+      "a forward-only via row whose class's backward takes a Comparable the target never is",
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer a) {}\n",
+        "public class %1$sHw {\n" +
+          "  public static Integer forward(final String s) { return 7; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        plainField(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        ),
+        plainRuntime(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        )
+      ),
+      "#0(a=7)"
+    ),
     // A property paired under two names is named by both in a refusal of its value, and of an
     // element's, with the element's index after the target's name.
     new ResultRow(
@@ -17277,6 +17298,27 @@ class CrossPathCorpusTest {
         "children",
         "java.lang.String",
         "java.lang.Comparable<java.lang.Integer>"
+      )
+    ),
+    // A two-way mapper calls the class's backward, which no Integer can be handed.
+    new ViaNeverFits(
+      "an Integer target, to a class whose backward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 1; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "target",
+        "children",
+        "java.lang.Integer",
+        "java.lang.Comparable<java.lang.Long>"
       )
     ),
     // Containers of two kinds are not lifted over, so the class's methods are
