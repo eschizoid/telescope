@@ -7562,7 +7562,15 @@ class CrossPathCorpusTest {
           .allMatch(e -> e.getSource() == null || e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
       () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
     );
-    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    // The Mappings interfaces call the field, which exists whatever its rows are.
+    assertTrue(
+      processed
+        .generated()
+        .keySet()
+        .stream()
+        .allMatch(name -> name.endsWith("Mappings")),
+      () -> "no bridge is written: " + processed.generated().keySet()
+    );
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
     assertTrue(
       !plain.success() &&
@@ -15400,7 +15408,15 @@ class CrossPathCorpusTest {
         .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
       () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
     );
-    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    // The Mappings interfaces call the field, which exists whatever its rows are.
+    assertTrue(
+      processed
+        .generated()
+        .keySet()
+        .stream()
+        .allMatch(name -> name.endsWith("Mappings")),
+      () -> "no bridge is written: " + processed.generated().keySet()
+    );
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
     assertFalse(plain.success(), "the runtime row compiled");
     assertTrue(

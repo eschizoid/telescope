@@ -3,9 +3,11 @@ package io.github.eschizoid.telescope.benchmarks;
 /**
  * The flat-tier bean of {@link MapStructComparisonBenchmark} again, for the generated mapper {@link
  * McFieldMappers#FLAT} declares on its field: the same five properties, so the field form and
- * {@code @Bridge} on {@link McFlatBean} generate the same conversion for the same work.
+ * {@code @Bridge} on {@link McFlatBean} generate the same conversion for the same work. It
+ * implements the {@code McFieldFlatBeanMappings} interface that field generates, for the {@code
+ * _field_call_forward} row.
  */
-public class McFieldFlatBean {
+public class McFieldFlatBean implements McFieldFlatBeanMappings {
 
   private Long id;
   private String email;

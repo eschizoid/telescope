@@ -105,12 +105,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The shared container allocation rules, over this world's type handles. */
   private ContainerAllocation<TypeMirror> allocation;
 
+  /** The {@code <Type>Mappings} interfaces the {@code @Bridge} fields of the compilation add to. */
+  private MappingsInterfaces mappings;
+
   @Override
   public synchronized void init(final ProcessingEnvironment processingEnv) {
     super.init(processingEnv);
     final var props = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
     rules = new PairingRules<>(props);
     allocation = new ContainerAllocation<>(props);
+    mappings = new MappingsInterfaces(processingEnv);
     try {
       final var trees = Trees.instance(processingEnv);
       // A class's calls are resolved once javac has attributed it, when each tree carries the
@@ -649,6 +653,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Collect annotated elements from both @Bridge (single use) and @Bridges (the container that
     // javac wraps multiple @Bridge into when the user declares more than one on the same type).
     final var elements = new LinkedHashSet<Element>(roundEnv.getElementsAnnotatedWith(anno));
+    mappings.read(roundEnv.getElementsAnnotatedWith(anno));
     if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
     for (final var retried : fieldRetries) {
       final var at = retried.lastIndexOf('#');
@@ -910,6 +915,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       bridgeNameOwner.clear();
       reachable.clear();
     }
+    mappings.write(roundEnv.processingOver());
     // @Bridge stays unclaimed: TelescopeMapperProcessor reads it too, and javac withholds a claimed
     // annotation from every processor that runs later, whatever order the build lists them in.
     return false;
