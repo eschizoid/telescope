@@ -753,10 +753,12 @@ JVM/codegen-only under AOT).
     (`invoice.toInvoiceDto()`); a two-way mapper adds `to<Source>()` on `<Target>Mappings`. No new `@Bridge` attribute;
     a name clash is refused by name.
 24. **0024 — Typed `before` and `after` edit rows.** (Proposed.) `before(over(...))`, `after(over(...))` and their
-    backward twins are rows holding `Edit`s, run around `forward` and `backward`, fused into one rebuild, compiled into
-    the bridge, and shown by `explain()`. They replace mapping callbacks for normalisation; the lambda hooks stay for
-    side effects. Lands after `over(Accessor, fn)`, a traversing `each(...)` path factory and container steps in
-    generated paths.
+    backward twins are rows holding `Edit`s, run around `forward` and `backward` inside the lambda hooks. A `before`
+    edit changes what rows read without rebuilding the source; generated `after` edits apply each value before the
+    constructor or setter call; `patch` runs edits only on paths the partial sets; null values behave as in
+    `Telescope.all`. They replace mapping callbacks for normalisation; the lambda hooks stay for side effects. Lands
+    after `over(Accessor, fn)`, a traversing `traverse(...)` path factory, container steps in generated paths, and
+    `after` edits on the generated `into`.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
