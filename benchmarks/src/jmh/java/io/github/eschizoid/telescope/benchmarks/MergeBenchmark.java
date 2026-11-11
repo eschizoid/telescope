@@ -74,6 +74,14 @@ public class MergeBenchmark {
     return autoMerge.forward(sources);
   }
 
+  /** The floor of the bag form: each source looked up in the bag, then one constructor call. */
+  @Benchmark
+  public Profile handBag() {
+    final var c = sources.byClass(Customer.class);
+    final var a = sources.byClass(Audit.class);
+    return new Profile(c.id(), c.email(), c.name(), a.createdBy(), a.createdAt(), a.region());
+  }
+
   /** The floor: direct reads, one constructor call, no staging map. */
   @Benchmark
   public Profile handMerge() {
