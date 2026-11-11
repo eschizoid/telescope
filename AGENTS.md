@@ -733,9 +733,9 @@ JVM/codegen-only under AOT).
 17. **0017 — `telescope-jpa`.** (Accepted, not built.) Persistence-aware container copies through a `ContainerCopy` SPI
     (an unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all
     against the Jakarta Persistence API.
-18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
-    guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
-    Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
+18. **0018 — Generated mapper parity with MapStruct.** (Accepted, shipped.) Closes the gaps on the `@Bridge` path in
+    order: cycle guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths,
+    update in place. Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
 19. **0019 — Which differences between the paths may remain.** (Accepted, shipped.) Only inherent limits stay in the
     cross-path registers, each refused by name on the path that cannot do the work: a private constructor, a non-public
     constructor in another package, a builder with no method for a `final` field that has no initializer, a `via` row
