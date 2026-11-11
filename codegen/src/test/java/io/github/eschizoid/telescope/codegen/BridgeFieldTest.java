@@ -13,6 +13,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.math.BigDecimal;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -21,6 +22,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -633,6 +637,64 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName("a generated number row formats and parses on many threads at once, each call through its own copy")
+  void aGeneratedNumberRowIsSafeAcrossThreads() throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Priced",
+        "package fb; public record Priced(java.math.BigDecimal total) {}",
+        "fb.PricedDto",
+        "package fb; public record PricedDto(String total) {}",
+        "fb.Prices",
+        HEADER +
+          "public final class Prices {\n" +
+          "  @Bridge public static final Mapper<Priced, PricedDto> DTO = Telescope.mapper(Priced.class," +
+          " PricedDto.class, toFormattedNumber(Priced::total, PricedDto::total, \"$#,##0.00\"," +
+          " java.util.Locale.US));\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    // A DecimalFormat shared between threads is not observed to race while it formats, only while
+    // it parses, so the copy forward makes is held by the generated method's own text as well.
+    final var fn = c.generated().get("fb.PricedToPricedDtoBridgeTotalFn");
+    final var forward = fn.substring(fn.indexOf(" forward("), fn.indexOf(" backward("));
+    assertTrue(forward.contains("((java.text.DecimalFormat) FORMAT.clone()).format(v)"), forward);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) field(loader, "fb.Prices", "DTO");
+      assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+      final var text = loader.loadClass("fb.PricedDto").getConstructor(String.class);
+      final var priced = loader.loadClass("fb.Priced").getConstructor(BigDecimal.class);
+      final var total = loader.loadClass("fb.Priced").getMethod("total");
+      final var written = loader.loadClass("fb.PricedDto").getMethod("total");
+      final var start = new CountDownLatch(1);
+      try (final var pool = Executors.newFixedThreadPool(8)) {
+        final var calls = new ArrayList<Future<?>>();
+        for (var t = 0; t < 8; t++) {
+          final var base = t * 1_000_000L;
+          calls.add(
+            pool.submit(() -> {
+              start.await();
+              for (var i = 0; i < 20_000; i++) {
+                final var value = BigDecimal.valueOf(base + i, 2);
+                final var expected = String.format(Locale.US, "$%,.2f", value);
+                assertEquals(expected, written.invoke(mapper.forward(priced.newInstance(value))));
+                assertEquals(value, total.invoke(mapper.backward(text.newInstance(expected))));
+              }
+              return null;
+            })
+          );
+        }
+        start.countDown();
+        for (final var call : calls) {
+          call.get();
+        }
+      }
+    }
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
@@ -673,6 +735,15 @@ class BridgeFieldTest {
         "an inline lambda can't be compiled into the generated bridge; write a method reference",
       },
       new String[] { "Rows.ID", "a @Bridge mapper compiles only rows written in place as a Mapping factory call" },
+      new String[] {
+        "toFormattedNumber(User::id, UserDto::kind, Rows.PATTERN)",
+        "a @Bridge mapper takes the pattern of a toFormattedNumber row as a string constant",
+      },
+      new String[] {
+        "toFormattedNumber(User::id, UserDto::kind, \"0\", java.util.Locale.of(\"de\"))",
+        "a @Bridge mapper takes the locale of a toFormattedNumber row as a static final field",
+      },
+      new String[] { "toFormatted(User::address, UserDto::kind, \"yyyy\")", "toFormatted" },
       new String[] {
         "constant(UserDto::kind, String.valueOf(1))",
         "a value in a @Bridge mapper must be a literal or an enum constant",
@@ -902,6 +973,7 @@ class BridgeFieldTest {
           "  static java.util.function.Predicate<Object> pred() { return o -> true; }\n" +
           "  static Mapping<User, UserDto> make() { return ID; }\n" +
           "  static final Mapper<Address, Address> SAME = Telescope.mapper(Address.class, Address.class);\n" +
+          "  static final String PATTERN = String.valueOf(\"0\");\n" +
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",

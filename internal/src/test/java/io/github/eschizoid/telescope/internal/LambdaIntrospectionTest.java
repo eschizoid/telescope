@@ -277,6 +277,19 @@ class LambdaIntrospectionTest {
     }
   }
 
+  @Test
+  @DisplayName("the name of what a reference returns comes from the method, or its instantiation where it erases")
+  void theReturnedNameIsReadWithoutLoading() {
+    final SerFn<Count, Integer> primitive = Count::value;
+    final SerFn<User, String> named = User::name;
+    final SerFn<Box<String>, String> erased = Box::value;
+    final SerFn<Strings, String[]> array = Strings::value;
+    assertEquals("int", LambdaIntrospection.returnedNameOf(primitive));
+    assertEquals("java.lang.String", LambdaIntrospection.returnedNameOf(named));
+    assertEquals("java.lang.String", LambdaIntrospection.returnedNameOf(erased));
+    assertNull(LambdaIntrospection.returnedNameOf(array));
+  }
+
   record Box<X>(X value) {}
 
   record Listed(ArrayList<String> value) {}

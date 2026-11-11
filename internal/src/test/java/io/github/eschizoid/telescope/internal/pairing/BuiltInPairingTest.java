@@ -120,14 +120,16 @@ class BuiltInPairingTest {
     @DisplayName("a String and a date or time are refused either way round, naming the rows that take a format")
     void datesNeedAFormat() {
       assertEquals(
-        PairingMessages.textNeedsFormat("p", "java.lang.String", "java.time.Instant"),
+        PairingMessages.textNeedsFormat("p", "java.lang.String", "java.time.Instant", false),
         refusal(String.class, Instant.class, true)
       );
       assertEquals(
-        PairingMessages.textNeedsFormat("p", "java.time.LocalDate", "java.lang.String"),
+        PairingMessages.textNeedsFormat("p", "java.time.LocalDate", "java.lang.String", true),
         refusal(LocalDate.class, String.class, false)
       );
       assertTrue(refusal(String.class, Instant.class, false).contains("to(source, target, forward, backward)"));
+      assertTrue(refusal(LocalDate.class, String.class, false).contains("toFormatted(source, target, pattern)"));
+      assertFalse(refusal(String.class, LocalDate.class, false).contains("toFormatted("));
     }
 
     @Test
