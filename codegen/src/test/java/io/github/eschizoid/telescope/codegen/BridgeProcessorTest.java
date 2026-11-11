@@ -4909,7 +4909,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a via row naming a field whose own rows are refused names that refusal, not a Lombok annotation")
+    @DisplayName(
+      "a via row naming a field whose own rows are refused is refused for the unwritten bridge, not a Lombok annotation"
+    )
     void viaMapperNamingARefusedFieldIsRefusedWithThatReason() {
       final var compilation = compileAttributed(
         source("demo.In", "package demo; public record In(String v) {}"),
@@ -4948,11 +4950,11 @@ class BridgeProcessorTest {
         )
       );
 
-      assertFalse(compilation.success(), "the field the row names is refused, so its bridge is never written");
+      assertFalse(compilation.success(), "the field the row names is refused, so its bridge is not written");
       assertTrue(
         compilation.hasError(
-          "converts through demo.InToOutBridge, the bridge of a @Bridge field this compilation refuses, so it is" +
-            " never written"
+          "converts through demo.InToOutBridge, the bridge of a @Bridge field no round of this compilation" +
+            " wrote: that field is refused, or an error reported elsewhere ended the rounds"
         ),
         () -> "expected the refused field as the reason, saw: " + compilation.errorMessages()
       );

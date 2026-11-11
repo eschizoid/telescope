@@ -1179,8 +1179,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Refuses each field of the final round whose rows convert through a bridge no round wrote, by
    * why that bridge is missing. The bridge of a field whose pair has a side carrying a Lombok
    * annotation is written in the final round, too late for another bridge to call. Any other bridge
-   * a field of this compilation declares exists by the final round unless that field was refused,
-   * whose own refusal is the one to correct.
+   * a field of this compilation declares is written in a round after that field is read, and javac
+   * starts no further round once a round has reported an error, so such a bridge is missing when
+   * its field is refused or when an error anywhere in the compilation ended the rounds first. The
+   * processor cannot tell those two apart, so the refusal names both.
    */
   private void refuseFinalRoundAwaits() {
     final var elements = processingEnv.getElementUtils();
@@ -1215,8 +1217,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             field.getSimpleName() +
             " converts through " +
             String.join(", ", unwritten) +
-            ", the bridge of a @Bridge field this compilation refuses, so it is never written; correct the" +
-            " rows of that field, or declare this field's rows without that via(...)"
+            ", the bridge of a @Bridge field no round of this compilation wrote: that field is refused, or" +
+            " an error reported elsewhere ended the rounds before the bridge was written; correct the error" +
+            " reported first, or declare this field's rows without that via(...)"
         );
       }
     }
