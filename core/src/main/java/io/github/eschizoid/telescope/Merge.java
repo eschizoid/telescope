@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
@@ -198,6 +199,13 @@ final class Merge {
     if (step instanceof MergeStep.FromInferred<?, ?> r) {
       ensureAccessorPresent(r.src(), index, "from", "source");
       ensureAccessorPresent(r.tgt(), index, "from", "target");
+      final var notAnAccessor = MergeReaders.refusal(
+        index,
+        LambdaIntrospection.implClassOf(r.src()).getSimpleName(),
+        LambdaIntrospection.methodNameOf(r.src()),
+        LambdaIntrospection.takesReceiver(r.src())
+      );
+      if (notAnAccessor != null) throw new IllegalArgumentException(notAnAccessor);
       final Class<?> srcClass = LambdaIntrospection.receiverClassOf(r.src());
       final Getter<Object, Object> srcAccessor = asGetter(r.src());
       final String tgtName = targetRefl.normalize(LambdaIntrospection.methodNameOf(r.tgt()));

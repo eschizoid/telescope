@@ -88,6 +88,42 @@ class MapperVerifierProcessorTest {
     );
   }
 
+  @Test
+  @DisplayName(
+    "a merge row reading through a static method or another object's method is reported in the merge's words"
+  )
+  void aMergeReaderThatIsNoAccessorIsReported() {
+    final var compilation = verify(
+      """
+      package demo;
+      import static io.github.eschizoid.telescope.mapping.MergeStep.*;
+      import io.github.eschizoid.telescope.Telescope;
+      record Customer(String id, String name) {}
+      record Profile(String id, String name) {}
+      class H {
+        static final H INSTANCE = new H();
+        static String nameOf(Customer c) { return c.name(); }
+        String label(Customer c) { return c.name(); }
+      }
+      class Holder {
+        static final Object STATIC = Telescope.merge(Profile.class, from(H::nameOf, Profile::name), auto(Customer.class));
+        static final Object BOUND = Telescope.merge(Profile.class, auto(Customer.class), from(H.INSTANCE::label, Profile::name));
+        static final Object ACCESSOR = Telescope.merge(Profile.class, from(Customer::name, Profile::name));
+      }
+      """
+    );
+    assertFalse(compilation.success());
+    assertEquals(2, compilation.errorMessages().split("ERROR", -1).length - 1, compilation::errorMessages);
+    assertTrue(
+      compilation.hasError(PairingMessages.mergeReaderNotAnAccessor(0, "H::nameOf")),
+      compilation::errorMessages
+    );
+    assertTrue(
+      compilation.hasError(PairingMessages.mergeReaderNotAnAccessor(1, "H::label")),
+      compilation::errorMessages
+    );
+  }
+
   @Nested
   @DisplayName("Rows through a getter inherited from an abstract base")
   class InheritedAccessorRows {

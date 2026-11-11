@@ -262,12 +262,14 @@ by the `Telescope.merge(...)` call above written in place compiles into a bridge
 paths. Each component is decided as the runtime decides it: a `from` row binds the component it names, and an `auto` row
 each component of a name its source has that no row before it binds, so where two sources carry one name the first
 `auto` fills it. Two rows binding one component, a row naming no component and an `auto` match of two types are refused
-when the field is compiled, in the words the runtime refuses them with when the mapper is built, and a missing source
-fails `forward` in the runtime's words, at the same component. The generated path's own limits: the target is a public
-record declaring no type parameters, a bean target is refused by name, and so are a primitive component no row binds and
-a `from` row reading a type its component does not hold (possible when javac infers the row's shared type as a supertype
-of both), each of which the runtime path accepts and then fails to construct on every `forward`, the second with "Failed
-to construct". Like the runtime merge, it is forward only.
+when the field is compiled, in the words the runtime refuses them with when the mapper is built, as is a `from` row
+reading through anything but an accessor of a source class (a static method taking the source, or a method of another
+object), which names no source the bag holds; a missing source fails `forward` in the runtime's words, at the same
+component. The generated path's own limits: the target is a public record declaring no type parameters, a bean target is
+refused by name, and so are a primitive component no row binds and a `from` row reading a type its component does not
+hold (possible when javac infers the row's shared type as a supertype of both), each of which the runtime path accepts
+and then fails to construct on every `forward`, the second with "Failed to construct". Like the runtime merge, it is
+forward only.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
 javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;

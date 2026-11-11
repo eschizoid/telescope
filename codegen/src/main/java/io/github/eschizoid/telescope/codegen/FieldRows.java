@@ -18,6 +18,7 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
@@ -667,9 +668,19 @@ final class FieldRows {
       if (!(read instanceof ExecutableElement reader) || !(written instanceof ExecutableElement writer)) {
         return Refused.javacReports(row);
       }
-      // An accessor takes the object it reads as its argument, so its reference is unbound and
-      // names the class it is applied to.
-      final var source = (TypeElement) elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      // The reader names the source the row reads only when it is an accessor of it: an unbound
+      // reference to an instance method taking no argument.
+      final var qualifier = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      final var notAnAccessor = MergeReaders.refusal(
+        index,
+        reader.getEnclosingElement().getSimpleName().toString(),
+        reader.getSimpleName().toString(),
+        qualifier instanceof TypeElement &&
+          !reader.getModifiers().contains(Modifier.STATIC) &&
+          reader.getParameters().isEmpty()
+      );
+      if (notAnAccessor != null) return new Refused(rowArgs.get(0), notAnAccessor);
+      final var source = (TypeElement) qualifier;
       sources.add(source);
       rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
       kinds.add("FromInferred");

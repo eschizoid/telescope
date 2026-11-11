@@ -22,6 +22,7 @@ import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.KeptNames;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
@@ -119,6 +120,8 @@ import javax.tools.StandardLocation;
 public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
+
+  private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String OBJECT_FQN = "java.lang.Object";
   // The telescope navigation calls that read a component of the path's current focus through an
@@ -648,12 +651,43 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       switch (name) {
         case "map", "mapper" -> strict = true;
         case "mapperForward" -> strict = false;
+        case "merge" -> {
+          if (!suppressed()) verifyMergeCall(node);
+          return;
+        }
         default -> {
           return;
         }
       }
       if (suppressed()) return;
       verifyPairCall(node, strict);
+    }
+
+    /**
+     * Reports each {@code from(...)} row of a {@code Telescope.merge} call whose reader is not an
+     * accessor of a source class, which the merge refuses when it is built, in its words.
+     */
+    private void verifyMergeCall(final MethodInvocationTree node) {
+      final var args = node.getArguments();
+      for (var i = 1; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        if (!(elementAt(row.getMethodSelect()) instanceof ExecutableElement step)) continue;
+        if (!(step.getEnclosingElement() instanceof TypeElement owner)) continue;
+        if (!owner.getQualifiedName().contentEquals(MERGE_STEP_FQN) || !step.getSimpleName().contentEquals("from")) {
+          continue;
+        }
+        if (!(row.getArguments().getFirst() instanceof MemberReferenceTree reference)) continue;
+        if (!(elementAt(reference) instanceof ExecutableElement reader)) continue;
+        final var refusal = MergeReaders.refusal(
+          i - 1,
+          reader.getEnclosingElement().getSimpleName().toString(),
+          reader.getSimpleName().toString(),
+          elementAt(reference.getQualifierExpression()) instanceof TypeElement &&
+            !reader.getModifiers().contains(Modifier.STATIC) &&
+            reader.getParameters().isEmpty()
+        );
+        if (refusal != null) report(reference, refusal);
+      }
     }
 
     private boolean suppressed() {
