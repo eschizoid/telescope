@@ -320,6 +320,56 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName(
+    "a field reading the source through a path into a target path runs its generated bridge, giving what the" +
+      " runtime mapper gives"
+  )
+  void aFieldWithAPathOnBothSidesRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathOrder.class, PathShipped.class,\n" +
+      "      to(Telescope.path(PathOrder::customer, PathCustomer::city)," +
+      " Telescope.of(PathShipped.class).field(PathShipped::place).field(PathPlace::city)));\n";
+    final var c = compile(
+      sources(
+        "fb.PathCustomer",
+        "package fb; public record PathCustomer(String city, String town) {}",
+        "fb.PathOrder",
+        "package fb; public record PathOrder(PathCustomer customer, int qty) {}",
+        "fb.PathPlace",
+        "package fb; public record PathPlace(String city) {}",
+        "fb.PathShipped",
+        "package fb; public record PathShipped(PathPlace place, int qty) {}",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathOrder, PathShipped> ORDER = " +
+          rows +
+          "  public static Mapper<PathOrder, PathShipped> runtime() { return Built.ORDER; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER + "final class Built {\n" + "  static final Mapper<PathOrder, PathShipped> ORDER = " + rows + "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.PathOrderToPathShippedBridge"), c.generated()::toString);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "ORDER");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var customer = loader.loadClass("fb.PathCustomer").getConstructors()[0].newInstance("Paris", "Rome");
+      final var order = loader.loadClass("fb.PathOrder").getConstructors()[0].newInstance(customer, 3);
+      assertEquals(runtime.forward(order), generated.forward(order));
+      final var nested = generated.forward(order);
+      assertEquals("PathShipped[place=PathPlace[city=Paris], qty=3]", nested.toString());
+      assertEquals(runtime.backward(nested), generated.backward(nested));
+      assertEquals(runtime.patch(order, nested), generated.patch(order, nested));
+    }
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
@@ -395,8 +445,8 @@ class BridgeFieldTest {
         "filter(...) in a path has no generated form",
       },
       new String[] {
-        "to(Telescope.path(User::address, Address::city), Telescope.path(UserDto::address, Address::city))",
-        "a row whose source and target are both telescope paths has no generated form yet",
+        "to(Telescope.path(User::address, Address::city), Telescope.path(User::address, Address::city))",
+        "this path starts at User, which is not UserDto or a class it extends",
       },
       new String[] { "to(Rows.CITY, UserDto::kind)", "this argument is not such a path" },
       new String[] {
@@ -416,9 +466,10 @@ class BridgeFieldTest {
         "filter(...) in a path has no generated form",
       },
       new String[] {
-        "to(Telescope.of(User.class).field(User::address).field(Address::city)," +
-        " Telescope.of(UserDto.class).field(UserDto::address).field(Address::city))",
-        "a row whose source and target are both telescope paths has no generated form yet",
+        "to(Telescope.of(User.class).field(User::address).<Object>field(Address::city)," +
+        " Telescope.of(UserDto.class).<Object>field(UserDto::handle))",
+        "the path writes fb.Handle, which is not the java.lang.String the source path reads; end both paths at a" +
+        " property of one type",
       },
       new String[] {
         "to(User::email, UserDto::contact), to(Telescope.of(User.class).field(User::email), UserDto::contact)",

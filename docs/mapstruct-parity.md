@@ -24,7 +24,7 @@ and the row names the workaround.
 | ------------------------- | ------------------------------------------------------------------- | :-----: | :-------: |
 | Core mapping              | [Implicit same-name mapping](#implicit-same-name-mapping)           |   ✅    |    ✅     |
 | Core mapping              | [Explicit rename](#explicit-rename)                                 |   ✅    |    ✅     |
-| Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ⚠️     |
+| Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ✅     |
 | Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ❌     |
 | Conversions               | [Implicit type conversions](#implicit-type-conversions)             |   ⚠️    |    ⚠️     |
 | Conversions               | [Format strings](#format-strings)                                   |   ⚠️    |    ⚠️     |
@@ -52,7 +52,7 @@ and the row names the workaround.
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 12 ✅ · 15 ⚠️ · 2 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 14 ⚠️ · 2 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
 generated path has no form for a mapper over several sources or for a conditional row, and each of those two rows names
 the workaround.
@@ -164,7 +164,7 @@ generated bridge cannot express is refused by name' (the `to(Address::city, Addr
 
 ### Nested source path
 
-**Runtime: ✅ full** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(source = "customer.address.city", target =
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(source = "customer.address.city", target =
 "city") — dotted path into nested source
 
 **telescope:**
@@ -199,12 +199,14 @@ A path through `field` steps alone reads a null object on the way as the leaf's 
 builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on
 `forward`.
 
-**Generated path:** partial, because nested -> nested has no generated form. A source path into a target property, and a
-source property into a target path, written in place from `Telescope.of` or `Telescope.ofBean`, or as
-`Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads and direct
-calls to each class's accessors and write strategy, and handle a null object on the way as the runtime does. A row with
-a path on both sides is refused with "a row whose source and target are both telescope paths has no generated form yet".
-A path held in a variable, a generated navigator (the `OrderTelescope.of()` form above), a step other than `field`
+**Generated path:** full, all three shapes. A source path into a target property, a source property into a target path,
+and a row with a path on both sides, each path written in place from `Telescope.of` or `Telescope.ofBean`, or as
+`Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads, each object
+read once, and direct calls to each class's accessors and write strategy, and handle a null object on the way as the
+runtime does. A row with a path on both sides reads through the one and writes through the other in each direction the
+mapper converts, after the other paths through the same first property in the order the rows came, and takes no part in
+`patch`, on both paths. Its two paths end at a property of one type, or the row is refused by name. A path held in a
+variable, a generated navigator (the `OrderTelescope.of()` form above, tracked separately), a step other than `field`
 (`filter`, `then`, `fieldByName`) and a lambda step are refused on the row by name. A mapper that writes through a path
 refuses one through a class no write strategy builds, on both paths in the same words.
 
@@ -217,11 +219,13 @@ telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Te
 core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java and NestedTargetPathTest.java;
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a row reading the
 source through a path converts the same way on both paths, a null object on the way included' and 'a row writing a
-source property into the target through a path converts the same way on both paths, a null object on the way included';
+source property into the target through a path converts the same way on both paths, a null object on the way included'
+and 'a row with a path on both sides converts the same way on both paths, a null object on either side included';
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `steps` (the paths a field compiles, and the
-refusal of every other step) and `read` of a `to` row (a path on both sides refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a row the generated bridge
-cannot express is refused by name' (the path cases);
+refusal of every other step) and `pathToPath` (a path on both sides, and the refusal of two paths ending at different
+types); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a row the generated
+bridge cannot express is refused by name' (the path cases) and 'a field reading the source through a path into a target
+path runs its generated bridge, giving what the runtime mapper gives';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeTest.java</sub>
 
 ### Multiple source parameters

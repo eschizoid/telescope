@@ -196,7 +196,8 @@ the existing emitter without a second one.
 > same way from the target. `Telescope.path(A::b, B::c, ...)` is read as the `field` chain it stands for, starting at
 > the class javac gives its first accessor, and generates the same code. Any other path is refused on the row by name:
 > one held in a variable or built by a navigator, a step other than `field`, a lambda step, and a path rooted at a class
-> its side neither is nor extends. A row with a path on both sides is refused too.
+> its side neither is nor extends. A row with a path on both sides compiles when each of its paths is written that way
+> and both end at a property of one type, as set out below.
 >
 > Both paths give such a row one meaning, decided in the shared spec. Each object a path steps through is read as the
 > class its property declares, with every type variable read as the type argument the path gives it, through nested
@@ -236,6 +237,13 @@ the existing emitter without a second one.
 > default tree of every record below it, and now starts it at its null value, building only what a value is written
 > through; a constant or a computed value written through a path, and a path of another shape, still start from the
 > default tree.
+>
+> A row with a path on both sides reads the value through the source path and writes it through the target path forward,
+> and on a mapper that converts both ways reads it through the target path and writes it through the source path
+> backward, each path read and written by the rules above. It claims neither first property: each pairs by name, or not,
+> as it would without the row, and the value is written over it, among the other paths through the same property in the
+> order the rows came. `patch` overlays target properties and the runtime mapper's patch takes no part in the row, so
+> the generated `patch` takes none either. The row records no write in `SourceWrites` on either path.
 >
 > `SourceWrites` names a path longer than one step by the properties it steps through, as `customer.city`, so a strict
 > mapper refuses one path written into two targets, and every factory refuses a drop of a property a path steps through.

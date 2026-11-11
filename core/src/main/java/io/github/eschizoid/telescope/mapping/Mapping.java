@@ -473,6 +473,19 @@ public sealed interface Mapping<A, B>
    * lattice's intrinsic {@link Telescope#set} broadcasts the value to every focus on the target
    * side, and {@link Telescope#read} returns the first focus on the source side. For positional N:N
    * — Nth source value at Nth target focus — use {@link #zip(Telescope, Telescope)} instead.
+   *
+   * <p><b>Paths through properties.</b> When both paths step through properties alone, forward
+   * reads the source path, a null object on the way read as null, and writes the value through the
+   * target path, building a null object on the way unless the value is null; backward does the same
+   * the other way. The row claims neither first property: each pairs by name, or not, as it would
+   * without the row, and the value is written over it. {@code patch} overlays target properties and
+   * takes no part in the row.
+   *
+   * <p>A {@code @Bridge} field compiles the row when both paths are written in place, each from
+   * {@code Telescope.of(Type.class)} or {@code Telescope.ofBean(Type.class)} through {@code field}
+   * steps alone or as {@code Telescope.path(...)}, and end at a property of one type: reads become
+   * a null-safe chain of locals, each object read once, and writes call each class's accessors and
+   * write strategy directly. Any other path is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
     return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);

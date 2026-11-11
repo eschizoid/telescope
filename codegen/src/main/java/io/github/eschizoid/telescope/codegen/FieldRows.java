@@ -127,7 +127,8 @@ final class FieldRows {
     Map<String, String> beanStrategies,
     String defaultStrategy,
     List<SourcePath> sourcePaths,
-    List<TargetPath> targetPaths
+    List<TargetPath> targetPaths,
+    List<PathToPath> pathsToPaths
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -149,9 +150,10 @@ final class FieldRows {
 
   /**
    * A row reading the source through a path into the target property {@code target}: the properties
-   * the path steps through from the source, in order, and the method each is read by.
+   * the path steps through from the source, in order, and the method each is read by. {@code order}
+   * is the row's place among the field's rows.
    */
-  record SourcePath(String target, List<String> properties, List<String> methods) {
+  record SourcePath(String target, List<String> properties, List<String> methods, int order) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
     String name() {
       return String.join(".", properties);
@@ -160,14 +162,22 @@ final class FieldRows {
 
   /**
    * A row writing the source property {@code source} into the target through a path: the properties
-   * the path steps through from the target, in order, and the method each is read by.
+   * the path steps through from the target, in order, and the method each is read by. {@code order}
+   * is the row's place among the field's rows.
    */
-  record TargetPath(String source, List<String> properties, List<String> methods) {
+  record TargetPath(String source, List<String> properties, List<String> methods, int order) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
     String name() {
       return String.join(".", properties);
     }
   }
+
+  /**
+   * A row reading the source through one path and writing the value into the target through
+   * another: {@code read} steps through the source, with no target property, and {@code written}
+   * through the target, with no source property. Both carry the row's place among the field's rows.
+   */
+  record PathToPath(SourcePath read, TargetPath written) {}
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
   record GeneratedClass(String qualifiedName, String source) {}
@@ -563,6 +573,10 @@ final class FieldRows {
     private String defaultStrategy;
     private final List<SourcePath> sourcePaths = new ArrayList<>();
     private final List<TargetPath> targetPaths = new ArrayList<>();
+    private final List<PathToPath> pathsToPaths = new ArrayList<>();
+
+    /** How many rows have been read, which is the place of the row being read. */
+    private int order;
 
     /** The classes a path of these rows steps through below its root, by qualified name. */
     private final Set<String> pathIntermediates = new HashSet<>();
@@ -633,12 +647,14 @@ final class FieldRows {
         beanStrategies,
         defaultStrategy,
         sourcePaths,
-        targetPaths
+        targetPaths,
+        pathsToPaths
       );
     }
 
     /** Reads one row, or answers why it cannot be compiled. */
     Refused read(final ExpressionTree arg) {
+      order++;
       if (!(arg instanceof MethodInvocationTree row)) {
         return new Refused(
           arg,
@@ -697,11 +713,7 @@ final class FieldRows {
         case "to" -> switch (rowArgs.size()) {
           case 2 -> pathParameter(rowExec, 0)
             ? pathParameter(rowExec, 1)
-              ? new Refused(
-                  row,
-                  "a row whose source and target are both telescope paths has no generated form yet; write the" +
-                    " source as a path into a target property, or a source property into a target path"
-                )
+              ? pathToPath(row)
               : sourcePath(row)
             : pathParameter(rowExec, 1)
               ? targetPath(row)
@@ -762,20 +774,15 @@ final class FieldRows {
             "' does not hold; end the path at a property of that type"
         );
       }
-      final var properties = new ArrayList<String>();
-      final var methods = new ArrayList<String>();
-      for (final var hop : hops) {
-        properties.add(((Accessor) hop).property());
-        methods.add(((Accessor) hop).method());
-      }
-      final var named = String.join(".", properties);
+      final var written = sourcePathOf(t.property(), hops);
+      final var named = written.name();
       if (!targetsWritten.add(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
       final var claimed = sourceWrites.write(named, t.property());
       if (claimed != null) return new Refused(row, claimed);
       if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
-      sourcePaths.add(new SourcePath(t.property(), List.copyOf(properties), List.copyOf(methods)));
+      sourcePaths.add(written);
       stepsThrough(hops);
       rowKinds.add("FromTelescopeTo");
       rowAccessors.add(named + ">" + t.method());
@@ -808,21 +815,78 @@ final class FieldRows {
             "' holds; end the path at a property of that type, which backward reads back into it"
         );
       }
+      final var written = targetPathOf(s.property(), hops);
+      final var named = written.name();
+      final var claimed = sourceWrites.write(s.property(), named);
+      if (claimed != null) return new Refused(row, claimed);
+      if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
+      targetPaths.add(written);
+      stepsThrough(hops);
+      rowKinds.add("TelescopeTo");
+      rowAccessors.add(s.method() + ">" + named);
+      return null;
+    }
+
+    /**
+     * A {@code to(path, path)} row: the properties the source path steps through, read into the
+     * value the target path writes. Both paths end at a property of one type, since forward writes
+     * the value the one reads through the other and backward writes it back. The row claims no
+     * source property and no target property, as the runtime mapper's claims none: the first
+     * property of each path pairs by name, or not, as it would without the row, and the value is
+     * written over it.
+     */
+    private Refused pathToPath(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var read = steps(args.get(0), source);
+      if (read instanceof Refused refused) return refused;
+      final var written = steps(args.get(1), target);
+      if (written instanceof Refused refused) return refused;
+      final var readHops = (List<?>) read;
+      final var writtenHops = (List<?>) written;
+      final var from = (Accessor) readHops.getLast();
+      final var into = (Accessor) writtenHops.getLast();
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(from.type(), into.type()) || !types.isAssignable(into.type(), from.type())) {
+        return new Refused(
+          args.get(1),
+          "the path writes " +
+            shown(into) +
+            ", which is not the " +
+            shown(from) +
+            " the source path reads; end both paths at a property of one type, which backward reads back" +
+            " across"
+        );
+      }
+      final var readPath = sourcePathOf(null, readHops);
+      final var writtenPath = targetPathOf(null, writtenHops);
+      pathsToPaths.add(new PathToPath(readPath, writtenPath));
+      stepsThrough(readHops);
+      stepsThrough(writtenHops);
+      rowKinds.add("TelescopeToTelescope");
+      rowAccessors.add(readPath.name() + ">" + writtenPath.name());
+      return null;
+    }
+
+    /** The source path {@code hops} step through into {@code target}, at this row's place. */
+    private SourcePath sourcePathOf(final String target, final List<?> hops) {
       final var properties = new ArrayList<String>();
       final var methods = new ArrayList<String>();
       for (final var hop : hops) {
         properties.add(((Accessor) hop).property());
         methods.add(((Accessor) hop).method());
       }
-      final var named = String.join(".", properties);
-      final var claimed = sourceWrites.write(s.property(), named);
-      if (claimed != null) return new Refused(row, claimed);
-      if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
-      targetPaths.add(new TargetPath(s.property(), List.copyOf(properties), List.copyOf(methods)));
-      stepsThrough(hops);
-      rowKinds.add("TelescopeTo");
-      rowAccessors.add(s.method() + ">" + named);
-      return null;
+      return new SourcePath(target, List.copyOf(properties), List.copyOf(methods), order);
+    }
+
+    /** The target path {@code hops} step through from {@code source}, at this row's place. */
+    private TargetPath targetPathOf(final String source, final List<?> hops) {
+      final var properties = new ArrayList<String>();
+      final var methods = new ArrayList<String>();
+      for (final var hop : hops) {
+        properties.add(((Accessor) hop).property());
+        methods.add(((Accessor) hop).method());
+      }
+      return new TargetPath(source, List.copyOf(properties), List.copyOf(methods), order);
     }
 
     /**

@@ -235,12 +235,22 @@ public final class DeepMap {
     for (final var step : steps) {
       // A write hint names a class rather than accessors; its kind is compared above.
       if (!(step instanceof Mapping<?, ?> row)) continue;
-      // A source path is named by the properties it steps through, so a bridge generated from
-      // another path into the same target property is passed over.
-      final var read =
-        row instanceof FromTelescopeTo<?, ?, ?> path ? path.sourceTelescope().pathName() : row.sourceField();
-      final var written =
-        row instanceof TelescopeTo<?, ?, ?> path ? path.targetTelescope().pathName() : row.targetField();
+      // A path is named by the properties it steps through, so a bridge generated from another
+      // path through the same property is passed over.
+      final var read = switch (row) {
+        case FromTelescopeTo<?, ?, ?> path -> path.sourceTelescope().pathName();
+        case TelescopeToTelescope<?, ?, ?> path when path.kind() == TelescopeToTelescope.Kind.BROADCAST -> path
+          .sourceTelescope()
+          .pathName();
+        default -> row.sourceField();
+      };
+      final var written = switch (row) {
+        case TelescopeTo<?, ?, ?> path -> path.targetTelescope().pathName();
+        case TelescopeToTelescope<?, ?, ?> path when path.kind() == TelescopeToTelescope.Kind.BROADCAST -> path
+          .targetTelescope()
+          .pathName();
+        default -> row.targetField();
+      };
       accessors.add(nullToEmpty(read) + ">" + nullToEmpty(written));
     }
     if (accessors.equals(provider.rowAccessors())) return null;

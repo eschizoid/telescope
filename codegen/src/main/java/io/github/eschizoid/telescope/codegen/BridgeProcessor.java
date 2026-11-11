@@ -25,10 +25,12 @@ import java.io.StringWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -390,6 +392,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // For a field's bridge, its rows writing a source property into the target through a path, in
     // the order the rows came.
     List<FieldRows.TargetPath> targetPaths,
+    // For a field's bridge, its rows reading the source through a path and writing the value into
+    // the target through another, in the order the rows came.
+    List<FieldRows.PathToPath> pathsToPaths,
     // For a field's bridge, the write strategy its writeBean rows name for each class, by
     // qualified name, and the one its writeBeans row names, or null: a path builds an object it
     // steps through by the one its class takes.
@@ -411,6 +416,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       null,
       false,
       null,
+      List.of(),
       List.of(),
       List.of(),
       List.of(),
@@ -440,6 +446,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         carrierEl.getQualifiedName().toString(),
         false,
         declaringField,
+        List.of(),
         List.of(),
         List.of(),
         List.of(),
@@ -866,6 +873,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           List.of(),
           List.of(),
           List.of(),
+          List.of(),
           Map.of(),
           null
         );
@@ -1161,6 +1169,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.copyOf(parsed.rowAccessors()),
       List.copyOf(parsed.sourcePaths()),
       List.copyOf(parsed.targetPaths()),
+      List.copyOf(parsed.pathsToPaths()),
       Map.copyOf(parsed.beanStrategies()),
       parsed.defaultStrategy()
     );
@@ -1590,6 +1599,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pathRoots.add(path.source());
       pathFilled.add(path.properties().getFirst());
     }
+    for (final var path : cfg.pathsToPaths()) {
+      pathRoots.add(path.read().properties().getFirst());
+      pathFilled.add(path.written().properties().getFirst());
+    }
     final var unwalked = Unwalked.of(pathRoots, transforms.keySet(), viaMappers.keySet(), pathFilled, renamedTo);
     final var unwalkedSource = unwalked.source();
     final var unwalkedTarget = unwalked.target();
@@ -1636,6 +1649,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // when the value is written through it, which forward does on a strict and a lenient bridge.
     final var targetPaths = planTargetPaths(source, target, cfg.targetPaths(), pathStrategyOf, bridgePackage);
     if (targetPaths == null) return;
+    // A row with a path on each side reads its value through the one and writes it through the
+    // other: forward through the target path on every bridge, and backward through the source path
+    // on a strict one. Each side is planned as a path of its own side is, its write helpers named
+    // past those of the paths before it.
+    final var pathsToPaths = planPathsToPaths(
+      source,
+      target,
+      cfg.pathsToPaths(),
+      sourcePaths.size(),
+      targetPaths.size(),
+      lenient,
+      pathStrategyOf,
+      bridgePackage
+    );
+    if (pathsToPaths == null) return;
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -2106,12 +2134,56 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         targetPathSources.add(from);
       }
     }
+    // A row with a path on each side reads neither first property for itself: each pairs by name
+    // as it would without the row, the target's filled from the paths through it alone where the
+    // source has no property of its name and no other row fills it, and the source's read by the
+    // path alone where the target has no property of its name and no other row reads it.
+    for (final var path : pathsToPaths) {
+      final var filled = path.written().row().properties().getFirst();
+      final var from = path.read().row().properties().getFirst();
+      if (!targetNames.contains(filled)) {
+        error(
+          source,
+          "a row writes the path '" +
+            path.written().row().name() +
+            "', whose first property is not one the bridge writes on " +
+            target.getSimpleName() +
+            "; its properties are " +
+            targetNames
+        );
+        return;
+      }
+      if (!sourceNamesForPaths.contains(from)) {
+        error(
+          source,
+          "a row reads the path '" +
+            path.read().row().name() +
+            "', whose first property is not one the bridge reads on " +
+            source.getSimpleName() +
+            "; its properties are " +
+            sourceNamesForPaths
+        );
+        return;
+      }
+      if (
+        !sourceNamesForPaths.contains(filled) &&
+        !renameTargetNames.contains(filled) &&
+        !injectedTargetFields.contains(filled)
+      ) {
+        targetPathRoots.add(filled);
+      }
+    }
     injectedTargetFields.addAll(targetPathRoots);
     final var pathConsumed = new LinkedHashSet<String>();
     for (final var path : sourcePaths) {
       final var root = path.row().properties().getFirst();
       if (renames.containsKey(root) || transforms.containsKey(root) || viaMappers.containsKey(root)) continue;
       if (path.row().properties().size() == 1 || !targetNames.contains(root)) pathConsumed.add(root);
+    }
+    for (final var path : pathsToPaths) {
+      final var root = path.read().row().properties().getFirst();
+      if (renames.containsKey(root) || transforms.containsKey(root) || viaMappers.containsKey(root)) continue;
+      if (!targetNames.contains(root)) pathConsumed.add(root);
     }
 
     // @Bridge(lenient = true): auto-fill the mismatch on both sides so the bijection check below
@@ -2247,6 +2319,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!lenient) writesSource.add(path.row().properties().getFirst());
     }
     for (final var path : targetPaths) writesTarget.add(path.row().properties().getFirst());
+    for (final var path : pathsToPaths) {
+      writesTarget.add(path.written().row().properties().getFirst());
+      if (!lenient) writesSource.add(path.read().row().properties().getFirst());
+    }
     for (final var sf : sourceFields) {
       if (effectiveDrops.contains(sf.name())) continue;
       writesTarget.add(renames.getOrDefault(sf.name(), sf.name()));
@@ -2384,10 +2460,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         paired.checkedInto(paired.forwardChecks(), targetName, applyForward(srcName, plan, read))
       );
     };
-    // Each target path writes its source property through the path, over the value of the target
-    // property it starts at, in the order the rows came.
+    // Each target path writes its value through the path, over the value of the target property it
+    // starts at, in the order the rows came: a source property's, or the value a source path reads
+    // for a row with a path on each side.
+    final var readThrough = new IdentityHashMap<TargetPathPlan, SourcePathPlan>();
+    final var writtenThrough = new IdentityHashMap<SourcePathPlan, TargetPathPlan>();
+    final var everyTargetPath = new ArrayList<>(targetPaths);
+    final var everySourcePath = new ArrayList<>(sourcePaths);
+    for (final var path : pathsToPaths) {
+      readThrough.put(path.written(), path.read());
+      writtenThrough.put(path.read(), path.written());
+      everyTargetPath.add(path.written());
+      everySourcePath.add(path.read());
+    }
+    everyTargetPath.sort(Comparator.comparingInt(path -> path.row().order()));
+    everySourcePath.sort(Comparator.comparingInt(path -> path.row().order()));
     final var writtenTargets = new LinkedHashMap<String, List<TargetPathPlan>>();
-    for (final var path : targetPaths) {
+    for (final var path : everyTargetPath) {
       writtenTargets.computeIfAbsent(path.row().properties().getFirst(), unused -> new ArrayList<>()).add(path);
     }
     final Function<String, String> readForward = targetName -> {
@@ -2397,7 +2486,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? defaultLiteralFor(fieldByName(targetFields, targetName).type())
         : readForwardPlain.apply(targetName);
       for (final var path : paths) {
-        final var value = rootRead(path.row().source(), forwardLocals, paired, sourceFields, source);
+        final var from = readThrough.get(path);
+        final var value =
+          from != null
+            ? pathRead(from, forwardLocals, paired, sourceFields, source)
+            : rootRead(path.row().source(), forwardLocals, paired, sourceFields, source);
         written =
           path.row().properties().size() == 1 ? value : "__tw" + path.index() + "_1(" + written + ", " + value + ")";
       }
@@ -2435,12 +2528,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         paired.checkedInto(paired.backwardChecks(), sourceName, applyBackward(sourceName, plan, local))
       );
     };
-    // A strict bridge writes each source path's target value back through the path, over the first
-    // property's own value, in the order the rows came. A lenient bridge's backward is lossy and
-    // writes nothing through a path.
+    // A strict bridge writes each source path's value back through the path, over the first
+    // property's own value, in the order the rows came: a target property's, or the value a target
+    // path reads for a row with a path on each side. A lenient bridge's backward is lossy and
+    // writes
+    // nothing through a path.
     final var writtenPaths = new LinkedHashMap<String, List<SourcePathPlan>>();
     if (!lenient) {
-      for (final var path : sourcePaths) {
+      for (final var path : everySourcePath) {
         writtenPaths.computeIfAbsent(path.row().properties().getFirst(), unused -> new ArrayList<>()).add(path);
       }
     }
@@ -2451,22 +2546,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!lenient) for (final var path : targetPaths) readTargets.put(path.row().source(), path);
     final Function<String, String> readBackward = sourceName -> {
       final var readBack = readTargets.get(sourceName);
-      if (readBack != null) return targetRead(readBack, backwardLocals, "t", "__bt_", paired, targetFields, target);
       final var paths = writtenPaths.get(sourceName);
-      if (paths == null) return readBackwardPlain.apply(sourceName);
+      if (paths == null) {
+        return readBack != null
+          ? targetRead(readBack, backwardLocals, "t", "__bt_", paired, targetFields, target)
+          : readBackwardPlain.apply(sourceName);
+      }
       final var sf = fieldByName(sourceFields, sourceName);
-      var written = pathConsumed.contains(sourceName)
-        ? defaultLiteralFor(sf.type())
-        : readBackwardPlain.apply(sourceName);
+      var written =
+        readBack != null
+          ? targetRead(readBack, backwardLocals, "t", "__bt_", paired, targetFields, target)
+          : pathConsumed.contains(sourceName)
+            ? defaultLiteralFor(sf.type())
+            : readBackwardPlain.apply(sourceName);
       for (final var path : paths) {
-        final var filled = fieldByName(targetFields, path.row().target());
-        final var local = "__bp_" + filled.name();
-        backwardLocals.putIfAbsent(
-          local,
-          declarable(filled.type()) + " " + local + " = " + readExpr(target, "t", filled) + ";"
-        );
+        final var from = writtenThrough.get(path);
+        final String value;
+        if (from != null) {
+          value = targetRead(from, backwardLocals, "t", "__bt_", paired, targetFields, target);
+        } else {
+          final var filled = fieldByName(targetFields, path.row().target());
+          value = "__bp_" + filled.name();
+          backwardLocals.putIfAbsent(
+            value,
+            declarable(filled.type()) + " " + value + " = " + readExpr(target, "t", filled) + ";"
+          );
+        }
         written =
-          path.row().properties().size() == 1 ? local : "__pw" + path.index() + "_1(" + written + ", " + local + ")";
+          path.row().properties().size() == 1 ? value : "__pw" + path.index() + "_1(" + written + ", " + value + ")";
       }
       return written;
     };
@@ -2671,10 +2778,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         forwardResults.put(filled.name(), read);
       }
     }
+    // The type of the value a target path writes, and of the one a source path writes back.
+    final Function<TargetPathPlan, TypeMirror> givenForward = path ->
+      readThrough.containsKey(path)
+        ? pathLeaf(readThrough.get(path))
+        : fieldByName(sourceFields, path.row().source()).type();
+    final Function<SourcePathPlan, TypeMirror> givenBackward = path ->
+      writtenThrough.containsKey(path)
+        ? targetLeaf(writtenThrough.get(path), targetFields)
+        : fieldByName(targetFields, path.row().target()).type();
     for (final var paths : writtenTargets.entrySet()) {
       final var last = paths.getValue().getLast();
       final var filled = fieldByName(targetFields, paths.getKey());
-      final var given = fieldByName(sourceFields, last.row().source()).type();
+      final var given = givenForward.apply(last);
       if (
         last.row().properties().size() == 1 && filled.type().getKind().isPrimitive() && !given.getKind().isPrimitive()
       ) {
@@ -2693,7 +2809,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var paths : writtenPaths.entrySet()) {
       final var last = paths.getValue().getLast();
       final var root = fieldByName(sourceFields, paths.getKey());
-      final var given = fieldByName(targetFields, last.row().target()).type();
+      final var given = givenBackward.apply(last);
       if (
         last.row().properties().size() == 1 && root.type().getKind().isPrimitive() && !given.getKind().isPrimitive()
       ) {
@@ -2817,7 +2933,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     };
     // Patch writes each non-null value of a path's target property back through the path, over the
-    // first property as patch rebuilds it, in the order the rows came.
+    // first property as patch rebuilds it, in the order the rows came. A row with a path on each
+    // side takes no part in patch, which overlays target properties, as the runtime mapper's patch
+    // does.
     final Function<String, String> readPatch = sourceName -> {
       final var readBack = readTargets.get(sourceName);
       if (readBack != null) {
@@ -2828,8 +2946,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           : readPatchPlain.apply(sourceName);
         return "(" + leaf + " != null ? " + leaf + " : " + base + ")";
       }
-      final var paths = writtenPaths.get(sourceName);
-      if (paths == null) return readPatchPlain.apply(sourceName);
+      final var paths = writtenPaths
+        .getOrDefault(sourceName, List.of())
+        .stream()
+        .filter(path -> !writtenThrough.containsKey(path))
+        .toList();
+      if (paths.isEmpty()) return readPatchPlain.apply(sourceName);
       final var sf = fieldByName(sourceFields, sourceName);
       var written = pathConsumed.contains(sourceName) ? readExpr(source, "base", sf) : readPatchPlain.apply(sourceName);
       var step = 0;
@@ -2925,12 +3047,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var pathWriters = new ArrayList<String>();
     for (final var paths : writtenPaths.values()) {
       for (final var path : paths) {
-        final var written = pathWriters(path, source, targetFields);
+        final var written = pathWriters(path, source, givenBackward.apply(path));
         if (written == null) return;
         pathWriters.addAll(written);
       }
     }
-    for (final var path : targetPaths) {
+    for (final var path : everyTargetPath) {
       final var written = writers(
         "__tw" + path.index(),
         path.row().properties(),
@@ -2939,7 +3061,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         path.rebuilds(),
         path.levelTypes(),
         path.strategies(),
-        fieldByName(sourceFields, path.row().source()).type(),
+        givenForward.apply(path),
         source
       );
       if (written == null) return;
@@ -3207,6 +3329,80 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           planned.rebuilds(),
           planned.levelTypes(),
           planned.strategies()
+        )
+      );
+    }
+    return plans;
+  }
+
+  /**
+   * A row with a path on each side, as the bridge reads and writes it: {@code read} the source path
+   * forward reads the value through, and backward writes it back through on a strict bridge, and
+   * {@code written} the target path forward writes it through, and backward reads it from.
+   */
+  private record PathToPathPlan(SourcePathPlan read, TargetPathPlan written) {}
+
+  /**
+   * The rows of a pair with a path on each side, or null once a path is refused, as {@link
+   * #planSourcePaths} and {@link #planTargetPaths} refuse one. The source side of each is numbered
+   * after the {@code sourcePathsBefore} source paths, and the target side after the {@code
+   * targetPathsBefore} target paths, so their write helpers take names of their own.
+   */
+  private List<PathToPathPlan> planPathsToPaths(
+    final TypeElement source,
+    final TypeElement target,
+    final List<FieldRows.PathToPath> rows,
+    final int sourcePathsBefore,
+    final int targetPathsBefore,
+    final boolean lenient,
+    final Function<TypeElement, String> strategyOf,
+    final PackageElement bridgePackage
+  ) {
+    final var plans = new ArrayList<PathToPathPlan>();
+    for (var index = 0; index < rows.size(); index++) {
+      final var row = rows.get(index);
+      final var read = steps(
+        source,
+        target,
+        source,
+        row.read().name(),
+        row.read().methods(),
+        !lenient,
+        strategyOf,
+        bridgePackage
+      );
+      if (read == null) return null;
+      final var written = steps(
+        source,
+        target,
+        target,
+        row.written().name(),
+        row.written().methods(),
+        true,
+        strategyOf,
+        bridgePackage
+      );
+      if (written == null) return null;
+      plans.add(
+        new PathToPathPlan(
+          new SourcePathPlan(
+            row.read(),
+            sourcePathsBefore + index,
+            read.levels(),
+            read.reads(),
+            read.rebuilds(),
+            read.levelTypes(),
+            read.strategies()
+          ),
+          new TargetPathPlan(
+            row.written(),
+            targetPathsBefore + index,
+            written.levels(),
+            written.reads(),
+            written.rebuilds(),
+            written.levelTypes(),
+            written.strategies()
+          )
         )
       );
     }
@@ -3538,14 +3734,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The helpers a strict bridge writes {@code path}'s value back through, one per object below the
-   * source, as {@link #writers} writes them. Null once a rebuild is refused.
+   * The helpers a strict bridge writes {@code path}'s value, of type {@code given}, back through,
+   * one per object below the source, as {@link #writers} writes them. Null once a rebuild is
+   * refused.
    */
-  private List<String> pathWriters(
-    final SourcePathPlan path,
-    final TypeElement source,
-    final List<Field> targetFields
-  ) {
+  private List<String> pathWriters(final SourcePathPlan path, final TypeElement source, final TypeMirror given) {
     return writers(
       "__pw" + path.index(),
       path.row().properties(),
@@ -3554,7 +3747,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       path.rebuilds(),
       path.levelTypes(),
       path.strategies(),
-      fieldByName(targetFields, path.row().target()).type(),
+      given,
       source
     );
   }
