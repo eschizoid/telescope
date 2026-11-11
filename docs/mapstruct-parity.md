@@ -27,7 +27,7 @@ and the row names the workaround.
 | Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ✅     |
 | Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ⚠️     |
 | Conversions               | [Implicit type conversions](#implicit-type-conversions)             |   ⚠️    |    ⚠️     |
-| Conversions               | [Format strings](#format-strings)                                   |   ⚠️    |    ⚠️     |
+| Conversions               | [Format strings](#format-strings)                                   |   ✅    |    ✅     |
 | Conversions               | [Expressions](#expressions)                                         |   ✅    |    ✅     |
 | Conversions               | [Constants and defaults](#constants-and-defaults)                   |   ✅    |    ✅     |
 | Collections & containers  | [Collection element mapping](#collection-element-mapping)           |   ✅    |    ✅     |
@@ -52,7 +52,7 @@ and the row names the workaround.
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 16 ⚠️ · 0 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 14 ✅ · 15 ⚠️ · 0 ❌ · Generated: 14 ✅ · 15 ⚠️ · 0 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
 generated path scores at least as high as the runtime on every row.
 
@@ -330,7 +330,9 @@ example `'total' got "12x", not a BigDecimal`, the same message on both paths. T
 
 What stays explicit: narrowing (`long` to `int`, `double` to `float`, `double` to `BigDecimal`, which has no NaN or
 infinity), and dates and times against a `String`, which need a format. Each is refused when the mapper is built, or at
-compile time on `@Bridge`, with a message naming the `to(source, target, forward, backward)` row that converts it.
+compile time on `@Bridge`, with a message naming the row that converts it: `toFormatted(source, target, pattern)` for a
+date or a time written into a `String` (see [Format strings](#format-strings)), and
+`to(source, target, forward, backward)` for the others.
 
 **Generated path:** partial for the same reason as the runtime path. The bridge decides each pair through the same
 `PairingRules`, so it converts and refuses the same pairs; the `to(source, target, forward, backward)` row that converts
@@ -352,49 +354,74 @@ core/src/test/java/io/github/eschizoid/telescope/BuiltInConversionTest.java; doc
 
 ### Format strings
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(numberFormat = "$#.00") /
-@Mapping(dateFormat = "dd.MM.yyyy") — annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code for
-both directions.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(numberFormat = "$#.00") / @Mapping(dateFormat =
+"dd.MM.yyyy") — annotation attribute, MapStruct generates DecimalFormat/DateTimeFormatter code for both directions.
 
 **telescope:**
 
 ```java
-private static final DateTimeFormatter D = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+// Both directions: forward formats, backward and patch parse the text back.
+Telescope.mapper(Order.class, OrderDto.class,
+    toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy"),
+    toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00"),
+    toFormatted(Order::placedAt, OrderDto::placedAt, "yyyy-MM-dd HH:mm", ZoneOffset.UTC)); // an Instant needs a zone
 
-// toOneWay rows need mapperForward; Telescope.mapper refuses them at build time
-Telescope.mapperForward(Order.class, OrderDto.class,
-    to(Order::shipDate, OrderDto::shipDateText, D::format, s -> LocalDate.parse(s, D)), // parse leg serves a Mapper
-    toOneWay(Order::createdAt, OrderDto::createdAtIso, Instant::toString));             // forward-only
+// Forward only, for a pattern that does not read back:
+Telescope.mapperForward(Order.class, OrderView.class,
+    toFormattedOneWay(Order::shipDate, OrderView::month, "MMMM yyyy"));
 
-// Codegen (@Bridge field) form — the formatter is a static helper named by method reference:
-public record UserEntity(String id, Instant expiresAt) {
+// Codegen (@Bridge field) form, the same rows:
+public record Order(LocalDate shipDate, BigDecimal total) {
   @Bridge
-  static final ForwardMapper<UserEntity, UserDto> DTO = Telescope.mapperForward(
-    UserEntity.class,
-    UserDto.class,
-    toOneWay(UserEntity::expiresAt, UserDto::expiresAt, DateHelpers::expiry)
-  );
+  static final Mapper<Order, OrderDto> DTO = Telescope.mapper(Order.class, OrderDto.class,
+    toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy"),
+    toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00", Locale.US));
 }
 ```
 
-No format-string attribute exists anywhere — no numberFormat/dateFormat analog, and a repo-wide grep finds no
-DecimalFormat/DateTimeFormatter machinery in main code. The use case is fully achievable with a typed transform row
-holding your own formatter (compile-checked, refactor-safe, arguably safer than a stringly pattern), but the migrator
-hand-writes the formatter and, for bidirectional number formats, the parse leg including checked-exception handling that
-MapStruct generates.
+`toFormatted` writes a `LocalDate`, `LocalTime`, `LocalDateTime`, `OffsetDateTime`, `OffsetTime`, `ZonedDateTime`,
+`Instant`, `Year`, `YearMonth` or `MonthDay` into a `String` property through a `DateTimeFormatter` pattern, with a
+`ZoneId` overload. `toFormattedNumber` writes a primitive number, its wrapper, a `BigInteger` or a `BigDecimal` through
+a `DecimalFormat` pattern, with a `Locale` overload. The two-way rows parse on `backward` and `patch`, and their
+`OneWay` siblings, which `Telescope.mapper` refuses by name, format forward only. Both properties are method references,
+and `javac` refuses a source property that is not a date, a time or a number.
 
-**Generated path:** partial, with more ceremony than the runtime path. The generated bridge cannot hold an inline
-lambda, which is refused on the row, so each formatted field names a static helper method (`toOneWay`, or
-`to(src, tgt, Helper::format, Helper::parse)` for both directions) or a `BridgeFn`, and the bridge calls it directly.
+The pattern is checked when the row is built: one the JDK does not compile, one naming a field the class lacks (`HH:mm`
+for a `LocalDate`), and an `Instant` given no zone are each refused by name, with the property named. A two-way row is
+also probed with dates across three centuries and with months whose English names share a first letter, and with numbers
+of the digits the pattern writes, and a pattern whose text reads back as another value is refused: `yy-MM-dd` reads
+1899-12-31 back as 2099-12-31, `dd MMMMM yyyy` reads January back as July, and `0.#E0` reads 127 back as 130. Writing
+less than the whole time is not refused: `yyyy-MM-dd HH:mm` reads back the time with no seconds. Text that does not
+parse fails with the target property, the text and the format named,
+`'shipDate' got "2026/12/31", not a LocalDate in the format "dd.MM.yyyy"`, the same message on both paths. A number
+reads back only when the whole text is read, and into an integral class only when it converts exactly. Where MapStruct
+parses with `DecimalFormat.parse`, which stops at the first character it cannot read, telescope refuses trailing text.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java,
-`to(Accessor, Accessor, Function, Function)` (typed transform, with an Instant::toString/Instant::parse example) and
-`toOneWay` (forward-only); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a converter on a
-`@Bridge` field is a method reference or a `BridgeFn`, compiled into a small generated class, and an inline lambda is
-refused on the row); README.md, "When MapStruct is the right pick" (which names `Mapping.via(...)` as the plain-Java
-stand-in for qualifier dispatch); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the
-test 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field' (number<->String
-transform round-trip)</sub>
+**Generated path:** full. On a `@Bridge` field the pattern is a string constant, which the processor checks at compile
+time through the same shared decision, and `MapperVerifierProcessor` checks it on a runtime mapper call too. The
+generated bridge holds a `DateTimeFormatter` as a `static final` constant and calls it directly; a `DecimalFormat`,
+which is not safe to share between threads, is copied from a `static final` prototype for each call on both paths. A
+zone or a locale is a `static final` field the bridge can name, such as `ZoneOffset.UTC` or `Locale.GERMANY`. A pattern
+that is not a compile-time constant, and a zone or a locale given as a call such as `ZoneId.of("Europe/Paris")`, are
+refused on the row by name, while the runtime builds them: the bridge's formatter is a constant built from text the
+processor reads, which is an inherent limit of the generated path, recorded in ADR-0019. Hold the value in a
+`static final` field, or build the mapper without `@Bridge`.
+
+What stays explicit on both paths: text parsed into a date or a number on a forward-only mapper whose source holds the
+text, `java.util.Date` and `Calendar`, and a date pattern in a locale other than the default, each of which takes a
+`to(src, tgt, forward, backward)` or `toOneWay` row.
+
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `toFormatted`,
+`toFormattedOneWay`, `toFormattedNumber` and `toFormattedNumberOneWay`;
+core/src/main/java/io/github/eschizoid/telescope/mapping/Formatted.java (the runtime conversion);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/TextFormats.java (which patterns are accepted, and
+how a number reads back) and PairingMessages.java, `formattedPhrase` and the `format*` refusals;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `formatted`, `temporalFn` and `numberFn`
+(the generated conversion); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the
+test 'a formatted row on a @Bridge field formats, parses, refuses and fails the same way on both paths';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessorTest.java, the nested 'Formatted
+rows' tests; core/src/test/java/io/github/eschizoid/telescope/FormattedRowTest.java;
+benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/FormattedRowBenchmark.java</sub>
 
 ### Expressions
 

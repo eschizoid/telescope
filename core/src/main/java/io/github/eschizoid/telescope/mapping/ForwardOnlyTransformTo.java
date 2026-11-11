@@ -46,4 +46,12 @@ public record ForwardOnlyTransformTo<A, B, X, Y>(
   public String targetField() {
     return LambdaIntrospection.methodNameOf(tgt);
   }
+
+  /**
+   * The name of the factory that built the row, which a refusal names: a forward-only formatted
+   * row's own, or {@code toOneWay}.
+   */
+  public String row() {
+    return forward instanceof Formatted.Forward formatted ? formatted.row() : "toOneWay";
+  }
 }

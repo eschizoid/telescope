@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.internal.pairing.TextFormats;
 import java.util.List;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
@@ -1807,6 +1808,103 @@ class MapperVerifierProcessorTest {
             Holder.class, HolderDto.class, cases(Circle.class, CircleDto.class), cases(Square.class, SquareDto.class));
         }
         """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+  }
+
+  @Nested
+  @DisplayName("Formatted rows")
+  class FormattedRows {
+
+    private static final String HEAD = """
+      package demo;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      record Src(java.time.LocalDate day, java.math.BigDecimal total) {}
+      record Tgt(String day, String total) {}
+      """;
+
+    @Test
+    @DisplayName("a formatted row claims both of its properties, which would otherwise need a format")
+    void aFormattedRowClaimsItsProperties() {
+      final var compilation = verify(
+        HEAD +
+          """
+          class Holder {
+            static final String DAY = "dd.MM.yyyy";
+            static final Object M = Telescope.mapper(Src.class, Tgt.class,
+              toFormatted(Src::day, Tgt::day, DAY),
+              toFormattedNumber(Src::total, Tgt::total, "#,##0.00"));
+          }
+          """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a constant pattern the shared spec refuses is reported in construction's words, on each row")
+    void aRefusedConstantPatternIsReported() {
+      final var compilation = verify(
+        HEAD +
+          """
+          class Holder {
+            static final Object M = Telescope.mapper(Src.class, Tgt.class,
+              toFormatted(Src::day, Tgt::day, "MM/yyyy"),
+              toFormattedNumber(Src::total, Tgt::total, "#.##.0"));
+          }
+          """
+      );
+      assertFalse(compilation.success());
+      assertEquals(2, compilation.errors().size(), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          TextFormats.refusal("toFormatted", "day", "java.time.LocalDate", "LocalDate", "MM/yyyy", false)
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(
+          TextFormats.refusal("toFormattedNumber", "total", "java.math.BigDecimal", "BigDecimal", "#.##.0", false)
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a formatted row keyed to a pair the mapper never visits is reported in construction's words")
+    void aFormattedRowOffTheWalkIsReported() {
+      final var compilation = verify(
+        HEAD +
+          """
+          record Other(java.time.LocalDate day) {}
+          record OtherDto(String day) {}
+          class Holder {
+            static final Object M = Telescope.mapper(Src.class, Tgt.class,
+              toFormatted(Src::day, Tgt::day, "dd.MM.yyyy"),
+              toFormattedNumber(Src::total, Tgt::total, "0.00"),
+              toFormatted(Other::day, OtherDto::day, "dd.MM.yyyy"));
+          }
+          """
+      );
+      assertFalse(compilation.success());
+      assertTrue(compilation.hasError("never visits"), compilation::errorMessages);
+      assertTrue(compilation.hasError("Other"), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a pattern known only at run time is left to construction")
+    void aRuntimePatternIsLeftToConstruction() {
+      final var compilation = verify(
+        HEAD +
+          """
+          class Holder {
+            static final String DAY = String.valueOf("MM/yyyy");
+            static final Object M = Telescope.mapper(Src.class, Tgt.class,
+              toFormatted(Src::day, Tgt::day, DAY),
+              toFormattedNumber(Src::total, Tgt::total, "0"));
+          }
+          """
       );
       assertTrue(compilation.success(), compilation::errorMessages);
     }
