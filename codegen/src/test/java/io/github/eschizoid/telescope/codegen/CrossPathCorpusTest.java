@@ -67,6 +67,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.AfterAll;
@@ -454,6 +455,19 @@ class CrossPathCorpusTest {
   private static final int RUN_BOTH_WAYS_FLOOR = 52;
 
   private static final int FIELD_TWIN_CORPUS = 600;
+
+  /** As {@link #bridged}, with {@code generators} run before the bridge processor. */
+  private static ProcessorHarness.Compilation bridgedWith(
+    final List<Processor> generators,
+    final JavaFileObject... sources
+  ) {
+    final var processors = new ArrayList<>(generators);
+    processors.add(new BridgeProcessor());
+    final var processed = ProcessorHarness.compileFully(processors, List.of(), sources);
+    final var warnings = warningsInGenerated(processed);
+    assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    return processed;
+  }
 
   /**
    * {@code sources} compiled with the bridge processor, failing the calling test on any warning
@@ -13712,9 +13726,151 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  private static final String FOCUS = "@io.github.eschizoid.telescope.annotations.Focus\n";
+  private static final String BEAN_FOCUS = "@io.github.eschizoid.telescope.annotations.BeanFocus\n";
+
+  private static final List<NestedPath> NAVIGATOR_PATHS = List.of(
+    new NestedPath(
+      "a source navigator of three steps into flat target properties",
+      false,
+      List.of(
+        FOCUS +
+          sampled(
+            "%1$sSrc",
+            "%1$sOuter customer, int qty",
+            "new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 75), \"L\"), 3)"
+          ),
+        FOCUS + OUTER_INNER,
+        FOCUS + INNER,
+        typedField(
+          false,
+          "to(%1$sSrcTelescope.of().customer().address().city(), %1$sTgt::city)",
+          "to(%1$sSrcTelescope.of().customer().address().zip(), %1$sTgt::zip)"
+        ),
+        sampled("%1$sTgt", "String city, int zip, int qty", "new %1$sTgt(\"R\", 5, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrcTelescope.of().customer().address().city(), %1$sTgt::city)",
+          "to(%1$sSrcTelescope.of().customer().address().zip(), %1$sTgt::zip)"
+        )
+      ),
+      "#0(city=\"P\", zip=75, qty=3)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a target navigator of three steps written from flat source properties, a null object on the way",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String city, int zip, int qty", "new %1$sSrc(\"P\", 75, 3)"),
+        FOCUS + OUTER_INNER,
+        FOCUS + INNER,
+        typedField(
+          false,
+          "to(%1$sSrc::city, %1$sTgtTelescope.of().customer().address().city())",
+          "to(%1$sSrc::zip, %1$sTgtTelescope.of().customer().address().zip())"
+        ),
+        FOCUS + sampled("%1$sTgt", "%1$sOuter customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::city, %1$sTgtTelescope.of().customer().address().city())",
+          "to(%1$sSrc::zip, %1$sTgtTelescope.of().customer().address().zip())"
+        )
+      ),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=\"P\", zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a navigator on each side of a row",
+      false,
+      List.of(
+        FOCUS + sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        FOCUS + MID,
+        typedField(false, "to(%1$sSrcTelescope.of().customer().name(), %1$sTgtTelescope.of().ship().label())"),
+        FOCUS + sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        FOCUS + DOCK,
+        runtimeMapper(false, "", "to(%1$sSrcTelescope.of().customer().name(), %1$sTgtTelescope.of().ship().label())")
+      ),
+      "#0(ship=#1(label=\"n\", n=0), qty=3)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)",
+      "#0(customer=#1(name=\"n\", age=4), qty=1)"
+    ),
+    new NestedPath(
+      "a navigator ended by get() at a navigable property",
+      false,
+      List.of(
+        FOCUS + sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        FOCUS + MID,
+        typedField(false, "to(%1$sSrcTelescope.of().customer().get(), %1$sTgt::buyer)"),
+        sampled("%1$sTgt", "%1$sMid buyer, int qty", "new %1$sTgt(new %1$sMid(\"m\", 7), 1)"),
+        runtimeMapper(false, "", "to(%1$sSrcTelescope.of().customer().get(), %1$sTgt::buyer)")
+      ),
+      "#0(buyer=#1(name=\"n\", age=4), qty=3)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a bean navigator through getters into flat target properties",
+      false,
+      List.of(
+        BEAN_FOCUS +
+          sampledBean(
+            "%1$sSrc",
+            "final var l = new %1$sLine(); l.setSku(\"a\"); l.setCount(3); final var s = new %1$sSrc();" +
+              " s.setLine(l); s.setTotal(2); return s;",
+            "%1$sLine line",
+            "int total"
+          ),
+        BEAN_FOCUS + sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count"),
+        typedField(
+          false,
+          "to(%1$sSrcTelescope.of().line().sku(), %1$sTgt::sku)",
+          "to(%1$sSrcTelescope.of().line().count(), %1$sTgt::count)"
+        ),
+        sampled("%1$sTgt", "String sku, int count, int total", "new %1$sTgt(\"s\", 5, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrcTelescope.of().line().sku(), %1$sTgt::sku)",
+          "to(%1$sSrcTelescope.of().line().count(), %1$sTgt::count)"
+        )
+      ),
+      "#0(sku=\"a\", count=3, total=2)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a row whose path is a generated navigator converts the same way on both paths as the path it stands for"
+  )
+  void aNavigatorPathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NAVIGATOR_PATHS, "Nv", () ->
+      List.of(new FocusProcessor(), new BeanFocusProcessor())
+    );
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
   private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
     throws ReflectiveOperationException {
+    return nestedPathFailures(rows, head, List::of);
+  }
+
+  /**
+   * As {@link #nestedPathFailures(List, String)}, with the processors {@code generators} makes,
+   * fresh for each compile, run on both compiles, as the navigator processors are where the rows
+   * name a navigator they write.
+   */
+  private static List<String> nestedPathFailures(
+    final List<NestedPath> rows,
+    final String head,
+    final Supplier<List<Processor>> generators
+  ) throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : rows) {
@@ -13728,16 +13884,24 @@ class CrossPathCorpusTest {
         .toList();
       // The runtime matches a constructor's parameters to properties by the names -parameters
       // keeps.
+      // A navigator processor gives the field's source a hop through the bridge the field declares,
+      // which only the bridge processor writes, so the runtime's compile leaves the field out.
+      final var navigators = generators.get();
       final var plain = ProcessorHarness.compileFully(
-        List.of(),
+        navigators,
         List.of("-parameters"),
-        all.toArray(JavaFileObject[]::new)
+        all
+          .stream()
+          .filter(file -> navigators.isEmpty() || !file.getName().endsWith("Carrier.java"))
+          .toArray(JavaFileObject[]::new)
       );
       assertTrue(
         plain.success(),
         () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
       );
-      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var processed = navigators.isEmpty()
+        ? bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new))
+        : bridgedWith(generators.get(), all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
       if (!processed.success()) {
         failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
         continue;

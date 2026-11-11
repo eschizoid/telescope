@@ -196,6 +196,86 @@ class PathShorthandBridgeTest {
     assertEquals(messages(chain), messages(shorthand));
   }
 
+  /**
+   * The model with each record a navigator is generated for, and a holder of one field over {@code
+   * rows}.
+   */
+  private static ProcessorHarness.Compilation navigated(final String pair, final String rows) {
+    final var focus = "@io.github.eschizoid.telescope.annotations.Focus ";
+    final var sources = new ArrayList<JavaFileObject>();
+    sources.add(
+      ProcessorHarness.source("ps.Inner", "package ps; " + focus + "public record Inner(String city, int zip) {}")
+    );
+    sources.add(
+      ProcessorHarness.source(
+        "ps.Outer",
+        "package ps; " + focus + "public record Outer(Inner address, String label) {}"
+      )
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Order", "package ps; " + focus + "public record Order(Outer customer, int qty) {}")
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Cart", "package ps; " + focus + "public record Cart(java.util.List<Inner> items) {}")
+    );
+    sources.add(
+      ProcessorHarness.source(
+        "ps.Flat",
+        "package ps; public record Flat(String city, String label, int zip, int qty) {}"
+      )
+    );
+    sources.add(
+      ProcessorHarness.source(
+        "ps.Mappers",
+        HEADER +
+          "public final class Mappers {\n" +
+          "  @Bridge public static final Mapper<" +
+          pair.replace(".class", "") +
+          "> MAPPER = Telescope.mapper(" +
+          pair +
+          ", " +
+          rows +
+          ");\n}\n"
+      )
+    );
+    return ProcessorHarness.compileFully(
+      List.<Processor>of(new FocusProcessor(), new BridgeProcessor(), new MapperVerifierProcessor()),
+      List.of("-Atelescope.verify=warn"),
+      sources.toArray(JavaFileObject[]::new)
+    );
+  }
+
+  @Test
+  @DisplayName("a generated navigator in a row generates exactly what the path(...) it stands for generates")
+  void aNavigatorGeneratesWhatThePathGenerates() {
+    final var navigator = navigated(
+      "Order.class, Flat.class",
+      "to(OrderTelescope.of().customer().label(), Flat::label)," +
+        " to(OrderTelescope.of().customer().address().city(), Flat::city)," +
+        " to(OrderTelescope.of().customer().address().zip(), Flat::zip)"
+    );
+    final var shorthand = navigated(
+      "Order.class, Flat.class",
+      "to(Telescope.path(Order::customer, Outer::label), Flat::label)," +
+        " to(Telescope.path(Order::customer, Outer::address, Inner::city), Flat::city)," +
+        " to(Telescope.path(Order::customer, Outer::address, Inner::zip), Flat::zip)"
+    );
+    assertTrue(navigator.success(), navigator::errorMessages);
+    assertTrue(shorthand.success(), shorthand::errorMessages);
+    for (final var name : List.of("ps.OrderToFlatBridge", "ps.OrderToFlatBridgeProvider")) {
+      assertTrue(shorthand.generated().containsKey(name), () -> shorthand.generated().keySet().toString());
+      assertEquals(shorthand.generated().get(name), navigator.generated().get(name), name);
+    }
+    assertEquals(messages(shorthand), messages(navigator));
+  }
+
+  @Test
+  @DisplayName("a navigator's container step, which reads no property, is refused by name as in a path")
+  void aNavigatorStepReadingNoPropertyIsRefused() {
+    final var refused = navigated("Cart.class, Flat.class", "to(CartTelescope.of().items().each().city(), Flat::city)");
+    assertTrue(refused.hasError("each(...) in a path has no generated form"), refused::errorMessages);
+  }
+
   @Test
   @DisplayName("a row with a path on each side compiles with nothing for the verifier to report")
   void aPathOnEachSideLeavesTheVerifierSilent() {

@@ -199,15 +199,16 @@ builds a null object unless the value is null: a source path writes back on `bac
 `forward`.
 
 **Generated path:** full, all three shapes. A source path into a target property, a source property into a target path,
-and a row with a path on both sides, each path written in place from `Telescope.of` or `Telescope.ofBean`, or as
-`Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads, each object
-read once, and direct calls to each class's accessors and write strategy, and handle a null object on the way as the
-runtime does. A row with a path on both sides reads through the one and writes through the other in each direction the
-mapper converts, after the other paths through the same first property in the order the rows came, and takes no part in
-`patch`, on both paths. Its two paths end at a property of one type, or the row is refused by name. A path held in a
-variable, a generated navigator (the `OrderTelescope.of()` form above, tracked separately), a step other than `field`
-(`filter`, `then`, `fieldByName`) and a lambda step are refused on the row by name. A mapper that writes through a path
-refuses one through a class no write strategy builds, on both paths in the same words.
+and a row with a path on both sides, each path written in place from `Telescope.of` or `Telescope.ofBean`, as
+`Telescope.path(...)`, or as a `@Focus` or `@BeanFocus` navigator's chain (the `OrderTelescope.of()` form above, ended
+by a property or by `get()`), each of which generates the same code as that chain, compile into a null-safe chain of
+reads, each object read once, and direct calls to each class's accessors and write strategy, and handle a null object on
+the way as the runtime does. A row with a path on both sides reads through the one and writes through the other in each
+direction the mapper converts, after the other paths through the same first property in the order the rows came, and
+takes no part in `patch`, on both paths. Its two paths end at a property of one type, or the row is refused by name. A
+path held in a variable, a step other than `field` (`filter`, `then`, `fieldByName`, a navigator's container step or
+bridge hop) and a lambda step are refused on the row by name. A mapper that writes through a path refuses one through a
+class no write strategy builds, on both paths in the same words.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
 (javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
@@ -225,7 +226,10 @@ refusal of every other step) and `pathToPath` (a path on both sides, and the ref
 types); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a row the generated
 bridge cannot express is refused by name' (the path cases) and 'a field reading the source through a path into a target
 path runs its generated bridge, giving what the runtime mapper gives';
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeTest.java</sub>
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeTest.java, including the test 'a
+generated navigator in a row generates exactly what the path(...) it stands for generates';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a row whose path is a
+generated navigator converts the same way on both paths as the path it stands for'</sub>
 
 ### Multiple source parameters
 
