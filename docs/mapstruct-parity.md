@@ -10,9 +10,9 @@ Every row is scored for both of telescope's paths. **Runtime** is the mapper `Te
 `Telescope.mapperForward` build. **Generated** is a `@Bridge static final` mapper field, whose rows the annotation
 processor compiles into a bridge class (ADR-0022), so each conversion is a direct call with no reflection. The two paths
 share one pairing spec, and `CrossPathCorpusTest` holds them to the same result on every row the generated path
-compiles. A row the generated path cannot compile is refused at compile time, on the row, by a message naming it; a row's
-notes name each such refusal that bears on its feature, and the runtime path still runs the row when the field is built
-without `@Bridge`.
+compiles. A row the generated path cannot compile is refused at compile time, on the row, by a message naming it; a
+row's notes name each such refusal that bears on its feature, and the runtime path still runs the row when the field is
+built without `@Bridge`.
 
 **Legend:** ✅ full — the use case is covered, possibly via a different idiom that is no worse · ⚠️ partial — the core
 use case works, with the real limitation stated in the row's notes · ❌ missing — the path has no form for the feature,
@@ -133,15 +133,16 @@ per mapper method, at the cost of broader scope when two usages of the same pair
 properties, and the processor compiles it into the generated bridge. A row on a field is keyed to the field's own pair:
 one naming an accessor of a nested class is refused with "a row keyed to a nested pair has no generated form yet", and a
 rename at a nested pair goes on that pair's own `@Bridge` field, which the outer bridge then converts the nested
-property through. That is the shape of a MapStruct mapper, with one method per nested pair. A converting `to` row, with a `BridgeFn` or a forward and a backward
-method reference, or a `via(...)` row renames and converts one property at once; the generated code is the same direct
-call it is for a property that is not renamed. A fan-out, one source property written into several targets by one `to`
-row each, takes a `mapperForward` field, and its rows convert the property the same way into every target. The strict
-`Telescope.mapper` refuses a fan-out by name on both paths, since `backward` would have no one target to read the
-property back from, and both paths refuse a property one row drops and another writes. A rename onto the target of
-another source property left under its own name is refused by that property's name by a strict bridge and the strict
-`Telescope.mapper`, at any pair with rows of its own and whatever other rows it has, since the property would have
-nowhere to be written; a lenient bridge, like `mapperForward`, leaves it unread instead.
+property through. That is the shape of a MapStruct mapper, with one method per nested pair. A converting `to` row, with
+a `BridgeFn` or a forward and a backward method reference, or a `via(...)` row renames and converts one property at
+once; the generated code is the same direct call it is for a property that is not renamed. A fan-out, one source
+property written into several targets by one `to` row each, takes a `mapperForward` field, and its rows convert the
+property the same way into every target. The strict `Telescope.mapper` refuses a fan-out by name on both paths, since
+`backward` would have no one target to read the property back from, and both paths refuse a property one row drops and
+another writes. A rename onto the target of another source property left under its own name is refused by that
+property's name by a strict bridge and the strict `Telescope.mapper`, at any pair with rows of its own and whatever
+other rows it has, since the property would have nowhere to be written; a lenient bridge, like `mapperForward`, leaves
+it unread instead.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
 (same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
@@ -163,8 +164,8 @@ generated bridge cannot express is refused by name' (the `to(Address::city, Addr
 
 ### Nested source path
 
-**Runtime: ✅ full** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(source = "customer.address.city", target = "city") — dotted path into
-nested source
+**Runtime: ✅ full** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(source = "customer.address.city", target =
+"city") — dotted path into nested source
 
 **telescope:**
 
@@ -198,12 +199,12 @@ A path through `field` steps alone reads a null object on the way as the leaf's 
 builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on
 `forward`.
 
-**Generated path:** partial, because nested -> nested has no generated form. A source path into a target property, and
-a source property into a target path, written in place from `Telescope.of` or `Telescope.ofBean`, or as
+**Generated path:** partial, because nested -> nested has no generated form. A source path into a target property, and a
+source property into a target path, written in place from `Telescope.of` or `Telescope.ofBean`, or as
 `Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads and direct
 calls to each class's accessors and write strategy, and handle a null object on the way as the runtime does. A row with
-a path on both sides is refused with "a row whose source and target are both telescope paths has no generated form
-yet". A path held in a variable, a generated navigator (the `OrderTelescope.of()` form above), a step other than `field`
+a path on both sides is refused with "a row whose source and target are both telescope paths has no generated form yet".
+A path held in a variable, a generated navigator (the `OrderTelescope.of()` form above), a step other than `field`
 (`filter`, `then`, `fieldByName`) and a lambda step are refused on the row by name. A mapper that writes through a path
 refuses one through a class no write strategy builds, on both paths in the same words.
 
@@ -216,16 +217,17 @@ telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Te
 core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java and NestedTargetPathTest.java;
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a row reading the
 source through a path converts the same way on both paths, a null object on the way included' and 'a row writing a
-source property into the target through a path converts the same way on both paths, a null object on the way
-included'; codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `steps` (the paths a field
-compiles, and the refusal of every other step) and `read` of a `to` row (a path on both sides refused);
+source property into the target through a path converts the same way on both paths, a null object on the way included';
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `steps` (the paths a field compiles, and the
+refusal of every other step) and `read` of a `to` row (a path on both sides refused);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a row the generated bridge
 cannot express is refused by name' (the path cases);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeTest.java</sub>
 
 ### Multiple source parameters
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one target built from several sources
+**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one
+target built from several sources
 
 **telescope:**
 
@@ -253,8 +255,8 @@ backward()/patch() throw (MapStruct multi-source is also inherently one-way, so 
 **Generated path:** missing. `Telescope.merge` has no generated form: a `@Bridge` field must be initialised by a
 `Telescope.mapper(...)` or `Telescope.mapperForward(...)` call written in place, and any other initializer is refused
 with that message. The workaround is a record holding the sources, as the source of a `mapperForward` field whose rows
-read each source through a path (`to(path(ProfileSources::audit, Audit::createdBy), Profile::createdBy)`); that keeps the call
-typed, at the cost of one row per property where `merge` backfills by name.
+read each source through a path (`to(path(ProfileSources::audit, Audit::createdBy), Profile::createdBy)`); that keeps
+the call typed, at the cost of one row per property where `merge` backfills by name.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
 javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;
@@ -272,9 +274,9 @@ final, or not a mapper call, is refused by name'</sub>
 
 ### Implicit type conversions
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Automatic conversions between source/target types: primitive<->wrapper
-autoboxing, `String<->number`, `enum<->String`, `date/time<->String`, widening numeric conversions — all silent, no
-declaration needed.
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Automatic conversions between source/target types:
+primitive<->wrapper autoboxing, `String<->number`, `enum<->String`, `date/time<->String`, widening numeric conversions —
+all silent, no declaration needed.
 
 **telescope:**
 
@@ -333,8 +335,9 @@ core/src/test/java/io/github/eschizoid/telescope/BuiltInConversionTest.java; doc
 
 ### Format strings
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(numberFormat = "$#.00") / @Mapping(dateFormat = "dd.MM.yyyy") —
-annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code for both directions.
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(numberFormat = "$#.00") /
+@Mapping(dateFormat = "dd.MM.yyyy") — annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code for
+both directions.
 
 **telescope:**
 
@@ -378,8 +381,9 @@ transform round-trip)</sub>
 
 ### Expressions
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(expression = "java(...)") for computed target values and defaultExpression
-= "java(...)" for lazily-computed null fallbacks; string-templated Java inside an annotation.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(expression = "java(...)") for computed target
+values and defaultExpression = "java(...)" for lazily-computed null fallbacks; string-templated Java inside an
+annotation.
 
 **telescope:**
 
@@ -405,9 +409,8 @@ converts one source field. compute/constant rows are forward-only by design (bac
 `static final` field holding one, and when its function is a method reference taking the source (`Names::display`), a
 method of the source, or a `static final` field holding one, which the generated bridge calls directly; `toOrElseGet`
 and `toOneWay` name theirs the same way. That is MapStruct's expression calling a helper, written as a typed reference.
-An inline lambda, as in the `traceId` row above, is refused on the row, and so is a nested target written as a
-telescope path, as in the `audit().createdAt()` row: a computed value at a nested pair goes on that pair's own `@Bridge`
-field.
+An inline lambda, as in the `traceId` row above, is refused on the row, and so is a nested target written as a telescope
+path, as in the `audit().createdAt()` row: a computed value at a nested pair goes on that pair's own `@Bridge` field.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `compute(Accessor, Supplier)`
 (javadoc names the expression=java(Instant.now()) gap), `compute(Accessor, FromSource)` (a value read from the whole
@@ -425,8 +428,8 @@ codegen/src/test/java/io/github/eschizoid/telescope/codegen/ComputeFromSourceFie
 
 ### Constants and defaults
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(target = "x", constant = "fixed") stamps a literal; @Mapping(target = "x",
-defaultValue = "fallback") substitutes when source is null.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(target = "x", constant = "fixed") stamps a
+literal; @Mapping(target = "x", defaultValue = "fallback") substitutes when source is null.
 
 **telescope:**
 
@@ -452,16 +455,17 @@ public record User(String id, String region) {
 }
 ```
 
-Complete coverage of MapStruct's constants and defaults on both paths, statically typed (constant(OrderDto::apiVersion, 7) is an int, not
-a string literal to parse). The runtime path exceeds MapStruct: predicate-gated toOrElse/toOrElseGet handle empty-string/empty-collection
-'missing' semantics MapStruct's strictly-null defaultValue cannot, and nested-target constants (@Mapping(target="a.b.c",
-constant=...)) work via Telescope paths. Known asymmetries, documented and tested: constant is forward-only (backward
-drops the slot), and a substituted default round-trips backward as itself rather than the original null.
+Complete coverage of MapStruct's constants and defaults on both paths, statically typed
+(constant(OrderDto::apiVersion, 7) is an int, not a string literal to parse). The runtime path exceeds MapStruct:
+predicate-gated toOrElse/toOrElseGet handle empty-string/empty-collection 'missing' semantics MapStruct's strictly-null
+defaultValue cannot, and nested-target constants (@Mapping(target="a.b.c", constant=...)) work via Telescope paths.
+Known asymmetries, documented and tested: constant is forward-only (backward drops the slot), and a substituted default
+round-trips backward as itself rather than the original null.
 
 **Generated path:** a constant or default is a literal or an enum constant, which the bridge writes in place, and
 `toOrElseGet` names its supplier by method reference. That covers MapStruct's surface, whose `constant` is a literal and
-whose `defaultValue` is strict-null. What the runtime adds beyond it does not compile: the predicate-gated `toOrElse` and
-`toOrElseGet` are refused with "toOrElse(...) with a predicate has no generated form yet", a value computed in place
+whose `defaultValue` is strict-null. What the runtime adds beyond it does not compile: the predicate-gated `toOrElse`
+and `toOrElseGet` are refused with "toOrElse(...) with a predicate has no generated form yet", a value computed in place
 (`String.valueOf(1)`) with "a value in a @Bridge mapper must be a literal or an enum constant", and a nested target
 written as a telescope path on the row; a constant at a nested pair goes on that pair's own `@Bridge` field.
 
@@ -484,8 +488,8 @@ codegen/src/test/java/io/github/eschizoid/telescope/codegen/ConstantLiteralEmiss
 
 ### Collection element mapping
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** `List<CarDto>` map(`List<Car>` cars) — generated loop reuses the element mapping
-method automatically
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** `List<CarDto>` map(`List<Car>` cars) — generated loop
+reuses the element mapping method automatically
 
 **telescope:**
 
@@ -516,10 +520,10 @@ concrete class (ArrayList/LinkedList/Deque/...) is honored through the allocatio
 
 **Generated path:** each element pair gets a bridge of its own and the bridge loops over the container, through
 `List<Optional<X>>` and `Map<K, List<X>>` alike; a list and a set reshape into each other, and the container class is
-the one the shared `ContainerAllocation` decides. A `via` row naming the element pair's `@Bridge` field, or a class
-with static `forward` and `backward` methods, converts each element. A `via` row naming a runtime `Mapper` value, as
-`userMapper` above, is refused ("names another @Bridge mapper field"), and the element rename in the first example
-goes on the element pair's own `@Bridge` field, since a row keyed to a nested pair is refused.
+the one the shared `ContainerAllocation` decides. A `via` row naming the element pair's `@Bridge` field, or a class with
+static `forward` and `backward` methods, converts each element. A `via` row naming a runtime `Mapper` value, as
+`userMapper` above, is refused ("names another @Bridge mapper field"), and the element rename in the first example goes
+on the element pair's own `@Bridge` field, since a row keyed to a nested pair is refused.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the class javadoc
 (List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), the LiftContainer branch of
@@ -531,17 +535,17 @@ every field threads through correctly' (element rename fires inside List of List
 `List<Optional<Record>> auto-lifts both layers; empty Optional round-trips`,
 `Map<K, List<Record>> auto-lifts values + list element`, and the `PreBuiltViaMapper` nested class (via(...) lifts
 `Mapper<UserEntity,UserDto>` through a List accessor pair and round-trips, and through a pair declared as the general
-Collection); codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `emitReshapeDirection`
-(a list against a set); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `via` (what a
-`via` row on a `@Bridge` field may name); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java,
+Collection); codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `emitReshapeDirection` (a
+list against a set); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `via` (what a `via` row
+on a `@Bridge` field may name); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java,
 the tests 'a via row naming a class on a List, Set, Optional or Map property converts each element the same way on both
 paths' and 'a container is built the same way on both paths, or refused by both in the same words';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/NestedContainerParityTest.java</sub>
 
 ### Map mapping
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** `Map<String, StringDto>` map(`Map<String, Entity>` m);
-@MapMapping(keyDateFormat/valueDateFormat/keyQualifiedBy/valueQualifiedBy)
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** `Map<String, StringDto>` map(`Map<String, Entity>`
+m); @MapMapping(keyDateFormat/valueDateFormat/keyQualifiedBy/valueQualifiedBy)
 
 **telescope:**
 
@@ -590,8 +594,8 @@ paths'; codegen/src/test/java/io/github/eschizoid/telescope/codegen/SortedMapKey
 
 ### Collection target strategies
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY / SETTER_PREFERRED / ADDER_PREFERRED /
-TARGET_IMMUTABLE; @MappingTarget updates an existing target's collections
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY /
+SETTER_PREFERRED / ADDER_PREFERRED / TARGET_IMMUTABLE; @MappingTarget updates an existing target's collections
 
 **telescope:**
 
@@ -622,10 +626,10 @@ rejects record targets.
 **Generated path:** partial for the same reasons. Fresh allocation follows the same `ContainerAllocation`, and a strict
 bridge over a bean target gets an `into` of its own, which replaces each collection through its setter as the runtime
 `into` does; where the bridge has no `into`, the field's mapper runs the runtime one. A `writeBean` hint keyed to the
-pair's own source or target compiles. Two hints in the example above do not: a `writeBean` keyed to a class that is neither side and that no path of the rows steps through is
-refused ("a nested pair the generated bridge has no hint for yet"), and a `writeBeans` default that reaches a bean
-below the pair is refused, since the generated bridge builds that pair through a bridge of its own. Either goes on the
-nested pair's own `@Bridge` field, with its own hint.
+pair's own source or target compiles. Two hints in the example above do not: a `writeBean` keyed to a class that is
+neither side and that no path of the rows steps through is refused ("a nested pair the generated bridge has no hint for
+yet"), and a `writeBeans` default that reaches a bean below the pair is refused, since the generated bridge builds that
+pair through a bridge of its own. Either goes on the nested pair's own `@Bridge` field, with its own hint.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; setter-based, records rejected, two-phase staged writes);
@@ -641,17 +645,17 @@ core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeB
 BUILDER/SETTERS/CONSTRUCTOR — no ADDER; a grep for 'adder' across core/, internal/ and codegen/ finds only the word
 'ladder' (no adder support anywhere); codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
 `intoStatements` and `emitInto` (the generated `into`, written for a strict bridge only) and `beanBelowDefault` (a
-`writeBeans` default reaching a nested bean refused); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java,
-`hintsOffThePair` (a `writeBean` keyed elsewhere refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/WriteHintRowTest.java, the tests 'a write hint on a @Bridge
-field rebuilds the side it names as the runtime path does', 'a writeBean keyed to a class other than the pair's sides is
-refused by name' and 'a writeBeans default reaching a bean below records or through sealed cases is refused by
-name'</sub>
+`writeBeans` default reaching a nested bean refused);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `hintsOffThePair` (a `writeBean` keyed
+elsewhere refused); codegen/src/test/java/io/github/eschizoid/telescope/codegen/WriteHintRowTest.java, the tests 'a
+write hint on a @Bridge field rebuilds the side it names as the runtime path does', 'a writeBean keyed to a class other
+than the pair's sides is refused by name' and 'a writeBeans default reaching a bean below records or through sealed
+cases is refused by name'</sub>
 
 ### Stream support
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** `List<CarDto>` map(`Stream<Car>` cars) — generated terminal collect;
-Stream-typed sources/targets in mapper signatures
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** `List<CarDto>` map(`Stream<Car>` cars) — generated
+terminal collect; Stream-typed sources/targets in mapper signatures
 
 **telescope:**
 
@@ -687,8 +691,8 @@ component pair decided through the same `PairingRules`)</sub>
 
 ### Before/after hooks
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @BeforeMapping / @AfterMapping callback methods invoked around the generated
-mapping
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @BeforeMapping / @AfterMapping callback methods invoked
+around the generated mapping
 
 **telescope:**
 
@@ -733,8 +737,8 @@ that is not static final, or not a mapper call, is refused by name'</sub>
 
 ### Context parameters
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Context param threaded through nested mappings without being mapped itself
-(e.g. Locale, cycle-tracking)
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Context param threaded through nested mappings
+without being mapped itself (e.g. Locale, cycle-tracking)
 
 **telescope:**
 
@@ -785,13 +789,13 @@ leads back to an object being converted maps to the same shape on both paths' (s
 cycles, cycles through a List, a nested List, a container subtype and an Optional, forward, backward and patch);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
 (typed-transform row where a closure captures context);
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (an inline lambda refused on
-the row) and `call` (a converter is a method reference the bridge can name)</sub>
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (an inline lambda refused on the
+row) and `call` (a converter is a method reference the bridge can name)</sub>
 
 ### Qualifiers
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Named("formatter") / custom @Qualifier to pick between multiple candidate mapping
-methods for the same type pair
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Named("formatter") / custom @Qualifier to pick between
+multiple candidate mapping methods for the same type pair
 
 **telescope:**
 
@@ -813,17 +817,16 @@ public record UserEntity(String id, Instant expiresAt, Instant createdAt) {
 ```
 
 The ambiguity qualifiers solve doesn't arise at runtime: each row names its converter/mapper by reference, resolved by
-javac — safer than @Named string matching. One corner: the DI
-TelescopeMapperRegistry allows one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same
-pair has to be wrapped in your own type or built where it's used. On Spring, a bean declared with
-`@Bean(defaultCandidate = false)` also stays out of the registry, and on Quarkus so does a `@DefaultBean` one while
-another `Mapper` bean exists.
+javac — safer than @Named string matching. One corner: the DI TelescopeMapperRegistry allows one `Mapper` bean per (src,
+tgt) pair, qualified or not. A second mapper for the same pair has to be wrapped in your own type or built where it's
+used. On Spring, a bean declared with `@Bean(defaultCandidate = false)` also stays out of the registry, and on Quarkus
+so does a `@DefaultBean` one while another `Mapper` bean exists.
 
-**Generated path:** a `@Bridge` field names its helper methods the same way, as in the second example, and the
-generated bridge calls each one directly or through a small generated class; a `toOneWay` row is forward-only (same
-asymmetry as a single MapStruct qualified method), and `to(src, tgt, Helper::format, Helper::parse)` names both
-directions. The per-row mapper value of the first example is a `via` row naming another `@Bridge` field or a class with
-static `forward` and `backward` methods; a runtime `Mapper` value is refused on the row.
+**Generated path:** a `@Bridge` field names its helper methods the same way, as in the second example, and the generated
+bridge calls each one directly or through a small generated class; a `toOneWay` row is forward-only (same asymmetry as a
+single MapStruct qualified method), and `to(src, tgt, Helper::format, Helper::parse)` names both directions. The per-row
+mapper value of the first example is a `via` row naming another `@Bridge` field or a class with static `forward` and
+`backward` methods; a runtime `Mapper` value is refused on the row.
 
 <sub>Evidence: codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a converter a `@Bridge` field
 names by method reference is called from a small generated class, and `via` names what a `via` row may name);
@@ -835,8 +838,8 @@ second mapper out of the registry)</sub>
 
 ### Mapper composition
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapper(uses = OtherMapper.class) — delegating nested type conversions to other
-mappers or static helper methods
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapper(uses = OtherMapper.class) — delegating nested
+type conversions to other mappers or static helper methods
 
 **telescope:**
 
@@ -889,15 +892,15 @@ declares converts through that field's bridge);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a field mapped through a
 bridge the same compilation generates converts the same way on both paths';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a via row naming a class
-converts the same on both paths' and 'a row the generated bridge cannot express is refused by name' (a `via` row naming a
-runtime mapper)</sub>
+converts the same on both paths' and 'a row the generated bridge cannot express is refused by name' (a `via` row naming
+a runtime mapper)</sub>
 
 ## Object creation & update
 
 ### In-place update methods
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** void update(@MappingTarget Entity target, Dto source) — mutate an existing bean
-instead of constructing a fresh one
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** void update(@MappingTarget Entity target, Dto source) —
+mutate an existing bean instead of constructing a fresh one
 
 **telescope:**
 
@@ -925,8 +928,8 @@ bean built through its setters, since forward would drop the value as well, and 
 by a builder or a constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives
 null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config.
 
-**Generated path:** a strict `@Bridge` whose target is a bean with a setter for every property it writes gets a
-static `into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
+**Generated path:** a strict `@Bridge` whose target is a bean with a setter for every property it writes gets a static
+`into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
 subclass, whose own setters may take a value differently, goes to the runtime `into`. `explain()` says so. It writes
 what the runtime `into` writes: each property takes the value `forward(source)` gives it, read back through its getter,
 every value read before the first setter runs, each written through the setter the runtime chooses from the property's
@@ -953,8 +956,9 @@ into'</sub>
 
 ### Object factories
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @ObjectFactory — a user method that instantiates the target (custom constructor
-args, EntityManager lookup, DI-provided instance) which the generated mapper then populates
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @ObjectFactory — a user method that instantiates
+the target (custom constructor args, EntityManager lookup, DI-provided instance) which the generated mapper then
+populates
 
 **telescope:**
 
@@ -990,14 +994,15 @@ overload); core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBui
 `from(Class)` (the from/to/using escape hatch); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java,
 `into(Object, Object)` (covers the load-existing-instance use case); no ObjectFactory counterpart exists anywhere in the
 main source sets; codegen/src/test/java/io/github/eschizoid/telescope/codegen/WriteHintRowTest.java, the tests 'a write
-hint on a @Bridge field rebuilds the side it names as the runtime path does' and 'a writeBean keyed to a class other than
-the pair's sides is refused by name'; codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java,
-the test 'a @Bridge field's mapper writes into the target through the generated bridge's own into'</sub>
+hint on a @Bridge field rebuilds the side it names as the runtime path does' and 'a writeBean keyed to a class other
+than the pair's sides is refused by name';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a @Bridge field's mapper
+writes into the target through the generated bridge's own into'</sub>
 
 ### Builder support
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Auto-detected builder(): Immutables, Lombok @Builder, protobuf builders;
-customizable via BuilderProvider SPI and @Builder(builderMethod=...)
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Auto-detected builder(): Immutables, Lombok
+@Builder, protobuf builders; customizable via BuilderProvider SPI and @Builder(builderMethod=...)
 
 **telescope:**
 
@@ -1037,13 +1042,14 @@ core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java — the 
 lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java (@Builder fixture) and
 LombokFocusProcessorTest.java (@Builder and @Value+@Builder navigators verified end-to-end);
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java — the `WriteHints` nested class (writeBean
-BUILDER/SETTERS/CONSTRUCTOR hint tests); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BeanRebuildPrecedenceTest.java
-and BeanRebuildCorpusTest.java (the generated rebuild takes the runtime's strategy)</sub>
+BUILDER/SETTERS/CONSTRUCTOR hint tests);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BeanRebuildPrecedenceTest.java and
+BeanRebuildCorpusTest.java (the generated rebuild takes the runtime's strategy)</sub>
 
 ### Records and constructor mapping
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Constructor-based target population for records and immutable classes
-(parameter-name matching, @Default constructor selection)
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** Constructor-based target population for records and
+immutable classes (parameter-name matching, @Default constructor selection)
 
 **telescope:**
 
@@ -1090,16 +1096,18 @@ docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, th
 the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested record mapper), and the
 `WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip', 'autoWriter constructor
 fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws cleanly for ambiguous
-multi-ctor POJO when no hint is supplied'; codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java,
-the tests 'a pair out of the generated path's reach is a registered limit of it, which the runtime passes' (the
-`GENERATED_PATH_LIMITS` register) and 'a target reachable only through a narrower-than-public member is built the same
-way on both paths'; docs/adr/0019-runtime-and-generated-path-agreement.md</sub>
+multi-ctor POJO when no hint is supplied';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a pair out of the
+generated path's reach is a registered limit of it, which the runtime passes' (the `GENERATED_PATH_LIMITS` register) and
+'a target reachable only through a narrower-than-public member is built the same way on both paths';
+docs/adr/0019-runtime-and-generated-path-agreement.md</sub>
 
 ## Policies & null handling
 
 ### Unmapped-target policy
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** unmappedTargetPolicy = ERROR/WARN/IGNORE at @Mapper or @MapperConfig level
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** unmappedTargetPolicy = ERROR/WARN/IGNORE at @Mapper or
+@MapperConfig level
 
 **telescope:**
 
@@ -1140,15 +1148,15 @@ codegen/src/main/java/io/github/eschizoid/telescope/codegen/MapperVerifierProces
 ('-Atelescope.verify=error|warn|off (default error)', '@UncheckedMapping("reason")'), `init` (mode ->
 Diagnostic.Kind.ERROR/WARNING/off), and `verifyPairCall` (unmatchedTargets/unmatchedSources reported);
 docs/adr/0012-compile-time-mapper-verification.md;
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a strict mapper refuses a
-property nothing pairs with whatever other rows it has, in the same words on both paths';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a strict mapper refuses
+a property nothing pairs with whatever other rows it has, in the same words on both paths';
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `drop` (the form keyed to a nested pair
 refused)</sub>
 
 ### Null value strategies
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** nullValueMappingStrategy / nullValuePropertyMappingStrategy (RETURN_NULL vs
-RETURN_DEFAULT, SET_TO_NULL vs IGNORE on update)
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** nullValueMappingStrategy /
+nullValuePropertyMappingStrategy (RETURN_NULL vs RETURN_DEFAULT, SET_TO_NULL vs IGNORE on update)
 
 **telescope:**
 
@@ -1196,18 +1204,18 @@ core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forwar
 RETURN_NULL) and `patch` ('overlay the non-null fields of partial ... leaving the rest of base untouched');
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, the `toOrElse` / `toOrElseGet` overloads
 (per-field defaults); core/src/test/java/io/github/eschizoid/telescope/NullStrategyTest.java, every nested class
-(PROPAGATE default, DEFAULT substitution for String/wrappers/BigDecimal/collections, bean targets,
-backward-unchanged); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (a call
-that is neither a `Mapping` row nor a `WriteHint` hint, `nullSourceValues` among them, is refused as not a row a
-`@Bridge` mapper compiles); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a
-field's mapper is the class generated for it, each direction one call into the bridge' (`forward(null)` and `patch` on
-the field's mapper); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a
-patch whose partial changes nothing returns a new object on both paths'</sub>
+(PROPAGATE default, DEFAULT substitution for String/wrappers/BigDecimal/collections, bean targets, backward-unchanged);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (a call that is neither a
+`Mapping` row nor a `WriteHint` hint, `nullSourceValues` among them, is refused as not a row a `@Bridge` mapper
+compiles); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a field's mapper
+is the class generated for it, each direction one call into the bridge' (`forward(null)` and `patch` on the field's
+mapper); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a patch whose
+partial changes nothing returns a new object on both paths'</sub>
 
 ### Null check strategy
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** nullValueCheckStrategy = ALWAYS — guard every property read before
-conversion/setter
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** nullValueCheckStrategy = ALWAYS — guard every
+property read before conversion/setter
 
 **telescope:**
 
@@ -1250,12 +1258,13 @@ which does not wrap); internal/src/main/java/io/github/eschizoid/telescope/inter
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, the predicate-gated `toOrElse` and `toOrElseGet`
 (null-short-circuit before user predicates fire);
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `applyForward` (the `TRANSFORM` branch
-calls the converter on the value it reads);
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `orElse` (the strict-null default)</sub>
+calls the converter on the value it reads); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java,
+`orElse` (the strict-null default)</sub>
 
 ### Conditional mapping
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** @Condition presence-check methods (e.g. only map non-blank strings)
+**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** @Condition presence-check methods (e.g. only map
+non-blank strings)
 
 **telescope:**
 
@@ -1307,8 +1316,8 @@ cannot express is refused by name' (the `when` and predicate-gated `toOrElse` ca
 
 ### Config inheritance
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @InheritConfiguration reuses a base @Mapping set on a sibling method;
-@InheritInverseConfiguration derives the reverse method from the forward one.
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @InheritConfiguration reuses a base @Mapping set on
+a sibling method; @InheritInverseConfiguration derives the reverse method from the forward one.
 
 **telescope:**
 
@@ -1333,11 +1342,11 @@ across DTO variants of different pairs — but a group inherited into a foreign 
 naming the unreachable pair and its rows, instead of being silently dropped. Declare a per-variant group typed against
 the variant.
 
-**Generated path:** partial, covering only the inverse half: a strict `@Bridge` field generates `backward` from the
-same rows. A row group cannot be shared, because the processor reads rows from the field's own factory call: a row held
-in a variable or an array, such as `AUDIT_COLUMNS`, is refused with "a @Bridge mapper compiles only rows written in
-place as a Mapping factory call", and `mapperBuilder(...)` is not an initializer a `@Bridge` field takes. Each field
-repeats the shared rows in place.
+**Generated path:** partial, covering only the inverse half: a strict `@Bridge` field generates `backward` from the same
+rows. A row group cannot be shared, because the processor reads rows from the field's own factory call: a row held in a
+variable or an array, such as `AUDIT_COLUMNS`, is refused with "a @Bridge mapper compiles only rows written in place as
+a Mapping factory call", and `mapperBuilder(...)` is not an initializer a `@Bridge` field takes. Each field repeats the
+shared rows in place.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java, the class javadoc
 ("Closes MapStruct's @InheritConfiguration", and 'Row groups bind to their type pair'), `inherit`, and `build`
@@ -1356,8 +1365,8 @@ cannot express is refused by name' (the `Rows.ID` case, a row held in a field)</
 
 ### Decorators
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @DecoratedWith(CustomDecorator.class) — an abstract decorator class wraps the
-generated mapper, overriding selected methods and delegating to the injected original.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @DecoratedWith(CustomDecorator.class) — an abstract
+decorator class wraps the generated mapper, overriding selected methods and delegating to the injected original.
 
 **telescope:**
 
@@ -1393,8 +1402,8 @@ class generated for it, each direction one call into the bridge' (a hook on the 
 
 ### DI component models
 
-**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** componentModel = "spring" / "cdi" / "jakarta" annotates the generated mapper impl
-so it is discovered as an injectable bean.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** componentModel = "spring" / "cdi" / "jakarta" annotates
+the generated mapper impl so it is discovered as an injectable bean.
 
 **telescope:**
 
@@ -1421,10 +1430,10 @@ registry is built; telescope.registry.fail-fast decides whether a lookup for an 
 null). Caveat: there is no dedicated plain-Jakarta-EE/jsr330 module — the Quarkus module's auto-collection uses ArC's
 @All — but a Mapper is an ordinary object producible from a standard CDI @Produces method in any container.
 
-**Generated path:** a `@Bridge` field's mapper is a `Mapper` value too, so `@Bean Mapper<UserEntity, UserDto>
-userMapper() { return UserMappers.DTO; }` registers the generated mapper, in the registry included. On Spring, a
-`@TelescopeMapper` interface is implemented by a generated `@Component` that calls the source's generated bridge when
-one exists.
+**Generated path:** a `@Bridge` field's mapper is a `Mapper` value too, so
+`@Bean Mapper<UserEntity, UserDto> userMapper() { return UserMappers.DTO; }` registers the generated mapper, in the
+registry included. On Spring, a `@TelescopeMapper` interface is implemented by a generated `@Component` that calls the
+source's generated bridge when one exists.
 
 <sub>Evidence: spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeAutoConfiguration.java,
 `telescopeMapperRegistry` (@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; the class javadoc
@@ -1442,8 +1451,9 @@ mapper and a projection written a round after a carrier find the carrier's bridg
 
 ### Enum mapping
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @ValueMapping(source = "X", target = "Y") per-constant renames with
-ANY_REMAINING/ANY_UNMAPPED defaults; @EnumMapping name-transformation strategies (prefix/suffix/case).
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @ValueMapping(source = "X", target = "Y")
+per-constant renames with ANY_REMAINING/ANY_UNMAPPED defaults; @EnumMapping name-transformation strategies
+(prefix/suffix/case).
 
 **telescope:**
 
@@ -1501,8 +1511,9 @@ by its types)</sub>
 
 ### Subclass mapping
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @SubclassMapping(source = Sub.class, target = SubDto.class) — polymorphic
-dispatch over an abstract/sealed source hierarchy, inheriting the parent method's mapping config.
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @SubclassMapping(source = Sub.class, target =
+SubDto.class) — polymorphic dispatch over an abstract/sealed source hierarchy, inheriting the parent method's mapping
+config.
 
 **telescope:**
 
@@ -1548,8 +1559,8 @@ hatch — no exhaustiveness check'; codegen/src/main/java/io/github/eschizoid/te
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeProcessorTest.java, the nested class 'Sealed roots —
 pattern-match dispatch over per-case bridges' (asserts the emitted `.when(...)` arms and `.exhaustive()`); README.md,
 "When MapStruct is the right pick" (the `@SubclassMapping` bullet);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/SealedInterfaceRowAgreementTest.java, the nested class 'A row
-keyed to the two sealed interfaces applies to every pair of their cases' (the runtime) and the test 'a @Bridge field on a
-sealed interface whose rows set how properties convert is refused by name' (the generated path);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/SealedInterfaceRowAgreementTest.java, the nested class 'A
+row keyed to the two sealed interfaces applies to every pair of their cases' (the runtime) and the test 'a @Bridge field
+on a sealed interface whose rows set how properties convert is refused by name' (the generated path);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'two sealed interfaces
 convert case by case to the same result on both paths, at the root and below it'</sub>
