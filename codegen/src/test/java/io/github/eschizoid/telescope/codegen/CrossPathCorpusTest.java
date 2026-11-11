@@ -12787,6 +12787,62 @@ class CrossPathCorpusTest {
       "#0(customer=#1(name=\"a\", age=4), nick=\"m\", qty=1)"
     ),
     new NestedPath(
+      "a path out of a property another row renames, which backward writes over",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, %1$sMid>to(%1$sSrc::customer, %1$sTgt::buyer)",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"
+        ),
+        sampled(
+          "%1$sTgt",
+          "%1$sMid buyer, %1$sDock ship, int qty",
+          "new %1$sTgt(new %1$sMid(\"m\", 7), new %1$sDock(\"k\", 5), 1)"
+        ),
+        DOCK,
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, %1$sMid>to(%1$sSrc::customer, %1$sTgt::buyer)",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"
+        )
+      ),
+      "#0(buyer=#1(name=\"n\", age=4), ship=#2(label=\"n\", n=0), qty=3)",
+      "#0(customer=#1(name=\"k\", age=7), qty=1)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a property read back through a target path, with a source path through it written over that",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        "public record %1$sHolder(%1$sMid mid) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::customer, " + pathOf("of", "%1$sTgt", "%1$sTgt::holder", "%1$sHolder::mid") + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::label)"
+        ),
+        sampled(
+          "%1$sTgt",
+          "%1$sHolder holder, String label, int qty",
+          "new %1$sTgt(new %1$sHolder(new %1$sMid(\"m\", 7)), \"z\", 1)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::customer, " + pathOf("of", "%1$sTgt", "%1$sTgt::holder", "%1$sHolder::mid") + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::label)"
+        )
+      ),
+      "#0(holder=#1(mid=#2(name=\"n\", age=4)), label=\"n\", qty=3)",
+      "#0(customer=#1(name=\"z\", age=7), qty=1)",
+      "#0(customer=#1(name=\"z\", age=7), qty=1)"
+    ),
+    new NestedPath(
       "a forward-only path into a path",
       true,
       List.of(
@@ -12823,6 +12879,8 @@ class CrossPathCorpusTest {
     "  public static boolean negative(final Integer n) { return n < 0; }\n" +
     "  public static String k() { return \"k\"; }\n" +
     "  public static Integer zero() { return 0; }\n" +
+    "  public static final %1$sHelp INSTANCE = new %1$sHelp();\n" +
+    "  public boolean accepts(final Object o) { return true; }\n" +
     "  public static String full(final %1$sSrc s) { return s.a() + \"!\"; }\n" +
     "}\n";
 
@@ -12869,6 +12927,70 @@ class CrossPathCorpusTest {
       "#0(a=\"a\", c=\"k\")",
       "#0(a=\"x\", c=\"y\")",
       "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant under a predicate that is a method of a static final field",
+      false,
+      flatGated(false, gated("%1$sHelp.INSTANCE::accepts", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant over a namesake a drop row reads, under a predicate the source fails",
+      false,
+      flatGated(
+        false,
+        "<%1$sSrc, %1$sTgt>drop(%1$sSrc::c)",
+        gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")
+      ),
+      "#0(a=\"a\", c=null)",
+      "#0(a=\"x\", c=null)",
+      "#0(a=\"x\", c=\"c\")"
+    ),
+    new NestedPath(
+      "a source path into a namesake a drop row reads, under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, String label", "new %1$sSrc(new %1$sMid(\"n\", 4), \"l\")"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"m\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::label)",
+          gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::label)",
+          gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")
+        )
+      ),
+      "#0(label=null)",
+      "#0(customer=null, label=null)",
+      "#0(customer=#1(name=\"n\", age=4), label=\"l\")"
+    ),
+    new NestedPath(
+      "a value supplied into a record of values no write strategy allocates, under a predicate the source fails",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public class %1$sHeld {\n  private %1$sHeld(final String v) {}\n}\n",
+        "public record %1$sRec(String[] names, java.util.List<String> tags, java.time.LocalDate day, %1$sHeld held," +
+          " double rate) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return null; }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=#1(names=null, tags=null, day=null, held=null, rate=0.0))",
+      null,
+      null
     ),
     new NestedPath(
       "a value computed from the source under a predicate the source passes",
@@ -13391,6 +13513,43 @@ class CrossPathCorpusTest {
       ),
       null,
       PairingMessages.mergeAutoTypesDiffer(1, "%1$sCustomer", "createdAt", "class java.lang.String", "long")
+    ),
+    new MergeCase(
+      "a backfill matching a name of two parameterized types, refused naming each as the runtime names it",
+      merging(
+        List.of(
+          "public record %1$sCustomer(java.util.List<java.util.List<String>> xs) {}\n",
+          "public record %1$sTgt(java.util.List<java.util.Set<? extends Number>> xs) {}\n"
+        ),
+        "",
+        "",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(
+        0,
+        "%1$sCustomer",
+        "xs",
+        "java.util.List<java.util.List<java.lang.String>>",
+        "java.util.List<java.util.Set<? extends java.lang.Number>>"
+      )
+    ),
+    new MergeCase(
+      "a backfill matching a name of an interface and a class, refused naming each as the runtime names it",
+      merging(
+        List.of("public record %1$sCustomer(Runnable r) {}\n", "public record %1$sTgt(Object r) {}\n"),
+        "",
+        "",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(
+        0,
+        "%1$sCustomer",
+        "r",
+        "interface java.lang.Runnable",
+        "class java.lang.Object"
+      )
     ),
     new MergeCase(
       "a row writing a component an earlier row writes, refused in the same words",

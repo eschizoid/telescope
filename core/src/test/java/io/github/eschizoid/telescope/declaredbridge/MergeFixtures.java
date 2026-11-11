@@ -51,7 +51,10 @@ public final class MergeFixtures {
     }
   );
 
-  /** The rows the bridge was generated from: {@code auto(Customer.class)}, then {@code from(Audit::by, ...)}. */
+  /**
+   * The rows the bridge was generated from: {@code auto(Customer.class)}, then {@code
+   * from(Audit::by, ...)}.
+   */
   private static final List<String> KINDS = List.of("AutoSameName", "FromInferred");
 
   private static final List<String> ACCESSORS = List.of(Customer.class.getName() + ">", "by>by");
@@ -92,7 +95,9 @@ public final class MergeFixtures {
     );
   }
 
-  /** The provider of a merge field declared by {@code declaring}, generated from the bridge's rows. */
+  /**
+   * The provider of a merge field declared by {@code declaring}, generated from the bridge's rows.
+   */
   private abstract static class Provider implements BridgeProvider {
 
     @Override

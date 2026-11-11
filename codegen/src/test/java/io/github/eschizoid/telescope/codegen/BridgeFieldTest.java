@@ -513,10 +513,10 @@ class BridgeFieldTest {
     }
   }
 
-  @ParameterizedTest(name = "{0}")
+  @ParameterizedTest(name = "{1}")
   @MethodSource("mergeRefusals")
   @DisplayName("a merge field the generated bridge cannot build is refused by name")
-  void aMergeTheBridgeCannotBuildIsRefused(final String target, final String rows, final String message) {
+  void aMergeTheBridgeCannotBuildIsRefused(final String target, final String args, final String message) {
     final var c = compile(
       sources(
         "fb.MergedCustomer",
@@ -525,34 +525,109 @@ class BridgeFieldTest {
         "package fb; " + target,
         "fb.MergeMappers",
         HEADER +
+          "import static io.github.eschizoid.telescope.mapping.MergeStep.*;\n" +
           "public final class MergeMappers {\n" +
+          "  static final Class<MergedCustomer> CUSTOMER = MergedCustomer.class;\n" +
+          "  static final io.github.eschizoid.telescope.mapping.MergeStep<MergedTarget> STEP = auto(MergedCustomer.class);\n" +
           "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedTarget> TARGET =" +
-          " Telescope.merge(MergedTarget.class, " +
-          rows +
-          ");\n}\n"
+          " Telescope.merge(" +
+          args +
+          ");\n}\n",
+        "fb.OtherMerge",
+        HEADER +
+          "public final class OtherMerge {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedTarget> TARGET =" +
+          " Telescope.merge(MergedTarget.class," +
+          " io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class));\n}\n"
       )
     );
     assertFalse(c.success(), "the merge must be refused");
     assertTrue(c.hasError(message), c::errorMessages);
   }
 
+  @Test
+  @DisplayName("a merge's typed forward names each source by its class, kept clear of keywords and of each other")
+  void aMergesTypedForwardNamesEachSource() {
+    final var c = compile(
+      sources(
+        "fb.Default",
+        "package fb; public record Default(String id) {}",
+        "fb.Sources",
+        "package fb; public record Sources(String name) {}",
+        "fb.a.Item",
+        "package fb.a; public record Item(String sku) {}",
+        "fb.b.Item",
+        "package fb.b; public record Item(String count) {}",
+        "fb.Named",
+        "package fb; public record Named(String id, String name, String sku, String count) {}",
+        "fb.NamedMappers",
+        HEADER +
+          "import static io.github.eschizoid.telescope.mapping.MergeStep.*;\n" +
+          "public final class NamedMappers {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, Named> NAMED = Telescope.merge(" +
+          "Named.class, auto(Default.class), auto(fb.Sources.class), auto(fb.a.Item.class), auto(fb.b.Item.class));\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var bridge = c.generated().get("fb.SourcesToNamedBridge");
+    assertTrue(
+      bridge.contains(
+        "forward(final fb.Default defaultSource, final fb.Sources sourcesSource, final fb.a.Item item," +
+          " final fb.b.Item item3)"
+      ),
+      bridge
+    );
+  }
+
   static List<String[]> mergeRefusals() {
-    final var auto = "io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class)";
+    final var record = "public record MergedTarget(String id) {}";
     return List.of(
       new String[] {
         "public class MergedTarget { public String getId() { return null; } public void setId(String v) {} }",
-        auto,
+        "MergedTarget.class, auto(MergedCustomer.class)",
         "a @Bridge merge builds a public record, and MergedTarget is not one",
       },
       new String[] {
+        "record MergedTarget(String id) {}",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge builds a public record, and MergedTarget is not one",
+      },
+      new String[] {
+        "public record MergedTarget<T>(String id) {}",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge builds a record that declares no type parameters",
+      },
+      new String[] {
         "public record MergedTarget(String id, int count) {}",
-        auto,
+        "MergedTarget.class, auto(MergedCustomer.class)",
         "a @Bridge merge writes no row into the primitive component 'count' of MergedTarget",
       },
       new String[] {
-        "public record MergedTarget(String id) {}",
-        "io.github.eschizoid.telescope.mapping.MergeStep.from(MergedCustomer::id, (MergedTarget t) -> t.id())",
+        record,
+        "MergedTarget.class, from(MergedCustomer::id, (MergedTarget t) -> t.id())",
         "a @Bridge merge compiles from(...) of two method references",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, STEP",
+        "a @Bridge merge compiles only rows written in place as MergeStep.from",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, auto(CUSTOMER)",
+        "a @Bridge merge compiles auto(...) of a class literal",
+      },
+      new String[] {
+        "public record MergedTarget(Integer id) {}",
+        "MergedTarget.class, MergeStep.<MergedCustomer, MergedTarget, Object>from(MergedCustomer::id, MergedTarget::id)",
+        "the merge row at index 0 reads java.lang.String, which the component 'id' of MergedTarget does not hold",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "declares a second merge into MergedTarget in package 'fb', whose bridge SourcesToMergedTargetBridge another" +
+        " field already declares",
       }
     );
   }
@@ -610,6 +685,51 @@ class BridgeFieldTest {
       new String[] {
         "when(User::isAdmin, toOneWay(User::name, UserDto::name, Conv::trim))",
         PairingMessages.whenWrapsOnly("ForwardOnlyTransformTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, Rows.ID)",
+        "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call",
+      },
+      new String[] {
+        "when(User::isAdmin, Rows.make())",
+        "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call",
+      },
+      new String[] {
+        "when(User::isAdmin, to(User::name, UserDto::name, Conv::trim, Conv::pad))",
+        PairingMessages.whenWrapsOnly("TypedTransformTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, toOrElse(User::nick, UserDto::nick, \"a\"))",
+        PairingMessages.whenWrapsOnly("TypedTransformTo", "nick", "nick"),
+      },
+      new String[] {
+        "when(User::isAdmin, via(User::address, UserDto::address, Rows.SAME))",
+        PairingMessages.whenWrapsOnly("Via", "address", "address"),
+      },
+      new String[] {
+        "when(User::isAdmin, via(User::address, UserDto::address, Conv.class))",
+        PairingMessages.whenWrapsOnly("ViaClass", "address", "address"),
+      },
+      new String[] {
+        "when(User::isAdmin, zip(Telescope.path(User::address, Address::city)," +
+        " Telescope.path(UserDto::address, Address::city)))",
+        "zip(...) has no generated form yet",
+      },
+      new String[] {
+        "when(Rows.pred(), constant(UserDto::kind, \"a\"))",
+        "a @Bridge mapper tests a predicate written as a method reference",
+      },
+      new String[] {
+        "when(HIDDEN_TEST, constant(UserDto::kind, \"a\"))",
+        "Mappers.HIDDEN_TEST cannot be called from the generated bridge in package 'fb'",
+      },
+      new String[] {
+        "when(Mappers::secretly, constant(UserDto::kind, \"a\"))",
+        "Mappers.secretly cannot be called from the generated bridge in package 'fb'",
+      },
+      new String[] {
+        "to(Telescope.path(UserDto::handle, Handle::value), Telescope.path(UserDto::handle, Handle::value))",
+        "this path starts at UserDto, which is not User or a class it extends",
       },
       new String[] {
         "when(User::isAdmin, when(User::isAdmin, constant(UserDto::kind, \"a\")))",
@@ -779,6 +899,9 @@ class BridgeFieldTest {
           "  @SuppressWarnings(\"rawtypes\") static final java.util.function.Supplier RAW = () -> 1;\n" +
           "  static final WriteHint.WriteStrategy STRATEGY = WriteHint.WriteStrategy.SETTERS;\n" +
           "  static java.util.function.Predicate<Object> OPEN = o -> true;\n" +
+          "  static java.util.function.Predicate<Object> pred() { return o -> true; }\n" +
+          "  static Mapping<User, UserDto> make() { return ID; }\n" +
+          "  static final Mapper<Address, Address> SAME = Telescope.mapper(Address.class, Address.class);\n" +
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",
@@ -794,7 +917,9 @@ class BridgeFieldTest {
           " Telescope.mapperForward(User.class, UserDto.class, " +
           rows.replace("User::isAdmin", "Admin::is") +
           ");\n  private static String lower(final String s) { return s; }\n" +
-          "  private static final java.util.function.Supplier<String> HIDDEN = () -> \"h\";\n}\n"
+          "  private static final java.util.function.Supplier<String> HIDDEN = () -> \"h\";\n" +
+          "  private static final java.util.function.Predicate<Object> HIDDEN_TEST = o -> true;\n" +
+          "  private static boolean secretly(final User u) { return true; }\n}\n"
       )
     );
     assertFalse(c.success(), "the row must be refused");

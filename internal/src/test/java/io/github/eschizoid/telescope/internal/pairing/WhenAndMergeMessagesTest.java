@@ -53,6 +53,11 @@ class WhenAndMergeMessagesTest {
   void aWhenAroundARowNamingFewerAccessors() {
     final var drop = PairingMessages.whenWrapsOnly("Drop", "secret", null);
     assertEquals("Got inner row of kind Drop (secret → <telescope>).", drop.substring(drop.indexOf("Got inner")));
+    final var targetOnly = PairingMessages.whenWrapsOnly("Constant", null, "c");
+    assertEquals(
+      "Got inner row of kind Constant (<telescope> → c).",
+      targetOnly.substring(targetOnly.indexOf("Got inner"))
+    );
     final var none = PairingMessages.whenWrapsOnly("Zip", null, null);
     assertEquals("Got inner row of kind Zip.", none.substring(none.indexOf("Got inner")));
   }

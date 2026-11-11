@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.Telescope;
@@ -88,7 +89,9 @@ class DeclaredMergeTest {
     final var declared = OtherKinds.PROFILE.explain().declared().orElseThrow();
     assertEquals(OpticNode.Runs.RUNTIME, declared.runs());
     assertTrue(
-      declared.why().contains("the rows [AutoSameName, FromInferred], but the mapper is built from [AutoSameName, AutoSameName]"),
+      declared
+        .why()
+        .contains("the rows [AutoSameName, FromInferred], but the mapper is built from [AutoSameName, AutoSameName]"),
       declared.why()
     );
   }
@@ -96,6 +99,8 @@ class DeclaredMergeTest {
   @Test
   @DisplayName("a merge bridge generated from rows naming other accessors is passed over on the JVM")
   void aBridgeFromOtherAccessorsIsPassedOver() {
+    // An image compares row kinds only; the accessors are read on the JVM.
+    assumeTrue(System.getProperty("org.graalvm.nativeimage.imagecode") == null);
     final var before = MergeFixtures.CALLS.get();
     assertEquals(new Profile("c-1", "Ada", "Ada"), OtherAccessors.PROFILE.forward(Sources.of(CUSTOMER, AUDIT)));
     assertEquals(before, MergeFixtures.CALLS.get());

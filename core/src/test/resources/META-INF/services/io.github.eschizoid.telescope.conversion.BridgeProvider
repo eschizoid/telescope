@@ -11,3 +11,5 @@ io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$LazyProvider
 io.github.eschizoid.telescope.declaredbridge.MergeFixtures$DeclaredProvider
 io.github.eschizoid.telescope.declaredbridge.MergeFixtures$OtherKindsProvider
 io.github.eschizoid.telescope.declaredbridge.MergeFixtures$OtherAccessorsProvider
+io.github.eschizoid.telescope.declaredbridge.PathFixtures$DeclaredProvider
+io.github.eschizoid.telescope.declaredbridge.PathFixtures$ZippedProvider

@@ -662,19 +662,14 @@ final class FieldRows {
           );
         }
       }
-      final var receiver = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
       final var read = trees.getElement(TreePath.getPath(unit, rowArgs.get(0)));
       final var written = trees.getElement(TreePath.getPath(unit, rowArgs.get(1)));
-      if (
-        !(receiver instanceof TypeElement source) ||
-        !(read instanceof ExecutableElement reader) ||
-        !(written instanceof ExecutableElement writer)
-      ) {
-        return new Refused(
-          rowArgs.get(0),
-          "a @Bridge merge compiles from(...) of method references on the source's class and the target's"
-        );
+      if (!(read instanceof ExecutableElement reader) || !(written instanceof ExecutableElement writer)) {
+        return Refused.javacReports(row);
       }
+      // An accessor takes the object it reads as its argument, so its reference is unbound and
+      // names the class it is applied to.
+      final var source = (TypeElement) elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
       sources.add(source);
       rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
       kinds.add("FromInferred");

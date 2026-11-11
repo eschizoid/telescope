@@ -2591,34 +2591,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A row with a path on each side reads neither first property for itself: each pairs by name
     // as it would without the row, the target's filled from the paths through it alone where the
     // source has no property of its name and no other row fills it, and the source's read by the
-    // path alone where the target has no property of its name and no other row reads it.
+    // path alone where the target has no property of its name and no other row reads it. Each
+    // first property is one of its side's, since the rows' reader resolves every step of a path to
+    // a property of the class it reads.
     for (final var path : pathsToPaths) {
       final var filled = path.written().row().properties().getFirst();
-      final var from = path.read().row().properties().getFirst();
-      if (!targetNames.contains(filled)) {
-        error(
-          source,
-          "a row writes the path '" +
-            path.written().row().name() +
-            "', whose first property is not one the bridge writes on " +
-            target.getSimpleName() +
-            "; its properties are " +
-            targetNames
-        );
-        return;
-      }
-      if (!sourceNamesForPaths.contains(from)) {
-        error(
-          source,
-          "a row reads the path '" +
-            path.read().row().name() +
-            "', whose first property is not one the bridge reads on " +
-            source.getSimpleName() +
-            "; its properties are " +
-            sourceNamesForPaths
-        );
-        return;
-      }
       if (
         !sourceNamesForPaths.contains(filled) &&
         !renameTargetNames.contains(filled) &&
@@ -3465,23 +3442,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // side takes no part in patch, which overlays target properties, as the runtime mapper's patch
     // does.
     final Function<String, String> readPatch = sourceName -> {
+      final var sf = fieldByName(sourceFields, sourceName);
+      // A property a target path fills is read back through the path first, as the rebuild
+      // reads
+      // it, and the source paths through it are written over that, as backward writes them.
       final var readBack = readTargets.get(sourceName);
+      String readBackValue = null;
       if (readBack != null) {
         final var leaf = targetRead(readBack, patchLocals, "partial", "__ppt_", paired, targetFields, target);
-        final var sf = fieldByName(sourceFields, sourceName);
         final var base = targetPathSources.contains(sourceName)
           ? readExpr(source, "base", sf)
           : readPatchPlain.apply(sourceName);
-        return "(" + leaf + " != null ? " + leaf + " : " + base + ")";
+        readBackValue = "(" + leaf + " != null ? " + leaf + " : " + base + ")";
       }
       final var paths = writtenPaths
         .getOrDefault(sourceName, List.of())
         .stream()
         .filter(path -> !writtenThrough.containsKey(path))
         .toList();
-      if (paths.isEmpty()) return readPatchPlain.apply(sourceName);
-      final var sf = fieldByName(sourceFields, sourceName);
-      var written = pathConsumed.contains(sourceName) ? readExpr(source, "base", sf) : readPatchPlain.apply(sourceName);
+      if (paths.isEmpty()) return readBackValue != null ? readBackValue : readPatchPlain.apply(sourceName);
+      var written =
+        readBackValue != null
+          ? readBackValue
+          : pathConsumed.contains(sourceName)
+            ? readExpr(source, "base", sf)
+            : readPatchPlain.apply(sourceName);
       var step = 0;
       for (final var path : paths) {
         final var filled = fieldByName(targetFields, path.row().target());
