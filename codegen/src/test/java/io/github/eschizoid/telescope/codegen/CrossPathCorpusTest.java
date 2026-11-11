@@ -14614,8 +14614,8 @@ class CrossPathCorpusTest {
       "#0(value=\"x!!\")",
       true
     ),
-    // An array handed to a variable-arity setter of its own array type is passed as it is, as a
-    // Java call passes it, not wrapped as the one element of a new array.
+    // A variable-arity setter of the property's own array type takes the array as it is, as a
+    // Java call passes it, not as the one element of a new array.
     new IntoRow(
       "an array property with a variable-arity setter of its own type",
       List.of(
