@@ -541,6 +541,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The {@code @Bridge} fields, as {@code Carrier#FIELD}, whose sides were checked for Lombok. */
   private final Set<String> lombokWaited = new HashSet<>();
 
+  /**
+   * The pair of each {@code @Bridge} field whose bridge this compilation writes, by the qualified
+   * name of that bridge.
+   */
+  private final Map<String, TypePair> fieldBridgePairs = new HashMap<>();
+
+  /**
+   * The {@code @Bridge} fields of the final round whose rows convert through a bridge no round has
+   * written, each with the names of those bridges, refused once every field of the round is read.
+   */
+  private final Map<VariableElement, List<String>> finalRoundAwaits = new LinkedHashMap<>();
+
   /** The pairs of the {@code @Bridge} fields no processor read rows from, by their class. */
   private final Map<TypeElement, Set<String>> unreadRows = new LinkedHashMap<>();
 
@@ -866,6 +878,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
       }
     }
+    if (roundEnv.processingOver()) {
+      refuseFinalRoundAwaits();
+    }
     // Drain the eager queue, generating bridges for pure record/POJO pairs. Each generate(...) call
     // may discover sub-pairs and add them to `pending` for recursive emission. The `seen` set
     // guards against re-emission (cycle safety + multiple parent bridges sharing the same
@@ -1107,22 +1122,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (roundEnv.processingOver()) {
-        error(
-          field,
-          "@Bridge field " +
-            fieldName +
-            " converts through " +
-            String.join(", ", parsed.awaits()) +
-            ", a bridge written only in the final round because a side of its pair carries a Lombok" +
-            " annotation, and a bridge written then cannot be called from another; declare this field's" +
-            " rows without that via(...), or give both pairs Lombok-free sides"
-        );
+        finalRoundAwaits.put(field, List.copyOf(parsed.awaits()));
         return;
       }
       fieldRetries.add(carrier.getQualifiedName() + "#" + fieldName);
       return;
     }
     if (parsed.defaultStrategy() != null) writeDefaults.put(pair, parsed.defaultStrategy());
+    final var carrierPackage = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
+    fieldBridgePairs.put(
+      (carrierPackage.isEmpty() ? "" : carrierPackage + ".") +
+        FieldRows.bridgeSimpleName(parsed.source(), parsed.target()),
+      pair
+    );
     final var config = new BridgeConfig(
       parsed.drops(),
       parsed.renames(),
@@ -1154,6 +1166,54 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     configsByPair.put(pair, config);
     pending.add(pair);
+  }
+
+  /**
+   * Refuses each field of the final round whose rows convert through a bridge no round wrote, by
+   * why that bridge is missing. The bridge of a field whose pair has a side carrying a Lombok
+   * annotation is written in the final round, too late for another bridge to call. Any other bridge
+   * a field of this compilation declares exists by the final round unless that field was refused,
+   * whose own refusal is the one to correct.
+   */
+  private void refuseFinalRoundAwaits() {
+    final var elements = processingEnv.getElementUtils();
+    for (final var entry : finalRoundAwaits.entrySet()) {
+      final var unwritten = new ArrayList<String>();
+      for (final var bridge : entry.getValue()) {
+        final var pair = fieldBridgePairs.get(bridge);
+        final var source = pair == null ? null : elements.getTypeElement(pair.sourceFq());
+        final var target = pair == null ? null : elements.getTypeElement(pair.targetFq());
+        final var lombok =
+          (source != null && carriesLombokTrigger(source)) || (target != null && carriesLombokTrigger(target));
+        if (!lombok) {
+          unwritten.add(bridge);
+        }
+      }
+      final var field = entry.getKey();
+      if (unwritten.isEmpty()) {
+        error(
+          field,
+          "@Bridge field " +
+            field.getSimpleName() +
+            " converts through " +
+            String.join(", ", entry.getValue()) +
+            ", a bridge written only in the final round because a side of its pair carries a Lombok" +
+            " annotation, and a bridge written then cannot be called from another; declare this field's" +
+            " rows without that via(...), or give both pairs Lombok-free sides"
+        );
+      } else {
+        error(
+          field,
+          "@Bridge field " +
+            field.getSimpleName() +
+            " converts through " +
+            String.join(", ", unwritten) +
+            ", the bridge of a @Bridge field this compilation refuses, so it is never written; correct the" +
+            " rows of that field, or declare this field's rows without that via(...)"
+        );
+      }
+    }
+    finalRoundAwaits.clear();
   }
 
   /**
