@@ -9875,6 +9875,44 @@ class CrossPathCorpusTest {
       "#0(ids=[[\"2\"]])"
     ),
     new EnumCell(
+      "a list of Optional texts converts each present value, an empty one staying empty",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.empty()))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      "#0(ids=[of 1, empty])",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
+      "an Optional element of a list that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.of(\"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
       "a value of a map that is no number fails naming the property and the value's key",
       Directions.BOTH,
       List.of(

@@ -5098,6 +5098,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         parentPkg
       );
     }
+    // An Optional element against an Optional element gets a nested element class that maps its
+    // value through the inner element's conversion, a null or empty Optional passing as it is, as
+    // the runtime lifts an Optional at any depth.
+    if (
+      innerSrc != null &&
+      innerTgt != null &&
+      innerSrc.kind() == FieldPlan.Kind.OPTIONAL &&
+      innerTgt.kind() == FieldPlan.Kind.OPTIONAL
+    ) {
+      final var inner = planElementSubBridge(
+        parentSource,
+        parentTarget,
+        fieldName,
+        innerSrc.elementType(),
+        innerTgt.elementType(),
+        FieldPlan.Kind.OPTIONAL,
+        pending,
+        seen,
+        lenient,
+        parentPkg
+      );
+      if (inner == null) {
+        return null;
+      }
+      final var name = "__Nested" + nestedElements.size();
+      nestedElements.put(name, new NestedElement(srcElement, tgtElement, inner));
+      if (threadedRefs.contains(inner.subBridgeName())) {
+        threadedRefs.add(name);
+      }
+      return FieldPlan.ofKind(kind, name);
+    }
     // An element pair the shared spec copies element for element, such as a generic class used
     // raw against another, is a nested container with no view to lift through: it gets a nested
     // element class whose helpers copy, as the same pair does when it is a field.
@@ -5632,11 +5663,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             emitMapHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward", bridgePkg);
             emitMapHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward", bridgePkg);
           }
+          case OPTIONAL -> {
+            emitOptionalHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName());
+            emitOptionalHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName());
+          }
           default -> throw new IllegalStateException("a nested element of kind " + plan.kind());
         }
       }
       out.println("  }");
     }
+  }
+
+  /**
+   * One direction of an Optional element against an Optional element: the value of {@code from}
+   * mapped through {@code element}'s {@code direction}, an empty Optional staying empty and a null
+   * staying null, as the runtime's Optional lift converts it.
+   */
+  private void emitOptionalHelper(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final String element
+  ) {
+    out.println();
+    out.println(helperSignature(direction, from, to, pathParameter(element)));
+    out.println("    return src == null ? null : src.map(" + subFunction(element, direction) + ");");
+    out.println("  }");
   }
 
   /**
@@ -7737,7 +7790,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     return switch (nested.plan().kind()) {
       case CONVERT -> builtInComponents.get(element);
-      case LIST, SET, MAP_VALUES, RESHAPE -> locatedComponent(nested.plan().subBridgeName());
+      case LIST, SET, MAP_VALUES, RESHAPE, OPTIONAL -> locatedComponent(nested.plan().subBridgeName());
       default -> null;
     };
   }
