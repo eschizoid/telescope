@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +73,7 @@ public final class Sources {
       );
       list.add(s);
     }
-    return new Sources(Map.copyOf(map), List.copyOf(list));
+    return new Sources(Collections.unmodifiableMap(map), List.copyOf(list));
   }
 
   /** Open a {@link Builder} for fluent / conditional source assembly. */
@@ -148,7 +149,7 @@ public final class Sources {
 
     /** Build the immutable bag. */
     public Sources build() {
-      return new Sources(Map.copyOf(entries), List.copyOf(entries.values()));
+      return new Sources(Collections.unmodifiableMap(new LinkedHashMap<>(entries)), List.copyOf(entries.values()));
     }
   }
 }

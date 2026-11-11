@@ -257,10 +257,13 @@ the existing emitter without a second one.
 > same, and is reported in the same words. The inner row claims nothing, as the runtime's claims nothing under `when`:
 > where the predicate rejects the source the property keeps what the rest of the rows and the name pairing give it, and
 > `backward` and `patch` leave the row out. A property no source property of its name fills starts, under a gated
-> constant or value, as the runtime starts it: a record as its default tree, a record that reaches itself as null, and a
-> bean, which the runtime builds a fresh instance of, is refused by name. The predicate-gated `toOrElse` and
-> `toOrElseGet` compile into the same converter as their strict-null forms, testing the predicate only on a value that
-> is not null.
+> constant or value, as the runtime starts it, as a default-tree instance of its type, which the bridge builds when it
+> is made of public records declaring no type parameters, primitives, platform classes and classes no write strategy
+> allocates; a record that reaches itself is null, as on the runtime path. Any other default tree, which the runtime
+> builds, is refused by name: one holding a record that is not public or declares type parameters, or a bean with a
+> public no-argument constructor or a public static `builder()`, at the property or at any component below it. The
+> predicate-gated `toOrElse` and `toOrElseGet` compile into the same converter as their strict-null forms, testing the
+> predicate only on a value that is not null.
 
 > **Amendment: multi-source merges.** A `@Bridge` field may also be initialised by
 > `Telescope.merge(Target.class, rows...)` written in place, its rows each a `MergeStep.from` of two method references

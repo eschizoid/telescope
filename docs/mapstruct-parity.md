@@ -264,9 +264,10 @@ each component of a name its source has that no row before it binds, so where tw
 `auto` fills it. Two rows binding one component, a row naming no component and an `auto` match of two types are refused
 when the field is compiled, in the words the runtime refuses them with when the mapper is built, and a missing source
 fails `forward` in the runtime's words, at the same component. The generated path's own limits: the target is a public
-record declaring no type parameters, a bean target is refused by name, and so is a primitive component no row binds,
-which the runtime path accepts and then fails to construct on every `forward`. Like the runtime merge, it is forward
-only.
+record declaring no type parameters, a bean target is refused by name, and so are a primitive component no row binds and
+a `from` row reading a type its component does not hold (possible when javac infers the row's shared type as a supertype
+of both), each of which the runtime path accepts and then fails to construct on every `forward`, the second with "Failed
+to construct". Like the runtime merge, it is forward only.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
 javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;
@@ -1315,9 +1316,13 @@ by name. `when(...)` gates a source path, a target path, a path on each side, a 
 value, and refuses a nested `when` and every other inner row in the runtime's words. The bridge tests the predicate
 through a `Predicate`, as the runtime does, writes the gated row where it accepts the source and leaves the property to
 the rest of the rows and the name pairing where it does not, reports a predicate that throws in the runtime's words, and
-leaves the row out of `backward` and `patch`. The generated path's own limit: a gated constant or value filling a bean
-property no source property of its name fills is refused by name, since the runtime starts such a property as a fresh
-instance of the bean, which generated code does not build; a record there is built as the runtime builds it.
+leaves the row out of `backward` and `patch`. The generated path's own limit: where a gated constant or value fills a
+property no source property of its name fills, the runtime starts that property as a default-tree instance of its type,
+and the generated bridge builds that instance only when it is made of public records declaring no type parameters,
+primitives, platform classes and classes no write strategy allocates, each of which it fills with null or the
+primitive's default, as the runtime does. Any other default tree is refused by name, though the runtime builds it: a
+record that is not public or declares type parameters, and a bean with a public no-argument constructor or a public
+static `builder()`, whether it is the property's type or a component of a record below it.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
 javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the
