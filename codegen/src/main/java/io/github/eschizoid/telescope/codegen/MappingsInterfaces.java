@@ -16,6 +16,7 @@ import javax.annotation.processing.FilerException;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
@@ -44,12 +45,14 @@ import javax.tools.JavaFileObject;
  * written it; the interface is therefore written in the round its fields are first seen, never in
  * the final one, whose output the types compiled with it cannot name.
  *
- * <p>The method is left out, with nothing reported, where the type declares or inherits a method of
- * that name taking nothing, which then is what the call means. It is also left out where the
- * interface cannot reach the field or a type the method names from its package, and where two
- * fields would give one interface two methods of one name, which leaves out both. A type naming the
- * interface in its {@code implements} clause hears about either on the field; a type that does not
- * name it calls no method of it, so its fields compile as they would without the interface.
+ * <p>The method is left out where the type declares or inherits a method of that name taking
+ * nothing, which then is what the call means; a type naming the interface in its {@code implements}
+ * clause gets a note on the field when the method is inherited. It is also left out where the
+ * interface cannot reach the field or a type the method names from its package, where two fields
+ * would give one interface two methods of one name, which leaves out both, and where a source a
+ * processor writes declares the field after the interface was written. A type naming the interface
+ * in its {@code implements} clause hears about either on the field; a type that does not name it
+ * calls no method of it, so its fields compile as they would without the interface.
  */
 final class MappingsInterfaces {
 
@@ -63,7 +66,15 @@ final class MappingsInterfaces {
    * One default method: {@code returns name() { return call((takes) (Object) this); }}, added by
    * {@code field}.
    */
-  private record Method(String name, VariableElement field, String returns, String takes, String call, boolean raw) {}
+  private record Method(
+    String name,
+    VariableElement field,
+    String returns,
+    String takes,
+    String call,
+    boolean raw,
+    boolean deprecated
+  ) {}
 
   private final ProcessingEnvironment env;
 
@@ -186,7 +197,18 @@ final class MappingsInterfaces {
     final var declared = methods.computeIfAbsent(ownerName, unused -> new LinkedHashMap<>());
     owners.putIfAbsent(ownerName, owner);
     final var name = "to" + other.getSimpleName();
-    if (declaresNoArgument(owner, name)) return;
+    final var own = noArgument(owner, name);
+    if (own != null) {
+      final var from = (TypeElement) own.getEnclosingElement();
+      if (
+        !from.equals(owner) &&
+        !interfaceName(owner, env).contentEquals(from.getQualifiedName()) &&
+        implementsInterface(owner)
+      ) {
+        note(field, inherited(field, owner, name, from));
+      }
+      return;
+    }
     final var pkg = env.getElementUtils().getPackageOf(owner);
     final var unreachable = unreachable(field, List.of(takes, returns), pkg);
     if (unreachable != null) {
@@ -196,7 +218,7 @@ final class MappingsInterfaces {
       return;
     }
     if (written.contains(ownerName)) {
-      error(field, writtenEarlier(field, owner, name));
+      if (implementsInterface(owner)) error(field, writtenEarlier(field, owner, name));
       return;
     }
     final var key = ownerName + "#" + name;
@@ -209,7 +231,12 @@ final class MappingsInterfaces {
       return;
     }
     final var raw = AbstractTelescopeProcessor.namesRaw(takes) || AbstractTelescopeProcessor.namesRaw(returns);
-    declared.put(name, new Method(name, field, render(returns), render(takes), call, raw));
+    final var deprecated =
+      env.getElementUtils().isDeprecated(field) ||
+      namesDeprecated((TypeElement) field.getEnclosingElement()) ||
+      namesDeprecated(takes) ||
+      namesDeprecated(returns);
+    declared.put(name, new Method(name, field, render(returns), render(takes), call, raw, deprecated));
   }
 
   /** Whether {@code type} was compiled from a source in this compilation, not read from a class. */
@@ -218,12 +245,14 @@ final class MappingsInterfaces {
     return file != null && file.getKind() == JavaFileObject.Kind.SOURCE;
   }
 
-  /** Whether {@code type} declares or inherits a method named {@code name} taking no argument. */
-  private boolean declaresNoArgument(final TypeElement type, final String name) {
+  /**
+   * The method named {@code name} taking no argument {@code type} declares or inherits, or null.
+   */
+  private ExecutableElement noArgument(final TypeElement type, final String name) {
     for (final var method : ElementFilter.methodsIn(env.getElementUtils().getAllMembers(type))) {
-      if (method.getSimpleName().contentEquals(name) && method.getParameters().isEmpty()) return true;
+      if (method.getSimpleName().contentEquals(name) && method.getParameters().isEmpty()) return method;
     }
-    return false;
+    return null;
   }
 
   /** Whether {@code type} names its interface among its direct supertypes. */
@@ -276,6 +305,34 @@ final class MappingsInterfaces {
       }
       default -> null;
     };
+  }
+
+  /** Whether {@code type} names, at any depth, a deprecated class or a class enclosed by one. */
+  private boolean namesDeprecated(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case DECLARED -> {
+        if (namesDeprecated((TypeElement) ((DeclaredType) type).asElement())) yield true;
+        for (final var argument : ((DeclaredType) type).getTypeArguments()) {
+          if (namesDeprecated(argument)) yield true;
+        }
+        yield false;
+      }
+      case ARRAY -> namesDeprecated(((ArrayType) type).getComponentType());
+      case WILDCARD -> {
+        final var wildcard = (WildcardType) type;
+        final var bound = wildcard.getExtendsBound() != null ? wildcard.getExtendsBound() : wildcard.getSuperBound();
+        yield bound != null && namesDeprecated(bound);
+      }
+      default -> false;
+    };
+  }
+
+  /** Whether {@code type} or a class enclosing it is deprecated. */
+  private boolean namesDeprecated(final TypeElement type) {
+    for (Element at = type; at instanceof TypeElement enclosing; at = enclosing.getEnclosingElement()) {
+      if (env.getElementUtils().isDeprecated(enclosing)) return true;
+    }
+    return false;
   }
 
   /** Whether code in {@code pkg} can name {@code type} and every class enclosing it. */
@@ -331,6 +388,12 @@ final class MappingsInterfaces {
       origins.add(method.field());
       if (method.raw()) suppressed.add("rawtypes");
       if (method.takes().indexOf('<') >= 0) suppressed.add("unchecked");
+      // A use of a deprecated element warns under -Xlint:deprecation, and of one deprecated for
+      // removal by default, so a build under -Werror fails on code it did not write.
+      if (method.deprecated()) {
+        suppressed.add("deprecation");
+        suppressed.add("removal");
+      }
     }
     try {
       final var file = env.getFiler().createSourceFile(name, origins.toArray(Element[]::new));
@@ -378,6 +441,10 @@ final class MappingsInterfaces {
 
   private void error(final Element at, final String message) {
     env.getMessager().printMessage(Diagnostic.Kind.ERROR, message, at);
+  }
+
+  private void note(final Element at, final String message) {
+    env.getMessager().printMessage(Diagnostic.Kind.NOTE, message, at);
   }
 
   private static String fieldName(final VariableElement field) {
@@ -440,6 +507,30 @@ final class MappingsInterfaces {
       "() on " +
       owner.getSimpleName() +
       " yourself"
+    );
+  }
+
+  /** A field whose method {@code owner} inherits under the same name from {@code from}. */
+  static String inherited(
+    final VariableElement field,
+    final TypeElement owner,
+    final String name,
+    final TypeElement from
+  ) {
+    return (
+      owner.getSimpleName() +
+      " inherits " +
+      name +
+      "() from " +
+      from.getQualifiedName() +
+      ", so " +
+      owner.getSimpleName() +
+      SUFFIX +
+      " has no method " +
+      name +
+      "() for " +
+      fieldName(field) +
+      ", and the call means the inherited one"
     );
   }
 

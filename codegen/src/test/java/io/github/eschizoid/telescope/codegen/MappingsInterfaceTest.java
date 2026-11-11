@@ -558,25 +558,106 @@ class MappingsInterfaceTest {
     }
   }
 
-  @Test
-  @DisplayName("a field a processor writes after the source's interface was written is refused by name")
-  void aFieldWrittenLaterIsRefused() {
-    final var c = ProcessorHarness.compileFully(
+  private static ProcessorHarness.Compilation withLateField(final String invoice) {
+    return ProcessorHarness.compileFully(
       List.of(new LateField(), new BridgeProcessor()),
       List.of(),
       sources(
         "mi.Invoice",
-        INVOICE.replace(" implements InvoiceMappings", ""),
+        invoice,
         "mi.InvoiceDto",
         INVOICE_DTO.replace(" implements InvoiceDtoMappings", ""),
         "mi.LateDto",
         "package mi; public record LateDto(Long id) {}"
       )
     );
+  }
+
+  @Test
+  @DisplayName("a field a processor writes after the interface was written compiles for a type not implementing it")
+  void aFieldWrittenLaterCompilesUnlessImplemented() {
+    final var c = withLateField(INVOICE.replace(" implements InvoiceMappings", ""));
+    assertTrue(c.success(), c::errorMessages);
+    assertFalse(c.generated().get("mi.InvoiceMappings").contains("toLateDto"));
+  }
+
+  @Test
+  @DisplayName(
+    "a field a processor writes after the interface was written is refused by name for a type implementing it"
+  )
+  void aFieldWrittenLaterIsRefusedWhenImplemented() {
+    final var c = withLateField(INVOICE);
     assertFalse(c.success());
     final var message = errorOn(c, "@Bridge field Late.LATE is declared in a source written during annotation");
     assertTrue(message.contains("after InvoiceMappings was generated"), message);
     assertTrue(message.contains("no method toLateDto()"), message);
+  }
+
+  private static JavaFileObject[] deprecatedField(final String annotation) {
+    return sources(
+      "mi.Invoice",
+      INVOICE.replace(" implements InvoiceMappings", "").replace("@Bridge static", annotation + " @Bridge static"),
+      "mi.InvoiceDto",
+      INVOICE_DTO.replace(" implements InvoiceDtoMappings", "")
+    );
+  }
+
+  @Test
+  @DisplayName("a field deprecated for removal compiles under -Werror with the compiler's default warnings")
+  void aFieldDeprecatedForRemovalCompilesUnderWerror() {
+    final var c = ProcessorHarness.compileFullyWithOnly(
+      processors(),
+      List.of("-Werror"),
+      deprecatedField("@Deprecated(forRemoval = true)")
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(
+      c.generated().get("mi.InvoiceMappings").contains("@SuppressWarnings({ \"deprecation\", \"removal\" })"),
+      () -> c.generated().get("mi.InvoiceMappings")
+    );
+  }
+
+  @Test
+  @DisplayName("a deprecated field compiles under -Xlint:all -Werror")
+  void aDeprecatedFieldCompilesUnderEveryLint() {
+    final var c = ProcessorHarness.compileFullyWithOnly(
+      processors(),
+      List.of("-Xlint:all,-processing", "-Werror"),
+      deprecatedField("@Deprecated")
+    );
+    assertTrue(c.success(), c::errorMessages);
+  }
+
+  @Test
+  @DisplayName(
+    "a type implementing the interface hears, in a note on the field, of an inherited method taking the name"
+  )
+  void anInheritedMethodIsNoted() {
+    final var invoice = INVOICE.replace(" implements InvoiceMappings", " implements InvoiceMappings, Legacy");
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        invoice,
+        "mi.InvoiceDto",
+        INVOICE_DTO,
+        "mi.Legacy",
+        "package mi; public interface Legacy { default InvoiceDto toInvoiceDto() { return null; } }"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertFalse(c.generated().get("mi.InvoiceMappings").contains("toInvoiceDto"));
+    final var note = c
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.NOTE && d.getMessage(null).contains("inherits toInvoiceDto()"))
+      .map(d -> d.getMessage(null))
+      .findFirst()
+      .orElseThrow(() -> new AssertionError(c.diagnostics().toString()));
+    assertEquals(
+      "Invoice inherits toInvoiceDto() from mi.Legacy, so InvoiceMappings has no method toInvoiceDto() for" +
+        " @Bridge field Invoice.DTO, and the call means the inherited one",
+      note
+    );
   }
 
   /** Writes, in the first round, the target class {@code mi.InvoiceDto}. */
