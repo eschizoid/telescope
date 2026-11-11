@@ -1810,7 +1810,7 @@ public final class DeepMap {
                 autoIso(
                   srcType,
                   tgtType,
-                  srcField + " → " + tgtField,
+                  PairingMessages.renamedComponent(srcField, tgtField),
                   overrides,
                   beanRefl,
                   cache,
@@ -1823,7 +1823,7 @@ public final class DeepMap {
                 ),
                 paired,
                 new RowSides(source, target, srcField, tgtField),
-                srcField + " → " + tgtField,
+                PairingMessages.renamedComponent(srcField, tgtField),
                 forwardOnly
               )
             : resultChecked(

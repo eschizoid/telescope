@@ -1658,7 +1658,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             classSides(sourceEl, targetEl),
             srcName,
             tgtName,
-            srcName + " → " + tgtName,
+            PairingMessages.renamedComponent(srcName, tgtName),
             at,
             new HashSet<>(),
             forwardOnly
@@ -2340,7 +2340,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           // carries user functions (or a user default), which construction accepts as-is.
           if ("to".equals(rowName) && rowArgs.size() == 2) {
             final var seen = new HashSet<String>();
-            final var componentName = src.name() + " → " + tgt.name();
+            final var componentName = PairingMessages.renamedComponent(src.name(), tgt.name());
             final var sides = classSides(src.owner(), tgt.owner());
             final var srcName = propertyName(src.method(), src.owner());
             final var tgtName = propertyName(tgt.method(), tgt.owner());

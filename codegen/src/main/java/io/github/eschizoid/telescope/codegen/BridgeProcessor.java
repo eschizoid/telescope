@@ -4745,7 +4745,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // (1d) Two different scalars a built-in conversion takes between, converted by a nested
       //      class calling the JDK's own parse, valueOf or widening, or refused in the shared
       //      spec's words. A renamed pair is named as the runtime names it.
-      final var component = tf.name().equals(sf.name()) ? sf.name() : sf.name() + " → " + tf.name();
+      final var component = tf.name().equals(sf.name())
+        ? sf.name()
+        : PairingMessages.renamedComponent(sf.name(), tf.name());
+      fieldComponent = component;
       final var builtIn = lift == null ? rules.builtIn(sf.type(), tf.type(), component, lenient) : null;
       if (builtIn != null) {
         final var name = planBuiltIn(source, target, sf.type(), tf.type(), component, builtIn);
@@ -5046,9 +5049,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var name = planEnum(parentSource, parentTarget, fieldName, srcElement, tgtElement, lenient);
       return name == null ? null : FieldPlan.ofKind(kind, name);
     }
-    final var builtIn = rules.builtIn(srcElement, tgtElement, fieldName + "[*]", lenient);
+    final var builtIn = rules.builtIn(srcElement, tgtElement, fieldComponent + "[*]", lenient);
     if (builtIn != null) {
-      final var name = planBuiltIn(parentSource, parentTarget, srcElement, tgtElement, fieldName + "[*]", builtIn);
+      final var name = planBuiltIn(parentSource, parentTarget, srcElement, tgtElement, fieldComponent + "[*]", builtIn);
       return name == null ? null : FieldPlan.ofKind(kind, name);
     }
     final var innerSrc = containerShapeOf(srcElement, tgtElement);
@@ -5337,6 +5340,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     builtInComponents.put(name, component);
     return name;
   }
+
+  /**
+   * The component the property being planned is named by in a refusal of its value, or of an
+   * element's: its own name, or the names of both sides where the target's differs, as the runtime
+   * names it. Set for each source property before its plan is made.
+   */
+  private String fieldComponent;
 
   /** The name each nested class of a built-in conversion gives a value it cannot convert. */
   private final Map<String, String> builtInComponents = new HashMap<>();

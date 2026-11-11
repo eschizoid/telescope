@@ -6425,6 +6425,42 @@ class CrossPathCorpusTest {
   }
 
   private static final List<ResultRow> RESULT_ROWS = List.of(
+    // A property paired under two names is named by both in a refusal of its value, and of an
+    // element's, with the element's index after the target's name.
+    new ResultRow(
+      "a renamed list whose element is no number, named by both names and the element's index",
+      List.of(
+        sampled("%1$sSrc", "java.util.List<String> x", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        "public record %1$sTgt(java.util.List<Integer> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed list of lists whose element is no number, named by both names and both indexes",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<java.util.List<String>> x",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\", \"x\")))"
+        ),
+        "public record %1$sTgt(java.util.List<java.util.List<Integer>> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[0][1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed scalar that is no number, named by both names",
+      List.of(
+        sampled("%1$sSrc", "String x", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y' got \"x\", not an Integer"
+    ),
     new ResultRow(
       "a String property with one setter, a transform returning Object that holds a String",
       resultRow(valueBean("%1$sTgt", "String", "\"q\""), "Object", "a"),

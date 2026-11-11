@@ -1545,6 +1545,15 @@ public final class PairingMessages {
   }
 
   /**
+   * The component a property paired under two names is named by in a refusal of its value: {@code
+   * name → label} for a source's {@code name} written into a target's {@code label}. An element of
+   * such a property is named by it too, as {@code 'name → label[1]'}.
+   */
+  public static String renamedComponent(final String source, final String target) {
+    return source + " → " + target;
+  }
+
+  /**
    * The text {@link #notAValue} opens with, up to the end of the property's name: {@code 'total}.
    * An element of a container is named by the property holding it.
    */
