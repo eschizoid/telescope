@@ -9809,10 +9809,66 @@ class CrossPathCorpusTest {
       "#0(total=\"1\")"
     ),
     new EnumCell(
-      "an element that is no number fails naming the property holding it",
+      "an element of a list that is no number fails naming the property and the element's index",
       Directions.BOTH,
       List.of(
         bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a list of lists that is no number fails naming both indexes",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.List<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\"), java.util.List.of(\"2\", \"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.List<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.List.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1][1]' got \"x\", not an Integer",
+      "#0(ids=[[\"2\"]])",
+      "#0(ids=[[\"2\"]])"
+    ),
+    new EnumCell(
+      "a value of a map that is no number fails naming the property and the value's key",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Map<String, String> ids", "new %1$sSrc(java.util.Map.of(\"k1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Map<String, Integer> ids", "new %1$sTgt(java.util.Map.of(\"k\", 2))")
+      ),
+      FAILS + "'ids[k1]' got \"x\", not an Integer",
+      "#0(ids={k=\"2\"})",
+      "#0(ids={k=\"2\"})"
+    ),
+    new EnumCell(
+      "an element of a list into a sorted set that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"2\", \"x\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.TreeSet<Integer> ids",
+          "new %1$sTgt(new java.util.TreeSet<>(java.util.Set.of(2)))"
+        )
+      ),
+      FAILS + "'ids[2]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a set that is no number fails naming the property, the element having no position",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Set<String> ids", "new %1$sSrc(java.util.Set.of(\"x\"))"),
         sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
       ),
       FAILS + "'ids' got \"x\", not an Integer",

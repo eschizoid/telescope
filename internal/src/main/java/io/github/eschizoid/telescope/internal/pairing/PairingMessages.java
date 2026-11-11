@@ -1533,7 +1533,7 @@ public final class PairingMessages {
    * A value a built-in conversion cannot convert: a {@code String} that is no {@code what}, read
    * from {@code componentName}. {@code what} is the phrase {@link #scalarPhrase} gives, and the
    * message reads {@code 'total' got "12x", not a BigDecimal}. An element of a container is named
-   * by the property holding it.
+   * by the property holding it, and {@link #notAValueAt} adds where in the container it is.
    */
   public static String notAValue(final String componentName, final String value, final String what) {
     return notAValueHead(componentName) + value + notAValueTail(what);
@@ -1541,8 +1541,41 @@ public final class PairingMessages {
 
   /** The text {@link #notAValue} puts before the value, which generated code writes as is. */
   public static String notAValueHead(final String componentName) {
+    return notAValueName(componentName) + "' got \"";
+  }
+
+  /**
+   * The text {@link #notAValue} opens with, up to the end of the property's name: {@code 'total}.
+   * An element of a container is named by the property holding it.
+   */
+  public static String notAValueName(final String componentName) {
     final var bracket = componentName.indexOf('[');
-    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket)) + "' got \"";
+    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket));
+  }
+
+  /**
+   * Where an element is in its container, as {@link #notAValueAt} writes it: {@code [1]} for the
+   * element at index 1 of a list, {@code [k]} for the value at key {@code k} of a map.
+   */
+  public static String elementPosition(final Object position) {
+    return "[" + position + "]";
+  }
+
+  /**
+   * {@code message}, a refusal {@link #notAValue} gives for an element of {@code componentName}'s
+   * container, with {@code position}, where that element is as {@link #elementPosition} writes it,
+   * after the property's name: {@code 'a' got "x", not an Integer} for the element at index 1 reads
+   * {@code 'a[1]' got "x", not an Integer}. The position of an element within that element, already
+   * there, follows it, so an element of a list of lists reads {@code 'a[1][0]'}. An element of a
+   * set or of an {@code Optional} has no position but its value, which the message already shows.
+   * Null where {@code message} is no such refusal.
+   */
+  public static String notAValueAt(final String message, final String componentName, final String position) {
+    final var name = notAValueName(componentName);
+    if (message == null || !(message.startsWith(name + "'") || message.startsWith(name + "["))) {
+      return null;
+    }
+    return name + position + message.substring(name.length());
   }
 
   /** The text {@link #notAValue} puts after the value, which generated code writes as is. */

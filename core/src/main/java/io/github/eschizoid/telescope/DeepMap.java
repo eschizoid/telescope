@@ -2837,13 +2837,14 @@ public final class DeepMap {
           srcType,
           tgtType,
           d.src().kind(),
-          d.tgt().kind()
+          d.tgt().kind(),
+          componentName
         );
       }
       return switch (d.src().kind()) {
-        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
-        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
-        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
         // Settled against the other side of the pair before the decision was built, so a view

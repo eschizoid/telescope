@@ -618,6 +618,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<TypeKind> orElseKinds = EnumSet.noneOf(TypeKind.class);
 
   /**
+   * Whether a container loop of the bridge being emitted names where an element is when its
+   * conversion refuses a value, through the bridge's {@code __located} helper; reset for each
+   * bridge.
+   */
+  private boolean elementsLocated;
+
+  /**
    * Per source property of the bridge being emitted, the check its transform's {@code forward}
    * argument takes before the call, where the transform takes a class narrower than the property's
    * type variable ({@link #readsByCheck}); reset for each bridge.
@@ -2316,6 +2323,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     erasingBridge = bridgeName;
     erasedArgumentUsed = false;
     orElseKinds.clear();
+    elementsLocated = false;
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -3091,6 +3099,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         for (final var writer : pathWriters) out.print(writer);
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
+        if (elementsLocated) {
+          emitLocatedHelper(out);
+        }
       }
     );
   }
@@ -7037,7 +7048,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity, bridgePkg));
     final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "e.getValue()" : "x";
-    emitFill(out, tgtContainer, srcContainer, plan.kind(), identity ? null : subCall(sub, direction, element));
+    final var located = identity ? null : locatedComponent(sub);
+    emitFill(
+      out,
+      tgtContainer,
+      srcContainer,
+      plan.kind(),
+      identity ? null : subCall(sub, direction, element),
+      plan.kind() == FieldPlan.Kind.MAP_VALUES ? located : indexedComponent(srcContainer, located)
+    );
     out.println("    return out;");
     out.println("  }");
   }
@@ -7676,8 +7695,106 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, bridgePkg));
-    out.println("    for (final var x : src) out.add(" + subCall(subBridge, direction, "x") + ");");
+    final var component = indexedComponent(srcContainer, locatedComponent(subBridge));
+    if (component == null) {
+      out.println("    for (final var x : src) out.add(" + subCall(subBridge, direction, "x") + ");");
+    } else {
+      out.println("    var __index = 0;");
+      out.println("    for (final var x : src) {");
+      out.println("      try {");
+      out.println("        out.add(" + subCall(subBridge, direction, "x") + ");");
+      emitLocatedCatch(out, "      ", component, "__index");
+      out.println("      __index++;");
+      out.println("    }");
+    }
     out.println("    return out;");
+    out.println("  }");
+  }
+
+  /**
+   * The component a container loop over {@code element}, a nested class of the bridge being
+   * planned, names when that element's conversion refuses a value: the built-in conversion's own,
+   * found through any container classes between them, or null where the element is converted any
+   * other way.
+   */
+  private String locatedComponent(final String element) {
+    final var nested = element == null ? null : nestedElements.get(element);
+    if (nested == null) {
+      return null;
+    }
+    return switch (nested.plan().kind()) {
+      case CONVERT -> builtInComponents.get(element);
+      case LIST, SET, MAP_VALUES, RESHAPE -> locatedComponent(nested.plan().subBridgeName());
+      default -> null;
+    };
+  }
+
+  /**
+   * {@code component} where {@code container}, the container a loop reads, is a list, whose
+   * elements have an index to name, and null otherwise.
+   */
+  private String indexedComponent(final TypeMirror container, final String component) {
+    if (component == null) {
+      return null;
+    }
+    final var types = processingEnv.getTypeUtils();
+    final var list = processingEnv.getElementUtils().getTypeElement("java.util.List");
+    return types.isSubtype(types.erasure(container), types.erasure(list.asType())) ? component : null;
+  }
+
+  /**
+   * Closes the {@code try} a container loop converts an element in, with the catch that refuses a
+   * value the element's conversion refuses for {@code component} with where the element is, the
+   * expression {@code position} gives, as the shared spec writes it.
+   */
+  private void emitLocatedCatch(
+    final PrintWriter out,
+    final String indent,
+    final String component,
+    final String position
+  ) {
+    elementsLocated = true;
+    final var marker = "\u0000";
+    final var written = PairingMessages.elementPosition(marker);
+    final var at = written.indexOf(marker);
+    out.println(indent + "} catch (final java.lang.IllegalArgumentException __refused) {");
+    out.println(
+      indent +
+        "  throw __located(__refused, " +
+        literal(PairingMessages.notAValueName(component)) +
+        ", " +
+        literal(written.substring(0, at)) +
+        " + " +
+        position +
+        " + " +
+        literal(written.substring(at + marker.length())) +
+        ");"
+    );
+    out.println(indent + "}");
+  }
+
+  /**
+   * The bridge's {@code __located} helper: {@code refused} with the element's position after the
+   * name it opens with, where it is a refusal of a value read from that name, as {@link
+   * PairingMessages#notAValueAt} writes it, keeping its cause; {@code refused} itself otherwise.
+   */
+  private static void emitLocatedHelper(final PrintWriter out) {
+    out.println();
+    out.println("  private static java.lang.IllegalArgumentException __located(");
+    out.println("    final java.lang.IllegalArgumentException refused,");
+    out.println("    final java.lang.String name,");
+    out.println("    final java.lang.String position");
+    out.println("  ) {");
+    out.println("    final var message = refused.getMessage();");
+    out.println(
+      "    if (message == null || !(message.startsWith(name + \"'\") || message.startsWith(name + \"[\"))) {"
+    );
+    out.println("      return refused;");
+    out.println("    }");
+    out.println(
+      "    return new java.lang.IllegalArgumentException(name + position + message.substring(name.length())," +
+        " refused.getCause());"
+    );
     out.println("  }");
   }
 
@@ -7705,7 +7822,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false, bridgePkg));
-    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.SET, subCall(subBridge, direction, "x"));
+    emitFill(
+      out,
+      tgtContainer,
+      srcContainer,
+      FieldPlan.Kind.SET,
+      subCall(subBridge, direction, "x"),
+      indexedComponent(srcContainer, locatedComponent(subBridge))
+    );
     out.println("    return out;");
     out.println("  }");
   }
@@ -7729,7 +7853,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror tgtContainer,
     final TypeMirror srcContainer,
     final FieldPlan.Kind kind,
-    final String convert
+    final String convert,
+    final String component
   ) {
     final var map = kind == FieldPlan.Kind.MAP_VALUES;
     final var guarded =
@@ -7739,18 +7864,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!guarded) {
       if (convert == null) {
         out.println(map ? "    out.putAll(src);" : "    out.addAll(src);");
-      } else {
+      } else if (component == null) {
         out.println(
           map
             ? "    for (final var e : src.entrySet()) out.put(e.getKey(), " + convert + ");"
             : "    for (final var x : src) out.add(" + convert + ");"
         );
+      } else if (map) {
+        out.println("    for (final var e : src.entrySet()) {");
+        out.println("      try {");
+        out.println("        out.put(e.getKey(), " + convert + ");");
+        emitLocatedCatch(out, "      ", component, "e.getKey()");
+        out.println("    }");
+      } else {
+        out.println("    var __index = 0;");
+        out.println("    for (final var x : src) {");
+        out.println("      try {");
+        out.println("        out.add(" + convert + ");");
+        emitLocatedCatch(out, "      ", component, "__index");
+        out.println("      __index++;");
+        out.println("    }");
       }
       return;
     }
     final var family = map ? OrderedNouns.MAP : OrderedNouns.SET;
     if (convert != null) {
-      emitOrderedInsert(out, tgtContainer, srcContainer, family, "    ", convert);
+      emitOrderedInsert(out, tgtContainer, srcContainer, family, "    ", convert, component);
       return;
     }
     // addAll and putAll keep a sorted container's linear build from a source sorted the same way.
@@ -7762,7 +7901,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(map ? "      out.putAll(src);" : "      out.addAll(src);");
     out.println("    } catch (final ClassCastException __unordered) {");
     out.println("      out.clear();");
-    emitOrderedInsert(out, tgtContainer, srcContainer, family, "      ", null);
+    emitOrderedInsert(out, tgtContainer, srcContainer, family, "      ", null, null);
     out.println("      throw new IllegalStateException(");
     out.println(
       "        " +
@@ -7824,10 +7963,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror srcContainer,
     final OrderedNouns family,
     final String indent,
-    final String convert
+    final String convert,
+    final String component
   ) {
     final var outRaw = binaryNameOf(tgtContainer);
     final var map = family == OrderedNouns.MAP;
+    final var located = convert != null && component != null;
     final String ordered;
     if (map) {
       ordered = "__k";
@@ -7840,11 +7981,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(indent + "for (final var e : src.entrySet()) {");
       }
       out.println(indent + "  final var __k = e.getKey();");
+      if (located) {
+        out.println(indent + "  try {");
+      }
       out.println(indent + "  final var __v = " + (convert == null ? "e.getValue()" : convert) + ";");
     } else {
       ordered = convert == null ? "x" : "__e";
+      if (located) {
+        out.println(indent + "var __index = 0;");
+      }
       out.println(indent + "for (final var x : src) {");
-      if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
+      if (located) {
+        out.println(indent + "  try {");
+      }
+      if (convert != null) {
+        out.println(indent + "  final var __e = " + convert + ";");
+      }
     }
     out.println(indent + "  try {");
     out.println(indent + (map ? "    out.put(__k, __v);" : "    out.add(" + ordered + ");"));
@@ -7860,6 +8012,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(indent + "          : " + literal(PairingMessages.unorderableInsertComparable(false)) + ")");
     emitRefusalAdvice(out, family, indent + "      ", "__cast");
     out.println(indent + "  }");
+    if (located) {
+      emitLocatedCatch(out, indent + "  ", component, map ? "__k" : "__index");
+      if (!map) {
+        out.println(indent + "  __index++;");
+      }
+    }
     out.println(indent + "}");
   }
 
@@ -7930,7 +8088,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true, bridgePkg));
-    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.MAP_VALUES, subCall(subBridge, direction, "e.getValue()"));
+    emitFill(
+      out,
+      tgtContainer,
+      srcContainer,
+      FieldPlan.Kind.MAP_VALUES,
+      subCall(subBridge, direction, "e.getValue()"),
+      locatedComponent(subBridge)
+    );
     out.println("    return out;");
     out.println("  }");
   }
