@@ -195,7 +195,15 @@ class TransformArgumentCheckTest {
     final var sources = pair("", "Object", "String", false);
     final var compilation = compile(fn("String"), sources[0], sources[1]);
     assertFalse(compilation.success());
-    assertTrue(compilation.generated().isEmpty(), () -> "no bridge is written: " + compilation.generated().keySet());
+    // The Mappings interfaces call the field, which exists whatever its rows are.
+    assertTrue(
+      compilation
+        .generated()
+        .keySet()
+        .stream()
+        .allMatch(name -> name.endsWith("Mappings")),
+      () -> "no bridge is written: " + compilation.generated().keySet()
+    );
   }
 
   @Test

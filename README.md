@@ -141,6 +141,21 @@ The same mapper runs two ways, and the call site is the same either way.
 - **At run time.** Without the processor, or without `@Bridge`, the field builds the mapper from its rows when the class
   loads. Nothing is generated and no build step is needed.
 
+The processor also writes a `<Type>Mappings` interface for each type a `@Bridge` field converts. A type that names it in
+its `implements` clause converts itself, and the call costs what calling the field costs:
+
+```java
+public record Order(Long id, String customer) implements OrderMappings {
+  @Bridge
+  static final Mapper<Order, OrderDto> DTO = mapper(Order.class, OrderDto.class, to(Order::id, OrderDto::number));
+}
+
+OrderDto dto = order.toOrderDto(); // Order.DTO.forward(order)
+```
+
+That form needs the processor, since the interface exists only once it runs. The field form runs either way.
+[docs/codegen.md](docs/codegen.md#a-value-that-converts-itself-typemappings) has the rules.
+
 You can start with the runtime mapper and add `@Bridge` where a hot loop needs the speed. A test suite runs the same
 inputs through both and fails when they give different results, and a compile-time verifier reports the refusals the
 runtime would raise, for each `Telescope.mapper(...)` call whose types it can read.

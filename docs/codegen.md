@@ -178,6 +178,44 @@ another class.
 The rows are read through the javac tree API. Under a compiler without it, Eclipse's for one, the processor warns on
 each `@Bridge` field and the mapper runs on the runtime path from the same rows.
 
+### A value that converts itself (`<Type>Mappings`)
+
+For each type a `@Bridge` field converts, the processor also writes an interface named after the type with `Mappings`
+added, in the type's package. Each field from the type adds a default method named `to` and the target's simple name,
+which returns the field's `forward` of the value. A `Telescope.mapper` field also adds the reverse to the target's
+interface, named after the source, which returns its `backward`. A `mapperForward` field adds no reverse. A type that
+wants the call form names its interface in its `implements` clause, or a sealed interface in its `extends` clause:
+
+```java
+public record User(Long id, String email) implements UserMappings {
+  @Bridge
+  static final Mapper<User, UserDto> DTO = mapper(User.class, UserDto.class, to(User::id, UserDto::userId));
+}
+
+public record UserDto(Long userId, String email) implements UserDtoMappings {}
+
+UserDto dto = user.toUserDto(); // User.DTO.forward(user)
+
+User back = dto.toUser(); // User.DTO.backward(dto)
+```
+
+The interface is written in the round the field is first seen, so a type compiled with it can name it, Lombok-annotated
+types included. Implementing it is optional, and a type that implements it does not compile without the processor, which
+is how a build missing the processor reports itself; the field form runs either way.
+
+- **A type that declares the method itself keeps its own.** Where the type declares or inherits a method of that name
+  taking nothing, the interface leaves the method out, and the call means the type's method.
+- **The interface must reach the field from its own package.** A `private` field, or a field or class that is not
+  `public` in another package, cannot be called from there, so the interface leaves the method out. When the type names
+  the interface in its `implements` clause, that is a compile error on the field, naming what is out of reach.
+- **Two methods of one name on one interface leave the name out**: two targets with one simple name in different
+  packages, or a pair and its reverse each declared by a two-way field. When the type names the interface in its
+  `implements` clause, that is a compile error on the second field, naming both. Declaring the method on the type
+  yourself, returning the conversion that name should mean, settles it.
+- **A generic type gets a plain interface.** The field's type is static and names the type raw or with fixed arguments,
+  so the method converts the value as the field's type names it.
+- **Only types compiled in the build get an interface.** A source or target read from a jar keeps the field form.
+
 ## Installing the processor
 
 Add the processor only if you use the `@Focus` path. It's inert otherwise — the annotation is source-retention.
