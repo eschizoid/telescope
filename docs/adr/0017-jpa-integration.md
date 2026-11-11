@@ -1,6 +1,6 @@
 # ADR-0017: `telescope-jpa` — persistence-aware container copies and proxy handling
 
-**Status:** Proposed · **Date:** 2026-10-08
+**Status:** Accepted · **Date:** 2026-10-08 · **Accepted:** 2026-11-11
 
 ## Context
 
@@ -64,6 +64,13 @@ live concurrent view or a very large container on a hot path.
   provider-specific branch in core for each behavior and keeps the native-image exception.
 - **Rely on `share(...)` alone.** Rejected as the only answer: it makes every entity mapper opt out field by field,
   which is the MapStruct `ignore = true` pattern in typed form rather than an improvement on it.
+
+## Not decided here
+
+Merging a managed collection by `@Id`, so a matching element is updated in place instead of the collection being cleared
+and refilled, is a later step with its own amendment. It plugs into the same `ContainerCopy` hook, but how the DTO
+side's identifier is found, how new elements and removals are ordered, and how hash-based sets and list order behave are
+not settled by this record.
 
 ## Open questions
 

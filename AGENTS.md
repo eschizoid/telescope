@@ -726,9 +726,9 @@ JVM/codegen-only under AOT).
     regression gate.
 16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
     converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.
-17. **0017 — `telescope-jpa`.** (Proposed.) Persistence-aware container copies through a `ContainerCopy` SPI (an
-    unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all against
-    the Jakarta Persistence API.
+17. **0017 — `telescope-jpa`.** (Accepted, not built.) Persistence-aware container copies through a `ContainerCopy` SPI
+    (an unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all
+    against the Jakarta Persistence API.
 18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
     guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
     Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
