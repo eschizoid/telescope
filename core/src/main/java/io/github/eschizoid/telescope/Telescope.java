@@ -1475,7 +1475,7 @@ public sealed class Telescope<
     // A @Bridge field of the calling class declares this mapper when the processor generated a
     // bridge from its rows; the caller is read here, in the factory the field's initializer calls.
     final var declaration = DeepMap.mergeDeclaration(initialisingCaller(), target, steps);
-    if (declaration.provider() == null) return Merge.build(target, steps);
+    if (declaration.provider() == null) return Merge.build(target, steps, declaration.node());
     final var fn = (BridgeFn<Sources, T>) bridgeFnOf(declaration.provider().bridge());
     return (Mapper<Sources, T>) BridgeRegistry.specialise(
       declaration.provider(),

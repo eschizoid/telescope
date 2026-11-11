@@ -8,3 +8,6 @@ io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$StaleProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$ForwardProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$MovedProvider
 io.github.eschizoid.telescope.declaredbridge.DeclaredFixtures$LazyProvider
+io.github.eschizoid.telescope.declaredbridge.MergeFixtures$DeclaredProvider
+io.github.eschizoid.telescope.declaredbridge.MergeFixtures$OtherKindsProvider
+io.github.eschizoid.telescope.declaredbridge.MergeFixtures$OtherAccessorsProvider

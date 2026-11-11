@@ -40,8 +40,17 @@ final class Merge {
 
   private Merge() {}
 
+  /**
+   * The runtime merge of {@code steps} into {@code target}, with {@code declared}, when not null,
+   * first in the mapper's {@code explain()} trail: the node saying why a merge a {@code @Bridge}
+   * field declares runs on the runtime path.
+   */
   @SuppressWarnings("unchecked")
-  static <T> Mapper<Sources, T> build(final Class<T> target, final MergeStep<T>[] steps) {
+  static <T> Mapper<Sources, T> build(
+    final Class<T> target,
+    final MergeStep<T>[] steps,
+    final OpticNode.Declared declared
+  ) {
     Objects.requireNonNull(target, "Telescope.merge: target class is null");
     final var targetRefl = Reflective.of(target);
 
@@ -71,7 +80,8 @@ final class Merge {
     // component (SourceClass.field → target field), one MISSING_SOURCE skip per unbound one.
     // Derived from the same plan the forward path runs on, so the report cannot drift.
     final var names = targetRefl.names(target);
-    final var trail = new ArrayList<OpticNode>(names.length);
+    final var trail = new ArrayList<OpticNode>(names.length + 1);
+    if (declared != null) trail.add(declared);
     for (final var name : names) {
       final var r = planByTgt.get(name);
       if (r != null) {
