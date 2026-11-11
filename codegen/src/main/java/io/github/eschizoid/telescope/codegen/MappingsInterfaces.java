@@ -15,18 +15,13 @@ import java.util.stream.Collectors;
 import javax.annotation.processing.FilerException;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.Element;
-import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
-import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
-import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
-import javax.lang.model.type.TypeMirror;
-import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -48,11 +43,11 @@ import javax.tools.JavaFileObject;
  * <p>The method is left out where the type declares or inherits a method of that name taking
  * nothing, which then is what the call means; a type naming the interface in its {@code implements}
  * clause gets a note on the field when the method is inherited. It is also left out where the
- * interface cannot reach the field or a type the method names from its package, where two fields
- * would give one interface two methods of one name, which leaves out both, and where a source a
- * processor writes declares the field after the interface was written. A type naming the interface
- * in its {@code implements} clause hears about either on the field; a type that does not name it
- * calls no method of it, so its fields compile as they would without the interface.
+ * interface cannot reach the field or a side from its package, where two fields would give one
+ * interface two methods of one name, which leaves out both, and where a source a processor writes
+ * declares the field after the interface was written. A type naming the interface in its {@code
+ * implements} clause hears about either on the field; a type that does not name it calls no method
+ * of it, so its fields compile as they would without the interface.
  */
 final class MappingsInterfaces {
 
@@ -60,7 +55,6 @@ final class MappingsInterfaces {
   static final String SUFFIX = "Mappings";
 
   private static final String MAPPER = "io.github.eschizoid.telescope.conversion.Mapper";
-  private static final String FORWARD_MAPPER = "io.github.eschizoid.telescope.conversion.ForwardMapper";
 
   /**
    * One default method: {@code returns name() { return call((takes) (Object) this); }}, added by
@@ -83,9 +77,6 @@ final class MappingsInterfaces {
 
   /** The type each interface is for, by its qualified name. */
   private final Map<String, TypeElement> owners = new LinkedHashMap<>();
-
-  /** The fields read so far, as {@code Carrier#FIELD}. */
-  private final Set<String> read = new HashSet<>();
 
   /**
    * The fields whose mapper type names a class no round has written yet, as {@code Carrier#FIELD}.
@@ -114,24 +105,19 @@ final class MappingsInterfaces {
   /**
    * Reads the {@code @Bridge} fields among {@code annotated}, the elements a round reports, and
    * again each field an earlier round could not read because its mapper type named a class not yet
-   * written.
+   * written. A round reports each element once, in the round that enters its source.
    */
   void read(final Set<? extends Element> annotated) {
     final var fields = new ArrayList<VariableElement>();
     for (final var key : List.copyOf(unresolved)) {
       final var at = key.lastIndexOf('#');
       final var carrier = env.getElementUtils().getTypeElement(key.substring(0, at));
-      if (carrier == null) continue;
       for (final var field : ElementFilter.fieldsIn(carrier.getEnclosedElements())) {
         if (field.getSimpleName().contentEquals(key.substring(at + 1))) fields.add(field);
       }
     }
     unresolved.clear();
-    for (final var element : annotated) {
-      if (element.getKind() == ElementKind.FIELD && read.add(keyOf((VariableElement) element))) {
-        fields.add((VariableElement) element);
-      }
-    }
+    fields.addAll(ElementFilter.fieldsIn(annotated));
     for (final var field : fields) add(field);
   }
 
@@ -150,75 +136,66 @@ final class MappingsInterfaces {
     return ((TypeElement) field.getEnclosingElement()).getQualifiedName() + "#" + field.getSimpleName();
   }
 
+  /**
+   * Adds the methods {@code field} gives. A field whose type does not name both sides, a raw {@code
+   * Mapper} or {@code Mapper<?, ?>}, gives none, since the interface could not type the call. A
+   * side is a class literal's class, so the type names each one without type arguments.
+   */
   private void add(final VariableElement field) {
-    if (!(field.getEnclosingElement() instanceof TypeElement carrier)) return;
+    final var carrier = (TypeElement) field.getEnclosingElement();
+    // A field holding a mapper call is a Mapper or a ForwardMapper, the only types of two type
+    // arguments either factory's result is assignable to; Object and a raw Mapper have none.
     if (!(field.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) return;
     final var mapperType = ((TypeElement) declared.asElement()).getQualifiedName().toString();
-    if (!mapperType.equals(MAPPER) && !mapperType.equals(FORWARD_MAPPER)) return;
     final var source = declared.getTypeArguments().get(0);
     final var target = declared.getTypeArguments().get(1);
     if (source.getKind() == TypeKind.ERROR || target.getKind() == TypeKind.ERROR) {
       unresolved.add(keyOf(field));
       return;
     }
-    if (
-      !(source instanceof DeclaredType s) ||
-      !(s.asElement() instanceof TypeElement sourceType) ||
-      !(target instanceof DeclaredType t) ||
-      !(t.asElement() instanceof TypeElement targetType)
-    ) {
-      return;
-    }
+    if (!(source instanceof DeclaredType s) || !(target instanceof DeclaredType t)) return;
+    final var sourceType = (TypeElement) s.asElement();
+    final var targetType = (TypeElement) t.asElement();
     final var call = carrier.getQualifiedName() + "." + field.getSimpleName();
-    contribute(sourceType, targetType, field, source, target, call + ".forward");
+    contribute(sourceType, targetType, field, call + ".forward");
     // A pair of one type converts to itself in both directions, so its backward has no name of its
     // own on the one interface.
     if (mapperType.equals(MAPPER) && !sourceType.equals(targetType)) {
-      contribute(targetType, sourceType, field, target, source, call + ".backward");
+      contribute(targetType, sourceType, field, call + ".backward");
     }
   }
 
   /**
-   * Adds to {@code owner}'s interface the method converting it, as {@code takes}, to {@code other},
-   * as {@code returns}, through {@code call}.
+   * Adds to {@code owner}'s interface the method converting it to {@code other} through {@code
+   * call}.
    */
   private void contribute(
     final TypeElement owner,
     final TypeElement other,
     final VariableElement field,
-    final TypeMirror takes,
-    final TypeMirror returns,
     final String call
   ) {
-    if (owner.getNestingKind() != NestingKind.TOP_LEVEL || !compiledHere(owner)) return;
+    if (!compiledHere(owner)) return;
     final var ownerName = owner.getQualifiedName().toString();
     // The interface is written for every type a field converts, whatever methods it ends up with,
     // so a type naming it in its implements clause compiles once it declares every method itself.
     final var declared = methods.computeIfAbsent(ownerName, unused -> new LinkedHashMap<>());
     owners.putIfAbsent(ownerName, owner);
     final var name = "to" + other.getSimpleName();
+    if (written.contains(ownerName)) {
+      if (implementsInterface(owner)) error(field, writtenEarlier(field, owner, name));
+      return;
+    }
     final var own = noArgument(owner, name);
     if (own != null) {
       final var from = (TypeElement) own.getEnclosingElement();
-      if (
-        !from.equals(owner) &&
-        !interfaceName(owner, env).contentEquals(from.getQualifiedName()) &&
-        implementsInterface(owner)
-      ) {
-        note(field, inherited(field, owner, name, from));
-      }
+      if (!from.equals(owner) && implementsInterface(owner)) note(field, inherited(field, owner, name, from));
       return;
     }
     final var pkg = env.getElementUtils().getPackageOf(owner);
-    final var unreachable = unreachable(field, List.of(takes, returns), pkg);
+    final var unreachable = unreachable(field, List.of(owner, other), pkg);
     if (unreachable != null) {
-      if (implementsInterface(owner)) {
-        error(field, unreachable(owner, name, unreachable, pkg));
-      }
-      return;
-    }
-    if (written.contains(ownerName)) {
-      if (implementsInterface(owner)) error(field, writtenEarlier(field, owner, name));
+      if (implementsInterface(owner)) error(field, unreachable(owner, name, unreachable, pkg));
       return;
     }
     final var key = ownerName + "#" + name;
@@ -226,21 +203,23 @@ final class MappingsInterfaces {
     if (held != null) {
       shared.putIfAbsent(key, held);
       if (implementsInterface(owner)) {
-        error(field, sameName(held.field(), field, owner, name, held.returns(), render(returns)));
+        error(field, sameName(held.field(), field, owner, name, held.returns(), other.getQualifiedName().toString()));
       }
       return;
     }
-    final var raw = AbstractTelescopeProcessor.namesRaw(takes) || AbstractTelescopeProcessor.namesRaw(returns);
+    final var raw = !owner.getTypeParameters().isEmpty() || !other.getTypeParameters().isEmpty();
+    final var elements = env.getElementUtils();
     final var deprecated =
-      env.getElementUtils().isDeprecated(field) ||
-      namesDeprecated((TypeElement) field.getEnclosingElement()) ||
-      namesDeprecated(takes) ||
-      namesDeprecated(returns);
-    declared.put(name, new Method(name, field, render(returns), render(takes), call, raw, deprecated));
+      elements.isDeprecated(field) ||
+      elements.isDeprecated(field.getEnclosingElement()) ||
+      elements.isDeprecated(owner) ||
+      elements.isDeprecated(other);
+    declared.put(name, new Method(name, field, other.getQualifiedName().toString(), ownerName, call, raw, deprecated));
   }
 
   /** Whether {@code type} was compiled from a source in this compilation, not read from a class. */
   private boolean compiledHere(final TypeElement type) {
+    // Elements.getFileObjectOf answers null for an element it has no file for.
     final var file = env.getElementUtils().getFileObjectOf(type);
     return file != null && file.getKind() == JavaFileObject.Kind.SOURCE;
   }
@@ -267,114 +246,26 @@ final class MappingsInterfaces {
   }
 
   /**
-   * What the interface, in {@code pkg}, cannot reach of {@code field} and {@code types} — the
-   * field, its class or one of the types — named for a diagnostic, or null when it reaches all.
+   * What the interface, in {@code pkg}, cannot reach of {@code field} and {@code sides} — the
+   * field, its class or one of the sides — named for a diagnostic, or null when it reaches all.
    */
-  private String unreachable(final VariableElement field, final List<TypeMirror> types, final PackageElement pkg) {
+  private String unreachable(final VariableElement field, final List<TypeElement> sides, final PackageElement pkg) {
     final var carrier = (TypeElement) field.getEnclosingElement();
     final var fieldName = carrier.getSimpleName() + "." + field.getSimpleName();
     if (field.getModifiers().contains(Modifier.PRIVATE)) return "the field " + fieldName + ", which is private,";
     if (!reaches(carrier, pkg)) return "the class " + carrier.getQualifiedName() + ", which is not public,";
-    if (!field.getModifiers().contains(Modifier.PUBLIC) && !samePackage(field, pkg)) {
-      return "the field " + fieldName + ", which is not public,";
-    }
-    for (final var type : types) {
-      final var hidden = hiddenIn(type, pkg);
-      if (hidden != null) return "the type " + hidden.getQualifiedName() + ", which is not public,";
+    if (!reaches(field, pkg)) return "the field " + fieldName + ", which is not public,";
+    for (final var side : sides) {
+      if (!reaches(side, pkg)) return "the type " + side.getQualifiedName() + ", which is not public,";
     }
     return null;
   }
 
-  /** The class {@code type} names, at any depth, that {@code pkg} cannot reach, or null. */
-  private TypeElement hiddenIn(final TypeMirror type, final PackageElement pkg) {
-    return switch (type.getKind()) {
-      case DECLARED -> {
-        final var element = (TypeElement) ((DeclaredType) type).asElement();
-        if (!reaches(element, pkg)) yield element;
-        for (final var argument : ((DeclaredType) type).getTypeArguments()) {
-          final var hidden = hiddenIn(argument, pkg);
-          if (hidden != null) yield hidden;
-        }
-        yield null;
-      }
-      case ARRAY -> hiddenIn(((ArrayType) type).getComponentType(), pkg);
-      case WILDCARD -> {
-        final var wildcard = (WildcardType) type;
-        final var bound = wildcard.getExtendsBound() != null ? wildcard.getExtendsBound() : wildcard.getSuperBound();
-        yield bound == null ? null : hiddenIn(bound, pkg);
-      }
-      default -> null;
-    };
-  }
-
-  /** Whether {@code type} names, at any depth, a deprecated class or a class enclosed by one. */
-  private boolean namesDeprecated(final TypeMirror type) {
-    return switch (type.getKind()) {
-      case DECLARED -> {
-        if (namesDeprecated((TypeElement) ((DeclaredType) type).asElement())) yield true;
-        for (final var argument : ((DeclaredType) type).getTypeArguments()) {
-          if (namesDeprecated(argument)) yield true;
-        }
-        yield false;
-      }
-      case ARRAY -> namesDeprecated(((ArrayType) type).getComponentType());
-      case WILDCARD -> {
-        final var wildcard = (WildcardType) type;
-        final var bound = wildcard.getExtendsBound() != null ? wildcard.getExtendsBound() : wildcard.getSuperBound();
-        yield bound != null && namesDeprecated(bound);
-      }
-      default -> false;
-    };
-  }
-
-  /** Whether {@code type} or a class enclosing it is deprecated. */
-  private boolean namesDeprecated(final TypeElement type) {
-    for (Element at = type; at instanceof TypeElement enclosing; at = enclosing.getEnclosingElement()) {
-      if (env.getElementUtils().isDeprecated(enclosing)) return true;
-    }
-    return false;
-  }
-
-  /** Whether code in {@code pkg} can name {@code type} and every class enclosing it. */
-  private boolean reaches(final TypeElement type, final PackageElement pkg) {
-    for (Element at = type; at instanceof TypeElement enclosing; at = enclosing.getEnclosingElement()) {
-      if (enclosing.getModifiers().contains(Modifier.PRIVATE)) return false;
-      if (!enclosing.getModifiers().contains(Modifier.PUBLIC) && !samePackage(enclosing, pkg)) return false;
-    }
-    return true;
-  }
-
-  private boolean samePackage(final Element element, final PackageElement pkg) {
-    return env.getElementUtils().getPackageOf(element).equals(pkg);
-  }
-
-  /**
-   * {@code type} as source text: each class by its canonical name, with its type arguments, and
-   * without the type annotations {@code TypeMirror.toString} would carry along.
-   */
-  private static String render(final TypeMirror type) {
-    return switch (type.getKind()) {
-      case DECLARED -> {
-        final var declared = (DeclaredType) type;
-        final var name = ((TypeElement) declared.asElement()).getQualifiedName().toString();
-        yield declared.getTypeArguments().isEmpty()
-          ? name
-          : name +
-            declared
-              .getTypeArguments()
-              .stream()
-              .map(MappingsInterfaces::render)
-              .collect(Collectors.joining(", ", "<", ">"));
-      }
-      case ARRAY -> render(((ArrayType) type).getComponentType()) + "[]";
-      case WILDCARD -> {
-        final var wildcard = (WildcardType) type;
-        if (wildcard.getExtendsBound() != null) yield "? extends " + render(wildcard.getExtendsBound());
-        if (wildcard.getSuperBound() != null) yield "? super " + render(wildcard.getSuperBound());
-        yield "?";
-      }
-      default -> type.toString();
-    };
+  /** Whether code in {@code pkg} can name {@code element}, a top-level class or a field of one. */
+  private boolean reaches(final Element element, final PackageElement pkg) {
+    return (
+      element.getModifiers().contains(Modifier.PUBLIC) || env.getElementUtils().getPackageOf(element).equals(pkg)
+    );
   }
 
   private void write(final TypeElement owner, final Iterable<Method> declared) {
@@ -387,7 +278,6 @@ final class MappingsInterfaces {
     for (final var method : declared) {
       origins.add(method.field());
       if (method.raw()) suppressed.add("rawtypes");
-      if (method.takes().indexOf('<') >= 0) suppressed.add("unchecked");
       // A use of a deprecated element warns under -Xlint:deprecation, and of one deprecated for
       // removal by default, so a build under -Werror fails on code it did not write.
       if (method.deprecated()) {

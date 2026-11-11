@@ -27,6 +27,8 @@ import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * The {@code <Type>Mappings} interface the processor generates for each type a {@code @Bridge}
@@ -698,5 +700,290 @@ class MappingsInterfaceTest {
       final var invoice = construct(loader, "mi.Invoice", 7L, "Ada");
       assertEquals(invoice, call(call(invoice, "toInvoiceDto"), "toInvoice"));
     }
+  }
+
+  @Test
+  @DisplayName("a source in the unnamed package converts itself through an interface of the unnamed package")
+  void aSourceInTheUnnamedPackage() throws Exception {
+    final var c = compile(
+      sources("Invoice", INVOICE.replace("package mi;\n", ""), "InvoiceDto", INVOICE_DTO.replace("package mi; ", ""))
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var text = c.generated().get("InvoiceMappings");
+    assertTrue(text.startsWith("/**"), text);
+    try (final var loader = load(c)) {
+      final var invoice = construct(loader, "Invoice", 7L, "Ada");
+      assertEquals(invoice, call(call(invoice, "toInvoiceDto"), "toInvoice"));
+    }
+  }
+
+  @Test
+  @DisplayName("a private field in the unnamed package is refused naming the unnamed package")
+  void aPrivateFieldInTheUnnamedPackageIsRefused() {
+    final var c = compile(
+      sources(
+        "Invoice",
+        INVOICE.replace("package mi;\n", "").replace("@Bridge static", "@Bridge private static"),
+        "InvoiceDto",
+        INVOICE_DTO.replace("package mi; ", "").replace(" implements InvoiceDtoMappings", "")
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(errorOn(c, "implements the generated InvoiceMappings").contains("from package (unnamed)"));
+  }
+
+  @Test
+  @DisplayName("a @Bridge on a class, not a field, writes no interface")
+  void aClassLevelBridgeWritesNoInterface() {
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        "package mi;\n" +
+          HEADER +
+          "@Bridge(InvoiceDto.class) public record Invoice(Long invoiceId, String customer) {}",
+        "mi.InvoiceDto",
+        "package mi; public record InvoiceDto(Long invoiceId, String customer) {}"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("mi.InvoiceBridge"), () -> c.generated().keySet().toString());
+    assertNull(c.generated().get("mi.InvoiceMappings"), () -> c.generated().keySet().toString());
+  }
+
+  static List<String> declaredTypesNamingNoSides() {
+    return List.of("@SuppressWarnings(\"rawtypes\") Mapper", "Mapper<?, ?>", "Object");
+  }
+
+  @ParameterizedTest
+  @MethodSource("declaredTypesNamingNoSides")
+  @DisplayName("a field whose declared type does not name both sides adds no interface")
+  void aFieldTypeNamingNoSidesAddsNoInterface(final String declared) {
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        INVOICE.replace(" implements InvoiceMappings", "").replace("Mapper<Invoice, InvoiceDto>", declared),
+        "mi.InvoiceDto",
+        INVOICE_DTO.replace(" implements InvoiceDtoMappings", "")
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertNull(c.generated().get("mi.InvoiceMappings"), () -> c.generated().keySet().toString());
+    assertNull(c.generated().get("mi.InvoiceDtoMappings"), () -> c.generated().keySet().toString());
+  }
+
+  @Test
+  @DisplayName("a type mapped to itself by a two-way field gets the forward method only")
+  void aPairOfOneTypeAddsOneMethod() throws Exception {
+    final var self =
+      "package mi;\n" +
+      HEADER +
+      "public record Invoice(Long id, String customer) implements InvoiceMappings {\n" +
+      "  @Bridge static final Mapper<Invoice, Invoice> COPY = Telescope.mapper(Invoice.class, Invoice.class);\n" +
+      "}\n";
+    final var c = compile(sources("mi.Invoice", self));
+    assertTrue(c.success(), c::errorMessages);
+    final var text = c.generated().get("mi.InvoiceMappings");
+    assertEquals(1, text.split("default ", -1).length - 1, text);
+    assertTrue(text.contains("return mi.Invoice.COPY.forward((mi.Invoice) (Object) this);"), text);
+    try (final var loader = load(c)) {
+      final var invoice = construct(loader, "mi.Invoice", 7L, "Ada");
+      assertEquals(invoice, call(invoice, "toInvoice"));
+    }
+  }
+
+  @Test
+  @DisplayName("a third field on a name two fields already share is refused too")
+  void aThirdFieldOnASharedNameIsRefused() {
+    final var all = new ArrayList<>(List.of(twoDtos(true, "")));
+    all.add(
+      ProcessorHarness.source(
+        "mi.third.Mappers",
+        "package mi.third;\n" +
+          HEADER +
+          "import mi.Invoice;\n" +
+          "public final class Mappers {\n" +
+          "  @Bridge public static final ForwardMapper<Invoice, mi.c.InvoiceDto> C =\n" +
+          "    Telescope.mapperForward(Invoice.class, mi.c.InvoiceDto.class);\n" +
+          "}\n"
+      )
+    );
+    all.add(ProcessorHarness.source("mi.c.InvoiceDto", "package mi.c; public record InvoiceDto(String customer) {}"));
+    final var c = compile(all.toArray(JavaFileObject[]::new));
+    assertFalse(c.success());
+    final var refusals = c
+      .diagnostics()
+      .stream()
+      .filter(
+        d -> d.getKind() == Diagnostic.Kind.ERROR && d.getMessage(null).contains("a second method toInvoiceDto()")
+      )
+      .map(d -> d.getMessage(null))
+      .toList();
+    assertEquals(2, refusals.size(), refusals::toString);
+    assertTrue(
+      refusals.stream().allMatch(m -> m.contains("which @Bridge field Invoice.A already gives it")),
+      refusals::toString
+    );
+  }
+
+  @Test
+  @DisplayName("an overload of toX() taking an argument does not take the generated method's name")
+  void anOverloadTakingAnArgumentKeepsTheMethod() throws Exception {
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        INVOICE.replace(
+          "}\n",
+          "  public InvoiceDto toInvoiceDto(final String customer) { return new InvoiceDto(id(), customer); }\n}\n"
+        ),
+        "mi.InvoiceDto",
+        INVOICE_DTO
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      final var invoice = construct(loader, "mi.Invoice", 7L, "Ada");
+      assertEquals("InvoiceDto[invoiceId=7, customer=Ada]", call(invoice, "toInvoiceDto").toString());
+    }
+  }
+
+  @Test
+  @DisplayName("a type naming its interface by its qualified name is held to the same refusals")
+  void aQualifiedImplementsClauseIsHeldToTheRefusals() {
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        INVOICE.replace(" implements InvoiceMappings", " implements mi.InvoiceMappings").replace(
+          "@Bridge static",
+          "@Bridge private static"
+        ),
+        "mi.InvoiceDto",
+        INVOICE_DTO.replace(" implements InvoiceDtoMappings", "")
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(
+      errorOn(c, "implements the generated InvoiceMappings").contains("the field Invoice.DTO, which is private,")
+    );
+  }
+
+  @Test
+  @DisplayName("a public field of a class not public in another package is refused naming the class")
+  void aHiddenCarrierIsRefused() {
+    final var c = compile(
+      sources(
+        "mi.maps.Mappers",
+        HIDDEN_CARRIER.replace("public final class Mappers", "final class Mappers").replace(
+          "@Bridge static",
+          "@Bridge public static"
+        ),
+        "mi.Invoice",
+        "package mi; public record Invoice(Long id, String customer) implements InvoiceMappings {}",
+        "mi.InvoiceDto",
+        "package mi; public record InvoiceDto(Long invoiceId, String customer) {}"
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(
+      errorOn(c, "implements the generated InvoiceMappings").contains("the class mi.maps.Mappers, which is not public,")
+    );
+  }
+
+  @Test
+  @DisplayName("a side the interface's package cannot name is refused naming the type")
+  void aHiddenSideIsRefused() {
+    final var carrier =
+      "package mi.maps;\n" +
+      HEADER +
+      "import mi.Invoice;\n" +
+      "public final class Mappers {\n" +
+      "  @Bridge public static final ForwardMapper<Invoice, Hidden> HIDDEN =\n" +
+      "    Telescope.mapperForward(Invoice.class, Hidden.class);\n" +
+      "}\n";
+    final var c = compile(
+      sources(
+        "mi.maps.Mappers",
+        carrier,
+        "mi.maps.Hidden",
+        "package mi.maps; record Hidden(Long id, String customer) {}",
+        "mi.Invoice",
+        "package mi; public record Invoice(Long id, String customer) implements InvoiceMappings {}"
+      )
+    );
+    assertFalse(c.success());
+    assertTrue(
+      errorOn(c, "implements the generated InvoiceMappings").contains("the type mi.maps.Hidden, which is not public,")
+    );
+  }
+
+  @Test
+  @DisplayName("a package-private source gets a package-private interface")
+  void aPackagePrivateSourceGetsAPackagePrivateInterface() {
+    final var c = compile(
+      sources("mi.Invoice", INVOICE.replace("public record Invoice", "record Invoice"), "mi.InvoiceDto", INVOICE_DTO)
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var text = c.generated().get("mi.InvoiceMappings");
+    assertTrue(text.contains("\ninterface InvoiceMappings {"), text);
+    assertTrue(c.generated().get("mi.InvoiceDtoMappings").contains("\npublic interface InvoiceDtoMappings {"));
+  }
+
+  @Test
+  @DisplayName("a type of the interface's name the user declared is left as it is")
+  void aTypeOfTheInterfacesNameIsTheUsers() {
+    final var c = compile(
+      sources(
+        "mi.Invoice",
+        INVOICE,
+        "mi.InvoiceMappings",
+        "package mi; public interface InvoiceMappings { default String mine() { return \"mine\"; } }",
+        "mi.InvoiceDto",
+        INVOICE_DTO
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertNull(c.generated().get("mi.InvoiceMappings"), () -> c.generated().keySet().toString());
+  }
+
+  static List<String> deprecatedDeclarations() {
+    return List.of("target", "carrier");
+  }
+
+  @ParameterizedTest
+  @MethodSource("deprecatedDeclarations")
+  @DisplayName("a deprecated side or carrier draws no warning from the interface under -Xlint:all")
+  void aDeprecatedSideOrCarrierDrawsNoWarningFromTheInterface(final String deprecated) {
+    final var carrier =
+      "package mi.maps;\n" +
+      HEADER +
+      "import mi.Invoice;\n" +
+      "import mi.InvoiceDto;\n" +
+      (deprecated.equals("carrier") ? "@Deprecated " : "") +
+      "@SuppressWarnings(\"deprecation\") public final class Mappers {\n" +
+      "  @Bridge public static final Mapper<Invoice, InvoiceDto> DTO =\n" +
+      "    Telescope.mapper(Invoice.class, InvoiceDto.class, to(Invoice::id, InvoiceDto::invoiceId));\n" +
+      "}\n";
+    final var c = ProcessorHarness.compileFullyWithOnly(
+      processors(),
+      List.of("-Xlint:all,-processing"),
+      sources(
+        "mi.maps.Mappers",
+        carrier,
+        "mi.Invoice",
+        "package mi; public record Invoice(Long id, String customer) {}",
+        "mi.InvoiceDto",
+        (deprecated.equals("target") ? "package mi; @Deprecated " : "package mi; ") +
+          "public record InvoiceDto(Long invoiceId, String customer) {}"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var fromInterfaces = c
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.WARNING || d.getKind() == Diagnostic.Kind.MANDATORY_WARNING)
+      .filter(d -> d.getSource() != null && d.getSource().getName().endsWith("Mappings.java"))
+      .map(d -> d.getSource().getName() + ": " + d.getMessage(null))
+      .toList();
+    assertTrue(fromInterfaces.isEmpty(), fromInterfaces::toString);
+    assertTrue(c.generated().get("mi.InvoiceMappings").contains("\"deprecation\""));
   }
 }
