@@ -4909,6 +4909,59 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "a via row naming a field whose own rows are refused is refused for the unwritten bridge, not a Lombok annotation"
+    )
+    void viaMapperNamingARefusedFieldIsRefusedWithThatReason() {
+      final var compilation = compileAttributed(
+        source("demo.In", "package demo; public record In(String v) {}"),
+        source("demo.Out", "package demo; public record Out(Integer v) {}"),
+        source(
+          "demo.InOut",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          import io.github.eschizoid.telescope.mapping.Mapping;
+          public class InOut {
+            @Bridge
+            public static final Mapper<In, Out> MAPPER = Telescope.mapper(In.class, Out.class,
+              Mapping.<In, Out, String, Integer>to(In::v, Out::v, s -> 99, i -> "nm"));
+          }
+          """
+        ),
+        source("demo.Src", "package demo; public record Src(In a) {}"),
+        source("demo.Tgt", "package demo; public record Tgt(Out a) {}"),
+        source(
+          "demo.Carrier",
+          """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.conversion.Mapper;
+          public class Carrier {
+            @Bridge
+            public static final Mapper<Src, Tgt> MAPPER =
+              Telescope.mapper(Src.class, Tgt.class, via(Src::a, Tgt::a, InOut.MAPPER));
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "the field the row names is refused, so its bridge is not written");
+      assertTrue(
+        compilation.hasError(
+          "converts through demo.InToOutBridge, the bridge of a @Bridge field no round of this compilation" +
+            " wrote: that field is refused, or an error reported elsewhere ended the rounds"
+        ),
+        () -> "expected the refused field as the reason, saw: " + compilation.errorMessages()
+      );
+      assertFalse(compilation.hasError("Lombok"), compilation::errorMessages);
+    }
+
+    @Test
     @DisplayName("a via row's patch() writes the slot whole through the named class's backward")
     void viaMapperPatchWritesWholeThroughUserBridgeBackward() {
       final var compilation = compile(

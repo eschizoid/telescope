@@ -176,6 +176,12 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public boolean isExtendable(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element != null && element.getKind() != ElementKind.ENUM && !element.getModifiers().contains(Modifier.FINAL);
+  }
+
+  @Override
   public boolean isAbstractType(final TypeMirror t) {
     final var element = elementOf(types.erasure(t));
     return element != null && (element.getKind().isInterface() || element.getModifiers().contains(Modifier.ABSTRACT));

@@ -1802,7 +1802,13 @@ public final class DeepMap {
         // least-upper-bound of the two accessors, so to(Integer-getter, String-getter) compiles and
         // would otherwise identity-pass an Integer into a String setter (ClassCastException at
         // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
-        final var resolution = resolvedRow(row, srcType, tgtType, new RowSides(source, target, srcField, tgtField));
+        final var resolution = resolvedRow(
+          row,
+          srcType,
+          tgtType,
+          new RowSides(source, target, srcField, tgtField),
+          forwardOnly
+        );
         final var resolved = resolution.row();
         final var rowIso =
           row instanceof SameTypedTo<?, ?, ?>
@@ -1810,7 +1816,7 @@ public final class DeepMap {
                 autoIso(
                   srcType,
                   tgtType,
-                  srcField + " → " + tgtField,
+                  PairingMessages.renamedComponent(srcField, tgtField),
                   overrides,
                   beanRefl,
                   cache,
@@ -1823,7 +1829,7 @@ public final class DeepMap {
                 ),
                 paired,
                 new RowSides(source, target, srcField, tgtField),
-                srcField + " → " + tgtField,
+                PairingMessages.renamedComponent(srcField, tgtField),
                 forwardOnly
               )
             : resultChecked(
@@ -2837,13 +2843,14 @@ public final class DeepMap {
           srcType,
           tgtType,
           d.src().kind(),
-          d.tgt().kind()
+          d.tgt().kind(),
+          componentName
         );
       }
       return switch (d.src().kind()) {
-        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
-        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
-        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType, componentName);
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
         // Settled against the other side of the pair before the decision was built, so a view
@@ -3124,13 +3131,15 @@ public final class DeepMap {
    * property the source declares as {@code srcType} and the target as {@code tgtType}; see {@link
    * ViaClasses}. The class's methods are read here, while the runtime path builds a mapper, and
    * nowhere else. A via row of two methods, or one naming a class, carries what its methods return
-   * where they convert the property itself.
+   * where they convert the property itself. A mapper that is {@code forwardOnly} never calls the
+   * class's {@code backward}.
    */
   private static ResolvedRow resolvedRow(
     final Mapping<?, ?> row,
     final Type srcType,
     final Type tgtType,
-    final RowSides sides
+    final RowSides sides,
+    final boolean forwardOnly
   ) {
     final var srcView = PAIRING.containerViewOf(srcType);
     final var tgtView = PAIRING.containerViewOf(tgtType);
@@ -3159,7 +3168,8 @@ public final class DeepMap {
       sides.source().getSimpleName(),
       sides.target().getSimpleName(),
       sides.srcField(),
-      sides.tgtField()
+      sides.tgtField(),
+      forwardOnly
     );
     return new ResolvedRow(chosen.row(), chosen.forward(), chosen.backward());
   }

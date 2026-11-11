@@ -6425,6 +6425,63 @@ class CrossPathCorpusTest {
   }
 
   private static final List<ResultRow> RESULT_ROWS = List.of(
+    // A forward-only mapper never calls a via class's backward, so a backward no value of the
+    // target's property can be handed is no reason to refuse it on either path.
+    new ResultRow(
+      "a forward-only via row whose class's backward takes a Comparable the target never is",
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer a) {}\n",
+        "public class %1$sHw {\n" +
+          "  public static Integer forward(final String s) { return 7; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        plainField(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        ),
+        plainRuntime(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        )
+      ),
+      "#0(a=7)"
+    ),
+    // A property paired under two names is named by both in a refusal of its value, and of an
+    // element's, with the element's index after the target's name.
+    new ResultRow(
+      "a renamed list whose element is no number, named by both names and the element's index",
+      List.of(
+        sampled("%1$sSrc", "java.util.List<String> x", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        "public record %1$sTgt(java.util.List<Integer> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed list of lists whose element is no number, named by both names and both indexes",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<java.util.List<String>> x",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\", \"x\")))"
+        ),
+        "public record %1$sTgt(java.util.List<java.util.List<Integer>> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[0][1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed scalar that is no number, named by both names",
+      List.of(
+        sampled("%1$sSrc", "String x", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y' got \"x\", not an Integer"
+    ),
     new ResultRow(
       "a String property with one setter, a transform returning Object that holds a String",
       resultRow(valueBean("%1$sTgt", "String", "\"q\""), "Object", "a"),
@@ -9809,10 +9866,146 @@ class CrossPathCorpusTest {
       "#0(total=\"1\")"
     ),
     new EnumCell(
-      "an element that is no number fails naming the property holding it",
+      "an element of a list that is no number fails naming the property and the element's index",
       Directions.BOTH,
       List.of(
         bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a list of lists that is no number fails naming both indexes",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.List<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\"), java.util.List.of(\"2\", \"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.List<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.List.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1][1]' got \"x\", not an Integer",
+      "#0(ids=[[\"2\"]])",
+      "#0(ids=[[\"2\"]])"
+    ),
+    new EnumCell(
+      "a list of Optional texts converts each present value, an empty one staying empty",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.empty()))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      "#0(ids=[of 1, empty])",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
+      "an Optional element of a list that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.of(\"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
+      "a value of a map that is no number fails naming the property and the value's key",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Map<String, String> ids", "new %1$sSrc(java.util.Map.of(\"k1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Map<String, Integer> ids", "new %1$sTgt(java.util.Map.of(\"k\", 2))")
+      ),
+      FAILS + "'ids[k1]' got \"x\", not an Integer",
+      "#0(ids={k=\"2\"})",
+      "#0(ids={k=\"2\"})"
+    ),
+    new EnumCell(
+      "an element of a list into a sorted set that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"2\", \"x\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.TreeSet<Integer> ids",
+          "new %1$sTgt(new java.util.TreeSet<>(java.util.Set.of(2)))"
+        )
+      ),
+      FAILS + "'ids[2]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    // Both paths read whether an element has an index to name from the
+    // property's declared type, so a list held by a property declared as
+    // no list gives none.
+    new EnumCell(
+      "an element of a Collection holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Collection<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a Deque holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.Deque<String> ids",
+          "new %1$sSrc(new java.util.LinkedList<>(java.util.List.of(\"1\", \"x\")))"
+        ),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    // An Iterable is no container either path lifts over, so the pair is refused before any
+    // element is read.
+    new EnumCell(
+      "an Iterable holding a list, against a list of numbers, is refused",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "Iterable<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      REFUSED + "'ids' has incompatible source/target shapes",
+      null,
+      null
+    ),
+    new EnumCell(
+      "an element of a set that is no number fails naming the property, the element having no position",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Set<String> ids", "new %1$sSrc(java.util.Set.of(\"x\"))"),
         sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
       ),
       FAILS + "'ids' got \"x\", not an Integer",
@@ -14614,6 +14807,23 @@ class CrossPathCorpusTest {
       "#0(value=\"x!!\")",
       true
     ),
+    // A variable-arity setter of the property's own array type takes the array as it is, as a
+    // Java call passes it, not as the one element of a new array.
+    new IntoRow(
+      "an array property with a variable-arity setter of its own type",
+      List.of(
+        sampled("%1$sSrc", "String[] tags", "new %1$sSrc(new String[] {\"a\", \"b\"})"),
+        "public class %1$sTgt {\n  private String[] tags;\n  private String seen = \"none\";\n  public %1$sTgt() {}\n" +
+          "  public String[] getTags() { return tags; }\n" +
+          "  public void setTags(final String... v) { tags = v; seen = v.length + \":\" + String.join(\"+\", v); }\n" +
+          "  public String getSeen() { return seen; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(seen=\"2:a+b\", tags=#1())",
+      true
+    ),
     new IntoRow(
       "a value whose getter throws on the object forward built, read before any setter runs",
       List.of(
@@ -17067,6 +17277,64 @@ class CrossPathCorpusTest {
         viaClassRow("children")
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
+    ),
+    // A String gives Comparable its own type, so it is never a
+    // Comparable<Integer>, though it is a Comparable.
+    new ViaNeverFits(
+      "a String property, to a class whose forward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final Comparable<Integer> c) { return 1; }\n" +
+          "  public static String backward(final Integer i) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "source",
+        "children",
+        "java.lang.String",
+        "java.lang.Comparable<java.lang.Integer>"
+      )
+    ),
+    // A two-way mapper calls the class's backward, which no Integer can be handed.
+    new ViaNeverFits(
+      "an Integer target, to a class whose backward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 1; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "target",
+        "children",
+        "java.lang.Integer",
+        "java.lang.Comparable<java.lang.Long>"
+      )
+    ),
+    // Containers of two kinds are not lifted over, so the class's methods are
+    // handed each whole property, which they cannot take.
+    new ViaNeverFits(
+      "a List of text into a Set of numbers, through a class converting one element",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 99; }\n" +
+          "  public static String backward(final Integer i) { return \"via\"; }\n}\n",
+        "public record %1$sSrc(java.util.List<String> children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(java.util.Set<Integer> children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "String")
     ),
     new ViaNeverFits(
       "a List source whose element is ? super Ch, through the mapper class",

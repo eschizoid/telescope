@@ -83,8 +83,8 @@ final class ContainerLifts {
     final var srcAlloc = copyAllocator(srcCls, kind);
     final var tgtAlloc = copyAllocator(tgtCls, kind);
     return Iso.of(
-      src -> buildConverted(src, tgtAlloc, Function.identity(), tgtCls),
-      tgt -> buildConverted(tgt, srcAlloc, Function.identity(), srcCls)
+      src -> buildConverted(src, tgtAlloc, Function.identity(), tgtCls, null),
+      tgt -> buildConverted(tgt, srcAlloc, Function.identity(), srcCls, null)
     );
   }
 
@@ -114,8 +114,8 @@ final class ContainerLifts {
     final var srcAlloc = copyAllocator(srcCls, kind);
     final var tgtAlloc = copyAllocator(tgtCls, kind);
     return Iso.of(
-      src -> buildMap(src, tgtAlloc, Function.identity(), tgtCls),
-      tgt -> buildMap(tgt, srcAlloc, Function.identity(), srcCls)
+      src -> buildMap(src, tgtAlloc, Function.identity(), tgtCls, null),
+      tgt -> buildMap(tgt, srcAlloc, Function.identity(), srcCls, null)
     );
   }
 
@@ -139,12 +139,51 @@ final class ContainerLifts {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> liftListIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
-    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, ContainerView.Kind.LIST, ContainerView.Kind.LIST);
+    return liftListIntoTargetRaw(elementIso, srcType, tgtType, null);
+  }
+
+  /**
+   * {@link #liftListIntoTargetRaw(Iso, Type, Type)} for the container {@code componentName} names,
+   * whose element conversion refusing a value names the element's index; see {@link #located}.
+   */
+  static Iso<?, ?> liftListIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Type srcType,
+    final Type tgtType,
+    final String componentName
+  ) {
+    return liftCollectionIntoTargetRaw(
+      elementIso,
+      srcType,
+      tgtType,
+      ContainerView.Kind.LIST,
+      ContainerView.Kind.LIST,
+      componentName
+    );
   }
 
   /** Set counterpart; custom sorted comparators cannot safely consume a changed element type. */
   static Iso<?, ?> liftSetIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
-    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, ContainerView.Kind.SET, ContainerView.Kind.SET);
+    return liftSetIntoTargetRaw(elementIso, srcType, tgtType, null);
+  }
+
+  /**
+   * {@link #liftSetIntoTargetRaw(Iso, Type, Type)} for the container {@code componentName} names.
+   */
+  static Iso<?, ?> liftSetIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Type srcType,
+    final Type tgtType,
+    final String componentName
+  ) {
+    return liftCollectionIntoTargetRaw(
+      elementIso,
+      srcType,
+      tgtType,
+      ContainerView.Kind.SET,
+      ContainerView.Kind.SET,
+      componentName
+    );
   }
 
   /**
@@ -157,9 +196,10 @@ final class ContainerLifts {
     final Type srcType,
     final Type tgtType,
     final ContainerView.Kind srcKind,
-    final ContainerView.Kind tgtKind
+    final ContainerView.Kind tgtKind,
+    final String componentName
   ) {
-    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, srcKind, tgtKind);
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, srcKind, tgtKind, componentName);
   }
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
@@ -168,7 +208,8 @@ final class ContainerLifts {
     final Type srcType,
     final Type tgtType,
     final ContainerView.Kind srcKind,
-    final ContainerView.Kind tgtKind
+    final ContainerView.Kind tgtKind,
+    final String componentName
   ) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
@@ -193,12 +234,22 @@ final class ContainerLifts {
     final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
     final boolean loopForward = tgtSet && converts && keepsOrder(tgtRaw);
     final boolean loopBackward = srcSet && converts && keepsOrder(srcRaw);
+    // Whether an element has an index to name is read from the declared type of the side being
+    // read, as the generated path reads it, not from the class of the value it holds.
+    final var forwardIndexed = indexedName(srcRaw, componentName);
+    final var backwardIndexed = indexedName(tgtRaw, componentName);
     final Iso<Object, Object> filled =
       mh != null && !loopForward && !loopBackward
         ? mh
         : Iso.of(
-            src -> mh != null && !loopForward ? mh.to(src) : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
-            tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
+            src ->
+              mh != null && !loopForward
+                ? mh.to(src)
+                : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw, forwardIndexed),
+            tgt ->
+              mh != null && !loopBackward
+                ? mh.from(tgt)
+                : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw, backwardIndexed)
           );
     final var loop = copying(filled, srcCopy, tgtCopy);
     // A comparator is a problem only for the side being built. Carrying one across a conversion
@@ -284,19 +335,27 @@ final class ContainerLifts {
    * conversion that counts, generates an id or reads a clock sees every element exactly once. That
    * is why a sorted output whose elements change type does not take the fused MethodHandle loop —
    * it leaves nowhere to stand between converting and inserting.
+   *
+   * <p>{@code componentName}, where it is not null, is the container's component, and a value an
+   * element's conversion refuses is refused naming that element's index; see {@link #indexedName},
+   * which passes it only for a container declared as a list.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object buildConverted(
     final Object input,
     final Function<Object, Object> alloc,
     final Function<Object, Object> convert,
-    final Class<?> outRaw
+    final Class<?> outRaw,
+    final String componentName
   ) {
     if (input == null) return null;
     final var fresh = (Collection) alloc.apply(input);
     final boolean ordered = keepsOrder(outRaw);
+    final boolean indexed = componentName != null;
+    var index = 0;
     for (final var x : (Collection<?>) input) {
-      final var converted = convert.apply(x);
+      final var converted = indexed ? convertAt(convert, x, componentName, index) : convert.apply(x);
+      index++;
       if (!ordered) {
         fresh.add(converted);
         continue;
@@ -312,6 +371,68 @@ final class ContainerLifts {
       }
     }
     return fresh;
+  }
+
+  /**
+   * {@code componentName} where {@code declared}, the raw class a container is declared as on the
+   * side a loop reads, is a list, whose elements have an index to name, and null otherwise: a
+   * {@code Collection}, a {@code Deque} or a set gives no index, whatever class its value is.
+   */
+  private static String indexedName(final Class<?> declared, final String componentName) {
+    return componentName != null && List.class.isAssignableFrom(declared) ? componentName : null;
+  }
+
+  /**
+   * {@code element} converted by {@code convert}, an element conversion of the container {@code
+   * componentName} names, where {@code key} is the element's key in a map; see {@link #located}.
+   */
+  private static Object convertAt(
+    final Function<Object, Object> convert,
+    final Object element,
+    final String componentName,
+    final Object key
+  ) {
+    try {
+      return convert.apply(element);
+    } catch (final IllegalArgumentException e) {
+      throw located(e, componentName, PairingMessages.elementPosition(key));
+    }
+  }
+
+  /**
+   * {@code element} converted by {@code convert}, an element conversion of the container {@code
+   * componentName} names, where {@code index} is the element's index in a list; see {@link
+   * #located}. The index is written only on a refusal, so converting allocates nothing for it.
+   */
+  private static Object convertAt(
+    final Function<Object, Object> convert,
+    final Object element,
+    final String componentName,
+    final int index
+  ) {
+    try {
+      return convert.apply(element);
+    } catch (final IllegalArgumentException e) {
+      throw located(e, componentName, PairingMessages.elementPosition(index));
+    }
+  }
+
+  /**
+   * What an element conversion of the container {@code componentName} names throws for {@code e}: a
+   * value it refuses with {@link PairingMessages#notAValue} is refused with the element's {@code
+   * position} after the property's name, as {@link PairingMessages#notAValueAt} writes it, keeping
+   * the refusal's cause, and any other failure is {@code e} itself.
+   */
+  private static IllegalArgumentException located(
+    final IllegalArgumentException e,
+    final String componentName,
+    final String position
+  ) {
+    final var located = PairingMessages.notAValueAt(e.getMessage(), componentName, position);
+    if (located == null) {
+      return e;
+    }
+    return new IllegalArgumentException(located, e.getCause());
   }
 
   /**
@@ -368,13 +489,17 @@ final class ContainerLifts {
     final Object input,
     final Function<Object, Object> alloc,
     final Function<Object, Object> convert,
-    final Class<?> outRaw
+    final Class<?> outRaw,
+    final String componentName
   ) {
     if (input == null) return null;
     final var fresh = (Map) alloc.apply(input);
     final boolean ordered = SortedMap.class.isAssignableFrom(outRaw);
     for (final var e : ((Map<?, ?>) input).entrySet()) {
-      final var value = convert.apply(e.getValue());
+      final var value =
+        componentName == null
+          ? convert.apply(e.getValue())
+          : convertAt(convert, e.getValue(), componentName, e.getKey());
       if (ordered) putOrdered(fresh, e.getKey(), value, outRaw);
       else fresh.put(e.getKey(), value);
     }
@@ -471,6 +596,20 @@ final class ContainerLifts {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> liftMapIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
+    return liftMapIntoTargetRaw(elementIso, srcType, tgtType, null);
+  }
+
+  /**
+   * {@link #liftMapIntoTargetRaw(Iso, Type, Type)} for the map {@code componentName} names, whose
+   * value conversion refusing a value names the value's key; see {@link #located}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  static Iso<?, ?> liftMapIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Type srcType,
+    final Type tgtType,
+    final String componentName
+  ) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
     final var kind = ContainerView.Kind.MAP_VALUES;
@@ -492,8 +631,9 @@ final class ContainerLifts {
     if (mh != null && !loopForward && !loopBackward) return mh;
     return copying(
       Iso.of(
-        src -> mh != null && !loopForward ? mh.to(src) : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
-        tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
+        src -> mh != null && !loopForward ? mh.to(src) : buildMap(src, tgtAlloc, elementIso::to, tgtRaw, componentName),
+        tgt ->
+          mh != null && !loopBackward ? mh.from(tgt) : buildMap(tgt, srcAlloc, elementIso::from, srcRaw, componentName)
       ),
       srcCopy,
       tgtCopy
