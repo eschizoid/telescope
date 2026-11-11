@@ -301,6 +301,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public boolean isExtendable(final Type t) {
+      return delegate.isExtendable(t);
+    }
+
+    @Override
     public boolean isImplementedBy(final Type t, final String className) {
       return delegate.isImplementedBy(t, className);
     }

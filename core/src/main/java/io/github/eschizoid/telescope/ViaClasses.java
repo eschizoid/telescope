@@ -305,17 +305,16 @@ final class ViaClasses {
     final String side,
     final String property
   ) {
-    for (final var method : methods) {
-      if (DeepMap.mayBeInstance(boxed(held), boxed(method.getParameterTypes()[0]))) return;
+    final var parameters = methods
+      .stream()
+      .<Type>map(method -> method.getParameterTypes()[0])
+      .toList();
+    final var unfit = DeepMap.PAIRING.viaParameterNeverFitting(held, parameters);
+    if (unfit == null) {
+      return;
     }
     throw new IllegalArgumentException(
-      PairingMessages.viaMapperNeverFits(
-        source,
-        target,
-        side,
-        property,
-        boxed(methods.getFirst().getParameterTypes()[0]).getSimpleName()
-      )
+      PairingMessages.viaMapperNeverFits(source, target, side, property, boxed((Class<?>) unfit).getSimpleName())
     );
   }
 

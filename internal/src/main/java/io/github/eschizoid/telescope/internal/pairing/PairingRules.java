@@ -1264,6 +1264,50 @@ public final class PairingRules<T> {
     );
   }
 
+  /**
+   * Whether one object can be an instance of both {@code a} and {@code b}, each read by its erasure
+   * and a primitive as its wrapper: one extends the other; either is sealed and one of its
+   * permitted cases can be such an instance, since every instance of a sealed type is an instance
+   * of one of its cases; or one is an interface and a subclass of the other can implement it.
+   */
+  public boolean mayShareInstance(final T a, final T b) {
+    final var x = props.boxed(props.erasure(a));
+    final var y = props.boxed(props.erasure(b));
+    if (props.isAssignable(x, y) || props.isAssignable(y, x)) {
+      return true;
+    }
+    final var xCases = props.permittedSubclasses(x);
+    if (!xCases.isEmpty()) {
+      return xCases.stream().anyMatch(c -> mayShareInstance(c, y));
+    }
+    final var yCases = props.permittedSubclasses(y);
+    if (!yCases.isEmpty()) {
+      return yCases.stream().anyMatch(c -> mayShareInstance(x, c));
+    }
+    if (props.isInterfaceType(x)) {
+      return props.isExtendable(y);
+    }
+    return props.isInterfaceType(y) && props.isExtendable(x);
+  }
+
+  /**
+   * The parameter a {@code via} row's class is refused by when its methods of one name are handed a
+   * property of type {@code property} as it is: the first of {@code parameters}, the types those
+   * methods take, when no value of the property can be an instance of any of them, so every call
+   * would fail. Null when one of them can take some value, and when there are none.
+   */
+  public T viaParameterNeverFitting(final T property, final List<T> parameters) {
+    if (parameters.isEmpty()) {
+      return null;
+    }
+    for (final var parameter : parameters) {
+      if (mayShareInstance(property, parameter)) {
+        return null;
+      }
+    }
+    return parameters.getFirst();
+  }
+
   /** {@link #chooseSetter(Object, List, List)} over methods none of which is variable arity. */
   public int chooseSetter(final T property, final List<T> parameters) {
     return chooseSetter(property, parameters, Collections.nCopies(parameters.size(), null));

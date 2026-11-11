@@ -6221,10 +6221,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(m -> boxedErasure(m.getParameters().getFirst().asType()))
       .toList();
-    if (takes.isEmpty()) return null;
-    final var held = boxedErasure(own);
-    if (takes.stream().anyMatch(parameter -> mayShareInstance(held, parameter))) return null;
-    return simpleNameOf(takes.getFirst());
+    final var unfit = rules.viaParameterNeverFitting(own, takes);
+    return unfit == null ? null : simpleNameOf(unfit);
   }
 
   /**

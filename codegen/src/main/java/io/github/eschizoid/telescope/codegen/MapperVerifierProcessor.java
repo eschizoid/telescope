@@ -120,6 +120,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
+  private static final String OBJECT_FQN = "java.lang.Object";
   // The telescope navigation calls that read a component of the path's current focus through an
   // accessor, so the first of them on a path names a property of the path's root.
   private static final Set<String> ROOT_HOPS = Set.of(
@@ -2180,6 +2181,91 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       return null;
     }
 
+    /**
+     * Reports a {@code via} row naming a class, {@code named}, that hands one side's property to
+     * the class's methods of one name as it is, though none of them takes a class a value of that
+     * property can be an instance of, with the refusal construction gives the same row. The
+     * source's property is handed to {@code forward} and the target's to {@code backward}.
+     * Construction may lift the class over the elements of two containers of one kind instead, so
+     * such a pair is left to it, and so is a class one of whose methods of that name is not public,
+     * which some callers can reach and others cannot.
+     */
+    private void verifyViaClass(
+      final MethodInvocationTree row,
+      final ExpressionTree named,
+      final Prop src,
+      final Prop tgt
+    ) {
+      final var using = classLiteral(named);
+      if (using == null || !(types.asElement(using) instanceof TypeElement mapper)) {
+        return;
+      }
+      final var srcView = rules.containerViewOf(src.type());
+      final var tgtView = rules.containerViewOf(tgt.type());
+      final var srcShape = rules.settledAgainst(srcView, tgtView);
+      final var tgtShape = rules.settledAgainst(tgtView, srcView);
+      if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
+        return;
+      }
+      final var forwards = viaParameters(mapper, "forward");
+      final var backwards = viaParameters(mapper, "backward");
+      if (forwards == null || backwards == null) {
+        return;
+      }
+      final var source = src.owner().getSimpleName().toString();
+      final var target = tgt.owner().getSimpleName().toString();
+      final var forward = rules.viaParameterNeverFitting(src.type(), forwards);
+      if (forward != null) {
+        report(row, PairingMessages.viaMapperNeverFits(source, target, "source", src.name(), boxedName(forward)));
+        return;
+      }
+      final var backward = rules.viaParameterNeverFitting(tgt.type(), backwards);
+      if (backward != null) {
+        report(row, PairingMessages.viaMapperNeverFits(source, target, "target", tgt.name(), boxedName(backward)));
+      }
+    }
+
+    /**
+     * The parameter types of the static methods of one parameter named {@code name} that {@code
+     * mapper} declares or inherits from a superclass, a method hiding one of its superclass's that
+     * takes the same class; null where one of them is not public.
+     */
+    private List<TypeMirror> viaParameters(final TypeElement mapper, final String name) {
+      final var found = new ArrayList<TypeMirror>();
+      final var hidden = new ArrayList<TypeMirror>();
+      for (var type = mapper; type != null && !type.getQualifiedName().contentEquals(OBJECT_FQN); ) {
+        for (final var method : ElementFilter.methodsIn(type.getEnclosedElements())) {
+          if (!method.getSimpleName().contentEquals(name) || method.getParameters().size() != 1) {
+            continue;
+          }
+          if (!method.getModifiers().contains(Modifier.STATIC)) {
+            continue;
+          }
+          final var parameter = types.erasure(method.getParameters().getFirst().asType());
+          if (hidden.stream().anyMatch(h -> types.isSameType(h, parameter))) {
+            continue;
+          }
+          hidden.add(parameter);
+          if (method.getModifiers().contains(Modifier.PRIVATE)) {
+            continue;
+          }
+          if (!method.getModifiers().contains(Modifier.PUBLIC)) {
+            return null;
+          }
+          found.add(parameter);
+        }
+        type = types.asElement(type.getSuperclass()) instanceof TypeElement superclass ? superclass : null;
+      }
+      return found;
+    }
+
+    /**
+     * The simple name of {@code type}'s wrapper where it is a primitive, and of its own otherwise.
+     */
+    private String boxedName(final TypeMirror type) {
+      return simpleName(props.boxed(type));
+    }
+
     /** A row given two accessors, keyed to the classes they are applied to, or null. */
     private KeyedRow accessorRow(final MethodInvocationTree row, final PairWalk.RowKind kind) {
       final var rowArgs = row.getArguments();
@@ -2225,6 +2311,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           }
           if (src == null || tgt == null) return false;
+          if ("via".equals(rowName) && rowArgs.size() == 3) {
+            verifyViaClass(row, rowArgs.get(2), src, tgt);
+          }
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
           // here; nested-keyed rows are still shape-checked against their own types below. Both

@@ -105,6 +105,12 @@ public interface PropertySystem<T> {
   boolean isAbstractType(T t);
 
   /**
+   * Whether a subclass of the class {@code t} names can implement an interface {@code t} does not:
+   * an interface, or a class that is neither final nor an enum. An array and a primitive cannot.
+   */
+  boolean isExtendable(T t);
+
+  /**
    * Whether an instance of the class named {@code className}, by its binary name, is an instance of
    * {@code t}'s erasure. False when this world cannot find that class.
    */

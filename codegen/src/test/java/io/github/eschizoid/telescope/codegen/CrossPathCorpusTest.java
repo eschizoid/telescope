@@ -17085,6 +17085,22 @@ class CrossPathCorpusTest {
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
     ),
+    // Containers of two kinds are not lifted over, so the class's methods are handed each
+    // whole
+    // property, which they cannot take.
+    new ViaNeverFits(
+      "a List of text into a Set of numbers, through a class converting one element",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 99; }\n" +
+          "  public static String backward(final Integer i) { return \"via\"; }\n}\n",
+        "public record %1$sSrc(java.util.List<String> children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(java.util.Set<Integer> children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "String")
+    ),
     new ViaNeverFits(
       "a List source whose element is ? super Ch, through the mapper class",
       List.of(
