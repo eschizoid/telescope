@@ -262,6 +262,17 @@ the existing emitter without a second one.
 > `toOrElseGet` compile into the same converter as their strict-null forms, testing the predicate only on a value that
 > is not null.
 
+> **Amendment: multi-source merges.** A `@Bridge` field may also be initialised by
+> `Telescope.merge(Target.class, rows...)` written in place, its rows each a `MergeStep.from` of two method references
+> or an `auto` of a class literal, its target a public record declaring no type parameters. The bridge, named
+> `SourcesTo<Target>Bridge` in the field's package, has a static `forward` taking the sources as typed parameters, in
+> the order the rows first name their classes, and one taking the `Sources` bag, which the field's mapper calls;
+> `Telescope.merge` finds the provider by its calling class and the pair of `Sources` and the target, as the other
+> factories do. Each component is decided as the runtime merge decides it, and its refusals and its missing-source
+> failure come from `PairingMessages`, so both paths say the same. A bean target and a primitive component no row binds,
+> which the runtime builds a merge for and then cannot construct, are refused by name. A merge stays forward only on
+> both paths.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the

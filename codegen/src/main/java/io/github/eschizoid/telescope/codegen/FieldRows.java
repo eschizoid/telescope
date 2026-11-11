@@ -50,7 +50,8 @@ import javax.lang.model.util.ElementFilter;
 /**
  * Reads the rows of a {@code @Bridge} field's {@code Telescope.mapper(...)} or {@code
  * Telescope.mapperForward(...)} initializer into the configuration the bridge emitter takes for a
- * pair. A row the generated bridge cannot express is refused by name, on the row.
+ * pair, and those of a {@code Telescope.merge(...)} initializer into the rows its bridge is written
+ * from. A row the generated bridge cannot express is refused by name, on the row.
  *
  * <p>The rows are read during a processing round, when the bridge can still be written. The tree
  * API resolves a method reference there by attributing the expression on demand, so a row names the
@@ -74,7 +75,8 @@ final class FieldRows {
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
-  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
+  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward", "merge");
+  private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
   private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
   private static final Set<String> ROW_FACTORIES = Set.of(
     "to",
@@ -93,7 +95,29 @@ final class FieldRows {
   );
 
   /** What the reader found for a field. */
-  sealed interface Result permits Parsed, Refused {}
+  sealed interface Result permits Parsed, Merged, Refused {}
+
+  /**
+   * The rows of a {@code Telescope.merge(...)} initializer building {@code target} from several
+   * sources: each row, in order, and the classes of the sources, in the order the rows first name
+   * them, which the generated {@code forward} takes as its parameters. {@code rowKinds} and {@code
+   * rowAccessors} are what the generated provider records, as a mapper's are.
+   */
+  record Merged(
+    TypeElement target,
+    List<MergeRow> rows,
+    List<TypeElement> sources,
+    List<String> rowKinds,
+    List<String> rowAccessors
+  ) implements Result {}
+
+  /**
+   * One merge row, at {@code index} among the rows: {@code from(Source::read, Target::written)},
+   * naming its source class, the method it reads and the target property it writes, or {@code
+   * auto(Source.class)}, naming its source class alone, with a null {@code read} and {@code
+   * written}. {@code at} is the tree a refusal of the row is reported on.
+   */
+  record MergeRow(int index, TypeElement source, ExecutableElement read, String written, Tree at) {}
 
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
@@ -546,11 +570,12 @@ final class FieldRows {
         variable.getInitializer() == null ? variable : variable.getInitializer(),
         "@Bridge field " +
           fieldName +
-          " must be initialised by a Telescope.mapper(...) or Telescope.mapperForward(...) call written in" +
-          " place, whose rows the processor compiles into the bridge"
+          " must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)" +
+          " call written in place, whose rows the processor compiles into the bridge"
       );
     }
     final var call = (MethodInvocationTree) variable.getInitializer();
+    if (factory.equals("merge")) return merged(unit, call, fieldName);
     final var strict = factory.equals("mapper");
     final var args = call.getArguments();
     final var source = args.size() < 2 ? null : classLiteral(unit, args.get(0));
@@ -573,6 +598,89 @@ final class FieldRows {
     final var offThePair = rows.hintsOffThePair();
     if (offThePair != null) return offThePair;
     return rows.parsed();
+  }
+
+  /**
+   * The rows of a {@code Telescope.merge(Target.class, rows...)} call written in place: each a
+   * {@code MergeStep.from} of two method references or an {@code auto} of a class literal, into a
+   * public record. Every other row, and every other target, is refused by name.
+   */
+  private Result merged(final CompilationUnitTree unit, final MethodInvocationTree call, final String fieldName) {
+    final var args = call.getArguments();
+    final var target = args.isEmpty() ? null : classLiteral(unit, args.getFirst());
+    if (target == null) {
+      return new Refused(call, "@Bridge field " + fieldName + " must name its target class as a class literal");
+    }
+    if (target.getKind() != ElementKind.RECORD || !target.getModifiers().contains(Modifier.PUBLIC)) {
+      return new Refused(
+        args.getFirst(),
+        "a @Bridge merge builds a public record, and " +
+          target.getSimpleName() +
+          " is not one; build this mapper without @Bridge to run it on the runtime path"
+      );
+    }
+    final var rows = new ArrayList<MergeRow>();
+    final var sources = new LinkedHashSet<TypeElement>();
+    final var kinds = new ArrayList<String>();
+    final var accessors = new ArrayList<String>();
+    for (var i = 1; i < args.size(); i++) {
+      final var index = i - 1;
+      final var arg = args.get(i);
+      if (
+        !(arg instanceof MethodInvocationTree row) ||
+        !(elementAt(unit, row.getMethodSelect()) instanceof ExecutableElement step) ||
+        !(step.getEnclosingElement() instanceof TypeElement owner) ||
+        !owner.getQualifiedName().contentEquals(MERGE_STEP_FQN)
+      ) {
+        return new Refused(
+          arg,
+          "a @Bridge merge compiles only rows written in place as MergeStep.from(Source::property," +
+            " Target::property) or MergeStep.auto(Source.class)"
+        );
+      }
+      final var rowArgs = row.getArguments();
+      if (step.getSimpleName().contentEquals("auto")) {
+        final var source = classLiteral(unit, rowArgs.getFirst());
+        if (source == null) {
+          return new Refused(
+            rowArgs.getFirst(),
+            "a @Bridge merge compiles auto(...) of a class literal, as Customer.class"
+          );
+        }
+        sources.add(source);
+        rows.add(new MergeRow(index, source, null, null, row));
+        kinds.add("AutoSameName");
+        accessors.add(env.getElementUtils().getBinaryName(source) + ">");
+        continue;
+      }
+      for (final var reference : rowArgs) {
+        if (!(reference instanceof MemberReferenceTree)) {
+          return new Refused(
+            reference,
+            "a @Bridge merge compiles from(...) of two method references, as from(Customer::name, Profile::name)," +
+              " so both paths read the same accessor"
+          );
+        }
+      }
+      final var receiver = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      final var read = trees.getElement(TreePath.getPath(unit, rowArgs.get(0)));
+      final var written = trees.getElement(TreePath.getPath(unit, rowArgs.get(1)));
+      if (
+        !(receiver instanceof TypeElement source) ||
+        !(read instanceof ExecutableElement reader) ||
+        !(written instanceof ExecutableElement writer)
+      ) {
+        return new Refused(
+          rowArgs.get(0),
+          "a @Bridge merge compiles from(...) of method references on the source's class and the target's"
+        );
+      }
+      sources.add(source);
+      rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
+      kinds.add("FromInferred");
+      accessors.add(reader.getSimpleName() + ">" + writer.getSimpleName());
+    }
+    return new Merged(target, List.copyOf(rows), List.copyOf(sources), List.copyOf(kinds), List.copyOf(accessors));
   }
 
   /** The rows of one call, accumulated into the pair's configuration. */

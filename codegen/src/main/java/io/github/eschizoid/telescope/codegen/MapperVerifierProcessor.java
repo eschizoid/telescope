@@ -423,7 +423,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var read = rows.read(field);
       if (read instanceof FieldRows.Refused) continue;
       fieldsRead.add(key);
-      final var parsed = (FieldRows.Parsed) read;
+      // A merge reads its sources through no pairing of its own for the verifier to agree with.
+      if (!(read instanceof FieldRows.Parsed parsed)) continue;
       if (!elements.getPackageOf(parsed.source()).equals(elements.getPackageOf(owner))) continue;
       final var renamedTo = new HashMap<String, List<String>>();
       for (final var rename : parsed.renames().entrySet()) {

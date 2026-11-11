@@ -47,6 +47,7 @@ import javax.annotation.processing.FilerException;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
@@ -1032,6 +1033,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     final var read = rows.read(field);
+    if (read instanceof FieldRows.Merged merged) {
+      fieldCarriers.add(carrier.getQualifiedName().toString());
+      var unsanctioned = false;
+      for (final var other : rows.unsanctionedCalls(carrier)) {
+        unsanctioned = true;
+        final var at = trees.getSourcePositions().getStartPosition(trees.getPath(field).getCompilationUnit(), other);
+        if (!reportedCalls.add(carrier.getQualifiedName() + "@" + at)) continue;
+        errorAt(trees, field, other, unsanctioned(carrier));
+      }
+      if (!unsanctioned) emitMerge(trees, field, carrier, merged);
+      return;
+    }
     if (read instanceof FieldRows.Refused refused) {
       // A null message is a row javac cannot type yet. Before the final round it may name a class a
       // later round writes, such as another @Bridge's generated bridge, so the field is read again
@@ -1513,6 +1526,382 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             m.getModifiers().contains(Modifier.PUBLIC)
         );
     return allocatable ? null : "null";
+  }
+
+  /** The merges this processor has written a bridge for, by the bridge's qualified name. */
+  private final Set<String> mergeBridges = new HashSet<>();
+
+  /**
+   * Writes the bridge and the provider of a {@code @Bridge} field initialised by {@code
+   * Telescope.merge}, after deciding each component of the target as the runtime merge does: a
+   * {@code from} row binds the component it names and an {@code auto} row every component of a name
+   * its source has and no row before it binds, of the same type; two rows binding one component, a
+   * row naming no component and an {@code auto} match of two types are refused in the runtime's
+   * words. A primitive component no row binds is refused too, since the runtime builds the target
+   * with a null there, which no constructor of it takes.
+   */
+  private void emitMerge(
+    final Trees trees,
+    final VariableElement field,
+    final TypeElement carrier,
+    final FieldRows.Merged merged
+  ) {
+    final var target = merged.target();
+    final var call = new FieldRows(processingEnv, trees).initializerCall(field);
+    if (!target.getTypeParameters().isEmpty()) {
+      errorAt(trees, field, call, "a @Bridge merge builds a record that declares no type parameters");
+      return;
+    }
+    final var components = fieldsOf(target);
+    final var names = components.stream().map(Field::name).toList();
+    final var types = processingEnv.getTypeUtils();
+    // Each bound component: the source it reads, and the expression reading it from {@code $}.
+    final var bound = new LinkedHashMap<String, MergeSlot>();
+    for (final var row : merged.rows()) {
+      if (row.read() != null) {
+        if (!names.contains(row.written())) {
+          errorAt(
+            trees,
+            field,
+            row.at(),
+            PairingMessages.mergeNotATarget(row.index(), row.written(), target.getSimpleName().toString(), names)
+          );
+          return;
+        }
+        if (bound.containsKey(row.written())) {
+          errorAt(trees, field, row.at(), PairingMessages.mergeClaimedTwice(row.index(), row.written()));
+          return;
+        }
+        final var holds = fieldByName(components, row.written()).type();
+        final var gives = (
+          (ExecutableType) types.asMemberOf((DeclaredType) row.source().asType(), row.read())
+        ).getReturnType();
+        if (!types.isAssignable(gives, holds)) {
+          errorAt(
+            trees,
+            field,
+            row.at(),
+            "the merge row at index " +
+              row.index() +
+              " reads " +
+              gives +
+              ", which the component '" +
+              row.written() +
+              "' of " +
+              target.getSimpleName() +
+              " does not hold"
+          );
+          return;
+        }
+        bound.put(row.written(), new MergeSlot(row.source(), "$." + row.read().getSimpleName() + "()"));
+        continue;
+      }
+      for (final var property : fieldsOf(row.source())) {
+        if (!names.contains(property.name()) || bound.containsKey(property.name())) continue;
+        final var holds = fieldByName(components, property.name()).type();
+        if (!types.isSameType(property.type(), holds)) {
+          errorAt(
+            trees,
+            field,
+            row.at(),
+            PairingMessages.mergeAutoTypesDiffer(
+              row.index(),
+              row.source().getSimpleName().toString(),
+              property.name(),
+              reflectedTypeName(property.type()),
+              reflectedTypeName(holds)
+            )
+          );
+          return;
+        }
+        bound.put(property.name(), new MergeSlot(row.source(), readExpr(row.source(), "$", property)));
+      }
+    }
+    for (final var component : components) {
+      if (bound.containsKey(component.name()) || !component.type().getKind().isPrimitive()) continue;
+      errorAt(
+        trees,
+        field,
+        call,
+        "a @Bridge merge writes no row into the primitive component '" +
+          component.name() +
+          "' of " +
+          target.getSimpleName() +
+          ", which forward builds " +
+          target.getSimpleName() +
+          " with null for and which no constructor takes; bind it with from(...) or auto(...)"
+      );
+      return;
+    }
+    final var pkg = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
+    final var bridgeName = "SourcesTo" + target.getSimpleName() + "Bridge";
+    final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
+    if (!mergeBridges.add(qualifiedBridge)) {
+      errorAt(
+        trees,
+        field,
+        call,
+        "@Bridge field " +
+          carrier.getSimpleName() +
+          "." +
+          field.getSimpleName() +
+          " declares a second merge into " +
+          target.getSimpleName() +
+          " in package '" +
+          pkg +
+          "', whose bridge " +
+          bridgeName +
+          " another field already declares"
+      );
+      return;
+    }
+    final var targetFq = target.getQualifiedName().toString();
+    final var parameters = new ArrayList<String>();
+    final var parameterOf = new LinkedHashMap<TypeElement, String>();
+    for (final var source : merged.sources()) {
+      final var simple = source.getSimpleName().toString();
+      var name = Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
+      if (SourceVersion.isKeyword(name) || name.equals("sources")) name = name + "Source";
+      while (parameterOf.containsValue(name)) name = name + parameterOf.size();
+      parameterOf.put(source, name);
+      parameters.add("final " + source.getQualifiedName() + " " + name);
+    }
+    writeClass(
+      qualifiedBridge,
+      bridgeName,
+      Set.of(),
+      "Generated by telescope-codegen for the @Bridge merge field " +
+        carrier.getSimpleName() +
+        "." +
+        field.getSimpleName() +
+        ".",
+      field,
+      out -> {
+        final var fnType =
+          "io.github.eschizoid.telescope.conversion.BridgeFn<io.github.eschizoid.telescope.Sources, " + targetFq + ">";
+        out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
+        out.println("  private static final class Fn implements " + fnType + " {");
+        out.println("    @Override");
+        out.println("    public " + targetFq + " forward(final io.github.eschizoid.telescope.Sources s) {");
+        out.println("      return " + bridgeName + ".forward(s);");
+        out.println("    }");
+        out.println();
+        out.println("    @Override");
+        out.println("    public io.github.eschizoid.telescope.Sources backward(final " + targetFq + " t) {");
+        out.println("      return " + bridgeName + ".backward(t);");
+        out.println("    }");
+        out.println("  }");
+        out.println();
+        out.println("  public static final " + fnType + " BRIDGE_FN = new Fn();");
+        out.println(
+          "  public static final io.github.eschizoid.telescope.Telescope<io.github.eschizoid.telescope.Sources, " +
+            targetFq +
+            "> BRIDGE = io.github.eschizoid.telescope.Telescope.bridge(BRIDGE_FN);"
+        );
+        out.println();
+        out.println("  /** Builds the target from each source, given in the order the rows first name them. */");
+        out.println("  public static " + targetFq + " forward(" + String.join(", ", parameters) + ") {");
+        emitMergeBody(out, target, components, bound, source -> parameterOf.get(source), parameterOf);
+        out.println("  }");
+        out.println();
+        out.println("  /** Builds the target from the sources the bag holds, each looked up by its class. */");
+        out.println("  public static " + targetFq + " forward(final io.github.eschizoid.telescope.Sources sources) {");
+        out.println("    if (sources == null) return null;");
+        emitMergeBody(out, target, components, bound, null, parameterOf);
+        out.println("  }");
+        out.println();
+        out.println("  /** A merge has no inverse, as on the runtime path. */");
+        out.println("  public static io.github.eschizoid.telescope.Sources backward(final " + targetFq + " target) {");
+        out.println("    throw io.github.eschizoid.telescope.Telescope.mergeHasNoInverse();");
+        out.println("  }");
+        out.println();
+      }
+    );
+    emitMergeProvider(carrier, target, bridgeName, pkg, merged);
+  }
+
+  /** A component a merge binds: the source it reads, and how, with {@code $} for that source. */
+  private record MergeSlot(TypeElement source, String read) {}
+
+  /**
+   * Writes the body of a merge's {@code forward}: each component in order, from its source, read
+   * once, the source fetched where its first component is read and refused there when missing, as
+   * the runtime merge fetches and refuses it, and null for a component no row binds. A source is
+   * the parameter {@code given} names, or, where {@code given} is null, the bag's entry of its
+   * class.
+   */
+  private void emitMergeBody(
+    final PrintWriter out,
+    final TypeElement target,
+    final List<Field> components,
+    final Map<String, MergeSlot> bound,
+    final Function<TypeElement, String> given,
+    final Map<TypeElement, String> parameterOf
+  ) {
+    final var fetched = new HashSet<TypeElement>();
+    final var reads = new LinkedHashMap<String, String>();
+    final var args = new ArrayList<String>();
+    var index = 0;
+    for (final var component : components) {
+      final var slot = bound.get(component.name());
+      if (slot == null) {
+        args.add("null");
+        continue;
+      }
+      final var local = "__src_" + parameterOf.get(slot.source());
+      final var sourceFq = slot.source().getQualifiedName().toString();
+      if (fetched.add(slot.source())) {
+        final String present;
+        if (given == null) {
+          out.println("    final " + sourceFq + " " + local + " = sources.byClass(" + sourceFq + ".class);");
+          present = "sources.classes()";
+        } else {
+          out.println("    final " + sourceFq + " " + local + " = " + given.apply(slot.source()) + ";");
+          present =
+            "java.util.stream.Stream.of(" +
+            String.join(", ", parameterOf.values()) +
+            ").filter(java.util.Objects::nonNull).<Class<?>>map(Object::getClass).toList()";
+        }
+        out.println(
+          "    if (" +
+            local +
+            " == null) throw io.github.eschizoid.telescope.Telescope.mergeSourceMissing(" +
+            present +
+            ", " +
+            sourceFq +
+            ".class, \"" +
+            component.name() +
+            "\");"
+        );
+      }
+      final var read = slot.read().replace("$", local);
+      var value = reads.get(read);
+      if (value == null) {
+        value = "__v" + index++;
+        reads.put(read, value);
+        out.println("    final " + declarable(component.type()) + " " + value + " = " + read + ";");
+      }
+      args.add(value);
+    }
+    out.println("    return new " + target.getQualifiedName() + "(" + String.join(", ", args) + ");");
+  }
+
+  /**
+   * How {@code java.lang.reflect.Type#toString} writes {@code type}, which the runtime merge's
+   * refusal of two types an {@code auto} row matches names: a class as {@code class} or {@code
+   * interface} and its binary name, a parameterized type as its raw binary name and its arguments.
+   */
+  private String reflectedTypeName(final TypeMirror type) {
+    if (type.getKind().isPrimitive()) return type.toString();
+    if (!(type instanceof DeclaredType declared) || !(declared.asElement() instanceof TypeElement element)) {
+      return type.toString();
+    }
+    final var binary = processingEnv.getElementUtils().getBinaryName(element).toString();
+    if (declared.getTypeArguments().isEmpty()) {
+      return (element.getKind().isInterface() ? "interface " : "class ") + binary;
+    }
+    final var arguments = new ArrayList<String>();
+    for (final var argument : declared.getTypeArguments()) {
+      arguments.add(
+        argument instanceof DeclaredType inner && inner.asElement() instanceof TypeElement innerElement
+          ? inner.getTypeArguments().isEmpty()
+            ? processingEnv.getElementUtils().getBinaryName(innerElement).toString()
+            : reflectedTypeName(inner)
+          : argument.toString()
+      );
+    }
+    return binary + "<" + String.join(", ", arguments) + ">";
+  }
+
+  /**
+   * Writes the provider registering a merge's bridge for its field's class, whose mapper calls the
+   * bridge's {@code forward} on the bag and keeps the runtime merge's {@code backward} and {@code
+   * patch}, which refuse.
+   */
+  private void emitMergeProvider(
+    final TypeElement carrier,
+    final TypeElement target,
+    final String bridgeName,
+    final String pkg,
+    final FieldRows.Merged merged
+  ) {
+    final var providerName = bridgeName + "Provider";
+    final var qualifiedProvider = pkg.isEmpty() ? providerName : pkg + "." + providerName;
+    final var t = target.getQualifiedName().toString();
+    final var bag = "io.github.eschizoid.telescope.Sources";
+    final var mapper = "io.github.eschizoid.telescope.conversion.Mapper";
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedProvider, carrier);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        out.println("import io.github.eschizoid.telescope.conversion.BridgeProvider;");
+        out.println("import java.util.List;");
+        out.println();
+        out.println(
+          "/** Generated by telescope-codegen — registers " + bridgeName + " for runtime @Bridge discovery. */"
+        );
+        out.println("public final class " + providerName + " implements BridgeProvider {");
+        out.println();
+        out.println("  @Override");
+        out.println("  public Class<?> sourceType() {");
+        out.println("    return " + bag + ".class;");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  public Class<?> targetType() {");
+        out.println("    return " + t + ".class;");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  public Class<?> declaringType() {");
+        out.println("    return " + carrier.getQualifiedName() + ".class;");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  public List<String> rowKinds() {");
+        out.println("    return List.of(" + quotedList(merged.rowKinds()) + ");");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  public List<String> rowAccessors() {");
+        out.println("    return List.of(" + quotedList(merged.rowAccessors()) + ");");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  @SuppressWarnings(\"unchecked\")");
+        out.println(
+          "  public " + mapper + "<?, ?> mapper(final " + mapper + "<?, ?> built, final " + GRANT + " grant) {"
+        );
+        out.println("    return new FieldMapper((" + mapper + "<" + bag + ", " + t + ">) built, grant);");
+        out.println("  }");
+        out.println();
+        out.println("  /** The mapper the @Bridge field holds: forward is one call into " + bridgeName + ". */");
+        out.println("  static final class FieldMapper extends " + mapper + "<" + bag + ", " + t + "> {");
+        out.println();
+        out.println("    FieldMapper(final " + mapper + "<" + bag + ", " + t + "> built, final " + GRANT + " grant) {");
+        out.println("      super(built, grant);");
+        out.println("    }");
+        out.println();
+        out.println("    @Override");
+        out.println("    public " + t + " forward(final " + bag + " sources) {");
+        out.println("      return " + bridgeName + ".forward(sources);");
+        out.println("    }");
+        out.println("  }");
+        out.println();
+        out.println("  @Override");
+        out.println("  public Object bridge() {");
+        out.println("    return " + bridgeName + ".BRIDGE;");
+        out.println("  }");
+        out.println("}");
+      }
+      bridgeProviders.add(qualifiedProvider);
+      fieldProviders.put(qualifiedProvider, carrier);
+    } catch (final IOException e) {
+      error(carrier, "Failed to write " + qualifiedProvider + ": " + e.getMessage());
+    }
   }
 
   /**

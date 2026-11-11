@@ -893,6 +893,103 @@ public final class PairingMessages {
     );
   }
 
+  /** Why a mapper {@code Telescope.merge} builds converts no way but forward. Both paths say it. */
+  public static String mergeForwardOnly() {
+    return (
+      "Telescope.merge produces a forward-only mapper — the multi-source case has no general " +
+      "inverse. Use Mapper.forward(...) only; backward/patch are unsupported."
+    );
+  }
+
+  /**
+   * The failure of a merge's forward given no source of the class {@code missing}, by its binary
+   * and simple names, which the row writing the target property {@code targetField} reads, among
+   * the sources of the simple names {@code present}. Both paths fail in these words.
+   */
+  public static String mergeSourceMissing(
+    final String missing,
+    final String missingSimple,
+    final String targetField,
+    final List<String> present
+  ) {
+    return (
+      "Telescope.merge: forward called without a source for class " +
+      missing +
+      " (required by the row writing target field '" +
+      targetField +
+      "'). Sources bag contains: " +
+      present +
+      ". Pass a value of " +
+      missingSimple +
+      " via Sources.of(...) or Sources.builder().with(...)."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which is not a property
+   * of {@code target}, whose properties are {@code known}. Both paths refuse with these words.
+   */
+  public static String mergeNotATarget(
+    final int index,
+    final String tgtName,
+    final String target,
+    final List<String> known
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " targets '" +
+      tgtName +
+      "', which is not a settable component/property of " +
+      target +
+      ". Known fields: " +
+      known +
+      "."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which a row before it
+   * writes. Both paths refuse with these words.
+   */
+  public static String mergeClaimedTwice(final int index, final String tgtName) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " writes target field '" +
+      tgtName +
+      "' which an earlier step already claimed. Each target component may be written by at most one row."
+    );
+  }
+
+  /**
+   * The refusal of the {@code auto(source)} merge row at {@code index}, which matched {@code name}
+   * by name between a source property of the type {@code sourceType} and a target property of the
+   * type {@code targetType}, each written as {@code java.lang.reflect.Type} writes it. Both paths
+   * refuse with these words.
+   */
+  public static String mergeAutoTypesDiffer(
+    final int index,
+    final String source,
+    final String name,
+    final String sourceType,
+    final String targetType
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " auto(" +
+      source +
+      ") matched field '" +
+      name +
+      "' by name but types differ: source=" +
+      sourceType +
+      ", target=" +
+      targetType +
+      ". Pre-convert the value into a matching-typed holder record, or rename to break the name match if this row was unintentional."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

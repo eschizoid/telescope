@@ -25,7 +25,7 @@ and the row names the workaround.
 | Core mapping              | [Implicit same-name mapping](#implicit-same-name-mapping)           |   ✅    |    ✅     |
 | Core mapping              | [Explicit rename](#explicit-rename)                                 |   ✅    |    ✅     |
 | Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ✅     |
-| Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ❌     |
+| Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ⚠️     |
 | Conversions               | [Implicit type conversions](#implicit-type-conversions)             |   ⚠️    |    ⚠️     |
 | Conversions               | [Format strings](#format-strings)                                   |   ⚠️    |    ⚠️     |
 | Conversions               | [Expressions](#expressions)                                         |   ✅    |    ✅     |
@@ -52,9 +52,9 @@ and the row names the workaround.
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 15 ⚠️ · 1 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 16 ⚠️ · 0 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
-generated path has no form for a mapper over several sources, and that row names the workaround.
+generated path scores at least as high as the runtime on every row.
 
 ## Core mapping
 
@@ -229,7 +229,7 @@ codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeT
 
 ### Multiple source parameters
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one
 target built from several sources
 
 **telescope:**
@@ -255,11 +255,18 @@ compile time like toDto(Customer, Address); (2) each source must have a distinct
 (MapStruct disambiguates by parameter name) require pre-aggregating into a holder record; (3) forward-only:
 backward()/patch() throw (MapStruct multi-source is also inherently one-way, so this is minor).
 
-**Generated path:** missing. `Telescope.merge` has no generated form: a `@Bridge` field must be initialised by a
-`Telescope.mapper(...)` or `Telescope.mapperForward(...)` call written in place, and any other initializer is refused
-with that message. The workaround is a record holding the sources, as the source of a `mapperForward` field whose rows
-read each source through a path (`to(path(ProfileSources::audit, Audit::createdBy), Profile::createdBy)`); that keeps
-the call typed, at the cost of one row per property where `merge` backfills by name.
+**Generated path:** partial, and closer to MapStruct's typed signature than the runtime. A `@Bridge` field initialised
+by the `Telescope.merge(...)` call above written in place compiles into a bridge with a typed
+`forward(Customer customer, Audit audit)`, its parameters in the order the rows first name their classes, and a
+`forward(Sources)` the field's mapper calls, so `forward(Sources.of(customer, audit))` builds the same target on both
+paths. Each component is decided as the runtime decides it: a `from` row binds the component it names, and an `auto` row
+each component of a name its source has that no row before it binds, so where two sources carry one name the first
+`auto` fills it. Two rows binding one component, a row naming no component and an `auto` match of two types are refused
+when the field is compiled, in the words the runtime refuses them with when the mapper is built, and a missing source
+fails `forward` in the runtime's words, at the same component. The generated path's own limits: the target is a public
+record declaring no type parameters, a bean target is refused by name, and so is a primitive component no row binds,
+which the runtime path accepts and then fails to construct on every `forward`. Like the runtime merge, it is forward
+only.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
 javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;
@@ -268,10 +275,16 @@ rows) and `auto(Class)` (same-name backfill); core/src/test/java/io/github/eschi
 'forward assembles a target from two sources, class inference picks each slot', '3-source forward — same factory shape,
 just more rows', '5-source forward — same factory, 5 sources, 5 rows', and 'forward called with a Sources bag missing
 one of the row source classes throws naming the class' (IllegalStateException at forward time);
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `read` (an initializer other than a
-`Telescope.mapper` or `mapperForward` call refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a field that is not static
-final, or not a mapper call, is refused by name'</sub>
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `merged` (the rows a merge field compiles);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `emitMerge` (each component decided as
+the runtime merge decides it);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, the `merge*` messages both
+paths refuse and fail with; codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the
+test 'a merge on a @Bridge field builds the same target on both paths, typed or from the bag, and refuses alike';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a merge field's mapper runs
+its generated bridge forward, and refuses backward as the runtime does' and 'a merge field the generated bridge cannot
+build is refused by name'; benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/MergeBenchmark.java,
+`bridgeField` and `bridgeTyped` against `handBag` and `handMerge`</sub>
 
 ## Conversions
 

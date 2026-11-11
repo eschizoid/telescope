@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
 import io.github.eschizoid.telescope.codegen.ctorbox.CityRow;
@@ -13210,6 +13211,290 @@ class CrossPathCorpusTest {
       " / " +
       (failure.getCause() == null ? "no cause" : failure.getCause().getClass().getSimpleName())
     );
+  }
+
+  /**
+   * A {@code @Bridge} field initialised by {@code Telescope.merge} and the runtime merge of the
+   * same rows: the declarations, each with {@code %1$s} as the row's prefix, among them {@code
+   * %1$sBag} with a {@code sample()} bag and the {@code args()} the typed {@code forward} takes,
+   * and what both owe: the target forward builds, or the failure both report. {@code generated} is
+   * the refusal the processor owes where it refuses the rows, which the runtime owes when the
+   * mapper is built.
+   */
+  private record MergeCase(String name, List<String> declarations, String owed, String generated) {}
+
+  private static final String MERGE_STEP = "io.github.eschizoid.telescope.mapping.MergeStep.";
+  private static final String MERGE_CUSTOMER =
+    "public record %1$sCustomer(String id, String email, String region) {}\n";
+  private static final String MERGE_AUDIT =
+    "public record %1$sAudit(String createdBy, long createdAt, String region) {}\n";
+  private static final String MERGE_TGT =
+    "public record %1$sTgt(String id, String email, String createdBy, long createdAt, String region) {}\n";
+
+  /**
+   * The declarations of a merge into {@code %1$sTgt} of {@code rows}, given {@code bag} and {@code
+   * args}.
+   */
+  private static List<String> merging(
+    final List<String> records,
+    final String bag,
+    final String args,
+    final String... rows
+  ) {
+    final var qualified = new ArrayList<String>();
+    for (final var row : rows) qualified.add(MERGE_STEP + row);
+    final var all = new ArrayList<>(records);
+    all.add(
+      "public class %1$sCarrier {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  public static final io.github.eschizoid.telescope.conversion.Mapper<io.github.eschizoid.telescope.Sources," +
+        " %1$sTgt> MERGE = io.github.eschizoid.telescope.Telescope.merge(%1$sTgt.class,\n    " +
+        String.join(",\n    ", qualified) +
+        ");\n}\n"
+    );
+    all.add(
+      "public class %1$sBag {\n" +
+        "  public static io.github.eschizoid.telescope.Sources sample() {\n" +
+        "    return io.github.eschizoid.telescope.Sources.of(" +
+        bag +
+        ");\n  }\n" +
+        "  public static Object[] args() {\n    return new Object[] { " +
+        args +
+        " };\n  }\n}\n"
+    );
+    all.add(
+      "public class %1$sRuntime {\n" +
+        "  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.merge(%1$sTgt.class,\n      " +
+        String.join(",\n      ", qualified) +
+        ");\n  }\n}\n"
+    );
+    return all;
+  }
+
+  private static final String CUSTOMER = "new %1$sCustomer(\"c-1\", \"a@x\", \"emea\")";
+  private static final String AUDIT = "new %1$sAudit(\"sys\", 7L, \"apac\")";
+
+  private static final List<MergeCase> MERGES = List.of(
+    new MergeCase(
+      "two sources backfilled by name, the first to name a property filling it",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        CUSTOMER + ", " + AUDIT,
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"emea\")",
+      null
+    ),
+    new MergeCase(
+      "two sources backfilled in the other order, the other filling the name both carry",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        AUDIT + ", " + CUSTOMER,
+        AUDIT + ", " + CUSTOMER,
+        "auto(%1$sAudit.class)",
+        "auto(%1$sCustomer.class)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "an explicit row per source, a component no row writes left null",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        CUSTOMER + ", " + AUDIT,
+        "from(%1$sCustomer::email, %1$sTgt::email)",
+        "from(%1$sAudit::createdAt, %1$sTgt::createdAt)",
+        "from(%1$sAudit::region, %1$sTgt::region)"
+      ),
+      "#0(id=null, email=\"a@x\", createdBy=null, createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "an explicit row before a backfill, which the backfill leaves",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        AUDIT + ", " + CUSTOMER,
+        "from(%1$sAudit::region, %1$sTgt::region)",
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)",
+        "from(%1$sAudit::createdAt, %1$sTgt::createdAt)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "a bag missing a source a row reads, which forward refuses at its first component",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER,
+        CUSTOMER + ", null",
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      "IllegalStateException: " +
+        PairingMessages.mergeSourceMissing(PACKAGE + ".%1$sAudit", "%1$sAudit", "createdBy", List.of("%1$sCustomer")) +
+        " / no cause",
+      null
+    ),
+    new MergeCase(
+      "a nested record, handed across as it is",
+      merging(
+        List.of(
+          "public record %1$sAddr(String city) {}\n",
+          "public record %1$sCustomer(String id, %1$sAddr addr) {}\n",
+          MERGE_AUDIT,
+          "public record %1$sTgt(String id, %1$sAddr addr, String createdBy) {}\n"
+        ),
+        "new %1$sCustomer(\"c\", new %1$sAddr(\"Oslo\")), " + AUDIT,
+        "new %1$sCustomer(\"c\", new %1$sAddr(\"Oslo\")), " + AUDIT,
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)"
+      ),
+      "#0(id=\"c\", addr=#1(city=\"Oslo\"), createdBy=\"sys\")",
+      null
+    ),
+    new MergeCase(
+      "five sources, each read through its own row",
+      merging(
+        List.of(
+          "public record %1$sA(String a) {}\n",
+          "public record %1$sB(String b) {}\n",
+          "public record %1$sC(int c) {}\n",
+          "public record %1$sD(String d) {}\n",
+          "public record %1$sE(String e) {}\n",
+          "public record %1$sTgt(String a, String b, int c, String d, String e) {}\n"
+        ),
+        "new %1$sE(\"e\"), new %1$sA(\"a\"), new %1$sC(3), new %1$sB(\"b\"), new %1$sD(\"d\")",
+        "new %1$sA(\"a\"), new %1$sB(\"b\"), new %1$sC(3), new %1$sD(\"d\"), new %1$sE(\"e\")",
+        "auto(%1$sA.class)",
+        "from(%1$sB::b, %1$sTgt::b)",
+        "auto(%1$sC.class)",
+        "from(%1$sD::d, %1$sTgt::d)",
+        "auto(%1$sE.class)"
+      ),
+      "#0(a=\"a\", b=\"b\", c=3, d=\"d\", e=\"e\")",
+      null
+    ),
+    new MergeCase(
+      "a backfill matching a name of two types, refused in the same words",
+      merging(
+        List.of("public record %1$sCustomer(String id, String createdAt) {}\n", MERGE_AUDIT, MERGE_TGT),
+        "",
+        "",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(1, "%1$sCustomer", "createdAt", "class java.lang.String", "long")
+    ),
+    new MergeCase(
+      "a row writing a component an earlier row writes, refused in the same words",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        "",
+        "",
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::region, %1$sTgt::region)"
+      ),
+      null,
+      PairingMessages.mergeClaimedTwice(1, "region")
+    ),
+    new MergeCase(
+      "a row writing no component of the target, refused in the same words",
+      merging(List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT), "", "", "from(%1$sCustomer::id, %1$sTgt::toString)"),
+      null,
+      PairingMessages.mergeNotATarget(
+        0,
+        "toString",
+        "%1$sTgt",
+        List.of("id", "email", "createdBy", "createdAt", "region")
+      )
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a merge on a @Bridge field builds the same target on both paths, typed or from the bag, and refuses alike"
+  )
+  void aMergeBuildsTheSameTargetOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : MERGES) {
+      final var prefix = "Mg" + index++;
+      final var header = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), header + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new)
+      );
+      final var classes = plain.define(MethodHandles.lookup());
+      final var built = failureOf(() ->
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null)
+      );
+      if (row.generated() != null) {
+        final var refusal = row.generated().formatted(prefix);
+        if (processed.success() || !processed.hasError(refusal)) {
+          failures.add(row.name() + ": the processor owed '" + refusal + "', saw " + processed.errorMessages());
+        }
+        if (!built.equals("IllegalArgumentException: " + refusal + " / no cause")) {
+          failures.add(row.name() + ": the runtime owed '" + refusal + "', saw " + built);
+        }
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var warnings = warningsInGenerated(processed);
+      if (!warnings.isEmpty()) failures.add(row.name() + ": the generated code warns: " + warnings);
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var bag = classes.get(PACKAGE + "." + prefix + "Bag");
+      final var sources = bag.getMethod("sample").invoke(null);
+      final var args = (Object[]) bag.getMethod("args").invoke(null);
+      final var bridge = defineAdded(processed, plain, name -> true).get(PACKAGE + ".SourcesTo" + prefix + "TgtBridge");
+      if (bridge == null) {
+        failures.add(row.name() + ": the processor wrote no bridge");
+        continue;
+      }
+      final var typed = Arrays.stream(bridge.getMethods())
+        .filter(m -> m.getName().equals("forward") && m.getParameterCount() == args.length)
+        .filter(m -> m.getParameterCount() != 1 || m.getParameterTypes()[0] != Sources.class)
+        .findFirst()
+        .orElseThrow();
+      final var owed = row.owed().formatted(prefix);
+      final var attempts = new LinkedHashMap<String, Attempt>();
+      attempts.put("reflective", () -> mapper.forward(sources));
+      attempts.put("generated from the bag", () -> bridge.getMethod("forward", Sources.class).invoke(null, sources));
+      attempts.put("generated from typed sources", () -> typed.invoke(null, args));
+      for (final var attempt : attempts.entrySet()) {
+        final var gave = owed.startsWith("#") ? shapeOf(attempt.getValue()) : failureOf(attempt.getValue());
+        if (!gave.equals(owed)) failures.add(
+          row.name() + ", " + attempt.getKey() + ": gave " + gave + ", owed " + owed
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
   /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */

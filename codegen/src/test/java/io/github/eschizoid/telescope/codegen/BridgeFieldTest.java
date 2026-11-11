@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -452,6 +453,107 @@ class BridgeFieldTest {
     assertTrue(
       c.hasError("when(...) gates a row filling 'box', which no source property of its name fills"),
       c::errorMessages
+    );
+  }
+
+  @Test
+  @DisplayName("a merge field's mapper runs its generated bridge forward, and refuses backward as the runtime does")
+  void aMergeFieldRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.merge(MergedProfile.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class),\n" +
+      "      io.github.eschizoid.telescope.mapping.MergeStep.from(MergedAudit::by, MergedProfile::by));\n";
+    final var c = compile(
+      sources(
+        "fb.MergedCustomer",
+        "package fb; public record MergedCustomer(String id, String name) {}",
+        "fb.MergedAudit",
+        "package fb; public record MergedAudit(String by) {}",
+        "fb.MergedProfile",
+        "package fb; public record MergedProfile(String id, String name, String by) {}",
+        "fb.MergeMappers",
+        HEADER +
+          "public final class MergeMappers {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> PROFILE = " +
+          rows +
+          "  public static Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> runtime() { return Built.PROFILE; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER +
+          "final class Built {\n" +
+          "  static final Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> PROFILE = " +
+          rows +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.SourcesToMergedProfileBridge"), c.generated()::toString);
+    // A merge converts forward only from the bag, so the target gains no Mappings method back to
+    // it.
+    assertFalse(c.generated().containsKey("fb.MergedProfileMappings"), () -> c.generated().keySet().toString());
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.MergeMappers", "PROFILE");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader
+        .loadClass("fb.MergeMappers")
+        .getMethod("runtime")
+        .invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var customer = loader.loadClass("fb.MergedCustomer").getConstructors()[0].newInstance("c-1", "Ada");
+      final var audit = loader.loadClass("fb.MergedAudit").getConstructors()[0].newInstance("sys");
+      final var sources = Sources.of(customer, audit);
+      assertEquals(runtime.forward(sources), generated.forward(sources));
+      assertEquals("MergedProfile[id=c-1, name=Ada, by=sys]", generated.forward(sources).toString());
+      final var profile = generated.forward(sources);
+      final var fromGenerated = assertThrows(UnsupportedOperationException.class, () -> generated.backward(profile));
+      final var fromRuntime = assertThrows(UnsupportedOperationException.class, () -> runtime.backward(profile));
+      assertEquals(fromRuntime.getMessage(), fromGenerated.getMessage());
+    }
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("mergeRefusals")
+  @DisplayName("a merge field the generated bridge cannot build is refused by name")
+  void aMergeTheBridgeCannotBuildIsRefused(final String target, final String rows, final String message) {
+    final var c = compile(
+      sources(
+        "fb.MergedCustomer",
+        "package fb; public record MergedCustomer(String id, String name) {}",
+        "fb.MergedTarget",
+        "package fb; " + target,
+        "fb.MergeMappers",
+        HEADER +
+          "public final class MergeMappers {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedTarget> TARGET =" +
+          " Telescope.merge(MergedTarget.class, " +
+          rows +
+          ");\n}\n"
+      )
+    );
+    assertFalse(c.success(), "the merge must be refused");
+    assertTrue(c.hasError(message), c::errorMessages);
+  }
+
+  static List<String[]> mergeRefusals() {
+    final var auto = "io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class)";
+    return List.of(
+      new String[] {
+        "public class MergedTarget { public String getId() { return null; } public void setId(String v) {} }",
+        auto,
+        "a @Bridge merge builds a public record, and MergedTarget is not one",
+      },
+      new String[] {
+        "public record MergedTarget(String id, int count) {}",
+        auto,
+        "a @Bridge merge writes no row into the primitive component 'count' of MergedTarget",
+      },
+      new String[] {
+        "public record MergedTarget(String id) {}",
+        "io.github.eschizoid.telescope.mapping.MergeStep.from(MergedCustomer::id, (MergedTarget t) -> t.id())",
+        "a @Bridge merge compiles from(...) of two method references",
+      }
     );
   }
 
@@ -2636,7 +2738,7 @@ class BridgeFieldTest {
     return List.of(
       new String[] {
         "  @Bridge static final Telescope<User, UserDto> USER = Telescope.map(User.class, UserDto.class);",
-        "must be initialised by a Telescope.mapper(...) or Telescope.mapperForward(...)",
+        "must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)",
       },
       new String[] {
         "  @Bridge(UserDto.class) static final ForwardMapper<User, UserDto> USER =" +

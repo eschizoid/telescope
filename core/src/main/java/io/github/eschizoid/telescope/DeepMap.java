@@ -41,6 +41,7 @@ import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.MergeStep;
 import io.github.eschizoid.telescope.mapping.NullHint;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TelescopeTo;
@@ -82,6 +83,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -170,6 +172,48 @@ public final class DeepMap {
     final MapStep[] steps
   ) {
     if (caller == null) return Declaration.NONE;
+    final var given = new ArrayList<String>(steps.length);
+    for (final var step : steps) given.add(step.getClass().getSimpleName());
+    return declared(caller, source, target, given, () -> accessorsOf(steps));
+  }
+
+  /**
+   * The {@link Declaration} for a {@code Telescope.merge} call from {@code caller} building {@code
+   * target} from {@code steps}, as {@link #declaration} reads it for a mapper of one source: a
+   * merge converts from the {@link Sources} bag, and each row is named by the source class and the
+   * accessors it reads.
+   */
+  static Declaration mergeDeclaration(final Class<?> caller, final Class<?> target, final MergeStep<?>[] steps) {
+    if (caller == null) return Declaration.NONE;
+    final var given = new ArrayList<String>(steps.length);
+    for (final var step : steps) given.add(step.getClass().getSimpleName());
+    return declared(caller, Sources.class, target, given, () -> {
+      final var accessors = new ArrayList<String>(steps.length);
+      for (final var step : steps) {
+        accessors.add(
+          switch (step) {
+            case MergeStep.FromInferred<?, ?> from -> LambdaIntrospection.methodNameOf(from.src()) +
+            ">" +
+            LambdaIntrospection.methodNameOf(from.tgt());
+            case MergeStep.AutoSameName<?> auto -> auto.sourceClass().getName() + ">";
+          }
+        );
+      }
+      return accessors;
+    });
+  }
+
+  /**
+   * The {@link Declaration} for a factory called from {@code caller} for the pair, whose rows are
+   * of the classes {@code given} and name the accessors {@code accessors} gives.
+   */
+  private static Declaration declared(
+    final Class<?> caller,
+    final Class<?> source,
+    final Class<?> target,
+    final List<String> given,
+    final Supplier<List<String>> accessors
+  ) {
     final var provider = BridgeRegistry.declaredBy(caller, source, target).orElse(null);
     if (provider == null) {
       if (!UNREAD_ROWS.get(caller).contains(source.getName() + " -> " + target.getName())) return Declaration.NONE;
@@ -184,9 +228,7 @@ public final class DeepMap {
         )
       );
     }
-    final var given = new ArrayList<String>(steps.length);
-    for (final var step : steps) given.add(step.getClass().getSimpleName());
-    final var stale = staleness(provider, steps, given);
+    final var stale = staleness(provider, given, accessors);
     if (stale != null) {
       final var why =
         "the bridge on the class path was generated from " +
@@ -226,11 +268,26 @@ public final class DeepMap {
    * each method reference; inside a native image, which is built from one compilation and needs no
    * such decoding, they are not.
    */
-  private static String staleness(final BridgeProvider provider, final MapStep[] steps, final List<String> kinds) {
+  private static String staleness(
+    final BridgeProvider provider,
+    final List<String> kinds,
+    final Supplier<List<String>> named
+  ) {
     if (!kinds.equals(provider.rowKinds())) {
       return "the rows " + provider.rowKinds() + ", but the mapper is built from " + kinds;
     }
     if (NativeImage.IN_IMAGE) return null;
+    final var accessors = named.get();
+    if (accessors.equals(provider.rowAccessors())) return null;
+    return (
+      "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors
+    );
+  }
+
+  /**
+   * The accessors each of {@code steps} names, as {@code read>written}, a write hint naming none.
+   */
+  private static List<String> accessorsOf(final MapStep[] steps) {
     final var accessors = new ArrayList<String>(steps.length);
     for (final var step : steps) {
       // A write hint names a class rather than accessors; its kind is compared above.
@@ -253,10 +310,7 @@ public final class DeepMap {
       };
       accessors.add(nullToEmpty(read) + ">" + nullToEmpty(written));
     }
-    if (accessors.equals(provider.rowAccessors())) return null;
-    return (
-      "rows naming the accessors " + provider.rowAccessors() + ", but the mapper is built from rows naming " + accessors
-    );
+    return accessors;
   }
 
   private static String nullToEmpty(final String value) {
