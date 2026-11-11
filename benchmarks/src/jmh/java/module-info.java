@@ -33,5 +33,6 @@ module io.github.eschizoid.telescope.benchmarks {
       io.github.eschizoid.telescope.benchmarks.BenchTxSrcToBenchTxTgtBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.FillSrcToFillTgtBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.IntoFieldSrcToIntoNarrowBridgeProvider,
-      io.github.eschizoid.telescope.benchmarks.IntoFieldWideSrcToIntoWideBridgeProvider;
+      io.github.eschizoid.telescope.benchmarks.IntoFieldWideSrcToIntoWideBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.IntoListSrcToIntoListTgtBridgeProvider;
 }
