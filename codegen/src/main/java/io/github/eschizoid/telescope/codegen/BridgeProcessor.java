@@ -395,6 +395,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // For a field's bridge, its rows reading the source through a path and writing the value into
     // the target through another, in the order the rows came.
     List<FieldRows.PathToPath> pathsToPaths,
+    // For a field's bridge, the predicate each when(...) row gates its inner row on: by target
+    // property for a constant or compute row, and by the row's place for a path.
+    Map<String, FieldRows.Gate> gatedTargets,
+    Map<Integer, FieldRows.Gate> gatedPaths,
     // For a field's bridge, the write strategy its writeBean rows name for each class, by
     // qualified name, and the one its writeBeans row names, or null: a path builds an object it
     // steps through by the one its class takes.
@@ -421,6 +425,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.of(),
       List.of(),
       List.of(),
+      Map.of(),
+      Map.of(),
       Map.of(),
       null
     );
@@ -451,6 +457,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         List.of(),
         List.of(),
         List.of(),
+        Map.of(),
+        Map.of(),
         Map.of(),
         null
       );
@@ -875,6 +883,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           List.of(),
           List.of(),
           Map.of(),
+          Map.of(),
+          Map.of(),
           null
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
@@ -1170,6 +1180,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       List.copyOf(parsed.sourcePaths()),
       List.copyOf(parsed.targetPaths()),
       List.copyOf(parsed.pathsToPaths()),
+      Map.copyOf(parsed.gatedTargets()),
+      Map.copyOf(parsed.gatedPaths()),
       Map.copyOf(parsed.beanStrategies()),
       parsed.defaultStrategy()
     );
@@ -1456,6 +1468,54 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * The source text of the default-tree instance the runtime mapper starts a target property of
+   * {@code type} at when a constant or a computed value is written into it: a primitive's default,
+   * a public record built of the default trees of its components, and null for a class of the
+   * platform and for a record that reaches itself through its components, which has no default
+   * tree; or null where the runtime builds an instance the generated bridge does not, a bean or a
+   * record it cannot call the constructor of. {@code building} holds the records being built, and
+   * {@code cyclic} those a component reached again.
+   */
+  private String defaultTree(final TypeMirror type, final Set<String> building, final Set<String> cyclic) {
+    if (type.getKind().isPrimitive()) return defaultLiteralFor(type);
+    if (!(type instanceof DeclaredType declared) || !(declared.asElement() instanceof TypeElement element)) {
+      return "null";
+    }
+    final var name = element.getQualifiedName().toString();
+    if (element.getKind() == ElementKind.RECORD) {
+      if (!element.getTypeParameters().isEmpty() || !element.getModifiers().contains(Modifier.PUBLIC)) return null;
+      if (!building.add(name)) {
+        cyclic.add(name);
+        return "null";
+      }
+      final var components = new ArrayList<String>();
+      for (final var component : element.getRecordComponents()) {
+        final var tree = defaultTree(component.asType(), building, cyclic);
+        if (tree == null) return null;
+        components.add(tree);
+      }
+      building.remove(name);
+      if (cyclic.remove(name)) return "null";
+      return "new " + name + "(" + String.join(", ", components) + ")";
+    }
+    if (element.getKind().isInterface() || name.startsWith("java.") || name.startsWith("javax.")) return "null";
+    final var allocatable =
+      ElementFilter.constructorsIn(element.getEnclosedElements())
+        .stream()
+        .anyMatch(c -> c.getParameters().isEmpty() && c.getModifiers().contains(Modifier.PUBLIC)) ||
+      ElementFilter.methodsIn(element.getEnclosedElements())
+        .stream()
+        .anyMatch(
+          m ->
+            m.getSimpleName().contentEquals("builder") &&
+            m.getParameters().isEmpty() &&
+            m.getModifiers().contains(Modifier.STATIC) &&
+            m.getModifiers().contains(Modifier.PUBLIC)
+        );
+    return allocatable ? null : "null";
+  }
+
+  /**
    * Plans and writes the bridge of the pair of {@code source} and {@code target}. While a bridge a
    * {@code @Bridge} field declares is planned, every refusal is reported on that field's mapper
    * call, which is where its rows are, rather than on a side or in a generated file.
@@ -1571,6 +1631,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceRebuild = rebuildFor(source, sourceFields, sourceWriteStrategy, bridgePackage);
     final var computes = cfg.computes();
     final var computedFrom = cfg.computedFrom();
+    // The when(...) rows: a constant or compute row gated by target property, and a path gated by
+    // its place among the rows. A gated row writes forward alone, where its predicate accepts the
+    // source, over whatever the property holds without it; backward and patch leave it out.
+    final var gatedTargets = cfg.gatedTargets();
+    final var gatedPaths = cfg.gatedPaths();
     // Every target property a compute row fills, from a supplier or from the source.
     final var computed = new LinkedHashSet<>(computes.keySet());
     computed.addAll(computedFrom.keySet());
@@ -2178,7 +2243,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var path : sourcePaths) {
       final var root = path.row().properties().getFirst();
       if (renames.containsKey(root) || transforms.containsKey(root) || viaMappers.containsKey(root)) continue;
-      if (path.row().properties().size() == 1 || !targetNames.contains(root)) pathConsumed.add(root);
+      // A path of one step claims its property as the property's accessor does, unless a when(...)
+      // gates the row, which then claims nothing.
+      final var claims = path.row().properties().size() == 1 && !gatedPaths.containsKey(path.row().order());
+      if (claims || !targetNames.contains(root)) pathConsumed.add(root);
     }
     for (final var path : pathsToPaths) {
       final var root = path.read().row().properties().getFirst();
@@ -2316,12 +2384,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writesSource = new HashSet<String>();
     for (final var path : sourcePaths) {
       writesTarget.add(path.row().target());
-      if (!lenient) writesSource.add(path.row().properties().getFirst());
+      if (!lenient && !gatedPaths.containsKey(path.row().order())) writesSource.add(path.row().properties().getFirst());
     }
     for (final var path : targetPaths) writesTarget.add(path.row().properties().getFirst());
     for (final var path : pathsToPaths) {
       writesTarget.add(path.written().row().properties().getFirst());
-      if (!lenient) writesSource.add(path.read().row().properties().getFirst());
+      if (!lenient && !gatedPaths.containsKey(path.read().row().order())) {
+        writesSource.add(path.read().row().properties().getFirst());
+      }
     }
     for (final var sf : sourceFields) {
       if (effectiveDrops.contains(sf.name())) continue;
@@ -2424,12 +2494,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var forwardLocals = new LinkedHashMap<String, String>();
     final var forwardPaths = new HashMap<String, SourcePathPlan>();
     for (final var path : sourcePaths) forwardPaths.put(path.row().target(), path);
-    final Function<String, String> readForwardPlain = targetName -> {
-      final var path = forwardPaths.get(targetName);
-      if (path != null) return pathRead(path, forwardLocals, paired, sourceFields, source);
-      if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
-      if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
-      if (computedFrom.containsKey(targetName)) return computedFrom.get(targetName);
+    // Each gate is tested by a helper of its own, numbered in the order the rows reach it.
+    final var gateHelpers = new LinkedHashMap<FieldRows.Gate, Integer>();
+    final Function<FieldRows.Gate, String> tested = gate ->
+      "__when" + gateHelpers.computeIfAbsent(gate, unused -> gateHelpers.size()) + "(s)";
+    // What a target property holds without the row that fills it: the source property it pairs
+    // with, converted, or its null value where it pairs with none, which for a constant or a
+    // computed value is a default-tree instance of a record, as the runtime mapper starts it.
+    final var unfilled = new LinkedHashMap<String, String>();
+    for (final var gated : gatedTargets.keySet()) {
+      final var srcName = reverseRenames.getOrDefault(gated, gated);
+      if (hasField(paired.source(), srcName) && fieldPlans.containsKey(srcName)) continue;
+      final var tree = defaultTree(fieldByName(targetFields, gated).type(), new HashSet<>(), new HashSet<>());
+      if (tree == null) {
+        error(
+          source,
+          "when(...) gates a row filling '" +
+            gated +
+            "', which no source property of its name fills, so where the predicate rejects the source" +
+            " the runtime mapper fills it with a default-tree instance of " +
+            fieldByName(targetFields, gated).type() +
+            "; the generated bridge builds that instance only of a public record of records and" +
+            " values, so fill '" +
+            gated +
+            "' without when(...), or give it a source property of its name"
+        );
+        return;
+      }
+      unfilled.put(gated, tree);
+    }
+    final Function<String, String> readPaired = targetName -> {
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
       final var sf = fieldByName(paired.source(), srcName);
       final var local = "__fs_" + srcName;
@@ -2459,6 +2553,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         targetName,
         paired.checkedInto(paired.forwardChecks(), targetName, applyForward(srcName, plan, read))
       );
+    };
+    final Function<String, String> readForwardPlain = targetName -> {
+      final var path = forwardPaths.get(targetName);
+      if (path != null) {
+        final var read = pathRead(path, forwardLocals, paired, sourceFields, source);
+        final var gate = gatedPaths.get(path.row().order());
+        if (gate == null) return read;
+        final var srcName = reverseRenames.getOrDefault(targetName, targetName);
+        final var otherwise =
+          hasField(paired.source(), srcName) && fieldPlans.containsKey(srcName)
+            ? readPaired.apply(targetName)
+            : defaultLiteralFor(fieldByName(targetFields, targetName).type());
+        return "(" + tested.apply(gate) + " ? " + read + " : " + otherwise + ")";
+      }
+      if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
+      final var gate = gatedTargets.get(targetName);
+      final var filled = computes.containsKey(targetName)
+        ? "__cp_" + targetName + ".get()"
+        : computedFrom.get(targetName);
+      if (filled != null && gate == null) return filled;
+      if (filled != null) {
+        final var otherwise = unfilled.containsKey(targetName)
+          ? unfilled.get(targetName)
+          : readPaired.apply(targetName);
+        return "(" + tested.apply(gate) + " ? " + filled + " : " + otherwise + ")";
+      }
+      return readPaired.apply(targetName);
     };
     // Each target path writes its value through the path, over the value of the target property it
     // starts at, in the order the rows came: a source property's, or the value a source path reads
@@ -2491,8 +2612,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           from != null
             ? pathRead(from, forwardLocals, paired, sourceFields, source)
             : rootRead(path.row().source(), forwardLocals, paired, sourceFields, source);
-        written =
+        final var gate = gatedPaths.get(path.row().order());
+        // A gated write is made over the property's value so far, held in a local of its own,
+        // which
+        // stays the value where the predicate rejects the source.
+        if (gate != null) {
+          final var held = "__gw" + path.row().order();
+          forwardLocals.put(
+            held,
+            declarable(fieldByName(targetFields, targetName).type()) + " " + held + " = " + written + ";"
+          );
+          written = held;
+        }
+        final var through =
           path.row().properties().size() == 1 ? value : "__tw" + path.index() + "_1(" + written + ", " + value + ")";
+        written = gate == null ? through : "(" + tested.apply(gate) + " ? " + through + " : " + written + ")";
       }
       return written;
     };
@@ -2536,6 +2670,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writtenPaths = new LinkedHashMap<String, List<SourcePathPlan>>();
     if (!lenient) {
       for (final var path : everySourcePath) {
+        if (gatedPaths.containsKey(path.row().order())) continue;
         writtenPaths.computeIfAbsent(path.row().properties().getFirst(), unused -> new ArrayList<>()).add(path);
       }
     }
@@ -2543,7 +2678,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // a null object on the way read as null. A lenient bridge's backward is lossy and reads nothing
     // through a path.
     final var readTargets = new LinkedHashMap<String, TargetPathPlan>();
-    if (!lenient) for (final var path : targetPaths) readTargets.put(path.row().source(), path);
+    if (!lenient) {
+      for (final var path : targetPaths) {
+        if (!gatedPaths.containsKey(path.row().order())) readTargets.put(path.row().source(), path);
+      }
+    }
     final Function<String, String> readBackward = sourceName -> {
       final var readBack = readTargets.get(sourceName);
       final var paths = writtenPaths.get(sourceName);
@@ -3225,6 +3364,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           guarded
         );
         for (final var writer : pathWriters) out.print(writer);
+        // Each when(...) predicate is tested through a Predicate, as the runtime tests it, and
+        // what
+        // it throws is reported in the runtime's words.
+        for (final var gate : gateHelpers.entrySet()) {
+          if (!source.getTypeParameters().isEmpty()) out.println("  @SuppressWarnings({\"rawtypes\", \"unchecked\"})");
+          out.println("  private static boolean __when" + gate.getValue() + "(final " + sourceFq + " s) {");
+          out.println("    try {");
+          out.println("      return " + gate.getKey().test(sourceFq, "s") + ";");
+          out.println("    } catch (final Throwable e) {");
+          out.println(
+            "      throw io.github.eschizoid.telescope.Telescope.whenPredicateThrew(\"" +
+              gate.getKey().inner() +
+              "\", " +
+              (gate.getKey().sourceField() == null ? "null" : "\"" + gate.getKey().sourceField() + "\"") +
+              ", e);"
+          );
+          out.println("    }");
+          out.println("  }");
+          out.println();
+        }
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
         if (elementsLocated) {

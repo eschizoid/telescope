@@ -832,6 +832,67 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * The refusal of a {@code when(...)} row whose inner row is another {@code when(...)}. Both paths
+   * refuse with these words.
+   */
+  public static String whenNested() {
+    return (
+      "Mapping.when(...) does not nest. Combine predicates with Predicate#and / Predicate#or " +
+      "on a single when(...) row instead of stacking when(when(...))."
+    );
+  }
+
+  /**
+   * The refusal of a {@code when(...)} row whose inner row, of the row class {@code kind}, is not a
+   * row it gates: one reading the source property {@code sourceField} into the target property
+   * {@code targetField}, either null where the row names none. Both paths refuse with these words.
+   */
+  public static String whenWrapsOnly(final String kind, final String sourceField, final String targetField) {
+    final var alternativeHint = kind.equals("ForwardOnlyTransformTo")
+      ? "Mapping.toOneWay(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
+        "predicate into the forward function (return the source value or a default based on the " +
+        "predicate)."
+      : "For field-level predicate gating on flat accessors, use Mapping.toOrElse(src, tgt, " +
+        "defaultValue, predicate) — the source-value predicate applies the default when matched.";
+    final var fields =
+      sourceField == null && targetField == null
+        ? ""
+        : " (" +
+          (sourceField == null ? "<telescope>" : sourceField) +
+          " → " +
+          (targetField == null ? "<telescope>" : targetField) +
+          ")";
+    return (
+      "Mapping.when(...) wraps only telescope-based rows: to(srcAcc, targetTelescope), " +
+      "to(srcTelescope, tgtAcc), to(srcTelescope, tgtTelescope), zip(srcTelescope, tgtTelescope), " +
+      "constant(targetTelescope, value), compute(targetTelescope, supplier). " +
+      alternativeHint +
+      " Got inner row of kind " +
+      kind +
+      fields +
+      "."
+    );
+  }
+
+  /**
+   * What a {@code when(...)} row's predicate throwing {@code failure} is reported with: the class
+   * of the row it gates, {@code inner}, and the source property that row reads, {@code
+   * sourceField}, or null where it reads none. Both paths report it in these words.
+   */
+  public static String whenPredicateThrew(final String inner, final String sourceField, final Throwable failure) {
+    final var failureMessage = failure.getMessage();
+    return (
+      "Mapping.when(...) predicate threw — inner=" +
+      inner +
+      " (sourceField=" +
+      (sourceField == null ? "<telescope>" : sourceField) +
+      "). Predicate failure: " +
+      className(failure.getClass()) +
+      (failureMessage == null ? "" : ": " + failureMessage)
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

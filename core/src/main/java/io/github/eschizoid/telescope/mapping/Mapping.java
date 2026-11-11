@@ -302,6 +302,9 @@ public sealed interface Mapping<A, B>
    * <p>Backward direction is identity; the asymmetry of {@link #toOrElse(Accessor, Accessor,
    * Object)} applies here too. Reach for the explicit 4-arg {@link #to(Accessor, Accessor,
    * Function, Function)} when both directions need bespoke logic.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and tests it only on a value that is not null.
    */
   static <A, B, X> Mapping<A, B> toOrElse(
     final Accessor<A, X> src,
@@ -347,6 +350,9 @@ public sealed interface Mapping<A, B>
    * <pre>{@code
    * toOrElseGet(Src::traceId, Dst::traceId, UUID::randomUUID, String::isBlank)
    * }</pre>
+   *
+   * <p>A {@code @Bridge} field compiles the row when the supplier and the predicate are each a
+   * method reference or a {@code static final} field holding one.
    */
   static <A, B, X> Mapping<A, B> toOrElseGet(
     final Accessor<A, X> src,
@@ -933,6 +939,12 @@ public sealed interface Mapping<A, B>
    * exception is decorated with the failing row's inner-kind + source field and rethrown as an
    * {@link IllegalStateException}. The decoration points the user back at the {@code when(...)}
    * call site rather than at an opaque internal stack frame.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and the inner row is a path row, a constant or a
+   * compute row the field compiles on its own: the bridge tests the predicate through a {@code
+   * Predicate} and reports a failure in the same words. A nested {@code when} and any other inner
+   * row are refused on the row in the words the runtime refuses them with.
    */
   static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
     return new Conditional<>(predicate, inner);

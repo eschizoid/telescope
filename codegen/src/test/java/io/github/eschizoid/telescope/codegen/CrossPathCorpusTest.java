@@ -12811,6 +12811,407 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  /** The predicates, suppliers and functions the when(...) and toOrElse rows name. */
+  private static final String WHEN_HELP =
+    "public class %1$sHelp {\n" +
+    "  public static final java.util.function.Predicate<Object> ALWAYS = o -> true;\n" +
+    "  public static boolean yes(final Object o) { return true; }\n" +
+    "  public static boolean no(final Object o) { return false; }\n" +
+    "  public static boolean boom(final Object o) { throw new IllegalArgumentException(\"no \" + o); }\n" +
+    "  public static Boolean unknown(final Object o) { return null; }\n" +
+    "  public static boolean negative(final Integer n) { return n < 0; }\n" +
+    "  public static String k() { return \"k\"; }\n" +
+    "  public static Integer zero() { return 0; }\n" +
+    "  public static String full(final %1$sSrc s) { return s.a() + \"!\"; }\n" +
+    "}\n";
+
+  /** {@code to(...)} of a row a when(...) row gates, written in full for the runtime mapper. */
+  private static String gated(final String predicate, final String inner) {
+    return "when(" + predicate + ", " + MAPPING_PREFIX + inner + ")";
+  }
+
+  /**
+   * The declarations of a pair of {@code Src(String a, String c)} and {@code Tgt(String a, String
+   * c)}.
+   */
+  private static List<String> flatGated(final boolean forwardOnly, final String... rows) {
+    return List.of(
+      sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", \"c\")"),
+      sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", \"y\")"),
+      WHEN_HELP,
+      typedField(forwardOnly, rows),
+      runtimeMapper(forwardOnly, "", rows)
+    );
+  }
+
+  private static final List<NestedPath> WHEN_ROWS = List.of(
+    new NestedPath(
+      "a constant over a namesake it pairs with, under a predicate the source passes",
+      false,
+      flatGated(false, gated("%1$sHelp::yes", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant over a namesake it pairs with, under a predicate the source fails",
+      false,
+      flatGated(false, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"c\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a supplied value under a predicate held in a static final field",
+      false,
+      flatGated(false, gated("%1$sHelp.ALWAYS", "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::k)")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a value computed from the source under a predicate the source passes",
+      false,
+      flatGated(false, gated("%1$sHelp::yes", "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::full)")),
+      "#0(a=\"a\", c=\"a!\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant under a predicate that is a method of the source",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a, boolean open", "new %1$sSrc(\"a\", false)"),
+        sampled("%1$sTgt", "String a, boolean open, String c", "new %1$sTgt(\"x\", true, \"y\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(true, gated("%1$sSrc::open", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+        runtimeMapper(true, "", gated("%1$sSrc::open", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"))
+      ),
+      "#0(a=\"a\", open=false, c=null)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a value supplied into a record no source property fills, under a predicate the source fails, which leaves its default tree",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public record %1$sLeaf(String z) {}\n",
+        "public record %1$sRec(String x, int y, %1$sLeaf leaf) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return new %1$sRec(\"m\", 1, null); }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=#1(x=null, y=0, leaf=#2(z=null)))",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a value supplied into a record that reaches itself, under a predicate the source fails, which leaves it null",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public record %1$sRec(String x, int y, %1$sRec next) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return new %1$sRec(\"m\", 1, null); }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=null)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a source property written through a target path under a predicate the source passes, never read back",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=#1(label=\"n\", n=0), qty=3)",
+      "#0(nick=null, qty=1)",
+      "#0(nick=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a source property written through a target path under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::no", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::no", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=null, qty=3)",
+      "#0(nick=null, qty=1)",
+      "#0(nick=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a source path read into a converted namesake under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, Integer label", "new %1$sSrc(new %1$sMid(\"n\", 4), 9)"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"12\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")),
+        runtimeMapper(false, "", gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)"))
+      ),
+      "#0(label=\"9\")",
+      "#0(customer=null, label=12)",
+      "#0(customer=#1(name=\"n\", age=4), label=12)"
+    ),
+    new NestedPath(
+      "a source path read into a converted namesake under a predicate the source passes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, Integer label", "new %1$sSrc(new %1$sMid(\"n\", 4), 9)"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"12\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", %1$sTgt::label)")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", %1$sTgt::label)"))
+      ),
+      "#0(label=\"n\")",
+      "#0(customer=null, label=12)",
+      "#0(customer=#1(name=\"n\", age=4), label=12)"
+    ),
+    new NestedPath(
+      "a path into a path under a predicate the source passes, a null object on the way",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(null, 3)"),
+        MID,
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=null, qty=1)"
+    ),
+    new NestedPath(
+      "a source path of one step under a predicate, whose property still pairs by name",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String label, String other", "new %1$sSrc(\"l\", \"o\")"),
+        sampled("%1$sTgt", "String label, String other", "new %1$sTgt(\"m\", \"p\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          gated("%1$sHelp::yes", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::label") + ", %1$sTgt::other)")
+        ),
+        runtimeMapper(
+          false,
+          "",
+          gated("%1$sHelp::yes", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::label") + ", %1$sTgt::other)")
+        )
+      ),
+      "#0(label=\"l\", other=\"l\")",
+      "#0(label=\"m\", other=\"p\")",
+      "#0(label=\"m\", other=\"p\")"
+    ),
+    new NestedPath(
+      "a source property written through a gated target path and into another property, which claims it once",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, String alias, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), \"a\", 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"),
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::nick, %1$sTgt::alias)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"),
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::nick, %1$sTgt::alias)"
+        )
+      ),
+      "#0(ship=#1(label=\"n\", n=0), alias=\"n\", qty=3)",
+      "#0(nick=\"a\", qty=1)",
+      "#0(nick=\"a\", qty=1)"
+    ),
+    new NestedPath(
+      "a toOrElse whose predicate accepts a blank value, both ways",
+      false,
+      flatGated(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)"),
+      "#0(a=\"a\", c=\"c\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a toOrElse whose predicate accepts the value, which takes the fallback",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", \" \")"),
+        sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", \" \")"),
+        WHEN_HELP,
+        typedField(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)"),
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)")
+      ),
+      "#0(a=\"a\", c=\"d\")",
+      "#0(a=\"x\", c=\" \")",
+      "#0(a=\"x\", c=\" \")"
+    ),
+    new NestedPath(
+      "a toOrElse given a null value, which takes the fallback without testing the predicate",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", null)"),
+        sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP,
+        typedField(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", %1$sHelp::boom)"),
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", %1$sHelp::boom)")
+      ),
+      "#0(a=\"a\", c=\"d\")",
+      "#0(a=\"x\", c=null)",
+      "#0(a=\"x\", c=null)"
+    ),
+    new NestedPath(
+      "a toOrElseGet whose predicate accepts the value, which takes the supplied fallback",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, Integer c", "new %1$sSrc(\"a\", -2)"),
+        sampled("%1$sTgt", "String a, Integer c", "new %1$sTgt(\"x\", 5)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, Integer>toOrElseGet(%1$sSrc::c, %1$sTgt::c, %1$sHelp::zero, %1$sHelp::negative)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, Integer>toOrElseGet(%1$sSrc::c, %1$sTgt::c, %1$sHelp::zero, %1$sHelp::negative)"
+        )
+      ),
+      "#0(a=\"a\", c=0)",
+      "#0(a=\"x\", c=5)",
+      "#0(a=\"x\", c=5)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a when(...) row and a toOrElse row with a predicate convert the same way on both paths, in each direction"
+  )
+  void aConditionalRowConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(WHEN_ROWS, "Wh");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A when(...) row whose predicate throws, and the failure both paths owe for {@code
+   * Src.sample()}.
+   */
+  private record ThrowingWhen(String name, List<String> declarations, String failure) {}
+
+  private static final List<ThrowingWhen> THROWING_WHEN = List.of(
+    new ThrowingWhen(
+      "a predicate throwing an exception of its own, gating a constant",
+      flatGated(false, gated("%1$sHelp::boom", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "IllegalStateException: Mapping.when(...) predicate threw — inner=Constant (sourceField=<telescope>)." +
+        " Predicate failure: IllegalArgumentException: no %1$sSrc[a=a, c=c] / IllegalArgumentException"
+    ),
+    new ThrowingWhen(
+      "a predicate unboxing a null result, gating a write through a target path",
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(null, 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::unknown", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::unknown", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "IllegalStateException: Mapping.when(...) predicate threw — inner=TelescopeTo (sourceField=nick)." +
+        " Predicate failure: NullPointerException / NullPointerException"
+    )
+  );
+
+  @Test
+  @DisplayName("a when(...) predicate that throws fails forward in the same words on both paths")
+  void aThrowingWhenPredicateFailsInTheSameWordsOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : THROWING_WHEN) {
+      final var prefix = "Wt" + index++;
+      final var header = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), header + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": " + plain.errorMessages());
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var sample = src.getMethod("sample").invoke(null);
+      final var owed = row.failure().formatted(prefix);
+      final var generated = failureOf(() -> bridge.getMethod("forward", src).invoke(null, sample));
+      final var reflective = failureOf(() -> mapper.forward(sample));
+      if (!owed.equals(generated)) failures.add(row.name() + ": generated gave " + generated + ", owed " + owed);
+      if (!owed.equals(reflective)) failures.add(row.name() + ": reflective gave " + reflective + ", owed " + owed);
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code attempt} threw, as its class, its message and its cause's class, or what it gave.
+   */
+  private static String failureOf(final Attempt attempt) {
+    try {
+      return "gave " + attempt.get();
+    } catch (final InvocationTargetException e) {
+      return described(e.getCause());
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return described(e);
+    }
+  }
+
+  private static String described(final Throwable failure) {
+    return (
+      failure.getClass().getSimpleName() +
+      ": " +
+      failure.getMessage() +
+      " / " +
+      (failure.getCause() == null ? "no cause" : failure.getCause().getClass().getSimpleName())
+    );
+  }
+
   /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
   private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
     throws ReflectiveOperationException {
@@ -14326,7 +14727,7 @@ class CrossPathCorpusTest {
           MAPPING_PREFIX +
           "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
       ),
-      "when(...) has no generated form yet",
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -14411,7 +14812,7 @@ class CrossPathCorpusTest {
           MAPPING_PREFIX +
           "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
       ),
-      "when(...) has no generated form yet",
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(

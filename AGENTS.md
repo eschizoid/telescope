@@ -286,6 +286,8 @@ from "compile-checked" to "runtime-checked" is a regression.
 ### Codegen-support seams (public, not for hand-written call sites)
 
 - `hop(OpticNode)` — appends an introspection node; generated navigators call it after each step.
+- `whenPredicateThrew(String, String, Throwable)` — the failure a generated bridge throws when a `when(...)` predicate
+  throws, in the words the runtime mapper reports it with, which `PairingMessages` holds for both.
 - `componentLens(Class, String, getter, setter)` — the lens a navigator composes per component, carrying the fusion
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter

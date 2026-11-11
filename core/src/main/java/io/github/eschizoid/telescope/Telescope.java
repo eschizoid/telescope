@@ -19,6 +19,7 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
@@ -893,6 +894,25 @@ public sealed class Telescope<
     } catch (final IllegalStateException | IllegalArgumentException e) {
       return null;
     }
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The failure a generated bridge
+   * throws when the predicate of a {@code when(...)} row throws {@code failure}, carrying it as its
+   * cause: the same words the runtime mapper reports, naming {@code inner}, the class of the row
+   * the predicate gates, and {@code sourceField}, the source property that row reads, or null.
+   *
+   * @param inner the simple name of the gated row's class, as {@code TelescopeTo}
+   * @param sourceField the method name of the source accessor the gated row reads, or null
+   * @param failure what the predicate threw
+   * @return the failure to throw
+   */
+  public static IllegalStateException whenPredicateThrew(
+    final String inner,
+    final String sourceField,
+    final Throwable failure
+  ) {
+    return new IllegalStateException(PairingMessages.whenPredicateThrew(inner, sourceField, failure), failure);
   }
 
   /**

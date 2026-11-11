@@ -128,7 +128,9 @@ final class FieldRows {
     String defaultStrategy,
     List<SourcePath> sourcePaths,
     List<TargetPath> targetPaths,
-    List<PathToPath> pathsToPaths
+    List<PathToPath> pathsToPaths,
+    Map<String, Gate> gatedTargets,
+    Map<Integer, Gate> gatedPaths
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -178,6 +180,34 @@ final class FieldRows {
    * through the target, with no source property. Both carry the row's place among the field's rows.
    */
   record PathToPath(SourcePath read, TargetPath written) {}
+
+  /**
+   * The predicate a {@code when(...)} row gates its inner row on, and what a failure of it names:
+   * {@code predicate} is a {@code Predicate} written as Java, a {@code static final} field holding
+   * one when {@code held}, and otherwise a method reference that takes a cast to the type it tests;
+   * {@code inner} the class of the row the runtime builds for the inner row, and {@code
+   * sourceField} the method name of the source accessor it names, or null. A gated row's target
+   * property is the key of {@link Parsed#gatedTargets}, and a gated path's place among the rows the
+   * key of {@link Parsed#gatedPaths}.
+   */
+  record Gate(String predicate, boolean held, String inner, String sourceField) {
+    /** The Java expression testing {@code value}, of type {@code type}. */
+    String test(final String type, final String value) {
+      return held
+        ? predicate + ".test(" + value + ")"
+        : "((java.util.function.Predicate<? super " + type + ">) " + predicate + ").test(" + value + ")";
+    }
+  }
+
+  /** The rows a {@code when(...)} row gates, by the class the runtime builds for each. */
+  private static final Set<String> GATED = Set.of(
+    "TelescopeTo",
+    "FromTelescopeTo",
+    "TelescopeToTelescope",
+    "Constant",
+    "Compute",
+    "ComputeFromSource"
+  );
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
   record GeneratedClass(String qualifiedName, String source) {}
@@ -578,6 +608,15 @@ final class FieldRows {
     /** How many rows have been read, which is the place of the row being read. */
     private int order;
 
+    /** Whether the row being read is the inner row of a {@code when(...)}, which claims nothing. */
+    private boolean gating;
+
+    /** The target property the last constant or compute row read fills. */
+    private String lastFilled;
+
+    private final Map<String, Gate> gatedTargets = new LinkedHashMap<>();
+    private final Map<Integer, Gate> gatedPaths = new LinkedHashMap<>();
+
     /** The classes a path of these rows steps through below its root, by qualified name. */
     private final Set<String> pathIntermediates = new HashSet<>();
 
@@ -648,7 +687,9 @@ final class FieldRows {
         defaultStrategy,
         sourcePaths,
         targetPaths,
-        pathsToPaths
+        pathsToPaths,
+        gatedTargets,
+        gatedPaths
       );
     }
 
@@ -684,7 +725,7 @@ final class FieldRows {
           row,
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
-            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute, and the hints writeBean and" +
+            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant, compute and when, and the hints writeBean and" +
             " writeBeans"
         );
       }
@@ -723,6 +764,7 @@ final class FieldRows {
         };
         case "toOneWay" -> converting(row, false);
         case "toOrElse", "toOrElseGet" -> orElse(row, kind);
+        case "when" -> gated(row);
         case "via" -> via(row);
         case "drop" -> drop(row);
         case "constant" -> filled(row, true);
@@ -779,9 +821,11 @@ final class FieldRows {
       if (!targetsWritten.add(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
-      final var claimed = sourceWrites.write(named, t.property());
-      if (claimed != null) return new Refused(row, claimed);
-      if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
+      if (!gating) {
+        final var claimed = sourceWrites.write(named, t.property());
+        if (claimed != null) return new Refused(row, claimed);
+        if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
+      }
       sourcePaths.add(written);
       stepsThrough(hops);
       rowKinds.add("FromTelescopeTo");
@@ -817,14 +861,154 @@ final class FieldRows {
       }
       final var written = targetPathOf(s.property(), hops);
       final var named = written.name();
-      final var claimed = sourceWrites.write(s.property(), named);
-      if (claimed != null) return new Refused(row, claimed);
-      if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
+      if (!gating) {
+        final var claimed = sourceWrites.write(s.property(), named);
+        if (claimed != null) return new Refused(row, claimed);
+        if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
+      }
       targetPaths.add(written);
       stepsThrough(hops);
       rowKinds.add("TelescopeTo");
       rowAccessors.add(s.method() + ">" + named);
       return null;
+    }
+
+    /**
+     * A {@code when(predicate, row)} row: the inner row, read as it is read on its own but claiming
+     * nothing, gated on the predicate, which forward tests on the source. The runtime refuses a
+     * nested {@code when} and any row it does not gate, and so does the reader, in the same words.
+     * The predicate is a method reference or a {@code static final} field holding one.
+     */
+    private Refused gated(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      if (
+        !(args.get(1) instanceof MethodInvocationTree inner) ||
+        !(elementAt(unit, inner.getMethodSelect()) instanceof ExecutableElement innerExec) ||
+        !(innerExec.getEnclosingElement() instanceof TypeElement innerOwner) ||
+        !innerOwner.getQualifiedName().contentEquals(MAPPING_FQN)
+      ) {
+        return new Refused(
+          args.get(1),
+          "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call"
+        );
+      }
+      final var kind = innerKind(innerExec, inner);
+      if (kind.equals("Conditional")) return new Refused(row, PairingMessages.whenNested());
+      final var innerArgs = inner.getArguments();
+      if (!GATED.contains(kind)) {
+        return new Refused(
+          row,
+          PairingMessages.whenWrapsOnly(
+            kind,
+            referencedName(innerArgs.get(0)),
+            kind.equals("Drop") ? null : referencedName(innerArgs.get(1))
+          )
+        );
+      }
+      final var predicate = predicateValue(args.get(0));
+      if (predicate instanceof Refused refused) return refused;
+      final var sourceField = kind.equals("TelescopeTo") ? referencedName(innerArgs.get(0)) : null;
+      // The inner row takes the place of the when(...) row among the rows.
+      order--;
+      gating = true;
+      lastFilled = null;
+      final var refused = read(inner);
+      gating = false;
+      if (refused != null) return refused;
+      final var gate = new Gate(((Gate) predicate).predicate(), ((Gate) predicate).held(), kind, sourceField);
+      if (kind.startsWith("Compute") || kind.equals("Constant")) {
+        gatedTargets.put(lastFilled, gate);
+      } else {
+        gatedPaths.put(order, gate);
+      }
+      // The runtime builds one Conditional row, which names the inner row's flat accessors alone.
+      rowKinds.set(rowKinds.size() - 1, "Conditional");
+      rowAccessors.set(
+        rowAccessors.size() - 1,
+        (kind.equals("TelescopeTo") ? sourceField : "") +
+          ">" +
+          (kind.equals("FromTelescopeTo") ? referencedName(innerArgs.get(1)) : "")
+      );
+      return null;
+    }
+
+    /**
+     * The class of the row the runtime builds for {@code row}, a call of the factory {@code exec}.
+     */
+    private String innerKind(final ExecutableElement exec, final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      return switch (exec.getSimpleName().toString()) {
+        case "to" -> args.size() != 2
+          ? "TypedTransformTo"
+          : pathParameter(exec, 0)
+            ? pathParameter(exec, 1)
+              ? "TelescopeToTelescope"
+              : "FromTelescopeTo"
+            : pathParameter(exec, 1)
+              ? "TelescopeTo"
+              : "SameTypedTo";
+        case "toOneWay" -> "ForwardOnlyTransformTo";
+        case "via" -> args.size() == 4 ? "ViaMethods" : classLiteral(unit, args.get(2)) != null ? "ViaClass" : "Via";
+        case "drop" -> "Drop";
+        case "constant" -> "Constant";
+        case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(ComputeForms.computeForm(exec))
+          ? "ComputeFromSource"
+          : "Compute";
+        case "zip" -> "TelescopeToTelescope";
+        case "when" -> "Conditional";
+        default -> "TypedTransformTo";
+      };
+    }
+
+    /** The name of the method {@code arg} references, or null when it is not a method reference. */
+    private static String referencedName(final ExpressionTree arg) {
+      return arg instanceof MemberReferenceTree reference ? reference.getName().toString() : null;
+    }
+
+    /**
+     * The predicate {@code arg} names, as a {@link Gate} carrying only its Java text: a {@code
+     * static final} field holding a predicate, or a method reference written with its class in
+     * full, which the bridge calls through the same kind of predicate the runtime does; or the
+     * refusal.
+     */
+    private Object predicateValue(final ExpressionTree arg) {
+      if (
+        (arg instanceof IdentifierTree || arg instanceof MemberSelectTree) &&
+        elementAt(unit, arg) instanceof VariableElement held &&
+        held.getKind() == ElementKind.FIELD
+      ) {
+        if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+          return new Refused(
+            arg,
+            "a @Bridge mapper tests a predicate the generated bridge can name: a method reference" +
+              " (Orders::shipped), or a static final field holding the predicate; " +
+              held.getSimpleName() +
+              " is not static and final"
+          );
+        }
+        final var owner = (TypeElement) held.getEnclosingElement();
+        if (!reachable(held, owner)) return new Refused(arg, unreachable(owner, held.getSimpleName()));
+        return new Gate(owner.getQualifiedName() + "." + held.getSimpleName(), true, null, null);
+      }
+      if (!(arg instanceof MemberReferenceTree reference)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper tests a predicate written as a method reference (Orders::shipped, String::isBlank)," +
+            " or a static final field holding one; this argument is neither"
+        );
+      }
+      final var checked = call(arg, "v", 1);
+      if (checked instanceof Refused refused) return refused;
+      final var qualifier = elementAt(unit, reference.getQualifierExpression());
+      final String receiver;
+      if (qualifier instanceof TypeElement type) {
+        receiver = type.getQualifiedName().toString();
+      } else {
+        // A reference call(...) accepts is on a type or on a static final field.
+        final var held = (VariableElement) qualifier;
+        receiver = ((TypeElement) held.getEnclosingElement()).getQualifiedName() + "." + held.getSimpleName();
+      }
+      return new Gate(receiver + "::" + reference.getName(), false, null, null);
     }
 
     /**
@@ -1239,11 +1423,13 @@ final class FieldRows {
       return null;
     }
 
+    /**
+     * A {@code toOrElse} or {@code toOrElseGet} row: forward writes the fallback where the source
+     * value is null, or where the row's predicate, tested only on a value that is not null, accepts
+     * it, and the value itself otherwise; backward writes the target value back as it is.
+     */
     private Refused orElse(final MethodInvocationTree row, final String kind) {
       final var args = row.getArguments();
-      if (args.size() != 3) {
-        return new Refused(row, kind + "(...) with a predicate has no generated form yet");
-      }
       final var src = accessor(args.get(0), source);
       if (src instanceof Refused refused) return refused;
       final var tgt = accessor(args.get(1), target);
@@ -1269,9 +1455,17 @@ final class FieldRows {
       }
       final var unnamed = unnameable(s, t);
       if (unnamed != null) return unnamed;
+      final String missing;
+      if (args.size() == 4) {
+        final var predicate = predicateValue(args.get(3));
+        if (predicate instanceof Refused refused) return refused;
+        missing = "v == null || " + ((Gate) predicate).test(s.type().toString(), "v");
+      } else {
+        missing = "v == null";
+      }
       final var name = bridgeName + camel(s.property()) + "Fn";
       transforms.put(s.property(), qualified(name));
-      classes.add(bridgeFn(name, s.type(), t.type(), "v == null ? " + fallback + " : v", "v"));
+      classes.add(bridgeFn(name, s.type(), t.type(), missing + " ? " + fallback + " : v", "v"));
       rowKinds.add("TypedTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
       return null;
@@ -1527,6 +1721,7 @@ final class FieldRows {
       if (filledAs == null || !nameable(filledAs)) return unnameable(t);
       final var name = bridgeName + camel(t.property()) + (constant ? "Constant" : "Compute");
       computes.put(t.property(), qualified(name));
+      lastFilled = t.property();
       classes.add(supplier(name, filledAs, value));
       rowKinds.add(constant ? "Constant" : "Compute");
       rowAccessors.add(">");
@@ -1674,6 +1869,7 @@ final class FieldRows {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
       computedFrom.put(t.property(), value);
+      lastFilled = t.property();
       rowKinds.add("ComputeFromSource");
       rowAccessors.add(">");
       return null;

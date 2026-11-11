@@ -370,6 +370,92 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName(
+    "a field with when(...) rows and a predicate toOrElse runs its generated bridge, giving what the runtime gives"
+  )
+  void aFieldWithConditionalRowsRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathFlat.class, PathNested.class,\n" +
+      "      when(PathGates::open, to(PathFlat::city," +
+      " Telescope.of(PathNested.class).field(PathNested::customer).field(PathPlace::city))),\n" +
+      "      when(PathGates::open, constant(PathNested::label, \"open\")),\n" +
+      "      toOrElse(PathFlat::note, PathNested::note, \"none\", String::isBlank));\n";
+    final var c = compile(
+      sources(
+        "fb.PathPlace",
+        "package fb; public record PathPlace(String city) {}",
+        "fb.PathFlat",
+        "package fb; public record PathFlat(String city, String note, int qty) {}",
+        "fb.PathNested",
+        "package fb; public record PathNested(PathPlace customer, String label, String note, int qty) {}",
+        "fb.PathGates",
+        "package fb; public final class PathGates { public static boolean open(final PathFlat f) { return f.qty() > 0; } }",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathFlat, PathNested> NESTED = " +
+          rows +
+          "  public static Mapper<PathFlat, PathNested> runtime() { return Built.NESTED; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER + "final class Built {\n" + "  static final Mapper<PathFlat, PathNested> NESTED = " + rows + "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "NESTED");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      for (final var qty : new int[] { 3, 0 }) {
+        final var flat = loader.loadClass("fb.PathFlat").getConstructors()[0].newInstance("Paris", " ", qty);
+        assertEquals(runtime.forward(flat), generated.forward(flat));
+        final var nested = generated.forward(flat);
+        assertEquals(runtime.backward(nested), generated.backward(nested));
+        assertEquals(runtime.patch(flat, nested), generated.patch(flat, nested));
+      }
+      final var open = loader.loadClass("fb.PathFlat").getConstructors()[0].newInstance("Paris", " ", 3);
+      assertEquals(
+        "PathNested[customer=PathPlace[city=Paris], label=open, note=none, qty=3]",
+        generated.forward(open).toString()
+      );
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a when(...) row filling a bean no source property fills is refused by name, since its default is a bean"
+  )
+  void aGatedRowFillingAnUnpairedBeanIsRefused() {
+    final var c = compile(
+      sources(
+        "fb.GateBox",
+        "package fb; public class GateBox { private String v; public String getV() { return v; }" +
+          " public void setV(final String v) { this.v = v; } }",
+        "fb.GateSrc",
+        "package fb; public record GateSrc(String a) {}",
+        "fb.GateTgt",
+        "package fb; public record GateTgt(String a, GateBox box) {}",
+        "fb.GateHelp",
+        "package fb; public final class GateHelp { public static boolean no(final GateSrc s) { return false; }" +
+          " public static GateBox box() { return new GateBox(); } }",
+        "fb.GateMappers",
+        HEADER +
+          "public final class GateMappers {\n" +
+          "  @Bridge public static final ForwardMapper<GateSrc, GateTgt> GATED = Telescope.mapperForward(" +
+          "GateSrc.class, GateTgt.class, when(GateHelp::no, compute(GateTgt::box, GateHelp::box)));\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success(), "the row must be refused");
+    assertTrue(
+      c.hasError("when(...) gates a row filling 'box', which no source property of its name fills"),
+      c::errorMessages
+    );
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
@@ -414,7 +500,24 @@ class BridgeFieldTest {
         "constant(UserDto::kind, String.valueOf(1))",
         "a value in a @Bridge mapper must be a literal or an enum constant",
       },
-      new String[] { "when(User::isAdmin, drop(User::secret))", "when(...) has no generated form yet" },
+      new String[] { "when(User::isAdmin, drop(User::secret))", PairingMessages.whenWrapsOnly("Drop", "secret", null) },
+      new String[] {
+        "when(User::isAdmin, to(User::name, UserDto::name))",
+        PairingMessages.whenWrapsOnly("SameTypedTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, toOneWay(User::name, UserDto::name, Conv::trim))",
+        PairingMessages.whenWrapsOnly("ForwardOnlyTransformTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, when(User::isAdmin, constant(UserDto::kind, \"a\")))",
+        PairingMessages.whenNested(),
+      },
+      new String[] { "when(Rows.OPEN, constant(UserDto::kind, \"a\"))", "OPEN is not static and final" },
+      new String[] {
+        "when(User::isAdmin, constant(Telescope.of(UserDto.class).field(UserDto::kind), \"a\"))",
+        "a telescope path or another expression has no generated form yet",
+      },
       new String[] {
         "to(Telescope.of(User.class).field(User::address).field(a -> a.city()), UserDto::kind)",
         "an inline lambda in a path can't be compiled into the generated bridge",
@@ -520,10 +623,7 @@ class BridgeFieldTest {
         "toOneWay(User::name, UserDto::name, Mappers::lower)",
         "Mappers.lower cannot be called from the generated bridge in package 'fb'",
       },
-      new String[] {
-        "toOrElse(User::nick, UserDto::nick, \"a\", String::isBlank)",
-        "toOrElse(...) with a predicate has no generated form yet",
-      },
+      new String[] { "toOrElse(User::nick, UserDto::nick, \"a\", Rows.OPEN)", "OPEN is not static and final" },
       new String[] {
         "constant(UserDto::kind, \"a\"), compute(UserDto::kind, Conv::region)",
         "duplicate override row for target field 'kind'",
@@ -576,6 +676,7 @@ class BridgeFieldTest {
           "  static java.util.function.Supplier<String> MUTABLE = () -> \"m\";\n" +
           "  @SuppressWarnings(\"rawtypes\") static final java.util.function.Supplier RAW = () -> 1;\n" +
           "  static final WriteHint.WriteStrategy STRATEGY = WriteHint.WriteStrategy.SETTERS;\n" +
+          "  static java.util.function.Predicate<Object> OPEN = o -> true;\n" +
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",

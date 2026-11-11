@@ -45,17 +45,16 @@ and the row names the workaround.
 | Policies & null handling  | [Unmapped-target policy](#unmapped-target-policy)                   |   ✅    |    ✅     |
 | Policies & null handling  | [Null value strategies](#null-value-strategies)                     |   ⚠️    |    ⚠️     |
 | Policies & null handling  | [Null check strategy](#null-check-strategy)                         |   ⚠️    |    ⚠️     |
-| Policies & null handling  | [Conditional mapping](#conditional-mapping)                         |   ⚠️    |    ❌     |
+| Policies & null handling  | [Conditional mapping](#conditional-mapping)                         |   ⚠️    |    ⚠️     |
 | Advanced                  | [Config inheritance](#config-inheritance)                           |   ⚠️    |    ⚠️     |
 | Advanced                  | [Decorators](#decorators)                                           |   ✅    |    ✅     |
 | Advanced                  | [DI component models](#di-component-models)                         |   ✅    |    ✅     |
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 14 ⚠️ · 2 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 13 ✅ · 15 ⚠️ · 1 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
-generated path has no form for a mapper over several sources or for a conditional row, and each of those two rows names
-the workaround.
+generated path has no form for a mapper over several sources, and that row names the workaround.
 
 ## Core mapping
 
@@ -468,10 +467,11 @@ round-trips backward as itself rather than the original null.
 
 **Generated path:** a constant or default is a literal or an enum constant, which the bridge writes in place, and
 `toOrElseGet` names its supplier by method reference. That covers MapStruct's surface, whose `constant` is a literal and
-whose `defaultValue` is strict-null. What the runtime adds beyond it does not compile: the predicate-gated `toOrElse`
-and `toOrElseGet` are refused with "toOrElse(...) with a predicate has no generated form yet", a value computed in place
-(`String.valueOf(1)`) with "a value in a @Bridge mapper must be a literal or an enum constant", and a nested target
-written as a telescope path on the row; a constant at a nested pair goes on that pair's own `@Bridge` field.
+whose `defaultValue` is strict-null. The predicate-gated `toOrElse` and `toOrElseGet` compile too, the predicate a
+method reference or a `static final` field holding one, tested only on a value that is not null, as the runtime tests
+it. A value computed in place (`String.valueOf(1)`) is refused with "a value in a @Bridge mapper must be a literal or an
+enum constant", and so is a nested target written as a telescope path on the row; a constant at a nested pair goes on
+that pair's own `@Bridge` field.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `constant(Accessor, Object)`
 (javadoc names the @Mapping constant gap), `constant(Telescope, Object)` (nested target), both `toOrElse` overloads
@@ -481,10 +481,11 @@ core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java
 default); core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java, every test (null->default,
 pass-through, lazy supplier, empty-string/empty-collection predicates);
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a constant or default on a `@Bridge` field
-is a literal or an enum constant, and a predicate-gated row is refused);
+is a literal or an enum constant, and `orElse` compiles the predicate-gated rows);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a default computed by a
 supplier converts the same on both paths' and 'a row the generated bridge cannot express is refused by name' (the
-predicate-gated and computed-value cases);
+computed-value cases); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a
+when(...) row and a toOrElse row with a predicate convert the same way on both paths, in each direction';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/ConstantLiteralEmissionTest.java; README.md, the `constant`
 / `compute` example under "Mapping"</sub>
 
@@ -1268,7 +1269,7 @@ calls the converter on the value it reads); codegen/src/main/java/io/github/esch
 
 ### Conditional mapping
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** @Condition presence-check methods (e.g. only map
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Condition presence-check methods (e.g. only map
 non-blank strings)
 
 **telescope:**
@@ -1295,12 +1296,15 @@ Also: when(...) wraps only telescope-based rows (plain to(srcAcc, tgtAcc)/via/dr
 pointer to toOrElse), when(...) is keyed to the type pair its inner row is keyed to, so its predicate receives the
 source converted at that pair, and there is no conditional analog on the patch/update path.
 
-**Generated path:** missing. Neither shape compiles: `when(...)` is refused with "when(...) has no generated form yet",
-and the predicate-gated `toOrElse` and `toOrElseGet` with "toOrElse(...) with a predicate has no generated form yet".
-The strict-null `toOrElse` and `toOrElseGet` compile, which covers the null presence check. Any other condition moves
-into a method the row names: a converter that holds the predicate,
-`toOneWay(Order::promoCode, OrderDto::promoCode, Promos::orNone)`, or a `compute` row reading the whole source,
-`compute(OrderDto::shipCountry, Orders::shipCountry)`; or the mapper stays on the runtime path.
+**Generated path:** partial, with the runtime's limits and one of its own. Both shapes compile when each predicate is a
+method reference or a `static final` field holding one; an inline lambda, as in the example above, is refused on the row
+by name. `when(...)` gates a source path, a target path, a path on each side, a constant and a supplied or computed
+value, and refuses a nested `when` and every other inner row in the runtime's words. The bridge tests the predicate
+through a `Predicate`, as the runtime does, writes the gated row where it accepts the source and leaves the property to
+the rest of the rows and the name pairing where it does not, reports a predicate that throws in the runtime's words, and
+leaves the row out of `backward` and `patch`. The generated path's own limit: a gated constant or value filling a bean
+property no source property of its name fills is refused by name, since the runtime starts such a property as a fresh
+instance of the bean, which generated code does not build; a record there is built as the runtime builds it.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
 javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the
@@ -1312,10 +1316,15 @@ rejection of field-iso and nested inners with alternative hints) and the 'Predic
 core/src/test/java/io/github/eschizoid/telescope/MappingWhenTest.java, the nested classes for gated flat-to-nested,
 constant, compute, nested-to-flat, nested-to-nested and zip rows, and 'Construction-time rejection — invalid inner
 rows'; core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java;
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (`when` falls to the refusal of
-a row with no generated form) and `orElse` (the predicate-gated forms refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a row the generated bridge
-cannot express is refused by name' (the `when` and predicate-gated `toOrElse` cases)</sub>
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `gated` (the inner rows a `when` compiles,
+and the runtime's refusals of the rest) and `orElse` (the predicate-gated forms);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a when(...) row and a
+toOrElse row with a predicate convert the same way on both paths, in each direction' and 'a when(...) predicate that
+throws fails forward in the same words on both paths';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a row the generated bridge
+cannot express is refused by name' (the `when` cases), 'a field with when(...) rows and a predicate toOrElse runs its
+generated bridge, giving what the runtime gives' and 'a when(...) row filling a bean no source property fills is refused
+by name, since its default is a bean'</sub>
 
 ## Advanced
 

@@ -249,6 +249,19 @@ the existing emitter without a second one.
 > mapper refuses one path written into two targets, and every factory refuses a drop of a property a path steps through.
 > The runtime mapper, the bridge processor and the compile-time verifier count it the same way.
 
+> **Amendment: conditional rows.** A `when(predicate, row)` row compiles when its inner row is one the runtime gates and
+> one a field compiles on its own: a source path, a target path, a path on each side, a constant, or a supplied or
+> computed value. A nested `when` and every other inner row are refused in the words the runtime refuses them with,
+> which `PairingMessages` holds for both. The predicate is a method reference or a `static final` field holding one, and
+> the bridge tests it through a `Predicate`, as the runtime does, so what it throws, an unboxed null included, is the
+> same, and is reported in the same words. The inner row claims nothing, as the runtime's claims nothing under `when`:
+> where the predicate rejects the source the property keeps what the rest of the rows and the name pairing give it, and
+> `backward` and `patch` leave the row out. A property no source property of its name fills starts, under a gated
+> constant or value, as the runtime starts it: a record as its default tree, a record that reaches itself as null, and a
+> bean, which the runtime builds a fresh instance of, is refused by name. The predicate-gated `toOrElse` and
+> `toOrElseGet` compile into the same converter as their strict-null forms, testing the predicate only on a value that
+> is not null.
+
 ### Amendments to ADR-0018
 
 - **Step 3** (conversion on a renamed field) is answered by a converting `to` row: the row names both properties and the
