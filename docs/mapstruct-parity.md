@@ -570,10 +570,11 @@ bwd) transform over the entire Map. No per-key/per-value format sugar like @MapM
 is a hand-written stream/collect transform row. Target Map concrete type is honored; an EnumMap target is built from the
 key class its declaration names.
 
-**Generated path:** partial for the same reasons. The bridge decides a map pair through the same `decidePair`, so values
-convert through the value pair's bridge, keys are copied and must be the same type, and a mismatch is refused at compile
-time in the runtime's words. An explicit value conversion is a `via` row naming the value pair's `@Bridge` field or a
-class, and a whole-map transform names its two directions by method reference.
+**Generated path:** partial for the same reasons. Values convert through the value pair's bridge, and keys are copied
+and must be the same type. The bridge refuses a key mismatch at compile time with its own message, which names the
+property and both key types but is worded differently from the runtime's. An explicit value conversion is a `via` row
+naming the value pair's `@Bridge` field or a class, and a whole-map transform names its two directions by method
+reference.
 
 <sub>Evidence: `DeepMap`'s MAP_VALUES lift; `ContainerLifts.liftMapIntoTargetRaw` ('Preserves source keys verbatim');
 `DeepMap`'s via(...) rejection when Map key types differ ('Key types must match exactly; auto-lifting preserves the
@@ -1542,12 +1543,12 @@ sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual).
 @SubclassMapping over open hierarchies as a reason to pick MapStruct.
 
 **Generated path:** partial, with the parent-field gap wider. A sealed pair dispatches over the source's permits, each
-through the permit's own `@Bridge`, and an abstract or open hierarchy is refused at compile time, naming the fix: seal
-it and give each permit its own `@Bridge`. A `cases(...)` row is refused on a `@Bridge` field as not a row it compiles,
-so each case pairs through its own `@Bridge` only. A `@Bridge` field between two sealed interfaces whose rows set how
-properties convert (a drop, a rename, a conversion, a constant or compute, a `via`, a write strategy) is refused by
-name, where a runtime row keyed to the interfaces applies to every pair of their cases; shared parent-field rows go on
-each case's own `@Bridge` field.
+through the permit's own `@Bridge`, and an abstract root or an interface that is not sealed is refused at compile time,
+naming the fix: seal it and give each permit its own `@Bridge`. A `cases(...)` row is refused on a `@Bridge` field as
+not a row it compiles, so each case pairs through its own `@Bridge` only. A `@Bridge` field between two sealed
+interfaces whose rows set how properties convert (a drop, a rename, a conversion, a constant or compute, a `via`, a
+write strategy) is refused by name, where a runtime row keyed to the interfaces applies to every pair of their cases;
+shared parent-field rows go on each case's own `@Bridge` field.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Match.java, `of` (rejects non-sealed roots),
 `when` (Prism.downcast-routed dispatch), `exhaustive()` (verifies coverage via Class.getPermittedSubclasses), and
