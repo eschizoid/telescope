@@ -302,6 +302,9 @@ public sealed interface Mapping<A, B>
    * <p>Backward direction is identity; the asymmetry of {@link #toOrElse(Accessor, Accessor,
    * Object)} applies here too. Reach for the explicit 4-arg {@link #to(Accessor, Accessor,
    * Function, Function)} when both directions need bespoke logic.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and tests it only on a value that is not null.
    */
   static <A, B, X> Mapping<A, B> toOrElse(
     final Accessor<A, X> src,
@@ -347,6 +350,9 @@ public sealed interface Mapping<A, B>
    * <pre>{@code
    * toOrElseGet(Src::traceId, Dst::traceId, UUID::randomUUID, String::isBlank)
    * }</pre>
+   *
+   * <p>A {@code @Bridge} field compiles the row when the supplier and the predicate are each a
+   * method reference or a {@code static final} field holding one.
    */
   static <A, B, X> Mapping<A, B> toOrElseGet(
     final Accessor<A, X> src,
@@ -473,6 +479,19 @@ public sealed interface Mapping<A, B>
    * lattice's intrinsic {@link Telescope#set} broadcasts the value to every focus on the target
    * side, and {@link Telescope#read} returns the first focus on the source side. For positional N:N
    * — Nth source value at Nth target focus — use {@link #zip(Telescope, Telescope)} instead.
+   *
+   * <p><b>Paths through properties.</b> When both paths step through properties alone, forward
+   * reads the source path, a null object on the way read as null, and writes the value through the
+   * target path, building a null object on the way unless the value is null; backward does the same
+   * the other way. The row claims neither first property: each pairs by name, or not, as it would
+   * without the row, and the value is written over it. {@code patch} overlays target properties and
+   * takes no part in the row.
+   *
+   * <p>A {@code @Bridge} field compiles the row when both paths are written in place, each from
+   * {@code Telescope.of(Type.class)} or {@code Telescope.ofBean(Type.class)} through {@code field}
+   * steps alone or as {@code Telescope.path(...)}, and end at a property of one type: reads become
+   * a null-safe chain of locals, each object read once, and writes call each class's accessors and
+   * write strategy directly. Any other path is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
     return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);
@@ -920,6 +939,12 @@ public sealed interface Mapping<A, B>
    * exception is decorated with the failing row's inner-kind + source field and rethrown as an
    * {@link IllegalStateException}. The decoration points the user back at the {@code when(...)}
    * call site rather than at an opaque internal stack frame.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and the inner row is a path row, a constant or a
+   * compute row the field compiles on its own: the bridge tests the predicate through a {@code
+   * Predicate} and reports a failure in the same words. A nested {@code when} and any other inner
+   * row are refused on the row in the words the runtime refuses them with.
    */
   static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
     return new Conditional<>(predicate, inner);

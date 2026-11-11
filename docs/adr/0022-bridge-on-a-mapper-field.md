@@ -196,7 +196,8 @@ the existing emitter without a second one.
 > same way from the target. `Telescope.path(A::b, B::c, ...)` is read as the `field` chain it stands for, starting at
 > the class javac gives its first accessor, and generates the same code. Any other path is refused on the row by name:
 > one held in a variable or built by a navigator, a step other than `field`, a lambda step, and a path rooted at a class
-> its side neither is nor extends. A row with a path on both sides is refused too.
+> its side neither is nor extends. A row with a path on both sides compiles when each of its paths is written that way
+> and both end at a property of one type, as set out below.
 >
 > Both paths give such a row one meaning, decided in the shared spec. Each object a path steps through is read as the
 > class its property declares, with every type variable read as the type argument the path gives it, through nested
@@ -237,9 +238,43 @@ the existing emitter without a second one.
 > through; a constant or a computed value written through a path, and a path of another shape, still start from the
 > default tree.
 >
+> A row with a path on both sides reads the value through the source path and writes it through the target path forward,
+> and on a mapper that converts both ways reads it through the target path and writes it through the source path
+> backward, each path read and written by the rules above. It claims neither first property: each pairs by name, or not,
+> as it would without the row, and the value is written over it, among the other paths through the same property in the
+> order the rows came. `patch` overlays target properties and the runtime mapper's patch takes no part in the row, so
+> the generated `patch` takes none either. The row records no write in `SourceWrites` on either path.
+>
 > `SourceWrites` names a path longer than one step by the properties it steps through, as `customer.city`, so a strict
 > mapper refuses one path written into two targets, and every factory refuses a drop of a property a path steps through.
 > The runtime mapper, the bridge processor and the compile-time verifier count it the same way.
+
+> **Amendment: conditional rows.** A `when(predicate, row)` row compiles when its inner row is one the runtime gates and
+> one a field compiles on its own: a source path, a target path, a path on each side, a constant, or a supplied or
+> computed value. A nested `when` and every other inner row are refused in the words the runtime refuses them with,
+> which `PairingMessages` holds for both. The predicate is a method reference or a `static final` field holding one, and
+> the bridge tests it through a `Predicate`, as the runtime does, so what it throws, an unboxed null included, is the
+> same, and is reported in the same words. The inner row claims nothing, as the runtime's claims nothing under `when`:
+> where the predicate rejects the source the property keeps what the rest of the rows and the name pairing give it, and
+> `backward` and `patch` leave the row out. A property no source property of its name fills starts, under a gated
+> constant or value, as the runtime starts it, as a default-tree instance of its type, which the bridge builds when it
+> is made of public records declaring no type parameters, primitives, platform classes and classes no write strategy
+> allocates; a record that reaches itself is null, as on the runtime path. Any other default tree, which the runtime
+> builds, is refused by name: one holding a record that is not public or declares type parameters, or a bean with a
+> public no-argument constructor or a public static `builder()`, at the property or at any component below it. The
+> predicate-gated `toOrElse` and `toOrElseGet` compile into the same converter as their strict-null forms, testing the
+> predicate only on a value that is not null.
+
+> **Amendment: multi-source merges.** A `@Bridge` field may also be initialised by
+> `Telescope.merge(Target.class, rows...)` written in place, its rows each a `MergeStep.from` of two method references
+> or an `auto` of a class literal, its target a public record declaring no type parameters. The bridge, named
+> `SourcesTo<Target>Bridge` in the field's package, has a static `forward` taking the sources as typed parameters, in
+> the order the rows first name their classes, and one taking the `Sources` bag, which the field's mapper calls;
+> `Telescope.merge` finds the provider by its calling class and the pair of `Sources` and the target, as the other
+> factories do. Each component is decided as the runtime merge decides it, and its refusals and its missing-source
+> failure come from `PairingMessages`, so both paths say the same. A bean target and a primitive component no row binds,
+> which the runtime builds a merge for and then cannot construct, are refused by name. A merge stays forward only on
+> both paths.
 
 ### Amendments to ADR-0018
 

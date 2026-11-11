@@ -832,6 +832,164 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * The refusal of a {@code when(...)} row whose inner row is another {@code when(...)}. Both paths
+   * refuse with these words.
+   */
+  public static String whenNested() {
+    return (
+      "Mapping.when(...) does not nest. Combine predicates with Predicate#and / Predicate#or " +
+      "on a single when(...) row instead of stacking when(when(...))."
+    );
+  }
+
+  /**
+   * The refusal of a {@code when(...)} row whose inner row, of the row class {@code kind}, is not a
+   * row it gates: one reading the source property {@code sourceField} into the target property
+   * {@code targetField}, either null where the row names none. Both paths refuse with these words.
+   */
+  public static String whenWrapsOnly(final String kind, final String sourceField, final String targetField) {
+    final var alternativeHint = kind.equals("ForwardOnlyTransformTo")
+      ? "Mapping.toOneWay(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
+        "predicate into the forward function (return the source value or a default based on the " +
+        "predicate)."
+      : "For field-level predicate gating on flat accessors, use Mapping.toOrElse(src, tgt, " +
+        "defaultValue, predicate) — the source-value predicate applies the default when matched.";
+    final var fields =
+      sourceField == null && targetField == null
+        ? ""
+        : " (" +
+          (sourceField == null ? "<telescope>" : sourceField) +
+          " → " +
+          (targetField == null ? "<telescope>" : targetField) +
+          ")";
+    return (
+      "Mapping.when(...) wraps only telescope-based rows: to(srcAcc, targetTelescope), " +
+      "to(srcTelescope, tgtAcc), to(srcTelescope, tgtTelescope), zip(srcTelescope, tgtTelescope), " +
+      "constant(targetTelescope, value), compute(targetTelescope, supplier). " +
+      alternativeHint +
+      " Got inner row of kind " +
+      kind +
+      fields +
+      "."
+    );
+  }
+
+  /**
+   * What a {@code when(...)} row's predicate throwing {@code failure} is reported with: the class
+   * of the row it gates, {@code inner}, and the source property that row reads, {@code
+   * sourceField}, or null where it reads none. Both paths report it in these words.
+   */
+  public static String whenPredicateThrew(final String inner, final String sourceField, final Throwable failure) {
+    final var failureMessage = failure.getMessage();
+    return (
+      "Mapping.when(...) predicate threw — inner=" +
+      inner +
+      " (sourceField=" +
+      (sourceField == null ? "<telescope>" : sourceField) +
+      "). Predicate failure: " +
+      className(failure.getClass()) +
+      (failureMessage == null ? "" : ": " + failureMessage)
+    );
+  }
+
+  /** Why a mapper {@code Telescope.merge} builds converts no way but forward. Both paths say it. */
+  public static String mergeForwardOnly() {
+    return (
+      "Telescope.merge produces a forward-only mapper — the multi-source case has no general " +
+      "inverse. Use Mapper.forward(...) only; backward/patch are unsupported."
+    );
+  }
+
+  /**
+   * The failure of a merge's forward given no source of the class {@code missing}, by its binary
+   * and simple names, which the row writing the target property {@code targetField} reads, among
+   * the sources of the simple names {@code present}. Both paths fail in these words.
+   */
+  public static String mergeSourceMissing(
+    final String missing,
+    final String missingSimple,
+    final String targetField,
+    final List<String> present
+  ) {
+    return (
+      "Telescope.merge: forward called without a source for class " +
+      missing +
+      " (required by the row writing target field '" +
+      targetField +
+      "'). Sources bag contains: " +
+      present +
+      ". Pass a value of " +
+      missingSimple +
+      " via Sources.of(...) or Sources.builder().with(...)."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which is not a property
+   * of {@code target}, whose properties are {@code known}. Both paths refuse with these words.
+   */
+  public static String mergeNotATarget(
+    final int index,
+    final String tgtName,
+    final String target,
+    final List<String> known
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " targets '" +
+      tgtName +
+      "', which is not a settable component/property of " +
+      target +
+      ". Known fields: " +
+      known +
+      "."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which a row before it
+   * writes. Both paths refuse with these words.
+   */
+  public static String mergeClaimedTwice(final int index, final String tgtName) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " writes target field '" +
+      tgtName +
+      "' which an earlier step already claimed. Each target component may be written by at most one row."
+    );
+  }
+
+  /**
+   * The refusal of the {@code auto(source)} merge row at {@code index}, which matched {@code name}
+   * by name between a source property of the type {@code sourceType} and a target property of the
+   * type {@code targetType}, each written as {@code java.lang.reflect.Type} writes it. Both paths
+   * refuse with these words.
+   */
+  public static String mergeAutoTypesDiffer(
+    final int index,
+    final String source,
+    final String name,
+    final String sourceType,
+    final String targetType
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " auto(" +
+      source +
+      ") matched field '" +
+      name +
+      "' by name but types differ: source=" +
+      sourceType +
+      ", target=" +
+      targetType +
+      ". Pre-convert the value into a matching-typed holder record, or rename to break the name match if this row was unintentional."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

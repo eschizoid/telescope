@@ -400,6 +400,34 @@ public class Mapper<A, B> {
   }
 
   /**
+   * <b>Module-internal seam — NOT public API.</b> A mapper over a generated bridge that converts
+   * forward only, as one {@code Telescope.merge} builds: {@code forward} and {@code backward} call
+   * {@code bridge} directly, {@link #patch} and {@link #into} refuse as they do on every mapper a
+   * merge builds, and {@link #explain()} reports {@code explainTrail}.
+   */
+  public static <A, B> Mapper<A, B> ofGeneratedForwardOnly(
+    final BridgeFn<A, B> bridge,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
+    return new Mapper<>(
+      new GeneratedIso<>(bridge),
+      sourceClass,
+      targetClass,
+      null,
+      null,
+      null,
+      null,
+      null,
+      explainTrail,
+      null,
+      null,
+      null
+    );
+  }
+
+  /**
    * <b>Module-internal seam — NOT public API.</b> A mapper over a generated bridge: {@code forward}
    * and {@code backward} call {@code bridge} directly, {@link #patch} is {@code patcher}, and
    * {@link #explain()} reports {@code explainTrail}.

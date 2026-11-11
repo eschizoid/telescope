@@ -5,10 +5,12 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.MergeStep;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -38,8 +40,17 @@ final class Merge {
 
   private Merge() {}
 
+  /**
+   * The runtime merge of {@code steps} into {@code target}, with {@code declared}, when not null,
+   * first in the mapper's {@code explain()} trail: the node saying why a merge a {@code @Bridge}
+   * field declares runs on the runtime path.
+   */
   @SuppressWarnings("unchecked")
-  static <T> Mapper<Sources, T> build(final Class<T> target, final MergeStep<T>[] steps) {
+  static <T> Mapper<Sources, T> build(
+    final Class<T> target,
+    final MergeStep<T>[] steps,
+    final OpticNode.Declared declared
+  ) {
     Objects.requireNonNull(target, "Telescope.merge: target class is null");
     final var targetRefl = Reflective.of(target);
 
@@ -62,17 +73,15 @@ final class Merge {
       : beanForward(target, targetRefl, planByTgt);
 
     final Function<T, Sources> backward = t -> {
-      throw new UnsupportedOperationException(
-        "Telescope.merge produces a forward-only mapper — the multi-source case has no general " +
-          "inverse. Use Mapper.forward(...) only; backward/patch are unsupported."
-      );
+      throw new UnsupportedOperationException(PairingMessages.mergeForwardOnly());
     };
 
     // Surface the build-time slot decisions as the explain() trail: one Mapped row per bound
     // component (SourceClass.field → target field), one MISSING_SOURCE skip per unbound one.
     // Derived from the same plan the forward path runs on, so the report cannot drift.
     final var names = targetRefl.names(target);
-    final var trail = new ArrayList<OpticNode>(names.length);
+    final var trail = new ArrayList<OpticNode>(names.length + 1);
+    if (declared != null) trail.add(declared);
     for (final var name : names) {
       final var r = planByTgt.get(name);
       if (r != null) {
@@ -151,18 +160,27 @@ final class Merge {
   // build-time misconfiguration.
   private static Object sourceOrThrow(final Sources sources, final ResolvedStep r) {
     final Object src = sources.byClass(r.sourceClass());
-    if (src == null) throw new IllegalStateException(
-      "Telescope.merge: forward called without a source for class " +
-        r.sourceClass().getName() +
-        " (required by the row writing target field '" +
-        r.tgtName() +
-        "'). Sources bag contains: " +
-        sources.classes().stream().map(Class::getSimpleName).toList() +
-        ". Pass a value of " +
-        r.sourceClass().getSimpleName() +
-        " via Sources.of(...) or Sources.builder().with(...)."
-    );
+    if (src == null) throw sourceMissing(sources.classes(), r.sourceClass(), r.tgtName());
     return src;
+  }
+
+  /**
+   * The failure of a forward given no source of the class {@code missing}, which the row writing
+   * {@code targetField} reads, among sources of the classes {@code present}.
+   */
+  static IllegalStateException sourceMissing(
+    final Collection<Class<?>> present,
+    final Class<?> missing,
+    final String targetField
+  ) {
+    return new IllegalStateException(
+      PairingMessages.mergeSourceMissing(
+        missing.getName(),
+        missing.getSimpleName(),
+        targetField,
+        present.stream().map(Class::getSimpleName).toList()
+      )
+    );
   }
 
   private static void resolveStep(
@@ -188,15 +206,12 @@ final class Merge {
       // bind a slot — its source accessor never read, its source class never checked at forward
       // time — a silent drop that also swallowed the missing-source diagnostic.
       if (!List.of(targetRefl.names(targetClass)).contains(tgtName)) throw new IllegalArgumentException(
-        "Telescope.merge: step at index " +
-          index +
-          " targets '" +
-          tgtName +
-          "', which is not a settable component/property of " +
-          targetClass.getSimpleName() +
-          ". Known fields: " +
-          List.of(targetRefl.names(targetClass)) +
-          "."
+        PairingMessages.mergeNotATarget(
+          index,
+          tgtName,
+          targetClass.getSimpleName(),
+          List.of(targetRefl.names(targetClass))
+        )
       );
       claimTarget(tgtName, index, claimedTgt);
       out.add(
@@ -236,17 +251,13 @@ final class Merge {
       final var tgtType = targetRefl.genericType(targetClass, name);
       if (srcType == null || tgtType == null) continue; // bean introspection couldn't recover one side; skip silently
       if (!srcType.equals(tgtType)) throw new IllegalArgumentException(
-        "Telescope.merge: step at index " +
-          index +
-          " auto(" +
-          sourceClass.getSimpleName() +
-          ") matched field '" +
-          name +
-          "' by name but types differ: source=" +
-          srcType +
-          ", target=" +
-          tgtType +
-          ". Pre-convert the value into a matching-typed holder record, or rename to break the name match if this row was unintentional."
+        PairingMessages.mergeAutoTypesDiffer(
+          index,
+          sourceClass.getSimpleName(),
+          name,
+          srcType.toString(),
+          tgtType.toString()
+        )
       );
       claimedTgt.add(name);
       final Getter<Object, Object> reader = src -> sourceRefl.read(src, name);
@@ -255,13 +266,7 @@ final class Merge {
   }
 
   private static void claimTarget(final String tgtName, final int index, final Set<String> claimedTgt) {
-    if (!claimedTgt.add(tgtName)) throw new IllegalArgumentException(
-      "Telescope.merge: step at index " +
-        index +
-        " writes target field '" +
-        tgtName +
-        "' which an earlier step already claimed. Each target component may be written by at most one row."
-    );
+    if (!claimedTgt.add(tgtName)) throw new IllegalArgumentException(PairingMessages.mergeClaimedTwice(index, tgtName));
   }
 
   private static void ensureAccessorPresent(

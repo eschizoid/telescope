@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.Objects;
 import java.util.function.Predicate;
 
@@ -89,30 +90,10 @@ public record Conditional<A, B>(Predicate<? super A> predicate, Mapping<A, B> in
   public Conditional {
     Objects.requireNonNull(predicate, "predicate");
     Objects.requireNonNull(inner, "inner");
-    if (inner instanceof Conditional<?, ?>) {
-      throw new IllegalArgumentException(
-        "Mapping.when(...) does not nest. Combine predicates with Predicate#and / Predicate#or " +
-          "on a single when(...) row instead of stacking when(when(...))."
-      );
-    }
+    if (inner instanceof Conditional<?, ?>) throw new IllegalArgumentException(PairingMessages.whenNested());
     if (!isSupportedInner(inner)) {
-      final var fieldSuffix = describeFieldClaim(inner);
-      final var alternativeHint =
-        inner instanceof ForwardOnlyTransformTo<?, ?, ?, ?>
-          ? "Mapping.toOneWay(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
-            "predicate into the forward function (return the source value or a default based on the " +
-            "predicate)."
-          : "For field-level predicate gating on flat accessors, use Mapping.toOrElse(src, tgt, " +
-            "defaultValue, predicate) — the source-value predicate applies the default when matched.";
       throw new IllegalArgumentException(
-        "Mapping.when(...) wraps only telescope-based rows: to(srcAcc, targetTelescope), " +
-          "to(srcTelescope, tgtAcc), to(srcTelescope, tgtTelescope), zip(srcTelescope, tgtTelescope), " +
-          "constant(targetTelescope, value), compute(targetTelescope, supplier). " +
-          alternativeHint +
-          " Got inner row of kind " +
-          inner.getClass().getSimpleName() +
-          fieldSuffix +
-          "."
+        PairingMessages.whenWrapsOnly(inner.getClass().getSimpleName(), inner.sourceField(), inner.targetField())
       );
     }
   }
@@ -126,18 +107,6 @@ public record Conditional<A, B>(Predicate<? super A> predicate, Mapping<A, B> in
       m instanceof Compute<?, ?, ?> ||
       m instanceof ComputeFromSource<?, ?, ?>
     );
-  }
-
-  /**
-   * Surface the inner row's source/target field names (if known) so the rejection message points at
-   * the actual call site the user wrote. Telescope-based rows return {@code null} for these
-   * accessors (root class erased), so we fall back to the bare kind name in that case.
-   */
-  private static String describeFieldClaim(final Mapping<?, ?> m) {
-    final var src = m.sourceField();
-    final var tgt = m.targetField();
-    if (src == null && tgt == null) return "";
-    return " (" + (src == null ? "<telescope>" : src) + " → " + (tgt == null ? "<telescope>" : tgt) + ")";
   }
 
   /** The inner row's source class, which keys this row to the same type pair. */

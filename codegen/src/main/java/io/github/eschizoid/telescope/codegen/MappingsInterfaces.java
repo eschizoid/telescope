@@ -156,6 +156,9 @@ final class MappingsInterfaces {
     if (!(source instanceof DeclaredType s) || !(target instanceof DeclaredType t)) return;
     final var sourceType = (TypeElement) s.asElement();
     final var targetType = (TypeElement) t.asElement();
+    // A merge converts from the bag of its sources, forward only, so it gives neither side a
+    // method: the bag is no type of this compilation, and the target has no way back to it.
+    if (sourceType.getQualifiedName().contentEquals("io.github.eschizoid.telescope.Sources")) return;
     final var call = carrier.getQualifiedName() + "." + field.getSimpleName();
     contribute(sourceType, targetType, field, call + ".forward");
     // A pair of one type converts to itself in both directions, so its backward has no name of its

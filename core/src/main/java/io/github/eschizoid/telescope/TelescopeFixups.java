@@ -187,29 +187,14 @@ final class TelescopeFixups {
         try {
           accepted = predicate.test(s);
         } catch (final Throwable predicateFailure) {
-          // Decorate user-predicate exceptions (including Errors like StackOverflowError on a
-          // self-recursive predicate, AssertionError on a `assert` in the body, and
-          // NoClassDefFoundError) with the row's inner-kind + source field breadcrumb so the
-          // failure points at the user's when(...) site, not at an opaque applyForward stack
-          // frame. Matches the self-diagnosing style of Mapping.zip's cardinality check below.
-          // Widened from RuntimeException to Throwable because the original catch let Errors
-          // propagate raw — the breadcrumb is even more valuable for those.
+          // Anything the predicate throws, an Error included, is reported with the kind of the row
+          // it gates and the source field that row reads, so the failure points at the when(...)
+          // row. The failure's class is named as well as its message, since a predicate commonly
+          // throws a NullPointerException with no message on null navigation. A generated bridge
+          // reports it in the same words.
           final var inner = cond.inner();
-          final var innerField = inner.sourceField() == null ? "<telescope>" : inner.sourceField();
-          // Include the failure CLASS name — predicate.test() commonly throws NPE on null
-          // navigation, where getMessage() returns null and "Predicate failure: null" tells the
-          // user nothing. The class name (NullPointerException, ClassCastException, etc.) carries
-          // the actionable signal even when the message is null.
-          final var failureType = PairingMessages.className(predicateFailure.getClass());
-          final var failureMsg = predicateFailure.getMessage();
           throw new IllegalStateException(
-            "Mapping.when(...) predicate threw — inner=" +
-              inner.getClass().getSimpleName() +
-              " (sourceField=" +
-              innerField +
-              "). Predicate failure: " +
-              failureType +
-              (failureMsg == null ? "" : ": " + failureMsg),
+            PairingMessages.whenPredicateThrew(inner.getClass().getSimpleName(), inner.sourceField(), predicateFailure),
             predicateFailure
           );
         }
