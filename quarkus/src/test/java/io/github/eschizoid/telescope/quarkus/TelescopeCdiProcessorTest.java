@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
 /**
  * The text {@code TelescopeMapperProcessor} writes when CDI is on the classpath, which this
  * module's test classpath has through Quarkus ArC, and the refusals that choose between CDI and
- * Spring. Spring is not on this classpath; a test that needs it declares its annotation as a
- * source.
+ * Spring. This module's own TelescopeProducer puts telescope-quarkus on the processor's classpath.
+ * Spring is not on it; a test that needs Spring declares its annotation as a source.
  */
 class TelescopeCdiProcessorTest {
 
@@ -169,8 +169,8 @@ class TelescopeCdiProcessorTest {
   }
 
   @Test
-  @DisplayName("with Spring and CDI both on the classpath, an interface is refused until telescope.beans chooses")
-  void bothContainersAreRefusedWithoutTheOption() {
+  @DisplayName("with telescope-quarkus on the classpath, a Spring annotation beside it still gives a CDI bean")
+  void quarkusStarterGeneratesCdiBesideTheSpringAnnotations() {
     final var result = ProcessorHarness.compile(
       List.of(new TelescopeMapperProcessor()),
       SPRING_COMPONENT,
@@ -178,20 +178,14 @@ class TelescopeCdiProcessorTest {
       USER_DTO,
       TRANSFORMER
     );
-    assertThat(result.success()).isFalse();
-    assertThat(
-      result.hasError(
-        "@TelescopeTransformer finds both Spring and CDI on the classpath of the module that declares this interface;" +
-          " pass -Atelescope.beans=spring or -Atelescope.beans=cdi to the compiler"
-      )
-    )
-      .withFailMessage(result.errorMessages())
-      .isTrue();
-    assertThat(result.generated()).doesNotContainKey("demo.CityTransformerImpl");
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.CityTransformerImpl"))
+      .contains("@ApplicationScoped")
+      .doesNotContain("Component");
   }
 
   @Test
-  @DisplayName("telescope.beans chooses the bean model when Spring and CDI are both on the classpath")
+  @DisplayName("telescope.beans overrides the starter, with Spring and CDI both on the classpath")
   void optionChoosesBetweenBothContainers() {
     final var cdi = ProcessorHarness.compile(
       List.of(new TelescopeMapperProcessor()),

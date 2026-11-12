@@ -196,8 +196,10 @@ their `@ApplicationScoped` annotation when it indexes your application. The pre-
 only the module's own classes. An interface declared in a separate library jar needs that jar indexed, as any bean there
 does, for example with the Jandex Gradle or Maven plugin or `quarkus.index-dependency`.
 
-If your module has the Spring annotations on its classpath as well, for example through Quarkus's Spring compatibility
-extensions, the processor refuses the interface until you choose the bean model with `-Atelescope.beans=cdi`.
+The processor picks the container by the telescope starter on the classpath, so with this module present it writes a CDI
+bean even when the Spring annotations are on the classpath as well, for example through Quarkus's Spring compatibility
+extensions. A module with both telescope starters is refused until you choose the bean model with
+`-Atelescope.beans=cdi` or `-Atelescope.beans=spring`, and that option overrides the starter in any build.
 
 ## What the module does not include
 

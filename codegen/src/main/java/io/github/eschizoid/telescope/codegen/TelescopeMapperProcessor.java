@@ -36,13 +36,15 @@ import javax.tools.Diagnostic;
 /**
  * Generates Spring components or CDI beans for structural mappers and reusable record paths.
  *
- * <p>The bean model follows the classpath of the module that declares the interface: a Spring
- * component when {@code org.springframework.stereotype.Component} is visible, an
- * {@code @ApplicationScoped} CDI bean when {@code jakarta.enterprise.context.ApplicationScoped} is.
- * With both visible the compiler option {@code -Atelescope.beans=spring} or {@code
- * -Atelescope.beans=cdi} decides, and without it the interface is refused, since either guess
- * writes a bean the other container never sees. The option also overrides a classpath that holds
- * one of the two, and is refused when it names a model whose annotations are not there.
+ * <p>The bean model follows the classpath of the module that declares the interface, a Spring
+ * component or an {@code @ApplicationScoped} CDI bean. The telescope starter on that classpath
+ * decides first: {@code telescope-spring-boot-starter} gives Spring and {@code telescope-quarkus}
+ * gives CDI. With neither starter, the container annotation decides: {@code
+ * org.springframework.stereotype.Component} gives Spring and {@code
+ * jakarta.enterprise.context.ApplicationScoped} gives CDI. Both starters, or both annotations with
+ * no starter, refuse the interface, since either guess writes a bean the other container never
+ * sees. The compiler option {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi}
+ * overrides all of this, and is refused when it names a model whose annotation is not there.
  *
  * <p>It also reads {@code @Bridge} and {@code @Bridges}, to know the bridge a carrier class or a
  * {@code @Bridge} field declares, and claims no annotation, so the bridge processor still sees
@@ -80,6 +82,8 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   private static final String CDI_NAMED = "jakarta.inject.Named";
   private static final String POST_CONSTRUCT = "jakarta.annotation.PostConstruct";
   private static final String ARC_ALL = "io.quarkus.arc.All";
+  private static final String SPRING_STARTER = "io.github.eschizoid.telescope.spring.TelescopeAutoConfiguration";
+  private static final String QUARKUS_STARTER = "io.github.eschizoid.telescope.quarkus.TelescopeProducer";
 
   /** The compiler option that chooses the bean model when the classpath holds both. */
   static final String BEANS_OPTION = "telescope.beans";
@@ -798,9 +802,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The container {@code element}'s generated class is a bean of, or null after reporting why there
-   * is none. The annotations live in core, so the classpath of the declaring module decides, and
-   * {@link #BEANS_OPTION} decides when it holds both. Each refusal lands on the user's interface
-   * rather than on a generated class that cannot compile.
+   * is none. The annotations live in core, so the classpath of the declaring module decides: its
+   * telescope starter, else its container annotation, unless {@link #BEANS_OPTION} names the model.
+   * Each refusal lands on the user's interface rather than on a generated class that cannot
+   * compile.
    */
   private Container container(final Element element, final String annotation) {
     final var elements = processingEnv.getElementUtils();
@@ -846,11 +851,36 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       );
       return null;
     }
+    // A telescope starter names the container the module runs in, which a bare annotation does
+    // not: an annotation can arrive through a transitive dependency of an application that never
+    // runs that container.
+    final var springStarter = elements.getTypeElement(SPRING_STARTER) != null;
+    final var quarkusStarter = elements.getTypeElement(QUARKUS_STARTER) != null;
+    if (springStarter && quarkusStarter) {
+      error(
+        element,
+        annotation +
+          " finds both telescope-spring-boot-starter and telescope-quarkus on the classpath of the module that" +
+          " declares this interface; pass -A" +
+          BEANS_OPTION +
+          "=spring or -A" +
+          BEANS_OPTION +
+          "=cdi to the compiler to choose the bean it generates"
+      );
+      return null;
+    }
+    if (springStarter && spring) {
+      return Container.SPRING;
+    }
+    if (quarkusStarter && cdi) {
+      return Container.CDI;
+    }
     if (spring && cdi) {
       error(
         element,
         annotation +
-          " finds both Spring and CDI on the classpath of the module that declares this interface; pass -A" +
+          " finds both Spring and CDI on the classpath of the module that declares this interface, and neither" +
+          " telescope starter; pass -A" +
           BEANS_OPTION +
           "=spring or -A" +
           BEANS_OPTION +

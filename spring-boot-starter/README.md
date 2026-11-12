@@ -141,10 +141,11 @@ the interface, the processor stops with this error on the interface:
 @TelescopeMapper generates a Spring component or a CDI bean; add telescope-spring-boot-starter or telescope-quarkus to the classpath of the module that declares this interface
 ```
 
-The same processor writes a CDI bean instead when the classpath holds CDI and not Spring, as in a Quarkus application
-(see the [Quarkus guide](../quarkus/README.md)). When a Spring module also has `jakarta.enterprise.cdi-api` on its
-classpath, the processor cannot tell which container will run the bean and refuses the interface until you choose one
-with a compiler option:
+The same processor writes a CDI bean instead in a Quarkus application (see the [Quarkus guide](../quarkus/README.md)).
+It picks the container by the telescope starter on the classpath, so with this starter present it writes a Spring
+component even when `jakarta.enterprise.cdi-api` arrives on the classpath through another dependency. Only a module with
+both telescope starters, or with both containers' annotations and neither starter, is refused until you choose the bean
+model with a compiler option. The same option overrides the starter in any build:
 
 ```kotlin
 // Gradle

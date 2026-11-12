@@ -15,15 +15,16 @@ import java.lang.annotation.Target;
  * interfaces supply {@link #from()} and {@link #to()} explicitly; those plain interfaces require a
  * generated {@code @Bridge}.
  *
- * <p>The implementation is a Spring {@code @Component} when Spring is on the classpath of the
- * declaring module ({@code telescope-spring-boot-starter}), and an {@code @ApplicationScoped} CDI
- * bean when CDI is ({@code telescope-quarkus}); either way {@code telescope-codegen} goes on the
- * annotation processor path. With neither on the classpath the processor reports an error on the
- * annotated interface. With both it reports one too, until the compiler option {@code
- * -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi} chooses. A CDI projection collects its
- * {@code TelescopeCustomizer} beans through Quarkus ArC's {@code @All}, so it needs ArC as well.
- * The annotation lives in core, next to {@link Bridge}, so each container integration generates its
- * own implementation from the same declaration.
+ * <p>The implementation is a Spring {@code @Component} when {@code telescope-spring-boot-starter}
+ * is on the classpath of the declaring module, and an {@code @ApplicationScoped} CDI bean when
+ * {@code telescope-quarkus} is; either way {@code telescope-codegen} goes on the annotation
+ * processor path. With no telescope starter, the Spring or CDI annotations on the classpath decide.
+ * With neither container the processor reports an error on the annotated interface. Both starters,
+ * or both containers' annotations with no starter, are reported too, until the compiler option
+ * {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi} chooses; the option overrides
+ * every case. A CDI projection collects its {@code TelescopeCustomizer} beans through Quarkus ArC's
+ * {@code @All}, so it needs ArC as well. The annotation lives in core, next to {@link Bridge}, so
+ * each container integration generates its own implementation from the same declaration.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

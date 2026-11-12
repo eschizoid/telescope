@@ -52,6 +52,87 @@ class TelescopeMapperBeanModelTest {
     "package jakarta.enterprise.context; public @interface ApplicationScoped {}"
   );
 
+  private static final JavaFileObject SPRING_COMPONENT = source(
+    "org.springframework.stereotype.Component",
+    "package org.springframework.stereotype; public @interface Component { String value() default \"\"; }"
+  );
+
+  private static final JavaFileObject POST_CONSTRUCT = source(
+    "jakarta.annotation.PostConstruct",
+    "package jakarta.annotation; public @interface PostConstruct {}"
+  );
+
+  /** The class the processor reads as telescope-spring-boot-starter being on the classpath. */
+  private static final JavaFileObject SPRING_STARTER = source(
+    "io.github.eschizoid.telescope.spring.TelescopeAutoConfiguration",
+    "package io.github.eschizoid.telescope.spring; public class TelescopeAutoConfiguration {}"
+  );
+
+  /** The class the processor reads as telescope-quarkus being on the classpath. */
+  private static final JavaFileObject QUARKUS_STARTER = source(
+    "io.github.eschizoid.telescope.quarkus.TelescopeProducer",
+    "package io.github.eschizoid.telescope.quarkus; public class TelescopeProducer {}"
+  );
+
+  @Test
+  @DisplayName("Spring and CDI annotations with no telescope starter are refused until telescope.beans chooses")
+  void bothAnnotationsWithoutAStarterAreRefused() {
+    final var result = ProcessorHarness.compile(
+      List.of(new TelescopeMapperProcessor()),
+      SPRING_COMPONENT,
+      CDI_SCOPE,
+      TRANSFORMER
+    );
+    assertFalse(result.success());
+    assertTrue(
+      result.hasError(
+        "@TelescopeTransformer finds both Spring and CDI on the classpath of the module that declares this interface," +
+          " and neither telescope starter; pass -Atelescope.beans=spring or -Atelescope.beans=cdi"
+      ),
+      result.errorMessages()
+    );
+    assertFalse(result.generated().containsKey("demo.NameTransformerImpl"));
+  }
+
+  @Test
+  @DisplayName("both telescope starters on the classpath are refused until telescope.beans chooses")
+  void bothStartersAreRefused() {
+    final var result = ProcessorHarness.compile(
+      List.of(new TelescopeMapperProcessor()),
+      SPRING_STARTER,
+      QUARKUS_STARTER,
+      SPRING_COMPONENT,
+      CDI_SCOPE,
+      TRANSFORMER
+    );
+    assertFalse(result.success());
+    assertTrue(
+      result.hasError(
+        "@TelescopeTransformer finds both telescope-spring-boot-starter and telescope-quarkus on the classpath of the" +
+          " module that declares this interface; pass -Atelescope.beans=spring or -Atelescope.beans=cdi"
+      ),
+      result.errorMessages()
+    );
+    assertFalse(result.generated().containsKey("demo.NameTransformerImpl"));
+  }
+
+  @Test
+  @DisplayName("telescope.beans chooses the bean model over both telescope starters")
+  void beanModelOptionOverridesBothStarters() {
+    final var result = ProcessorHarness.compile(
+      List.of(new TelescopeMapperProcessor()),
+      List.of("-Atelescope.beans=cdi"),
+      SPRING_STARTER,
+      QUARKUS_STARTER,
+      SPRING_COMPONENT,
+      CDI_SCOPE,
+      POST_CONSTRUCT,
+      TRANSFORMER
+    );
+    assertTrue(result.success(), result.errorMessages());
+    assertTrue(result.generated().get("demo.NameTransformerImpl").contains("@ApplicationScoped"));
+  }
+
   @Test
   @DisplayName("a mapper with neither Spring nor CDI on the classpath is refused on the interface")
   void mapperWithoutAContainerIsRefusedOnTheInterface() {
@@ -153,7 +234,7 @@ class TelescopeMapperBeanModelTest {
     final var result = ProcessorHarness.compile(
       List.of(new TelescopeMapperProcessor()),
       CDI_SCOPE,
-      source("jakarta.annotation.PostConstruct", "package jakarta.annotation; public @interface PostConstruct {}"),
+      POST_CONSTRUCT,
       TRANSFORMER
     );
     assertTrue(result.success(), result.errorMessages());
