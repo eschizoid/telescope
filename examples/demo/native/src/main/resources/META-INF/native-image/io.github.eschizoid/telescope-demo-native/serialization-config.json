@@ -1,0 +1,24 @@
+{
+  "lambdaCapturingTypes": [
+    {
+      "name": "io.github.eschizoid.telescope.demo.nativeimage.OrderRun"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.demo.order.OrderMappers"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.demo.api.OrderDtoTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.demo.api.ShippingDtoTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.demo.nativeimage.PickListTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.demo.nativeimage.PickTelescope"
+    }
+  ],
+  "types": [],
+  "proxies": []
+}

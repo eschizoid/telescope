@@ -299,7 +299,8 @@ the existing emitter without a second one.
 - Building a mapper costs one stack walk and one `ServiceLoader` scan more than today, once per mapper.
 - The generated path needs no reflection configuration inside a native image: `ServiceLoader` providers are registered
   by the image builder, `StackWalker` is supported there, and the rows are built but not decoded, except a `constant` or
-  `compute` row, which decodes its target accessor. The `NativeVerify` binary covers a field-declared mapper.
+  `compute` row, which decodes its target accessor. The native-image demo's `OrderRun` binary covers a field-declared
+  mapper.
 - A provider left on the class path by an IDE build that no longer runs the processor would answer for rows it was not
   generated from. The provider records the kind of each row and the accessors it names; on the JVM the factory compares
   both with the rows it is given, and builds the runtime mapper from those rows when they differ. What the comparison

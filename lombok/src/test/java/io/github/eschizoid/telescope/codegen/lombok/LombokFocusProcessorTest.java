@@ -84,10 +84,9 @@ class LombokFocusProcessorTest {
       // the consumer compiled, so the navigator symbol resolved during its binding phase and the
       // generated surface is usable through the typed API rather than only reflectively.
       //
-      // This does NOT gate emission order: a test-source consumer resolves a navigator emitted in
-      // the final round just as well, so deferring every target to processingOver() leaves this
-      // green. Only a MAIN-source consumer distinguishes them, which is what the direct
-      // references in examples/library's LombokDemo hold in place.
+      // This does NOT gate emission order: a consumer compiled in the same pass resolves a
+      // navigator emitted in the final round just as well, so deferring every target to
+      // processingOver() leaves this green.
       final var result = SameRoundConsumer.shoutEmail(new DataUser("u-1", "alice@example.com"));
       assertEquals("u-1", result.getId());
       assertEquals("ALICE@EXAMPLE.COM", result.getEmail());

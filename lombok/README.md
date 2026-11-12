@@ -122,8 +122,7 @@ round can see it before Lombok has added those members.
    skipped without a message.
 
 Because a navigator is generated as soon as its class is ready, main code in the same module can import and call it
-directly. The `LombokDemo` class in `examples/library` does that, and it fails to compile if the navigator is generated
-too late.
+directly.
 
 ## Generated output
 

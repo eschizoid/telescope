@@ -223,8 +223,8 @@ Telescope.of(Page.class)
     .update(page, String::toLowerCase);
 ```
 
-For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4, Hibernate, and
-Jackson REST pipeline, see [`examples/springboot/`](../examples/springboot/).
+For a worked end-to-end demo, an order service whose PATCH writes into a managed JPA entity through `into` and fills its
+lines through `ADDERS`, see [`examples/demo/`](../examples/demo/README.md).
 
 **`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
 the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a `Telescope<Source, Target>`

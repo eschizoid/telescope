@@ -1,26 +1,28 @@
 name: Native Image Verification
 
 # Proves telescope's runtime + codegen substrate survives a GraalVM native-image build under the
-# closed-world assumption: the cached LambdaMetafactory-built Function / Supplier / BiConsumer
-# readers+writers, the SerializedLambda field-name decode behind .field(Record::accessor), the
-# runtime record→record and record→bean mappers, the generated @FromMap converter, and the generated
-# @Bridge constant baked into the image heap.
+# closed-world assumption, on the order-service demo users read: the generated @Bridge fields the
+# service maps through (found by StackWalker and ServiceLoader), the generated Mappings, @FromMap
+# and class-level @Bridge code, the SerializedLambda field-name decode behind .field(Type::accessor)
+# and the generated navigators, and the runtime record→record, record→bean and record→builder
+# mappers that reach accessors through method handles.
 #
-# The :examples:graphql module's NativeVerify main exercises all of these over the example's own
-# domain models and exits non-zero on any capability mismatch, so `nativeRun` building AND running
-# the binary IS the test — a red job means the substrate hit a real native-image gap (a missing
-# reflection/serialization registration, an LMF call site the image builder couldn't fold, a
-# SerializedLambda decode that closed-world analysis broke, or a constant that needs build-time init).
+# The :examples:demo:native module's OrderRun main runs a day at the shop and checks every answer,
+# exiting non-zero on any mismatch, so `nativeRun` building AND running the binary IS the test — a
+# red job means the substrate hit a real native-image gap (a missing reflection/serialization
+# registration, an LMF call site the image builder couldn't fold, a SerializedLambda decode that
+# closed-world analysis broke, or a constant that needs build-time init).
 
 on:
   # Native-image builds are slow (several minutes) and need a GraalVM toolchain the normal CI doesn't
-  # install — so this never gates a PR. It runs on demand, on pushes to main that touch the example
-  # or the substrate modules, and weekly, so a GraalVM-version regression surfaces on its own cadence.
+  # install — so this never gates a PR. It runs on demand, on pushes to main that touch the demo or
+  # the substrate modules, and weekly, so a GraalVM-version regression surfaces on its own cadence.
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "examples/graphql/**"
+      - "examples/demo/domain/**"
+      - "examples/demo/native/**"
       - "core/**"
       - "internal/**"
       - "codegen/**"
@@ -39,7 +41,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # GraalVM ships native-image. The example targets release 21 bytecode, which GraalVM consumes;
+      # GraalVM ships native-image. The demo targets release 21 bytecode, which GraalVM consumes;
       # we install 25 to match the rest of the project's toolchain and keep the JDK surface uniform.
       - name: Set up GraalVM (native-image)
         uses: graalvm/setup-graalvm@v1
@@ -55,10 +57,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # nativeRun builds the binary then executes it. Because NativeVerify calls System.exit(non-zero)
-      # on any failed capability, a failing binary fails this step — no extra assertion needed.
-      - name: Build and run the native-image verifier
-        run: ./gradlew :examples:graphql:nativeRun --no-daemon --stacktrace
+      # nativeRun builds the binary then executes it. Because OrderRun calls System.exit(non-zero)
+      # on any failed step, a failing binary fails this step — no extra assertion needed.
+      - name: Build and run the order-service demo as a native image
+        run: ./gradlew :examples:demo:native:nativeRun --no-daemon --stacktrace
 
       # Keep the produced binary + native-image build reports for post-mortem when the substrate
       # needs config: the build report lists exactly which classes were registered for reflection /
@@ -70,6 +72,6 @@ jobs:
         with:
           name: native-image-reports
           path: |
-            examples/graphql/build/native/nativeCompile/
-            examples/graphql/build/reports/
+            examples/demo/native/build/native/nativeCompile/
+            examples/demo/native/build/reports/
           retention-days: 14

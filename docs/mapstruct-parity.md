@@ -750,10 +750,10 @@ lift, and forward-only (no backward through a consumed Stream).
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `containerViewOf` (recognizes
 only Optional, List, Set and Map subtypes and the Deque, Queue and Collection interfaces by name — a Stream-typed
 component falls through to Incompatible); grep for 'Stream<' across core/src/main, core/src/test, and examples/ finds
-one hit, the JDK type used inside ContainerAllocatorCorpusTest, and no Stream mapping API. Two fixtures declare a record
-named Stream (TelescopeTest, and the examples' SealedAndFilterDemo); a user type that happens to carry the name is
-mapped as the record it is; codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java (each
-component pair decided through the same `PairingRules`)</sub>
+one hit, the JDK type used inside ContainerAllocatorCorpusTest, and no Stream mapping API. One fixture declares a record
+named Stream (TelescopeTest); a user type that happens to carry the name is mapped as the record it is;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java (each component pair decided through
+the same `PairingRules`)</sub>
 
 ## Lifecycle & customization
 
@@ -1523,9 +1523,8 @@ quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeMapperRegis
 pairs throw) and `get` (fail-fast on a missing pair);
 quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeProducer.java (@ApplicationScoped producer, ArC
 @All `List<Mapper<?, ?>>` collector); README.md, the `telescope-spring-boot-starter` and `telescope-quarkus` rows of
-"Published artifacts", and the `examples/springboot/product-starter/` row of "Examples";
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/TelescopeMapperProcessor.java (the generated Spring
-component, which reads the bridge a carrier class or a `@Bridge` field declares);
+"Published artifacts"; codegen/src/main/java/io/github/eschizoid/telescope/codegen/TelescopeMapperProcessor.java (the
+generated Spring component, which reads the bridge a carrier class or a `@Bridge` field declares);
 spring-boot-starter/src/test/java/io/github/eschizoid/telescope/spring/TelescopeSpringProcessorTest.java, the test 'a
 mapper and a projection written a round after a carrier find the carrier's bridge'</sub>
 

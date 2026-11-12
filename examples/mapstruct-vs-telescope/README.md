@@ -24,15 +24,24 @@ output reads as a walkthrough.
 ## The mappings
 
 Both libraries need the one renamed field spelled out, and both map the nested customer, the list, and the same-named
-fields without more configuration. Telescope names the field with method references in `TelescopeMappings`:
+fields without more configuration. Both generate the mapping code at compile time. Telescope names the field with method
+references on a `@Bridge` field in `TelescopeMappings`, and `telescope-codegen` compiles each field's rows into a class
+of its own:
 
 ```java
-public static final Mapper<Order, OrderDto> ORDER_MAPPER = Telescope.mapper(
-  Order.class,
-  OrderDto.class,
+@Bridge
+public static final Mapper<Customer, CustomerDto> CUSTOMER_MAPPER = mapper(
+  Customer.class,
+  CustomerDto.class,
   to(Customer::email, CustomerDto::getContactEmail)
 );
+
+@Bridge
+public static final Mapper<Order, OrderDto> ORDER_MAPPER = mapper(Order.class, OrderDto.class);
 ```
+
+A pair is declared once, so `ORDER_MAPPER` needs no row: it converts the nested customer through the class generated
+from `CUSTOMER_MAPPER`.
 
 MapStruct names it with strings in `OrderMapStructMapper`:
 
@@ -65,8 +74,8 @@ according to its documentation. A plain rename in the editor doesn't change them
 To reproduce the MapStruct side, follow these steps:
 
 1. Rename the `email` component of `Customer` to `emailAddress`.
-2. Change both `Customer::email` references in `TelescopeMappings` to `Customer::emailAddress`. An IDE rename does both
-   steps at once.
+2. Change every `Customer::email` reference, in `TelescopeMappings` and in the test, to `Customer::emailAddress`. An IDE
+   rename does both steps at once.
 3. Leave the `@Mapping(source = "email", ...)` strings as they are, and run
    `./gradlew :examples:mapstruct-vs-telescope:compileJava`.
 
@@ -98,13 +107,12 @@ The test `mapStructSilentlyDropsUnmappedTarget` checks that `region` is `null` a
 the stricter setup. It sets `unmappedTargetPolicy = ReportingPolicy.ERROR`, which makes the same mapper fail to compile
 until the drop is written out as `@Mapping(target = "region", ignore = true)`.
 
-Telescope's `Telescope.mapper(...)` is strict by default. It throws when the mapper is built if a target field has no
-source, and you give that field a value with a row such as `to(...)`, `constant(...)`, or `compute(...)`. The two
-libraries reach the same safety, and the difference is the default. With `telescope-codegen` on the annotation processor
-path, a mapper verifier also reports the same message as a compile error for each `Telescope.mapper(...)` call whose
-types it can read. The `mapstruct-vs-telescope` module doesn't put `telescope-codegen` on its processor path, so here
-the check happens when the mapper is built. The root README's
-[unconvertible fields section](../../README.md#unconvertible-fields-are-refused) shows the message.
+Telescope's `Telescope.mapper(...)` is strict by default. A target field with no source is refused, and you give that
+field a value with a row such as `to(...)`, `constant(...)`, or `compute(...)`. The two libraries reach the same safety,
+and the difference is the default. This module puts `telescope-codegen` on its processor path, so the refusal is a
+compile error on the `@Bridge` field, and a mapper verifier reports the same message for every other
+`Telescope.mapper(...)` call whose types it can read. Without the processor, the same refusal comes when the mapper is
+built.
 
 ## Updating values inside an immutable graph
 
@@ -138,9 +146,10 @@ A telescope mapper can describe its own structure with `explain()` and show the 
 `trace(input)`. To see the same things in MapStruct, you read the generated `OrderMapStructMapperImpl` source or step
 through it in a debugger.
 
-`TelescopeMappings.CUSTOMER_MAPPER` maps `Customer` to `CustomerDto` with the same `to(...)` row, so its `explain()`
-lists the renamed field as a top-level row. The test asserts that `explain().mapped()` contains the pair `email` and
-`contactEmail`. The test prints this:
+On a `@Bridge` field, `explain()` says which code runs the mapper: the generated `CustomerToCustomerDtoBridge`, or the
+rows at run time and why. The test asserts the first. The same rows built at run time, with `Telescope.mapper(...)` in
+the test, list every pair they decide, so `explain()` shows the renamed field as a top-level row. The test asserts that
+`explain().mapped()` contains the pair `email` and `contactEmail`, and prints this:
 
 ```text
 Mapped:
@@ -148,7 +157,7 @@ Mapped:
   ✓ name  → name
 ```
 
-`ORDER_MAPPER.trace(order)` shows each field of one conversion with its source and target values:
+The runtime `Order` mapper's `trace(order)` shows each field of one conversion with its source and target values:
 
 ```text
 ✓ id        "o-1"                                                                                       → id "o-1"

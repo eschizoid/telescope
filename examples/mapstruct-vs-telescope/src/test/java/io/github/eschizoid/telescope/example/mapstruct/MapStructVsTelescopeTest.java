@@ -1,18 +1,23 @@
 package io.github.eschizoid.telescope.example.mapstruct;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.example.mapstruct.domain.Customer;
 import io.github.eschizoid.telescope.example.mapstruct.domain.LineItem;
 import io.github.eschizoid.telescope.example.mapstruct.domain.Order;
+import io.github.eschizoid.telescope.example.mapstruct.dto.CustomerDto;
+import io.github.eschizoid.telescope.example.mapstruct.dto.OrderDto;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.OrderMapStructMapper;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.SilentDropMapper;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.StrictPolicyMapper;
 import io.github.eschizoid.telescope.example.mapstruct.telescope.TelescopeMappings;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.math.BigDecimal;
@@ -138,13 +143,27 @@ class MapStructVsTelescopeTest {
 
   @Test
   @org.junit.jupiter.api.Order(6)
-  @DisplayName("Act 3: the telescope mapper explains and traces itself; MapStruct is a black box")
+  @DisplayName("Act 3: a field's mapper names the class it runs, and its rows explain and trace themselves")
   void introspectionExposesWhatTheMapperDoes() {
     final var order = sampleOrder();
 
-    // Static structure — no input needed. The Act 1 rename is a first-class row here, not a string
-    // buried in generated OrderMapStructMapperImpl.java.
-    final var report = TelescopeMappings.CUSTOMER_MAPPER.explain();
+    // The field's mapper says which code runs it: the class generated from its rows.
+    final var declared = TelescopeMappings.CUSTOMER_MAPPER.explain();
+    assertEquals(
+      OpticNode.Runs.GENERATED,
+      declared.declared().map(OpticNode.Declared::runs).orElse(null),
+      () -> "the @Bridge field does not run its generated bridge:\n" + declared
+    );
+    assertTrue(declared.toString().contains("CustomerToCustomerDtoBridge"), declared::toString);
+    log("Act 3 — CUSTOMER_MAPPER.explain() (which code runs the field):", declared);
+
+    // The same rows built at run time list every pair they decide. The rename is a row of data
+    // here, not a string inside generated OrderMapStructMapperImpl.java.
+    final var report = Telescope.mapper(
+      Customer.class,
+      CustomerDto.class,
+      to(Customer::email, CustomerDto::getContactEmail)
+    ).explain();
     assertFalse(report.isEmpty(), "the mapper describes its own structure");
     assertTrue(
       report
@@ -153,12 +172,14 @@ class MapStructVsTelescopeTest {
         .anyMatch(m -> m.from().equals("email") && m.to().equals("contactEmail")),
       () -> "the email -> contactEmail rename is enumerable data, not opaque generated code:\n" + report
     );
-    log("Act 3 — CUSTOMER_MAPPER.explain() (structure as data; MapStruct has no equivalent):", report);
+    log("Act 3 — the same rows at run time, explain() (structure as data; MapStruct has no equivalent):", report);
 
-    // Per-conversion values — the same rows with the actual Order data filled in, whole graph deep.
-    final var trace = TelescopeMappings.ORDER_MAPPER.trace(order).toString();
+    // Per-conversion values: the rows with the actual Order data filled in, whole graph deep.
+    final var trace = Telescope.mapper(Order.class, OrderDto.class, to(Customer::email, CustomerDto::getContactEmail))
+      .trace(order)
+      .toString();
     assertTrue(trace.contains("o-1"), () -> "the trace shows the real values flowing through:\n" + trace);
-    log("Act 3 — ORDER_MAPPER.trace(order) (per-conversion values, nested graph and all):", trace);
+    log("Act 3 — the same rows at run time, trace(order) (per-conversion values, nested graph and all):", trace);
   }
 
   // Narrate what each act proves when the suite runs, through java.lang.System.Logger — the same
