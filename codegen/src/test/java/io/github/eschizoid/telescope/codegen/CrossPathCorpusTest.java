@@ -17085,15 +17085,16 @@ class CrossPathCorpusTest {
         ", the base #0(counts={k=1}, name=\"old\", tags=[\"a\", \"b\"])"
     ),
     new ContainerRow(
-      "a list a bean base holds, which the partial supplies, where a setter of the rebuild throws",
+      "a list a bean base holds, which the partial supplies, where a setter the rebuild calls after the list's throws",
       intoPair(
-        "public class %1$sSrc {\n  private String name;\n" +
-          "  private java.util.List<String> tags = new java.util.ArrayList<>();\n  public %1$sSrc() {}\n" +
+        "public class %1$sSrc {\n" +
+          "  private java.util.List<String> tags = new java.util.ArrayList<>();\n  private String name;\n" +
+          "  public %1$sSrc() {}\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
           "  public String getName() { return name; }\n" +
           "  public void setName(final String v) {\n" +
           "    if (\"boom\".equals(v)) { throw new IllegalArgumentException(\"no boom\"); }\n    name = v;\n  }\n" +
-          "  public java.util.List<String> getTags() { return tags; }\n" +
-          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
           "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
           "    s.getTags().addAll(java.util.List.of(\"a\", \"b\"));\n    return s;\n  }\n}\n",
         taggedPartial("java.util.List.of(\"x\")").replace("new %1$sTgt(null, ", "new %1$sTgt(\"boom\", ")
