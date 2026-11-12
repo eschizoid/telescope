@@ -17084,6 +17084,20 @@ class CrossPathCorpusTest {
       "#0(name=\"old\", tags=[\"x\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
     ),
     new ContainerRow(
+      "a list a bean base rebuilt through its adders holds",
+      intoPair(
+        "public class %1$sSrc {\n  private final java.util.List<String> tags = new java.util.ArrayList<>();\n" +
+          "  public %1$sSrc() {}\n  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void addTag(final String tag) { tags.add(tag); }\n" +
+          "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.addTag(\"stale\"); return s; }\n}\n",
+        sampled("%1$sTgt", "java.util.List<String> tags", "new %1$sTgt(java.util.List.of(\"x\"))"),
+        ADDERS_FOR_TGT.replace("Tgt.class", "Src.class")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(tags=[\"x\"])" + REPLACED + ", the base #0(tags=[\"stale\"])"
+    ),
+    new ContainerRow(
       "a list a record base holds",
       intoPair(
         sampled(
