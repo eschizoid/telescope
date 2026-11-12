@@ -104,10 +104,65 @@ setter for one of them, and `into` then refuses the call by the property's name 
 comes on the first `into` call for a target of that class rather than when the mapper is built, since a mapper used only
 through `forward` needs no setters.
 
+`into` merges a `Collection` or `Map` property where it can and replaces it where it cannot. When the target's getter
+returns a container that can be changed, `into` clears it and refills it with the converted elements, so the container
+keeps its identity, which is what a managed `@OneToMany` with orphan removal needs. When the getter returns null, or a
+container that cannot be changed, `into` writes the converted container through the setter: an unmodifiable JDK
+container (`List.of`, `Collections.unmodifiableList` and their kin) is known in advance, and any other container whose
+refill throws, such as `Arrays.asList` or a library's immutable collection refusing the change, or a natural-order
+`TreeSet` handed a null, has its old elements put back, so anyone else holding it sees it unchanged, and is then
+replaced. A null container from the source is written through the setter as null, as `forward` gives it. Only a
+container property nothing can write, one with no setter whose target holds no container or one that cannot be changed,
+is refused by the property's name. Container properties are written before every other property, so a refused call
+leaves the target's other properties as they were. Both paths make the same decision through the same `ContainerCopy`
+methods.
+
+```java
+final OrderEntity managed = repository.findById(id).orElseThrow();
+final List<LineEntity> lines = managed.getLines();
+mapper.into(managed, dto);
+assert managed.getLines() == lines; // the same list, now holding dto's lines
+```
+
+**`ADDERS` — fill a collection through its adder.** `writeBean(OrderEntity.class, ADDERS)` builds the class as `SETTERS`
+does, except that each collection property a field of its name stores is filled one element at a time through its adder:
+`addLine` for `lines`, `addCategory` for `categories`, `addAddress` for `addresses`. The adder is a public instance
+method taking the collection's element, which is how an entity wires the back-reference of a bidirectional association,
+and the collection needs no setter. `into` clears the collection the target holds and then calls the adder for each
+element. The value `forward` builds for `into` to read from runs none of its adders, so each adder runs once per
+element, on the target, and an adder that changes or drops an element gives the target what `forward` would. A class
+with such a collection and no adder for it is refused by the property's name when the mapper is built, and at compile
+time on a `@Bridge` field and in the verifier.
+
+```java
+public class OrderEntity {
+
+  private final List<LineEntity> lines = new ArrayList<>();
+
+  public List<LineEntity> getLines() {
+    return lines;
+  }
+
+  public void addLine(final LineEntity line) {
+    line.setOrder(this);
+    lines.add(line);
+  }
+  // ...
+}
+
+final Mapper<Order, OrderEntity> mapper = Telescope.mapper(
+  Order.class,
+  OrderEntity.class,
+  writeBean(OrderEntity.class, ADDERS)
+);
+```
+
 On a `@Bridge` field's mapper, `into` is generated with the bridge when the target class has a setter for every property
-the bridge writes: plain setter calls, no reflection, with the same result, for a target of exactly that class. A
-subclass, whose own setters may take a value differently, and a target class without such setters are written by the
-runtime `into` above, and `explain()` says which of the two writes.
+the bridge writes other than a container: plain setter and adder calls, no reflection, with the same result, for a
+target of exactly that class. A subclass, whose own setters may take a value differently, and a target class without
+such members are written by the runtime `into` above, and `explain()` says which of the two writes.
+`@Bridge(writeStrategy = ADDERS)` and a `writeBean(..., ADDERS)` row on the field's mapper both compile to the adder
+calls.
 
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one

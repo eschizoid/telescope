@@ -23,7 +23,13 @@ public enum BeanWriteStrategy {
   /** A public constructor taking every property, matched by parameter name. */
   CONSTRUCTOR,
   /** A no-argument constructor followed by one public setter call per property. */
-  SETTERS;
+  SETTERS,
+  /**
+   * A no-argument constructor, then one public setter call per property, except that a collection
+   * property a field of its name stores is filled one element at a time through its adder, as
+   * {@link CollectionWrites#adderNames} names it. Taken only where a hint names it.
+   */
+  ADDERS;
 
   /**
    * The order an unhinted write tries the strategies in. A builder and a constructor build the
@@ -83,7 +89,8 @@ public enum BeanWriteStrategy {
     return switch (strategy) {
       case BUILDER -> shape.hasBuilder() && builderCarriesWhatTheNextStrategyWrites(shape);
       case CONSTRUCTOR -> shape.hasConstructor();
-      case SETTERS -> shape.hasSetters();
+      // AUTO_ORDER holds no ADDERS, so only the other three are ever asked about.
+      case SETTERS, ADDERS -> shape.hasSetters();
     };
   }
 

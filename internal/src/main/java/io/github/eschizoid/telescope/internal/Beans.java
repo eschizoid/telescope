@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
@@ -1028,7 +1029,17 @@ public final class Beans {
    * opens} needed) — the natural rebuild strategy for classic JavaBeans.
    */
   public static <P> BeanWriter<P> settersWriter(final Class<P> pojoClass) {
-    return new SettersWriter<>(pojoClass);
+    return new SettersWriter<>(pojoClass, false);
+  }
+
+  /**
+   * Strategy: invoke the no-arg constructor, then fill each collection property a field of its name
+   * stores through its adder, one element at a time, and write every other property through its
+   * setter, as {@link #settersWriter} does. A class with such a collection and no adder for it, as
+   * {@link #adderRefusal} decides, is refused here, when the writer is built.
+   */
+  public static <P> BeanWriter<P> addersWriter(final Class<P> pojoClass) {
+    return new SettersWriter<>(pojoClass, true);
   }
 
   /** The strategy {@code writer} builds its bean through. */
@@ -1036,8 +1047,131 @@ public final class Beans {
     return switch (writer) {
       case BuilderWriter<?> ignored -> BeanWriteStrategy.BUILDER;
       case ConstructorWriter<?> ignored -> BeanWriteStrategy.CONSTRUCTOR;
-      case SettersWriter<?> ignored -> BeanWriteStrategy.SETTERS;
+      case SettersWriter<?> setters -> setters.throughAdders ? BeanWriteStrategy.ADDERS : BeanWriteStrategy.SETTERS;
     };
+  }
+
+  /**
+   * The adder each collection property of {@code cls} that a field of its name stores is filled
+   * through under {@link BeanWriteStrategy#ADDERS}, by property name. A property with no adder is
+   * absent, and {@link #adderRefusal} names the first.
+   */
+  public static Map<String, BiConsumer<Object, Object>> adders(final Class<?> cls) {
+    return ADDERS.get(cls).bound();
+  }
+
+  /**
+   * Why {@code cls} cannot be written through its adders, or null when it can: the first collection
+   * property a field of its name stores that has no adder of its element's class.
+   */
+  public static String adderRefusal(final Class<?> cls) {
+    return ADDERS.get(cls).refusal();
+  }
+
+  /** The decision for {@code into} and the adders strategy, over reflection handles. */
+  private static final CollectionWrites<Type> COLLECTION_WRITES = new CollectionWrites<>(new ReflectionProps());
+
+  /**
+   * Whether {@code into} refills property {@code name} of {@code cls} in the container the target
+   * holds rather than writing it through its setter.
+   */
+  public static boolean refilledInPlace(final Class<?> cls, final String name) {
+    return COLLECTION_WRITES.refilledInPlace(resolvedPropertyType(cls, name));
+  }
+
+  /** A class's adders, and the refusal of the first collection property that has none. */
+  private record Adders(Map<String, BiConsumer<Object, Object>> bound, String refusal) {}
+
+  private static final ClassValue<Adders> ADDERS = new ClassValue<>() {
+    @Override
+    protected Adders computeValue(final Class<?> type) {
+      return computeAdders(type);
+    }
+  };
+
+  private static Adders computeAdders(final Class<?> cls) {
+    final var bound = new LinkedHashMap<String, BiConsumer<Object, Object>>();
+    String refusal = null;
+    for (final var name : propertyNames(cls)) {
+      final var declared = resolvedPropertyType(cls, name);
+      if (!COLLECTION_WRITES.filledByAdder(declared) || !storesAField(cls, name)) continue;
+      final var element = COLLECTION_WRITES.elementOf(declared);
+      final Method adder = COLLECTION_WRITES.adderFor(
+        name,
+        element,
+        candidate -> publicOneArgumentMethods(cls, candidate),
+        method -> method.getGenericParameterTypes()[0]
+      );
+      if (adder != null) {
+        bound.put(name, adderInvoker(cls, adder));
+      } else if (refusal == null) {
+        refusal = PairingMessages.adderMissing(
+          cls.getSimpleName(),
+          name,
+          element == null ? null : ((Class<?>) element).getSimpleName(),
+          CollectionWrites.adderNames(name)
+        );
+      }
+    }
+    return new Adders(Collections.unmodifiableMap(bound), refusal);
+  }
+
+  /** Whether {@code cls} or a superclass declares an instance field named {@code name}. */
+  private static boolean storesAField(final Class<?> cls, final String name) {
+    for (var c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+      for (final var field : c.getDeclaredFields()) {
+        if (field.getName().equals(name) && !Modifier.isStatic(field.getModifiers())) return true;
+      }
+    }
+    return false;
+  }
+
+  /** The public instance methods of {@code cls} named {@code name} that take one parameter. */
+  private static List<Method> publicOneArgumentMethods(final Class<?> cls, final String name) {
+    final var found = new ArrayList<Method>();
+    for (final var method : cls.getMethods()) {
+      if (
+        method.getName().equals(name) &&
+        method.getParameterCount() == 1 &&
+        !Modifier.isStatic(method.getModifiers()) &&
+        !method.isBridge()
+      ) {
+        found.add(method);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * {@code adder} bound as a {@code (bean, element) -> void} call: a {@link LambdaMetafactory}
+   * class on the JVM, a {@link MethodHandle} closure inside a native image. A value the adder
+   * returns is dropped.
+   */
+  @SuppressWarnings("unchecked")
+  private static BiConsumer<Object, Object> adderInvoker(final Class<?> cls, final Method adder) {
+    final var declaringClass = adder.getDeclaringClass();
+    final var lookup = privateLookupOrThrow(declaringClass, cls, "adder");
+    try {
+      final var handle = lookup.unreflect(adder);
+      final var spinner = ModuleAccess.spinner(lookup, adder);
+      if (spinner == null) return MhAccessors.biConsumer(handle);
+      final var callSite = LambdaMetafactory.metafactory(
+        spinner,
+        "accept",
+        MethodType.methodType(BiConsumer.class),
+        MethodType.methodType(void.class, Object.class, Object.class),
+        handle,
+        MethodType.methodType(void.class, declaringClass, adder.getParameterTypes()[0])
+      );
+      return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+    } catch (final Throwable t) {
+      throw new RuntimeException("Failed to bind adder '" + adder.getName() + "' on " + cls.getName(), t);
+    }
+  }
+
+  /** Whether {@code writer} fills property {@code name} through an adder rather than a setter. */
+  private static boolean byAdder(final BeanWriter<?> writer, final String name) {
+    return writer instanceof SettersWriter<?> setters && setters.adders.containsKey(name);
   }
 
   /** The bean's property names (getter-derived), in discovery order. */
@@ -1220,7 +1354,8 @@ public final class Beans {
       return switch (chosen.get()) {
         case BUILDER -> builderWriter(cls);
         case CONSTRUCTOR -> constructorWriter(cls, props.length);
-        case SETTERS -> settersWriter(cls);
+        // The shared order never takes ADDERS, which only a hint names.
+        case SETTERS, ADDERS -> settersWriter(cls);
       };
     }
     // A usable builder that was passed over with nothing else to fall to: it cannot carry some
@@ -1692,7 +1827,7 @@ public final class Beans {
    * lens writing it refuse with this message.
    */
   public static String setterRefusal(final BeanWriter<?> writer, final Class<?> cls, final String name) {
-    if (!(writer instanceof SettersWriter<?>)) return null;
+    if (!(writer instanceof SettersWriter<?>) || byAdder(writer, name)) return null;
     final var choice = setterChoice(cls, name);
     if (choice.candidates().isEmpty() || (choice.method() != null && choice.fit().reflects())) return null;
     if (!getters(cls).containsKey(name)) return null;
@@ -1720,7 +1855,7 @@ public final class Beans {
    * refuses only this.
    */
   public static String setterAmbiguity(final BeanWriter<?> writer, final Class<?> cls, final String name) {
-    if (!(writer instanceof SettersWriter<?>)) return null;
+    if (!(writer instanceof SettersWriter<?>) || byAdder(writer, name)) return null;
     return setterChoice(cls, name).method() == null ? setterRefusal(writer, cls, name) : null;
   }
 
@@ -1731,7 +1866,7 @@ public final class Beans {
    * property's type, its getter's, everywhere else.
    */
   public static Type conversionType(final BeanWriter<?> writer, final Class<?> cls, final String name) {
-    if (writer instanceof SettersWriter<?>) {
+    if (writer instanceof SettersWriter<?> && !byAdder(writer, name)) {
       final var choice = setterChoice(cls, name);
       if (choice.method() != null && !choice.fit().compiles()) return choice.writeType();
     }
@@ -1745,7 +1880,7 @@ public final class Beans {
    * through {@link #convertedWriter}, once the writer has built the bean.
    */
   public static boolean writtenOnlyConverted(final BeanWriter<?> writer, final Class<?> cls, final String name) {
-    if (!(writer instanceof SettersWriter<?>)) return false;
+    if (!(writer instanceof SettersWriter<?>) || byAdder(writer, name)) return false;
     final var choice = setterChoice(cls, name);
     return choice.method() != null && !choice.fit().reflects();
   }
@@ -1798,6 +1933,8 @@ public final class Beans {
     return switch (writer) {
       case null -> cls.isRecord() ? recordComponentClass(cls, name) : null;
       case SettersWriter<?> __ -> {
+        // An adder takes one element at a time, so no member takes the property's value whole.
+        if (byAdder(writer, name)) yield null;
         final var choice = setterChoice(cls, name);
         if (choice.method() == null) yield null;
         final var parameter = choice.method().getParameterTypes()[0];
@@ -2498,14 +2635,29 @@ public final class Beans {
     private final Class<P> cls;
     private final Supplier<Object> ctorFn;
     private final Map<String, BiConsumer<Object, Object>> setterInvokers = new ConcurrentHashMap<>();
+    // Whether this is the adders strategy, and the adder each collection property it fills one
+    // element at a time is written through; empty for the setters strategy.
+    final boolean throughAdders;
+    final Map<String, BiConsumer<Object, Object>> adders;
 
-    SettersWriter(final Class<P> cls) {
+    SettersWriter(final Class<P> cls, final boolean throughAdders) {
       this.cls = cls;
+      this.throughAdders = throughAdders;
       final Constructor<P> ctor;
       try {
         ctor = cls.getDeclaredConstructor();
       } catch (final NoSuchMethodException e) {
+        if (throughAdders) {
+          throw new IllegalStateException(PairingMessages.addersNeedNoArgConstructor(cls.getSimpleName()), e);
+        }
         throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
+      }
+      if (throughAdders) {
+        final var refusal = adderRefusal(cls);
+        if (refusal != null) throw new IllegalStateException(refusal);
+        this.adders = Beans.adders(cls);
+      } else {
+        this.adders = Map.of();
       }
       // Build the no-arg ctor as an LMF-bound Supplier, as BuilderWriter does, so a write never
       // reaches Constructor.newInstance. autoWriter picks SETTERS for a bean with neither a builder
@@ -2525,7 +2677,12 @@ public final class Beans {
         throw new RuntimeException("Failed to instantiate " + cls.getName(), e);
       }
       for (final var name : names) {
-        setterFor(name).accept(pojo, valueByName.apply(name));
+        final var adder = adders.get(name);
+        if (adder == null) {
+          setterFor(name).accept(pojo, valueByName.apply(name));
+        } else if (valueByName.apply(name) instanceof Iterable<?> elements) {
+          AdderCalls.add(pojo, name, elements, adder);
+        }
       }
       return pojo;
     }
@@ -2540,7 +2697,7 @@ public final class Beans {
      */
     @Override
     public boolean writes(final String name) {
-      return setterMethod(name) != null;
+      return adders.containsKey(name) || setterMethod(name) != null;
     }
 
     /** The setter {@link #propertySetter} finds for {@code name}, or null when there is none. */

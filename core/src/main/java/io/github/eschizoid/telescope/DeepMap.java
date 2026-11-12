@@ -405,7 +405,7 @@ public final class DeepMap {
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
     // trail rides along so explain() can surface the field decisions this resolution just made.
     if (r.cases != null) return Mapper.ofCases(r.iso, source, target, r.cases, trail);
-    return Mapper.ofIso(r.iso, source, target, r.patchTable, trail, r.sourceRefl);
+    return Mapper.ofIso(r.iso, source, target, r.patchTable, trail, r.beanRefl);
   }
 
   private static List<OpticNode> noted(final List<OpticNode> trail, final OpticNode note) {
@@ -569,7 +569,7 @@ public final class DeepMap {
           value -> inInvocation(FORWARD_SEEN, ownBridges, source, target, value, iso::to),
           value -> inInvocation(BACKWARD_SEEN, ownBridges, target, source, value, iso::from)
         );
-    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), pickReflective(source, beanRefl));
+    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), beanRefl);
   }
 
   /**
@@ -677,6 +677,7 @@ public final class DeepMap {
       case BUILDER -> Beans.builderWriter(raw);
       case SETTERS -> Beans.settersWriter(raw);
       case CONSTRUCTOR -> Beans.constructorWriter(raw, Beans.propertyNames(raw).length);
+      case ADDERS -> Beans.addersWriter(raw);
     };
   }
 
@@ -2416,14 +2417,7 @@ public final class DeepMap {
         null
       );
       iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
-      mapper = Mapper.ofIso(
-        (Iso) cache.get(pair),
-        source,
-        target,
-        patchTableOf(steps, source),
-        List.of(),
-        pickReflective(source, beanRefl)
-      );
+      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of(), beanRefl);
     } else {
       // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
       // decision says and has no fields to patch.
@@ -2447,7 +2441,7 @@ public final class DeepMap {
       final BiFunction<Object, Object, Object> rebuild = (base, partial) -> base;
       mapper = source.isEnum()
         ? Mapper.ofPatcher((Iso) iso, source, target, rebuild, List.of())
-        : Mapper.ofIso((Iso) iso, source, target, Map.of(), List.of(), pickReflective(source, beanRefl));
+        : Mapper.ofIso((Iso) iso, source, target, Map.of(), List.of(), beanRefl);
     }
     return Map.entry(new Mapper.CaseEntry(source, target, mapper), iso);
   }
@@ -4083,6 +4077,8 @@ public final class DeepMap {
     final var named = refl.namedStrategyFor(cls);
     if (writer == null) {
       if (named == null) return;
+      final var adderRefusal = named == BeanWriteStrategy.ADDERS ? Beans.adderRefusal(cls) : null;
+      if (adderRefusal != null) throw new IllegalArgumentException(adderRefusal);
       throw new IllegalArgumentException(
         PairingMessages.beanUnbuiltBy(
           source.getSimpleName(),
@@ -4102,7 +4098,8 @@ public final class DeepMap {
       written.add(name);
     }
     written.addAll(rowWritten);
-    if (Beans.strategyOf(writer) != BeanWriteStrategy.SETTERS) return;
+    final var strategy = Beans.strategyOf(writer);
+    if (strategy != BeanWriteStrategy.SETTERS && strategy != BeanWriteStrategy.ADDERS) return;
     for (final var name : written) {
       if (!writer.writes(name)) {
         throw new IllegalArgumentException(
@@ -4131,15 +4128,15 @@ public final class DeepMap {
   /**
    * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso, the patch
    * table, for a pair of two sealed interfaces each source case's mapper ({@code cases} is null for
-   * any other pair), and the reflective that rebuilds the source, which carries the call's write
-   * hints so a patch builds a bean the way backward does.
+   * any other pair), and the bean reflective carrying the call's write hints, so a patch builds a
+   * bean source the way backward does and into fills a bean target the way forward does.
    */
   private record Resolution<A, B>(
     Iso<A, B> iso,
     Map<String, Mapper.PatchEntry> patchTable,
     List<Mapper.CaseEntry> cases,
     List<OpticNode> trail,
-    Reflective sourceRefl
+    Reflective beanRefl
   ) {}
 
   /**

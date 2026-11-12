@@ -2564,6 +2564,34 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!hintTargets.add(binaryName)) {
         report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
       }
+      if (
+        row.getArguments().size() == 2 &&
+        elementAt(row.getArguments().get(1)) instanceof VariableElement constant &&
+        constant.getKind() == ElementKind.ENUM_CONSTANT &&
+        constant.getSimpleName().contentEquals("ADDERS")
+      ) {
+        final var refusal = addersRefusal(targetEl);
+        if (refusal != null) report(row, refusal);
+      }
+    }
+
+    /**
+     * Why the adders strategy cannot build {@code bean}, as the runtime writer refuses it when the
+     * mapper is built, or null when it can: no no-argument constructor, or a collection a field of
+     * its name stores with no adder.
+     */
+    private String addersRefusal(final TypeElement bean) {
+      final var simple = bean.getSimpleName().toString();
+      if (
+        ElementFilter.constructorsIn(bean.getEnclosedElements())
+          .stream()
+          .noneMatch(c -> c.getParameters().isEmpty())
+      ) {
+        return PairingMessages.addersNeedNoArgConstructor(simple);
+      }
+      final var properties = new LinkedHashMap<String, TypeMirror>();
+      for (final var property : props.properties(bean.asType())) properties.put(property.name(), property.member());
+      return MirrorAdders.of(elements, types, props, bean, properties).refusal();
     }
 
     /**
