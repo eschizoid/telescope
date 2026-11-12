@@ -1017,9 +1017,10 @@ has no `into`, so a direct call does not compile, and the field's mapper runs th
 same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;
 where `forward` inlines, as on a flat bean, the JIT can remove that object, and `IntoBenchmark` measures what is left.
 Where the source of a strict `@Bridge` is a bean, the bridge also gets a static `patchInto(target, partial)`, which the
-field's mapper calls for any target, and which writes what the runtime `patchInto` writes, refusing a sent property with
-no setter in the same words; a source that is a record, or a bridge with a row writing through a path, has none, and the
-field's mapper refuses.
+field's mapper calls for a target of exactly that class, and which writes what the runtime `patchInto` writes, refusing
+a sent property with no setter in the same words; a subclass goes to the runtime `patchInto`, which writes it through
+its own setters from the bridge's overlay. A source that is a record has none; a bridge with a row writing through a
+path refuses in the runtime's words.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a

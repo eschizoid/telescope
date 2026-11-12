@@ -9447,7 +9447,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("    @Override");
         out.println("    public " + s + " patchInto(final " + s + " target, final " + t + " partial) {");
-        // As into: the bridge binds each setter on the source class itself, so a subclass, whose own
+        // As into: the bridge binds each setter on the source class itself, so a subclass, whose
+        // own
         // setter can take the value instead, is written by the runtime patchInto.
         if (!source.getModifiers().contains(Modifier.FINAL)) {
           out.println(

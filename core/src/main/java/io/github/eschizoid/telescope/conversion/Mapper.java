@@ -711,7 +711,6 @@ public class Mapper<A, B> {
     }
   }
 
-
   /**
    * In-place partial update: write into {@code target} the properties {@link #patch} would overlay
    * from {@code partial}, and only those, keeping {@code target}'s identity. Which properties are
@@ -766,7 +765,8 @@ public class Mapper<A, B> {
       }
     }
     if (patcher instanceof BridgePatcher<A, B> bridged) {
-      // The bridge binds each setter on the class it rebuilds; a subclass, whose own setters can take
+      // The bridge binds each setter on the class it rebuilds; a subclass, whose own setters can
+      // take
       // a value instead, is written here through the setters of its own class, from the bridge's
       // overlay, as into writes one.
       if (target.getClass() == sourceClass) {

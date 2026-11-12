@@ -17340,7 +17340,8 @@ class CrossPathCorpusTest {
           "  public void setName(final CharSequence v) { name = \"base:\" + v; }\n" +
           "  public java.util.List<String> getTags() { return tags; }\n" +
           "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
-          // The subclass is reached by name, so defining this class does not need it defined first.
+          // The subclass is reached by name, so defining this class does not need it
+          // defined first.
           "  public static %1$sSrc sample() {\n    try {\n" +
           "      final var s = (%1$sSrc) Class.forName(%1$sSrc.class.getName() + \"Sub\").getConstructor().newInstance();\n" +
           "      s.setTags(new java.util.ArrayList<>(java.util.List.of(\"stale\")));\n      return s;\n" +
@@ -17369,15 +17370,19 @@ class CrossPathCorpusTest {
         "public class %1$sSrcAddress {\n  private String city;\n  public %1$sSrcAddress() {}\n" +
           "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n}\n",
         sampled("%1$sTgt", "String name, String city", "new %1$sTgt(\"new\", \"Paris\")"),
-        plainField(false, "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"),
-        plainRuntime(false, MAPPING + "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)")
+        plainField(
+          false,
+          "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"
+        ),
+        plainRuntime(
+          false,
+          MAPPING +
+            "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"
+        )
       ),
       "name",
       Call.PATCH_INTO,
-      REFUSED +
-        PairingMessages.patchIntoThroughPath("%1$sSrc") +
-        LEFT +
-        "#0(address=#1(city=\"Lyon\"), name=\"old\")"
+      REFUSED + PairingMessages.patchIntoThroughPath("%1$sSrc") + LEFT + "#0(address=#1(city=\"Lyon\"), name=\"old\")"
     ),
     new ContainerRow(
       "a scalar the partial sends that the target has no setter for, refused by name before anything is written",
