@@ -3,6 +3,10 @@
 **Status:** Accepted (qualifies [ADR-0005](0005-lambdametafactory-over-method-handle-invoke.md) under AOT) · **Date:**
 2026-07-17
 
+> **Amendment (2026-11-12).** The verifier this record names, `:examples:graphql`'s `NativeVerify`, is retired with that
+> module. `:examples:demo:native`'s `OrderRun` is the native-image gate now: it runs the order-service demo as a native
+> image and covers every capability `NativeVerify` checked, over the demo's own types.
+
 ## Context
 
 The `:examples:graphql` native-image verifier (`NativeVerify`) exercises telescope's full runtime + codegen surface

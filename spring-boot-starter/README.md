@@ -622,11 +622,12 @@ telescope:
 
 ## Example application
 
-[`examples/springboot/product-starter`](../examples/springboot/product-starter) is a small Spring Boot application built
-on this starter. It declares three `Mapper<Product, ?>` beans, and its controller picks one through
-`registry.get(Product.class, ...)` according to a query parameter.
+[`examples/demo/spring`](../examples/demo/spring/README.md) is an order service built on this starter, with JPA over H2.
+Most of its handlers return entities and name the response types with `@TelescopeGetMapping` and its siblings, it takes
+the version 2 request through `@TelescopeRequestBody`, and imports a partner's orders through a generated
+`@TelescopeMapper` and `@TelescopeTransformer` bean.
 
 ## Quarkus
 
-[`telescope-quarkus`](../quarkus/README.md) offers the same registry through CDI. The generated `@TelescopeMapper` and
-`@TelescopeTransformer` beans exist only for Spring.
+[`telescope-quarkus`](../quarkus/README.md) offers the same registry through CDI, and `@TelescopeMapper` and
+`@TelescopeTransformer` interfaces become CDI beans there.

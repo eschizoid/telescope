@@ -83,4 +83,4 @@ TRACE io...mapper.UserDto.User - ✓ firstName "Ada" → givenName "Ada"
   that's the adopter-facing knob: at `DEBUG` only the structure fires (`isLoggable(TRACE)` is false), and raising the
   logger to `TRACE` additionally fires the per-forward values. An adopter who wants the two lines to carry distinct
   SLF4J levels installs the direct `slf4j-jdk-platform-logging` provider (a `System.LoggerFinder`), bypassing JUL.
-  Pinned end-to-end by `MapperLoggingRoutingTest` in the `org-chart` demo.
+  Pinned end-to-end by `MapperLoggingTest` in the Spring order-service demo.

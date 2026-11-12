@@ -1,6 +1,5 @@
 [versions]
 junit = "6.1.3"
-graphqlJava = "26.1"
 spotless = "8.11.0"
 googleJavaFormat = "1.30.0"
 prettier = "3.8.1"
@@ -14,7 +13,6 @@ jgit = "6.10.0.202406032230-r"
 lombok = "1.18.48"
 
 [libraries]
-graphqlJava = { module = "com.graphql-java:graphql-java", version.ref = "graphqlJava" }
 junitBom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }

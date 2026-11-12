@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.internal.Beans;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,7 +13,8 @@ import java.util.Set;
  * Class-keyed bag of source objects consumed by {@link Telescope#merge(Class,
  * io.github.eschizoid.telescope.mapping.MergeStep[])} — the N-source forward-only mapper. Each
  * entry's runtime class is the lookup key; the merge engine reads the value for a row's source
- * class at forward time.
+ * class at forward time. A Hibernate proxy is keyed by the entity class it stands for, so a lazy
+ * association passed in as it is reaches the rows that read that class.
  *
  * <p>One concept, any arity. There are no {@code Sources2}/{@code Sources3} specializations because
  * the typed tuple variants didn't pay their way at higher arities and split the public surface
@@ -66,7 +68,7 @@ public final class Sources {
       if (s == null) throw new IllegalArgumentException(
         "Sources.of: source at position " + list.size() + " is null. Every source in a merge bag must be non-null."
       );
-      if (map.put(s.getClass(), s) != null) throw new IllegalArgumentException(
+      if (map.put(Beans.persistentClassOf(s), s) != null) throw new IllegalArgumentException(
         "Sources.of: two sources share runtime class " +
           s.getClass().getName() +
           ". Each merge source must have a distinct class — for two same-typed sources, pre-aggregate them into a named holder record (records are final; subclassing is not available)."
@@ -139,7 +141,7 @@ public final class Sources {
     /** Add one source. Same constraints as {@link Sources#of(Object[])}. */
     public Builder with(final Object source) {
       Objects.requireNonNull(source, "Sources.Builder.with: source is null");
-      if (entries.put(source.getClass(), source) != null) throw new IllegalArgumentException(
+      if (entries.put(Beans.persistentClassOf(source), source) != null) throw new IllegalArgumentException(
         "Sources.Builder.with: two sources share runtime class " +
           source.getClass().getName() +
           ". Each merge source must have a distinct class — for two same-typed sources, pre-aggregate them into a named holder record (records are final; subclassing is not available)."

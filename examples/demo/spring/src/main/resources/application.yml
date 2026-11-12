@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:orders;DB_CLOSE_DELAY=-1
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    # Mapped responses convert the entity after the handler returns, while Spring MVC writes the
+    # body, so the lazy customer, lines and tags are read with the session the request opened.
+    open-in-view: true
+  jackson:
+    deserialization:
+      # A client may leave out a flag such as giftWrap, which then reads as false.
+      fail-on-null-for-primitives: false
+
+demo:
+  seller:
+    name: Telescope Goods Ltd
+    vat-id: GB123456789

@@ -11,9 +11,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Pins {@link DeepMap}'s TypePair cycle cache against direct scalar cycles, container cycles, and
- * mutual-recursion cycles. The org-chart example covers the Optional+List self-reference shape;
- * these tests pin the harder shapes the cache also has to handle so a future refactor of the
- * placeholder-then-fill-in mechanism doesn't silently regress to StackOverflow.
+ * mutual-recursion cycles, the shapes a refactor of the placeholder-then-fill-in mechanism would
+ * otherwise regress to a StackOverflow on.
  */
 class CycleHandlingTest {
 

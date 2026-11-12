@@ -25,6 +25,9 @@ tasks.withType<JavaCompile>().configureEach {
 
 dependencies {
     implementation(project(":core"))
+    // Compiles each @Bridge field into a plain Java class at build time, and verifies every
+    // Telescope.mapper(...) call while it compiles.
+    annotationProcessor(project(":codegen"))
 
     // Same MapStruct line the :benchmarks head-to-head already pins.
     implementation("org.mapstruct:mapstruct:1.6.3")

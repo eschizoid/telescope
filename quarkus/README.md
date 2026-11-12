@@ -206,6 +206,7 @@ extensions. A module with both telescope starters is refused until you choose th
 The module has no `telescope.default-write-strategy` setting.
 
 The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency, and
-`@QuarkusComponentTest` classes that run `TelescopeProducer` and the generated beans in an ArC container. No
-`@QuarkusTest` in this repository starts Quarkus itself, so add one to your own application if you want to check the
-wiring end to end.
+`@QuarkusComponentTest` classes that run `TelescopeProducer` and the generated beans in an ArC container. The
+[order-service demo](../examples/demo/quarkus/README.md) checks the wiring end to end: its `@QuarkusTest` starts a
+Quarkus REST app over this module and calls its endpoints, the generated `@TelescopeMapper` and `@TelescopeTransformer`
+beans among them.

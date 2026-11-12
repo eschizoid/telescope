@@ -71,8 +71,8 @@ At the entity, `into` clears and refills a collection the entity already holds i
 `@OneToMany` keeps its identity. Under `ADDERS`, each element goes through the entity's adder, which is where a
 bidirectional association sets its back-reference. With Hibernate on the classpath, the runtime mapper reads a lazy
 proxy as the entity class it stands for, except inside a native image.
-[`examples/springboot/order-jpa/`](examples/springboot/order-jpa/) maps a JPA order model on Spring Boot and Hibernate,
-lazy proxies included.
+[`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate whose PATCH
+runs `into` on the managed entity and refills its lines through `ADDERS`.
 
 Two modules are planned and not built yet. `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
 register mappers with Jackson and bind JSON straight to a type. `telescope-jpa`
@@ -325,14 +325,19 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
 
 ## Examples
 
-| Module                                                                         | Shows                                                         |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| [`examples/library/`](examples/library/)                                       | the DSL on its own, in small demos that each have a `main`    |
-| [`examples/springboot/order-jpa/`](examples/springboot/order-jpa/)             | Spring Boot, JPA and Hibernate over one realistic order model |
-| [`examples/springboot/product-starter/`](examples/springboot/product-starter/) | the starter finding `Mapper` beans with no wiring             |
-| [`examples/springboot/org-chart/`](examples/springboot/org-chart/)             | a model that refers back to itself, mapped without looping    |
-| [`examples/springboot/invoicing/`](examples/springboot/invoicing/)             | `@Bridge` mappers generated at compile time on a hot path     |
-| [`examples/mapstruct-vs-telescope/`](examples/mapstruct-vs-telescope/)         | the same mappings in both tools, tested side by side          |
+[`examples/demo/`](examples/demo/README.md) is a small order service: a REST API over a database whose orders are
+placed, paid, shipped or cancelled, with a public DTO that hides the cost price, a PATCH that changes only what the
+client sent, an older API version the mobile app still calls, an import of untyped JSON and an invoice built from
+several objects. Its README walks those problems in the order a request meets them, from the REST layer through the
+service to the JPA entities, and quotes the mapper that solves each one. The mappers are written once, and the service
+runs three ways:
+
+| Module                                                                 | Runs the order service                                         |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [`examples/demo/spring/`](examples/demo/spring/README.md)              | on Spring Boot, with JPA, mapped responses and request bodies  |
+| [`examples/demo/quarkus/`](examples/demo/quarkus/README.md)            | on Quarkus, with the generated CDI beans                       |
+| [`examples/demo/native/`](examples/demo/native/README.md)              | as a GraalVM native image, which is also the native-image gate |
+| [`examples/mapstruct-vs-telescope/`](examples/mapstruct-vs-telescope/) | the same mappings in both tools, tested side by side           |
 
 ## Published artifacts
 

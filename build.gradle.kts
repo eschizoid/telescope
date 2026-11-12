@@ -56,7 +56,7 @@ allprojects {
 }
 
 // The snapshot-dependency scan resolves every subproject's configurations from the root
-// verifyRelease task; the GraalVM native-buildtools plugin (:examples:graphql) forbids that
+// verifyRelease task; the GraalVM native-buildtools plugin (:examples:demo:native) forbids that
 // cross-project resolution ("attempted without an exclusive lock"), failing every release run at
 // configuration-cache store time. Replacing the convention provider with an empty set neutralizes
 // only the scan — the task's uncommitted-changes / ahead-of-remote guards keep running. Safe here:
@@ -102,7 +102,7 @@ spotless {
 }
 
 subprojects {
-    if (path == ":examples" || path == ":examples:springboot") return@subprojects
+    if (path == ":examples" || path == ":examples:demo") return@subprojects
     apply(plugin = "com.diffplug.spotless")
     configure<SpotlessExtension> {
         java {

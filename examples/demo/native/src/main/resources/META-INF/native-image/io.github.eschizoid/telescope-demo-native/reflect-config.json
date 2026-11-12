@@ -1,0 +1,114 @@
+[
+  {
+    "name": "io.github.eschizoid.telescope.demo.order.Order",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.order.Customer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.order.OrderLine",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.api.OrderDto",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.api.OrderSummary",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.api.OrderV2Dto",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.api.ImportedOrder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.api.ItemsV2",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.Address",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.Shipment",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.ShipmentNotice",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.WarehouseTicket",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.CarrierLabel",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.CarrierLabel$Builder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.Envelope",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.Notice",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.Batch",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.BatchLines",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.eschizoid.telescope.demo.nativeimage.TrackingCode"
+  },
+  {
+    "name": "java.lang.String"
+  }
+]

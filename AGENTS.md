@@ -88,7 +88,7 @@ lombok/                telescope-lombok — navigators for @Data/@Value/@Builder
 quarkus/               telescope-quarkus — Quarkus 3 CDI extension + TelescopeMapperRegistry
 spring-boot-starter/   telescope-spring-boot-starter — Spring Boot 4 auto-config + TelescopeMapperRegistry
 benchmarks/            JMH benchmarks (reflective vs codegen vs hand-written)
-examples/              runnable example slices for READMEs / blog posts
+examples/              the order-service demo (shared domain, Spring, Quarkus, native image) and the MapStruct comparison
 docs/adr/              architecture decision records
 AGENTS.md              this file
 ```
@@ -396,20 +396,19 @@ Two shapes handle it, and which one a processor needs depends on whether its out
 same-module main code. `LombokFocusProcessor` retries every round and emits as soon as the bean surface reads complete
 (`emitBeanNavigatorIfReady`), using `processingOver()` only to turn a target that never became readable into a
 diagnostic rather than silence — nothing is emitted there. Deferring emission itself to that round is what breaks **for
-this processor**: a navigator emitted only then does not exist yet when same-module main code is resolved, which
-`examples/library`'s `LombokDemo` holds in place by importing the generated navigators directly. `BridgeProcessor`,
-`FromMapProcessor` and `BeanFocusProcessor` defer only the targets carrying a Lombok trigger, to `processingOver()`. For
-`BeanFocusProcessor` the readable-properties check `LombokFocusProcessor` retries on is not enough: hand-written getters
-read complete in round one while the builder or constructor Lombok adds, which decides the rebuild strategy, is still
-missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitted in the final round and cannot be
-named from same-module main code. The exception is a class `LombokFocusProcessor` has taken as a target, which it
-records per class: that processor writes the same navigator and holder as soon as the class is ready, so
-`BeanFocusProcessor` leaves the class to it and writes every other one in the final round as usual. A navigator written
-before the final round cannot name one written in it, so its hop to a child or bridge target whose navigator only the
-final round writes ends there (`Telescope<R, Child>`) instead of descending; a parent whose child or bridge target
-telescope-lombok may still take is held back one round, until that is settled. Both processors treat `@BeanFocus` and,
-with telescope-lombok on the path, the Lombok bean annotations as marking a child type that has its own navigator, so
-the navigator is the same whichever writes it. **Any future processor reading synthesised members of Lombok-annotated
+this processor**: a navigator emitted only then does not exist yet when same-module main code is resolved.
+`BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` defer only the targets carrying a Lombok trigger, to
+`processingOver()`. For `BeanFocusProcessor` the readable-properties check `LombokFocusProcessor` retries on is not
+enough: hand-written getters read complete in round one while the builder or constructor Lombok adds, which decides the
+rebuild strategy, is still missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitted in the
+final round and cannot be named from same-module main code. The exception is a class `LombokFocusProcessor` has taken as
+a target, which it records per class: that processor writes the same navigator and holder as soon as the class is ready,
+so `BeanFocusProcessor` leaves the class to it and writes every other one in the final round as usual. A navigator
+written before the final round cannot name one written in it, so its hop to a child or bridge target whose navigator
+only the final round writes ends there (`Telescope<R, Child>`) instead of descending; a parent whose child or bridge
+target telescope-lombok may still take is held back one round, until that is settled. Both processors treat `@BeanFocus`
+and, with telescope-lombok on the path, the Lombok bean annotations as marking a child type that has its own navigator,
+so the navigator is the same whichever writes it. **Any future processor reading synthesised members of Lombok-annotated
 types must do one or the other; reading them in round one gets an un-patched view.**
 
 The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce this — Lombok's javac hooks don't install in
@@ -699,7 +698,7 @@ native-image workflow goes red.** The JVM keeps LMF (it's faster once JIT-warmed
 `telescope-core`; app DTO/lambda metadata is the app's own reachability config. Two gates cover it. `:core:imageTest`
 and `:internal:imageTest` re-run each module's whole suite with the `imagecode` property set, so every existing
 assertion runs on the substrate an image uses; both are wired into `check`, which is what CI runs. The
-`:examples:graphql` `NativeVerify` native binary covers what the image itself does — closed world, reachability
+`:examples:demo:native` `OrderRun` native binary covers what the image itself does — closed world, reachability
 metadata, `SerializedLambda` — on every substrate push to `main` and weekly. Full contract: `docs/native-image.md`,
 decisions: ADR-0015. The one documented exception is the guarded Hibernate-proxy accessor pair (fails safe to `null`;
 JVM/codegen-only under AOT).
@@ -744,7 +743,7 @@ JVM/codegen-only under AOT).
     (runtime `LambdaMetafactory` class definition, forbidden by AOT) fixed in the substrate: `NativeImage.IN_IMAGE`
     gates every accessor builder to `MhAccessors` `MethodHandle` closures inside an image, LMF stays the JVM hot path.
     Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own `native-image.properties`; no
-    separate `telescope-graalvm` Feature module is needed. The `:examples:graphql` `NativeVerify` binary is the CI
+    separate `telescope-graalvm` Feature module is needed. The `:examples:demo:native` `OrderRun` binary is the CI
     regression gate.
 16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
     converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.

@@ -8,33 +8,34 @@ reflection. GraalVM's closed-world assumption can break exactly these mechanics 
 bootstrap, `SerializedLambda` deserialization, `MethodHandles.privateLookupIn`, and codegen constants baked into the
 image heap.
 
-The `:examples:graphql` example carries the verification: its `NativeVerify` main exercises the full runtime + codegen
-substrate over the example's own domain models and either lets the project claim native support or names the real gap.
-It doubles as a runnable demo — the same module also serves the runtime (`Telescope.fromMap`) and generated (`@FromMap`)
-GraphQL servers.
+The order-service demo carries the verification: [`:examples:demo:native`](../examples/demo/native/README.md) builds the
+demo as a native image whose `OrderRun` main runs a day at the shop over the demo's own types, checks every step and
+either lets the project claim native support or names the real gap.
 
 ## What the verifier covers
 
-`examples/graphql/src/main/java/.../server/NativeVerify.java` exercises, in one process, the substrate mechanics whose
-survival under native-image is what we verify. Each capability prints `PASS` / `FAIL` and the process exits non-zero on
-any failure — so `native-image` compiling and running the binary **is** the test.
+`examples/demo/native/src/main/java/.../nativeimage/OrderRun.java` runs, in one process, the steps whose survival under
+native-image is what we verify. Each step prints `PASS` / `FAIL` and the process exits non-zero on any failure — so
+`native-image` compiling and running the binary **is** the test.
 
-| Capability                        | Substrate mechanic under test                                                                            |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Record field update               | `SerializedLambda` method-reference decode + LMF record reader + cached canonical-ctor `MethodHandle`    |
-| Record read (`.read()`)           | pure LMF-dispatched record component read (the `Records.read` path through the public surface)           |
-| Bean read (`.read()`)             | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)        |
-| Runtime record → record `mapper`  | LMF record readers on the source, canonical-constructor rebuild, carrying a nested record + enum         |
-| Runtime record → bean `mapper`    | LMF getter readers + no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)         |
-| Runtime record → builder `mapper` | the `Beans` `BuilderWriter` — `builder()` `Supplier` + fluent-setter `BiFunction` + `build()` `Function` |
-| Generated `@FromMap`              | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)           |
-| Runtime `fromMap` with a binder   | `Telescope.fromMap(...)` finding the generated `AddressFromMap` binder through its `ServiceLoader` entry |
-| Generated `@Bridge` constant      | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap       |
-| Generated `@Focus` navigator      | `UserTelescope.of().address().city()` read and update, with the navigator in `serialization-config.json` |
-| Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
-| Row typed by a type argument      | `Mapping.to` rows typed by `Tagged<String>` and `Tagged<Badge>`, loading each class by name to check it  |
-| `@Bridge` mapper field            | `Ticket.VIEW` found by `StackWalker` and `ServiceLoader`, over records with no registration              |
-| Runtime via row naming a class    | `via(..., TicketViews.class)` choosing the class's methods reflectively and calling them through handles |
+| Step                                       | Substrate mechanic under test                                                                                   |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Public view, summary, version 2 view       | `@Bridge` mapper fields found by `StackWalker` and `ServiceLoader`, the generated `OrderMappings`, sealed cases |
+| Version 2 request forward, backward, patch | a `@Bridge` field over records with no registration, its `via` methods called by name and never decoded         |
+| New order, PATCH                           | the generated bridge's adder calls under `ADDERS`, and its generated `into` refilling the held list             |
+| Partner import                             | the reflection-free generated `@FromMap` binder — the control (no LMF, no `SerializedLambda`)                   |
+| Import trace                               | a runtime `Telescope.fromMap(...)` finding each line's generated binder through its `ServiceLoader` entry       |
+| Invoice                                    | the generated bridge of a `@Bridge` `merge` field                                                               |
+| Orders waiting to ship                     | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)               |
+| Navigator read and update                  | `OrderDtoTelescope.of().shipping().trackingNumber()`, with the navigator in `serialization-config.json`         |
+| Carrier's city in capitals                 | `SerializedLambda` method-reference decode + LMF record reader + cached canonical-ctor `MethodHandle`           |
+| Shipment notice                            | runtime record → record `mapper`, carrying a nested record + enum                                               |
+| Warehouse ticket                           | runtime record → bean `mapper`: no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)     |
+| Carrier label                              | runtime record → builder `mapper`: `builder()` `Supplier` + fluent-setter `BiFunction` + `build()` `Function`   |
+| Parcel view                                | the emitted class-level `ParcelBridge.BRIDGE` constant                                                          |
+| Pick list                                  | fused `Telescope.all` over generated navigator paths, on records with no `reflect-config.json` entry            |
+| Carrier webhook                            | `Mapping.to` rows typed by `Envelope<String>` and `Envelope<TrackingCode>`, loading each class by name          |
+| Restocking batch                           | `via(..., ItemsV2.class)` choosing the class's methods reflectively and calling them through handles            |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -42,13 +43,14 @@ the identical LMF call sites through the public `Telescope.of(...).field(...).re
 
 ## How to run it
 
-- **JVM sanity check** (validates the harness logic, not native-image): `./gradlew :examples:graphql:runNativeVerify`
+- **JVM sanity check** (validates the harness logic, not native-image): `./gradlew :examples:demo:native:runOnJvm`, or
+  `:examples:demo:native:test`, which `check` runs.
 - **Native build + run** (the real test, needs a GraalVM `native-image` on `PATH`):
-  `./gradlew :examples:graphql:nativeRun`
+  `./gradlew :examples:demo:native:nativeRun`
 
 CI wiring: `.github/workflows/native-image.yaml` installs GraalVM via `graalvm/setup-graalvm`, then runs
-`:examples:graphql:nativeRun`. The job fails if the binary exits non-zero. It runs on `workflow_dispatch`, on pushes to
-`main` that touch the example or the substrate modules, and weekly (to catch a GraalVM-version regression on its own
+`:examples:demo:native:nativeRun`. The job fails if the binary exits non-zero. It runs on `workflow_dispatch`, on pushes
+to `main` that touch the demo or the substrate modules, and weekly (to catch a GraalVM-version regression on its own
 cadence). Native builds are minutes-long, so it deliberately does **not** gate every PR.
 
 ## Two walls, and how each falls
@@ -72,8 +74,8 @@ JVM/codegen-only under AOT.)
 **Wall A — `SerializedLambda` decode.** `.field(User::name)` recovers the field name by invoking the method reference's
 `writeReplace()` to read a `SerializedLambda`. native-image only synthesizes `writeReplace()` for a lambda whose
 capturing class is registered as a lambda-capturing type for serialization. Fixed with an app-level
-`serialization-config.json` naming the call-site class (here, `NativeVerify`). `.fieldByName(String)` and codegen
-navigators are the `SerializedLambda`-free alternatives that need no such registration.
+`serialization-config.json` naming the call-site class (here, `OrderRun` and `OrderMappers`). `.fieldByName(String)` and
+codegen navigators are the `SerializedLambda`-free alternatives that need no such registration.
 
 ## What ships where
 
@@ -81,7 +83,7 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   (e.g. `AccountBridge.BRIDGE`, a `Telescope` built at the generated class's static init) land in the build-time image
   heap; native-image defaults every class to run-time init, and a heap object of a run-time-init type is a hard error.
   telescope-core ships `--initialize-at-build-time` for the telescope packages in its jar, so **adopters need no build
-  args for telescope itself**. The example still initializes its own generated-model package (app-specific).
+  args for telescope itself**. The demo's native build passes none for its own packages either.
 - **Generated `@FromMap` binder discovery — nothing to configure.** A runtime `fromMap` fills a component whose type has
   a generated binder by finding the binder's `FromMapProvider` through `ServiceLoader` and calling the binder it
   returns. The processor writes the `META-INF/services` registration beside the binder, and native-image includes the
@@ -89,14 +91,14 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   from named modules reads `provides` directives instead, so declare each binder's `<Name>FromMap.Provider` there, and a
   fat jar fed to native-image must merge the service files of the jars it combines (`ServicesResourceTransformer`,
   `mergeServiceFiles()`).
-- **`--no-fallback`** — in the example build: fail rather than silently emit a JVM-fallback image, so a reachability gap
-  is a hard error, not a slow "native" binary that is really the JVM.
+- **`--no-fallback`** — in the demo's native build: fail rather than silently emit a JVM-fallback image, so a
+  reachability gap is a hard error, not a slow "native" binary that is really the JVM.
 - **App-level reachability metadata — the app's own types.** The runtime reflective mapper walks its source/target types
   with `Class.getRecordComponents()` and unreflects their accessors / constructor / setters, so those DTO types need a
   `reflect-config.json`; `.field(methodref)` needs the call-site class in a `serialization-config.json` (Wall A). Both
   live under the app's `META-INF/native-image/...`, exactly as every GraalVM app ships for its own domain types — the
-  example does this for its model types (including the builder-only bean and its `Builder`). Four ways to produce them,
-  in order of how often they fit — see below.
+  demo does this for its own types (including the builder-only bean and its `Builder`). Four ways to produce them, in
+  order of how often they fit — see below.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
   `opens ... to io.github.eschizoid.telescope.internal;` — a module-descriptor requirement, not a native-image one.
@@ -195,8 +197,8 @@ metadata the other libraries in it contribute, which can change when a dependenc
 
 A class that is not registered fails the mapper's construction with an `IllegalStateException` naming the class and the
 method reference, and under GraalVM's strict missing-registration mode the image's own missing-registration error passes
-through instead. `NativeVerify` builds two such rows over the example's `Tagged` record, one reading it as `String` and
-one as the example's `Badge` record, with both classes in the example's `reflect-config.json`.
+through instead. `OrderRun` builds two such rows over the demo's `Envelope` record, one reading it as `String` and one
+as the demo's `TrackingCode` record, with both classes in the demo's `reflect-config.json`.
 
 ## A via row naming a class
 
@@ -210,9 +212,8 @@ or `backward` from:
 { "name": "com.example.Hw", "allDeclaredMethods": true }
 ```
 
-A `@Bridge` field with the same row needs none of this: its generated bridge calls the methods by name. `NativeVerify`
-builds the row on the runtime path over the example's `Itinerary` record, with `TicketViews` in the example's
-`reflect-config.json`.
+A `@Bridge` field with the same row needs none of this: its generated bridge calls the methods by name. `OrderRun`
+builds the row on the runtime path over the demo's `Batch` record, with `ItemsV2` in the demo's `reflect-config.json`.
 
 ## The order a bean's properties convert in
 
@@ -220,15 +221,15 @@ A runtime mapper converts a bean's properties in the order of the fields that ba
 superclass fields first, and then the properties no field backs, by name. The generated bridge uses the same order. On
 the JVM, `getDeclaredFields` returns the class file's order, which javac writes in source order. In an image, the fields
 come from the reflection metadata registered for the bean, so their order is whatever the image builder recorded. The
-`:core:imageTest` gate checks this order on the accessor substrate an image uses, but it runs on the JVM. `NativeVerify`
+`:core:imageTest` gate checks this order on the accessor substrate an image uses, but it runs on the JVM. `OrderRun`
 does not check the order, so a real image's order is not verified. It matters only to conversions with side effects.
 
 ## Producing the app metadata
 
-1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's
-   [`reflect-config.json`](../examples/graphql/src/main/resources/META-INF/native-image/io.github.eschizoid/telescope-examples-graphql/reflect-config.json)
-   is eight readable entries and doubles as the template. One gotcha: nested types get their own entry with the binary
-   name (`AccountBuilderBean$Builder`) — the builder write path unreflects the builder class too.
+1. **Hand-write it.** For a handful of DTO types this is the honest option: the demo's
+   [`reflect-config.json`](../examples/demo/native/src/main/resources/META-INF/native-image/io.github.eschizoid/telescope-demo-native/reflect-config.json)
+   is a list of readable entries and doubles as the template. One gotcha: nested types get their own entry with the
+   binary name (`CarrierLabel$Builder`) — the builder write path unreflects the builder class too.
 2. **Framework hints — the route for the starter users.** Both frameworks telescope ships starters for generate this
    metadata themselves; if you're on one, use its mechanism and skip the JSON entirely:
    - **Quarkus**: `@RegisterForReflection(targets = { User.class, UserView.class })` on any class in the app (or
@@ -282,15 +283,14 @@ does not check the order, so a real image's order is not verified. It matters on
    }
    ```
 
-   This exact task, pointed at the graphql example's model package, reproduces every entry of the example's hand-written
-   config (nested `$Builder` included, correct subpackage FQNs) plus four extras — the codegen-generated classes that
-   compile into the same package and need no registration. Which is the trade stated plainly: it over-registers (every
-   type in the walked packages, all members), the price of not enumerating by hand. Wire the task before `nativeCompile`
-   and keep the package boundaries tight. Note this produces `reflect-config.json` only: the `serialization-config`
-   entries name the **call-site classes** holding your `.field(methodref)` references — usage information, not model
-   information — so no walk of the model folder can derive them. Hand-list those (usually one to three classes), point
-   the same walk at the package where your navigation code lives, or use `.fieldByName(String)` / codegen navigators and
-   skip the file entirely.
+   Pointed at a model package, the task emits an entry for every class compiled into it, nested `$Builder` classes and
+   subpackages included, and for the codegen-generated classes that compile into the same package and need no
+   registration. Which is the trade stated plainly: it over-registers (every type in the walked packages, all members),
+   the price of not enumerating by hand. Wire the task before `nativeCompile` and keep the package boundaries tight.
+   Note this produces `reflect-config.json` only: the `serialization-config` entries name the **call-site classes**
+   holding your `.field(methodref)` references — usage information, not model information — so no walk of the model
+   folder can derive them. Hand-list those (usually one to three classes), point the same walk at the package where your
+   navigation code lives, or use `.fieldByName(String)` / codegen navigators and skip the file entirely.
 
 4. **The GraalVM tracing agent.** Run the app or its tests once on the JVM with
    `-agentlib:native-image-agent=config-output-dir=...` and it dumps all the config files from observed behavior.
