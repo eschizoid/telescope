@@ -605,6 +605,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
+    // Reads a row written as a generated navigator's chain as the bridge processor reads it.
+    private final FieldRows navigators = new FieldRows(processingEnv, trees);
+
     // The target properties the rows of the call being verified claim, by the nested pair they are
     // keyed to; a nested pair with no entry has no row keyed to it. Read through claimsAt, which
     // adds the rows keyed to two sealed interfaces a pair's classes implement.
@@ -1520,7 +1523,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var path = inlinePath(arg);
       if (path == null || path.steps().size() != 1) return false;
       final var step = path.steps().getFirst();
-      return path.startsAtClass() && "field".equals(step.name()) && step.args().size() == 1;
+      return path.startsAtClass() && "field".equals(step.name()) && step.readsOne();
     }
 
     /**
@@ -2191,8 +2194,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (final var step : path.steps()) {
         final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name)) continue;
-        if (!"field".equals(name) || step.args().size() != 1) return null;
-        final var hop = accessorProp(step.args().getFirst());
+        if (!"field".equals(name) || !step.readsOne()) return null;
+        final var hop = hop(step);
         if (hop == null) return null;
         names.add(hop.name());
       }
@@ -2215,8 +2218,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (final var step : path.steps()) {
         final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name) || "as".equals(name)) continue;
-        if (!ROOT_HOPS.contains(name) || step.args().size() != 1) return null;
-        final var hop = accessorProp(step.args().getFirst());
+        if (!ROOT_HOPS.contains(name) || !step.readsOne()) return null;
+        final var hop = hop(step);
         return hop == null ? null : hop.method();
       }
       return null;
@@ -3097,8 +3100,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           continue;
         }
-        if (ROOT_HOPS.contains(name) && callArgs.size() == 1) {
-          verifyWrittenOnTarget(row, rowName, accessorProp(callArgs.getFirst()), tgtType, srcSimple, tgtSimple);
+        if (ROOT_HOPS.contains(name) && step.readsOne()) {
+          verifyWrittenOnTarget(row, rowName, hop(step), tgtType, srcSimple, tgtSimple);
         }
         return;
       }
@@ -3162,16 +3165,34 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
     }
 
-    /** One call after a path's factory: the method it names and its arguments. */
-    private record Step(String name, List<? extends ExpressionTree> args) {}
+    /**
+     * One call after a path's factory: the method it names and its arguments, and, for a call of a
+     * generated navigator, {@code read}, the property it reads, as the {@code field(...)} step it
+     * stands for; null for any other call.
+     */
+    private record Step(String name, List<? extends ExpressionTree> args, Prop read) {
+      Step(final String name, final List<? extends ExpressionTree> args) {
+        this(name, args, null);
+      }
+
+      /** Whether the step reads one property: through one accessor, or as a navigator's call. */
+      boolean readsOne() {
+        return read != null || args.size() == 1;
+      }
+    }
+
+    /** The property {@code step}, a step that {@link Step#readsOne() reads one}, reads. */
+    private Prop hop(final Step step) {
+      return step.read() != null ? step.read() : accessorProp(step.args().getFirst());
+    }
 
     /**
-     * {@code arg} read as an inline path, or null for any expression {@link #telescopeCalls} does
-     * not read as one.
+     * {@code arg} read as an inline path, a generated navigator's chain read as the path it stands
+     * for ({@link #navigatorPath}), or null for any other expression.
      */
     private InlinePath inlinePath(final ExpressionTree arg) {
-      final var calls = arg == null ? null : telescopeCalls(arg);
-      if (calls == null) return null;
+      final var calls = telescopeCalls(arg);
+      if (calls == null) return navigatorPath(arg);
       final var first = calls.getFirst();
       final var steps = new ArrayList<Step>();
       final var factory = factoryName(first);
@@ -3193,6 +3214,26 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         steps.add(new Step(name, call.getArguments()));
       }
       return new InlinePath(factory, first.getArguments(), root, List.copyOf(steps));
+    }
+
+    /**
+     * {@code arg}, a chain started at a generated navigator's {@code of()}, read as the path {@code
+     * Telescope.of(Root.class)} it stands for, as the bridge processor reads it: each call naming a
+     * property is the {@code field(...)} step reading it, a {@code get()} adds no step, and every
+     * other call is the step it is; or null when {@code arg} is no such chain.
+     */
+    private InlinePath navigatorPath(final ExpressionTree arg) {
+      final var chain = navigators.navigatorChain(getCurrentPath().getCompilationUnit(), arg);
+      if (chain == null) return null;
+      final var steps = new ArrayList<Step>();
+      for (final var step : navigators.navigatorSteps(chain, chain.root().asType())) {
+        if (step.accessor() != null) {
+          steps.add(new Step("field", List.of(), new Prop(step.name(), step.read(), step.owner(), step.accessor())));
+        } else if (!step.name().equals("get")) {
+          steps.add(new Step(step.name(), step.call().getArguments()));
+        }
+      }
+      return new InlinePath("of", List.of(), chain.root().asType(), List.copyOf(steps));
     }
 
     /** The name of the method a call invokes, read from its resolved element. */
@@ -3258,10 +3299,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           return;
         }
-        if (ROOT_HOPS.contains(name)) verifySourceComponent(
+        if (ROOT_HOPS.contains(name) && step.readsOne()) verifySourceComponent(
           row,
           rowName,
-          accessorProp(callArgs.getFirst()),
+          hop(step),
           srcErased,
           srcSimple,
           tgtSimple
