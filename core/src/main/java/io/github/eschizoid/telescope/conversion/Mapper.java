@@ -711,9 +711,6 @@ public class Mapper<A, B> {
     }
   }
 
-  private static final String PATCH_INTO_PATH =
-    "patchInto() writes into %s each property the partial supplies, and a row of this mapper writes through a" +
-    " source path, which names no property of it. Call patch(base, partial) and write the result.";
 
   /**
    * In-place partial update: write into {@code target} the properties {@link #patch} would overlay
@@ -763,34 +760,41 @@ public class Mapper<A, B> {
     if (partial == null) {
       return target;
     }
+    for (final var entry : patchByTargetField.values()) {
+      if (entry.overlay() != null) {
+        throw new UnsupportedOperationException(PairingMessages.patchIntoThroughPath(sourceClass.getSimpleName()));
+      }
+    }
     if (patcher instanceof BridgePatcher<A, B> bridged) {
-      return bridged.fn().patchInto(target, partial);
+      // The bridge binds each setter on the class it rebuilds; a subclass, whose own setters can take
+      // a value instead, is written here through the setters of its own class, from the bridge's
+      // overlay, as into writes one.
+      if (target.getClass() == sourceClass) {
+        return bridged.fn().patchInto(target, partial);
+      }
+      final var names = bridged.fn().patchIntoProperties();
+      final var flags = new boolean[names.size()];
+      final var produced = bridged.fn().overlaid(target, partial, flags);
+      final var sent = new LinkedHashSet<String>();
+      for (var i = 0; i < flags.length; i++) {
+        if (flags[i]) {
+          sent.add(names.get(i));
+        }
+      }
+      writeSent(target, sent, produced, null);
+      return target;
     }
     if (patcher != null) throw new UnsupportedOperationException(
       "patchInto(): this mapper patches " +
         sourceClass.getSimpleName() +
         " whole, with no fields a partial could supply, so there is nothing to write in place."
     );
-    for (final var entry : patchByTargetField.values()) {
-      if (entry.overlay() != null) {
-        throw new UnsupportedOperationException(PATCH_INTO_PATH.formatted(sourceClass.getSimpleName()));
-      }
-    }
     if (!rebuildable()) throw new UnsupportedOperationException(
       "patchInto() rebuilds the partial over the target to read the values it writes, and " +
         sourceClass.getName() +
         " is an enum or a class no write strategy can build."
     );
-    final var writeClass = Beans.persistentClassOf(target);
-    final var known = patchIntoPlan;
-    final var plan =
-      known != null && known.writeClass() == writeClass
-        ? known
-        : new PatchIntoPlan(writeClass, patchIntoAdders(writeClass), new ConcurrentHashMap<>());
-    if (plan != known) {
-      patchIntoPlan = plan;
-    }
-    final var adders = plan.adders();
+    final var adders = patchIntoPlan(Beans.persistentClassOf(target)).adders();
     final var sent = new LinkedHashSet<String>();
     // The value read from is built with no adder of the target class run on it, so each adder runs
     // once per element, on the target, as into does.
@@ -804,9 +808,38 @@ public class Mapper<A, B> {
       produced = built.value();
       deferred = built.elements();
     }
-    if (sent.isEmpty()) {
-      return target;
+    writeSent(target, sent, produced, deferred);
+    return target;
+  }
+
+  /** The bound writers of {@link #patchInto} for a target of {@code writeClass}. */
+  private PatchIntoPlan patchIntoPlan(final Class<?> writeClass) {
+    final var known = patchIntoPlan;
+    if (known != null && known.writeClass() == writeClass) {
+      return known;
     }
+    final var plan = new PatchIntoPlan(writeClass, patchIntoAdders(writeClass), new ConcurrentHashMap<>());
+    patchIntoPlan = plan;
+    return plan;
+  }
+
+  /**
+   * Writes into {@code target} each property in {@code sent}, the value {@code produced}, the
+   * overlay, holds for it, as {@link #into} writes: an adder-filled collection from {@code
+   * deferred} where the overlay was built with its adders deferred.
+   */
+  private void writeSent(
+    final A target,
+    final Set<String> sent,
+    final Object produced,
+    final Map<String, Object> deferred
+  ) {
+    if (sent.isEmpty()) {
+      return;
+    }
+    final var writeClass = Beans.persistentClassOf(target);
+    final var plan = patchIntoPlan(writeClass);
+    final var adders = plan.adders();
     final var readClass = Beans.persistentClassOf(produced);
     final var slots = new IntoSlot[sent.size()];
     final var staged = new Object[slots.length];
@@ -825,7 +858,6 @@ public class Mapper<A, B> {
       i++;
     }
     writeSlots(target, writeClass, slots, staged);
-    return target;
   }
 
   private void refusePatchIntoRecord(final Class<?> written) {

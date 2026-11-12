@@ -3850,7 +3850,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           unwalkedSource,
           unwalkedTarget,
           guarded,
-          patchIntoStatements != null
+          patchIntoStatements == null ? null : new ArrayList<>(patchSent.keySet()),
+          !lenient && hasPathRows && sourceRebuild.kind() != Rebuild.Kind.RECORD
+            ? PairingMessages.patchIntoThroughPath(source.getSimpleName().toString())
+            : null
         );
         for (final var writer : pathWriters) out.print(writer);
         // Each when(...) predicate is tested through a Predicate, as the runtime tests it, and
@@ -4829,7 +4832,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       unwalkedSource,
       unwalkedTarget,
       false,
-      false
+      null,
+      null
     );
   }
 
@@ -4849,7 +4853,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<String> unwalkedSource,
     final Set<String> unwalkedTarget,
     final boolean takesPath,
-    final boolean patchInto
+    final List<String> patchIntoNames,
+    final String patchIntoRefusal
   ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
@@ -4869,12 +4874,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".patch(base, partial);");
     out.println("    }");
     out.println();
-    if (patchInto) {
+    if (patchIntoNames != null || patchIntoRefusal != null) {
       out.println("    @Override");
       out.println(
         "    public " + sourceFq + " patchInto(final " + sourceFq + " target, final " + targetFq + " partial) {"
       );
-      out.println("      return " + bridgeName + ".patchInto(target, partial);");
+      out.println(
+        patchIntoRefusal != null
+          ? "      throw new UnsupportedOperationException(" + literal(patchIntoRefusal) + ");"
+          : "      return " + bridgeName + ".patchInto(target, partial);"
+      );
+      out.println("    }");
+      out.println();
+    }
+    if (patchIntoNames != null) {
+      out.println("    @Override");
+      out.println("    public java.util.List<String> patchIntoProperties() {");
+      out.println("      return java.util.List.of(" + quotedList(patchIntoNames) + ");");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println(
+        "    public " +
+          sourceFq +
+          " overlaid(final " +
+          sourceFq +
+          " base, final " +
+          targetFq +
+          " partial, final boolean[] sent) {"
+      );
+      out.println("      return " + bridgeName + ".__overlaid(base, partial, sent);");
       out.println("    }");
       out.println();
     }
@@ -9418,6 +9447,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("    @Override");
         out.println("    public " + s + " patchInto(final " + s + " target, final " + t + " partial) {");
+        // As into: the bridge binds each setter on the source class itself, so a subclass, whose own
+        // setter can take the value instead, is written by the runtime patchInto.
+        if (!source.getModifiers().contains(Modifier.FINAL)) {
+          out.println(
+            "      if (target != null && target.getClass() != " + s + ".class) return super.patchInto(target, partial);"
+          );
+        }
         out.println("      return " + bridgeName + ".patchInto(target, partial);");
         out.println("    }");
       }

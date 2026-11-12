@@ -17333,6 +17333,53 @@ class CrossPathCorpusTest {
       "#0(name=\"new\", tags=[\"x\"])" + KEPT
     ),
     new ContainerRow(
+      "a subclass target that adds a more specific setter, written through that setter",
+      List.of(
+        "public class %1$sSrc {\n  private String name;\n  private java.util.List<String> tags;\n" +
+          "  public %1$sSrc() {}\n  public String getName() { return name; }\n" +
+          "  public void setName(final CharSequence v) { name = \"base:\" + v; }\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
+          // The subclass is reached by name, so defining this class does not need it defined first.
+          "  public static %1$sSrc sample() {\n    try {\n" +
+          "      final var s = (%1$sSrc) Class.forName(%1$sSrc.class.getName() + \"Sub\").getConstructor().newInstance();\n" +
+          "      s.setTags(new java.util.ArrayList<>(java.util.List.of(\"stale\")));\n      return s;\n" +
+          "    } catch (final ReflectiveOperationException e) {\n      throw new IllegalStateException(e);\n    }\n  }\n}\n",
+        "public class %1$sSrcSub extends %1$sSrc {\n  public %1$sSrcSub() {}\n" +
+          "  public void setName(final String v) { super.setName(\"sub:\" + v); }\n}\n",
+        taggedPartial("null").replace("new %1$sTgt(null, ", "new %1$sTgt(\"x\", "),
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "tags",
+      Call.PATCH_INTO,
+      // The subclass's own setter takes the value, after the base setter the rebuild of the
+      // overlay calls, as into writes a subclass.
+      "#0(name=\"base:sub:base:x\", tags=[\"stale\"])" + KEPT
+    ),
+    new ContainerRow(
+      "a mapper with a row writing through a source path, refused before anything is written",
+      List.of(
+        "public class %1$sSrc {\n  private String name;\n  private %1$sSrcAddress address;\n  public %1$sSrc() {}\n" +
+          "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
+          "  public %1$sSrcAddress getAddress() { return address; }\n" +
+          "  public void setAddress(final %1$sSrcAddress v) { address = v; }\n" +
+          "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
+          "    final var a = new %1$sSrcAddress(); a.setCity(\"Lyon\"); s.setAddress(a);\n    return s;\n  }\n}\n",
+        "public class %1$sSrcAddress {\n  private String city;\n  public %1$sSrcAddress() {}\n" +
+          "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n}\n",
+        sampled("%1$sTgt", "String name, String city", "new %1$sTgt(\"new\", \"Paris\")"),
+        plainField(false, "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"),
+        plainRuntime(false, MAPPING + "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)")
+      ),
+      "name",
+      Call.PATCH_INTO,
+      REFUSED +
+        PairingMessages.patchIntoThroughPath("%1$sSrc") +
+        LEFT +
+        "#0(address=#1(city=\"Lyon\"), name=\"old\")"
+    ),
+    new ContainerRow(
       "a scalar the partial sends that the target has no setter for, refused by name before anything is written",
       intoPair(
         "public class %1$sSrc {\n  private final String name;\n  private java.util.List<String> tags;\n" +
