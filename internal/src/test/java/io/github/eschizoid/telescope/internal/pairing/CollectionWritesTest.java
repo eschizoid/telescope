@@ -137,6 +137,25 @@ class CollectionWritesTest {
   }
 
   @Nested
+  @DisplayName("What into does once a refill has failed")
+  class AfterAFailedRefill {
+
+    @Test
+    @DisplayName("an adder's rejection is thrown on, setter or not, so nothing writes past the adder")
+    void anAdderRejectionIsThrownOn() {
+      assertEquals(CollectionWrites.AfterFailedRefill.RETHROW, CollectionWrites.afterFailedRefill(true, true));
+      assertEquals(CollectionWrites.AfterFailedRefill.RETHROW, CollectionWrites.afterFailedRefill(true, false));
+    }
+
+    @Test
+    @DisplayName("a container's own refusal goes to the setter, and is refused by name without one")
+    void aContainerRefusalGoesToTheSetterOrIsRefused() {
+      assertEquals(CollectionWrites.AfterFailedRefill.SET, CollectionWrites.afterFailedRefill(false, true));
+      assertEquals(CollectionWrites.AfterFailedRefill.REFUSE, CollectionWrites.afterFailedRefill(false, false));
+    }
+  }
+
+  @Nested
   @DisplayName("Which method is the adder")
   class Adders {
 

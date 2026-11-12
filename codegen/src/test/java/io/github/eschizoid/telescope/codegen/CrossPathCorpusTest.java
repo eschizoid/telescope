@@ -16433,6 +16433,10 @@ class CrossPathCorpusTest {
   /** An adder that marks each line's sku as well, so an adder run twice on a line shows. */
   private static final String MARKING_ADDER = "line.setSku(line.getSku() + \"!\"); line.attach(this); lines.add(line);";
 
+  /** The start of an adder that rejects the line whose sku is {@code b}, before adding anything. */
+  private static final String REJECTING_ADDER =
+    "if (\"b\".equals(line.getSku())) { throw new IllegalArgumentException(\"rejected b\"); } ";
+
   /**
    * A bean {@code %1$sTgt} with an id and a {@code java.util.<collection>} of {@code %1$sTgtLine}
    * held in a final field initialised to {@code held}, with a getter and an adder whose body is
@@ -16696,14 +16700,17 @@ class CrossPathCorpusTest {
         "#0(id=\"old\", lines=[])"
     ),
     new ContainerRow(
-      "a list of a class with no add and no setter, refused before any other property is written",
-      addersPair(adderTarget("List", "new %1$sFixed<>(java.util.List.of())", WIRING_ADDER), FIXED_LIST),
+      "a list of a class that cannot clear, with no setter, refused before any other property is written",
+      addersPair(
+        adderTarget("List", "new %1$sFixed<>(java.util.List.of(new %1$sTgtLine()))", WIRING_ADDER),
+        FIXED_LIST
+      ),
       "lines",
       Call.INTO,
       REFUSED +
         PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", PACKAGE + ".%1$sFixed") +
         LEFT +
-        "#0(id=\"old\", lines=[])"
+        "#0(id=\"old\", lines=[#1(order=null, sku=null)])"
     ),
     new ContainerRow(
       "a second collection nothing can write, refused before the first is refilled",
@@ -16736,22 +16743,30 @@ class CrossPathCorpusTest {
         "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")], notes=[])"
     ),
     new ContainerRow(
-      "a list with no setter that clears and whose adder then refuses, refused with its lines put back",
+      "an adder that rejects an element, on a list with no setter, thrown on with the lines put back",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", REJECTING_ADDER + WIRING_ADDER, "stale")),
+      "lines",
+      Call.INTO,
+      REFUSED + "rejected b" + LEFT + "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
+    ),
+    new ContainerRow(
+      "an adder that rejects an element, on a list with a setter, thrown on with the lines put back",
       addersPair(
-        adderTarget(
-          "List",
-          "new java.util.ArrayList<>()",
-          "if (!\"stale\".equals(line.getSku())) { throw new UnsupportedOperationException(\"closed\"); } " +
-            WIRING_ADDER,
-          "stale"
-        )
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void setLines(final java.util.List<%1$sTgtLine> v) { lines = v; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { " +
+          REJECTING_ADDER +
+          WIRING_ADDER +
+          " }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
+          "    final var s = new %1$sTgtLine(); s.setSku(\"stale\"); t.addLine(s); return t;\n  }\n}\n"
       ),
       "lines",
       Call.INTO,
-      REFUSED +
-        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", ArrayList.class.getName()) +
-        LEFT +
-        "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
+      REFUSED + "rejected b" + LEFT + "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
     ),
     new ContainerRow(
       "a collection with no adder under the adders strategy",

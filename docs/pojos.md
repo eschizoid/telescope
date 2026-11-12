@@ -130,9 +130,11 @@ does, except that each collection property a field of its name stores is filled 
 method taking the collection's element, which is how an entity wires the back-reference of a bidirectional association,
 and the collection needs no setter. `into` clears the collection the target holds and then calls the adder for each
 element. The value `forward` builds for `into` to read from runs none of its adders, so each adder runs once per
-element, on the target, and an adder that changes or drops an element gives the target what `forward` would. A class
-with such a collection and no adder for it is refused by the property's name when the mapper is built, and at compile
-time on a `@Bridge` field and in the verifier.
+element, on the target, and an adder that changes or drops an element gives the target what `forward` would. An adder
+that rejects an element by throwing has its exception thrown on, once the held collection has its elements back: the
+setter never writes the collection past the adder's check and wiring. A class with such a collection and no adder for it
+is refused by the property's name when the mapper is built, and at compile time on a `@Bridge` field and in the
+verifier.
 
 ```java
 public class OrderEntity {

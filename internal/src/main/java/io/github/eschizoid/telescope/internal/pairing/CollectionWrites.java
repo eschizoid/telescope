@@ -83,6 +83,39 @@ public final class CollectionWrites<T> {
   }
 
   /**
+   * What {@code into} does once a refill has failed and the held container has its elements back.
+   */
+  public enum AfterFailedRefill {
+    /** Write the converted value through the setter: the container refused the change. */
+    SET,
+    /**
+     * Refuse the call by the property's name: the container refused the change and nothing else can
+     * write it.
+     */
+    REFUSE,
+    /**
+     * Let what the adder threw go: the adder rejected an element, and writing the collection
+     * through the setter would bypass the check and the wiring the adder does.
+     */
+    RETHROW,
+  }
+
+  /**
+   * What {@code into} does once a refill has failed, from where the failure came from. An adder
+   * that throws is rejecting an element, which no other write may override, so its exception goes
+   * to the caller. A container that throws, from its own {@code clear}, {@code add} or {@code put}
+   * on a refill no adder takes part in, cannot hold the converted elements, so the setter writes
+   * them where there is one, and the call is refused by name where there is none.
+   *
+   * @param adderThrew whether the exception came from the adder
+   * @param setter whether the target class has a setter for the property
+   */
+  public static AfterFailedRefill afterFailedRefill(final boolean adderThrew, final boolean setter) {
+    if (adderThrew) return AfterFailedRefill.RETHROW;
+    return setter ? AfterFailedRefill.SET : AfterFailedRefill.REFUSE;
+  }
+
+  /**
    * Whether {@link BeanWriteStrategy#ADDERS} fills a property declared as {@code declared} through
    * an adder: a {@code Collection}. A map has no single element to add and is written as any other
    * property is.

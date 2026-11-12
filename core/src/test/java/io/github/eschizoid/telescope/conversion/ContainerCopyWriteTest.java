@@ -284,27 +284,29 @@ class ContainerCopyWriteTest {
     }
 
     @Test
-    @DisplayName("an adder that refuses with no setter puts the held elements back and refuses by name")
-    void aRefusingAdderPutsTheElementsBack() {
-      final var owner = new Owner();
-      final var held = new ArrayList<Object>(List.of("held"));
-      final BiConsumer<Owner, Object> closed = (target, element) -> {
-        throw new UnsupportedOperationException("closed");
-      };
-      final var thrown = assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.fill("S", "T", owner, "lines", held, List.of("a"), closed, false)
-      );
-      assertEquals(unwritable(owner, "lines", held), thrown.getMessage());
-      assertEquals(List.of("held"), held);
+    @DisplayName("an adder that rejects an element has its exception thrown on, with the held elements put back")
+    void aRejectingAdderIsThrownOn() {
+      for (final var setter : List.of(true, false)) {
+        final var held = new ArrayList<Object>(List.of("held"));
+        final var rejection = new IllegalArgumentException("rejected b");
+        final BiConsumer<Owner, Object> checking = (target, element) -> {
+          if ("b".equals(element)) throw rejection;
+          held.add(element);
+        };
+        final var thrown = assertThrows(IllegalArgumentException.class, () ->
+          ContainerCopy.fill("S", "T", new Owner(), "lines", held, List.of("a", "b"), checking, setter)
+        );
+        assertSame(rejection, thrown, "setter " + setter);
+        assertEquals(List.of("held"), held, "setter " + setter);
+      }
     }
 
     @Test
-    @DisplayName("an adder that refuses with a setter leaves the property to the setter")
-    void aRefusingAdderWithASetterGoesToTheSetter() {
-      final BiConsumer<Owner, Object> closed = (target, element) -> {
-        throw new UnsupportedOperationException("closed");
-      };
-      assertFalse(ContainerCopy.fill("S", "T", new Owner(), "lines", new ArrayList<>(), List.of("a"), closed, true));
+    @DisplayName("a held collection whose own clear throws still goes to the setter where an adder fills it")
+    void aContainerThatCannotClearStillGoesToTheSetter() {
+      final var fixed = Arrays.<Object>asList("held");
+      assertFalse(ContainerCopy.fill("S", "T", new Owner(), "lines", fixed, List.of("a"), ADD, true));
+      assertEquals(List.of("held"), fixed);
     }
   }
 
