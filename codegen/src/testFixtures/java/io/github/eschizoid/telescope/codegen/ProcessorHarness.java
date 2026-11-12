@@ -78,10 +78,32 @@ public final class ProcessorHarness {
     return run(processors, extraOptions, false, sources);
   }
 
+  /**
+   * Same as {@link #compileFully}, with {@code options} as the whole command line: no {@code
+   * -Xlint} flags are added, so the compiler warns as it does by default.
+   */
+  public static Compilation compileFullyWithOnly(
+    final List<? extends Processor> processors,
+    final List<String> options,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, options, false, false, sources);
+  }
+
   private static Compilation run(
     final List<? extends Processor> processors,
     final List<String> extraOptions,
     final boolean procOnly,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, extraOptions, procOnly, true, sources);
+  }
+
+  private static Compilation run(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final boolean procOnly,
+    final boolean lint,
     final JavaFileObject... sources
   ) {
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
@@ -97,9 +119,9 @@ public final class ProcessorHarness {
     // -proc:only runs annotation processing without emitting .class files (nothing leaks into the
     // working tree, no read-back compile round); the full pipeline routes class output into the
     // capturing manager's in-memory sink instead. The -Xlint flags mirror the build.
-    final var options = new ArrayList<>(
-      procOnly ? List.of("-proc:only", "-Xlint:all,-processing") : List.of("-Xlint:all,-processing")
-    );
+    final var options = new ArrayList<String>();
+    if (procOnly) options.add("-proc:only");
+    if (lint) options.add("-Xlint:all,-processing");
     options.addAll(extraOptions);
     final JavaCompiler.CompilationTask task = compiler.getTask(
       null,

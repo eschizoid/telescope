@@ -192,6 +192,24 @@ public final class LambdaIntrospection {
   }
 
   /**
+   * The name of the type the method a Serializable method reference names returns, without loading
+   * it: a primitive's name ({@code int}), or a class's binary name ({@code java.time.LocalDate}).
+   * Where the method returns {@code Object}, as one returning a type variable erases, this is the
+   * class the reference's instantiation types the result as. Null for an array or {@code void}.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   */
+  public static String returnedNameOf(final Serializable lambda) {
+    final var metadata = CACHE.get(lambda.getClass()).get(lambda);
+    final var descriptor = metadata.implSignature();
+    final var type = descriptor.substring(descriptor.indexOf(')') + 1);
+    if (type.startsWith("[") || type.equals("V")) return null;
+    if (!type.startsWith("L")) return MethodType.fromMethodDescriptorString("()" + type, null).returnType().getName();
+    final var name = type.substring(1, type.length() - 1).replace('/', '.');
+    return name.equals("java.lang.Object") && metadata.returnName() != null ? metadata.returnName() : name;
+  }
+
+  /**
    * The class a Serializable method reference's instantiation says it returns, where that is
    * narrower than {@code declared}, the class the referenced method returns; null where every value
    * of {@code declared} is an instance of it. For {@code Box::value} passed where an {@code

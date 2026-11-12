@@ -6,12 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.math.BigDecimal;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -20,6 +22,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -320,6 +325,376 @@ class BridgeFieldTest {
   }
 
   @Test
+  @DisplayName(
+    "a field reading the source through a path into a target path runs its generated bridge, giving what the" +
+      " runtime mapper gives"
+  )
+  void aFieldWithAPathOnBothSidesRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathOrder.class, PathShipped.class,\n" +
+      "      to(Telescope.path(PathOrder::customer, PathCustomer::city)," +
+      " Telescope.of(PathShipped.class).field(PathShipped::place).field(PathPlace::city)));\n";
+    final var c = compile(
+      sources(
+        "fb.PathCustomer",
+        "package fb; public record PathCustomer(String city, String town) {}",
+        "fb.PathOrder",
+        "package fb; public record PathOrder(PathCustomer customer, int qty) {}",
+        "fb.PathPlace",
+        "package fb; public record PathPlace(String city) {}",
+        "fb.PathShipped",
+        "package fb; public record PathShipped(PathPlace place, int qty) {}",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathOrder, PathShipped> ORDER = " +
+          rows +
+          "  public static Mapper<PathOrder, PathShipped> runtime() { return Built.ORDER; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER + "final class Built {\n" + "  static final Mapper<PathOrder, PathShipped> ORDER = " + rows + "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.PathOrderToPathShippedBridge"), c.generated()::toString);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "ORDER");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var customer = loader.loadClass("fb.PathCustomer").getConstructors()[0].newInstance("Paris", "Rome");
+      final var order = loader.loadClass("fb.PathOrder").getConstructors()[0].newInstance(customer, 3);
+      assertEquals(runtime.forward(order), generated.forward(order));
+      final var nested = generated.forward(order);
+      assertEquals("PathShipped[place=PathPlace[city=Paris], qty=3]", nested.toString());
+      assertEquals(runtime.backward(nested), generated.backward(nested));
+      assertEquals(runtime.patch(order, nested), generated.patch(order, nested));
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a field with when(...) rows and a predicate toOrElse runs its generated bridge, giving what the runtime gives"
+  )
+  void aFieldWithConditionalRowsRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.mapper(PathFlat.class, PathNested.class,\n" +
+      "      when(PathGates::open, to(PathFlat::city," +
+      " Telescope.of(PathNested.class).field(PathNested::customer).field(PathPlace::city))),\n" +
+      "      when(PathGates::open, constant(PathNested::label, \"open\")),\n" +
+      "      toOrElse(PathFlat::note, PathNested::note, \"none\", String::isBlank));\n";
+    final var c = compile(
+      sources(
+        "fb.PathPlace",
+        "package fb; public record PathPlace(String city) {}",
+        "fb.PathFlat",
+        "package fb; public record PathFlat(String city, String note, int qty) {}",
+        "fb.PathNested",
+        "package fb; public record PathNested(PathPlace customer, String label, String note, int qty) {}",
+        "fb.PathGates",
+        "package fb; public final class PathGates { public static boolean open(final PathFlat f) { return f.qty() > 0; } }",
+        "fb.PathMappers",
+        HEADER +
+          "public final class PathMappers {\n" +
+          "  @Bridge public static final Mapper<PathFlat, PathNested> NESTED = " +
+          rows +
+          "  public static Mapper<PathFlat, PathNested> runtime() { return Built.NESTED; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER + "final class Built {\n" + "  static final Mapper<PathFlat, PathNested> NESTED = " + rows + "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.PathMappers", "NESTED");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader.loadClass("fb.PathMappers").getMethod("runtime").invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      for (final var qty : new int[] { 3, 0 }) {
+        final var flat = loader.loadClass("fb.PathFlat").getConstructors()[0].newInstance("Paris", " ", qty);
+        assertEquals(runtime.forward(flat), generated.forward(flat));
+        final var nested = generated.forward(flat);
+        assertEquals(runtime.backward(nested), generated.backward(nested));
+        assertEquals(runtime.patch(flat, nested), generated.patch(flat, nested));
+      }
+      final var open = loader.loadClass("fb.PathFlat").getConstructors()[0].newInstance("Paris", " ", 3);
+      assertEquals(
+        "PathNested[customer=PathPlace[city=Paris], label=open, note=none, qty=3]",
+        generated.forward(open).toString()
+      );
+    }
+  }
+
+  @Test
+  @DisplayName(
+    "a when(...) row filling a bean no source property fills is refused by name, since its default is a bean"
+  )
+  void aGatedRowFillingAnUnpairedBeanIsRefused() {
+    final var c = compile(
+      sources(
+        "fb.GateBox",
+        "package fb; public class GateBox { private String v; public String getV() { return v; }" +
+          " public void setV(final String v) { this.v = v; } }",
+        "fb.GateSrc",
+        "package fb; public record GateSrc(String a) {}",
+        "fb.GateTgt",
+        "package fb; public record GateTgt(String a, GateBox box) {}",
+        "fb.GateHelp",
+        "package fb; public final class GateHelp { public static boolean no(final GateSrc s) { return false; }" +
+          " public static GateBox box() { return new GateBox(); } }",
+        "fb.GateMappers",
+        HEADER +
+          "public final class GateMappers {\n" +
+          "  @Bridge public static final ForwardMapper<GateSrc, GateTgt> GATED = Telescope.mapperForward(" +
+          "GateSrc.class, GateTgt.class, when(GateHelp::no, compute(GateTgt::box, GateHelp::box)));\n" +
+          "}\n"
+      )
+    );
+    assertFalse(c.success(), "the row must be refused");
+    assertTrue(
+      c.hasError("when(...) gates a row filling 'box', which no source property of its name fills"),
+      c::errorMessages
+    );
+  }
+
+  @Test
+  @DisplayName("a merge field's mapper runs its generated bridge forward, and refuses backward as the runtime does")
+  void aMergeFieldRunsItsGeneratedBridge() throws Exception {
+    final var rows =
+      "Telescope.merge(MergedProfile.class,\n" +
+      "      io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class),\n" +
+      "      io.github.eschizoid.telescope.mapping.MergeStep.from(MergedAudit::by, MergedProfile::by));\n";
+    final var c = compile(
+      sources(
+        "fb.MergedCustomer",
+        "package fb; public record MergedCustomer(String id, String name) {}",
+        "fb.MergedAudit",
+        "package fb; public record MergedAudit(String by) {}",
+        "fb.MergedProfile",
+        "package fb; public record MergedProfile(String id, String name, String by) {}",
+        "fb.MergeMappers",
+        HEADER +
+          "public final class MergeMappers {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> PROFILE = " +
+          rows +
+          "  public static Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> runtime() { return Built.PROFILE; }\n" +
+          "}\n",
+        "fb.Built",
+        HEADER +
+          "final class Built {\n" +
+          "  static final Mapper<io.github.eschizoid.telescope.Sources, MergedProfile> PROFILE = " +
+          rows +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    assertTrue(c.generated().containsKey("fb.SourcesToMergedProfileBridge"), c.generated()::toString);
+    // A merge converts forward only from the bag, so the target gains no Mappings method back to
+    // it.
+    assertFalse(c.generated().containsKey("fb.MergedProfileMappings"), () -> c.generated().keySet().toString());
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var generated = (Mapper<Object, Object>) field(loader, "fb.MergeMappers", "PROFILE");
+      @SuppressWarnings("unchecked")
+      final var runtime = (Mapper<Object, Object>) loader
+        .loadClass("fb.MergeMappers")
+        .getMethod("runtime")
+        .invoke(null);
+      assertEquals(OpticNode.Runs.GENERATED, generated.explain().declared().orElseThrow().runs());
+      assertTrue(runtime.explain().declared().isEmpty());
+      final var customer = loader.loadClass("fb.MergedCustomer").getConstructors()[0].newInstance("c-1", "Ada");
+      final var audit = loader.loadClass("fb.MergedAudit").getConstructors()[0].newInstance("sys");
+      final var sources = Sources.of(customer, audit);
+      assertEquals(runtime.forward(sources), generated.forward(sources));
+      assertEquals("MergedProfile[id=c-1, name=Ada, by=sys]", generated.forward(sources).toString());
+      final var profile = generated.forward(sources);
+      final var fromGenerated = assertThrows(UnsupportedOperationException.class, () -> generated.backward(profile));
+      final var fromRuntime = assertThrows(UnsupportedOperationException.class, () -> runtime.backward(profile));
+      assertEquals(fromRuntime.getMessage(), fromGenerated.getMessage());
+    }
+  }
+
+  @ParameterizedTest(name = "{1}")
+  @MethodSource("mergeRefusals")
+  @DisplayName("a merge field the generated bridge cannot build is refused by name")
+  void aMergeTheBridgeCannotBuildIsRefused(final String target, final String args, final String message) {
+    final var c = compile(
+      sources(
+        "fb.MergedCustomer",
+        "package fb; public record MergedCustomer(String id, String name) {}",
+        "fb.MergedTarget",
+        "package fb; " + target,
+        "fb.MergeMappers",
+        HEADER +
+          "import static io.github.eschizoid.telescope.mapping.MergeStep.*;\n" +
+          "public final class MergeMappers {\n" +
+          "  static final Class<MergedCustomer> CUSTOMER = MergedCustomer.class;\n" +
+          "  static final io.github.eschizoid.telescope.mapping.MergeStep<MergedTarget> STEP = auto(MergedCustomer.class);\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedTarget> TARGET =" +
+          " Telescope.merge(" +
+          args +
+          ");\n}\n",
+        "fb.OtherMerge",
+        HEADER +
+          "public final class OtherMerge {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, MergedTarget> TARGET =" +
+          " Telescope.merge(MergedTarget.class," +
+          " io.github.eschizoid.telescope.mapping.MergeStep.auto(MergedCustomer.class));\n}\n"
+      )
+    );
+    assertFalse(c.success(), "the merge must be refused");
+    assertTrue(c.hasError(message), c::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a merge's typed forward names each source by its class, kept clear of keywords and of each other")
+  void aMergesTypedForwardNamesEachSource() {
+    final var c = compile(
+      sources(
+        "fb.Default",
+        "package fb; public record Default(String id) {}",
+        "fb.Sources",
+        "package fb; public record Sources(String name) {}",
+        "fb.a.Item",
+        "package fb.a; public record Item(String sku) {}",
+        "fb.b.Item",
+        "package fb.b; public record Item(String count) {}",
+        "fb.Named",
+        "package fb; public record Named(String id, String name, String sku, String count) {}",
+        "fb.NamedMappers",
+        HEADER +
+          "import static io.github.eschizoid.telescope.mapping.MergeStep.*;\n" +
+          "public final class NamedMappers {\n" +
+          "  @Bridge public static final Mapper<io.github.eschizoid.telescope.Sources, Named> NAMED = Telescope.merge(" +
+          "Named.class, auto(Default.class), auto(fb.Sources.class), auto(fb.a.Item.class), auto(fb.b.Item.class));\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var bridge = c.generated().get("fb.SourcesToNamedBridge");
+    assertTrue(
+      bridge.contains(
+        "forward(final fb.Default defaultSource, final fb.Sources sourcesSource, final fb.a.Item item," +
+          " final fb.b.Item item3)"
+      ),
+      bridge
+    );
+  }
+
+  static List<String[]> mergeRefusals() {
+    final var record = "public record MergedTarget(String id) {}";
+    return List.of(
+      new String[] {
+        "public class MergedTarget { public String getId() { return null; } public void setId(String v) {} }",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge builds a public record, and MergedTarget is not one",
+      },
+      new String[] {
+        "record MergedTarget(String id) {}",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge builds a public record, and MergedTarget is not one",
+      },
+      new String[] {
+        "public record MergedTarget<T>(String id) {}",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge builds a record that declares no type parameters",
+      },
+      new String[] {
+        "public record MergedTarget(String id, int count) {}",
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "a @Bridge merge writes no row into the primitive component 'count' of MergedTarget",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, from(MergedCustomer::id, (MergedTarget t) -> t.id())",
+        "a @Bridge merge compiles from(...) of two method references",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, STEP",
+        "a @Bridge merge compiles only rows written in place as MergeStep.from",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, auto(CUSTOMER)",
+        "a @Bridge merge compiles auto(...) of a class literal",
+      },
+      new String[] {
+        "public record MergedTarget(Integer id) {}",
+        "MergedTarget.class, MergeStep.<MergedCustomer, MergedTarget, Object>from(MergedCustomer::id, MergedTarget::id)",
+        "the merge row at index 0 reads java.lang.String, which the component 'id' of MergedTarget does not hold",
+      },
+      new String[] {
+        record,
+        "MergedTarget.class, auto(MergedCustomer.class)",
+        "declares a second merge into MergedTarget in package 'fb', whose bridge SourcesToMergedTargetBridge another" +
+        " field already declares",
+      }
+    );
+  }
+
+  @Test
+  @DisplayName("a generated number row formats and parses on many threads at once, each call through its own copy")
+  void aGeneratedNumberRowIsSafeAcrossThreads() throws Exception {
+    final var c = compile(
+      sources(
+        "fb.Priced",
+        "package fb; public record Priced(java.math.BigDecimal total) {}",
+        "fb.PricedDto",
+        "package fb; public record PricedDto(String total) {}",
+        "fb.Prices",
+        HEADER +
+          "public final class Prices {\n" +
+          "  @Bridge public static final Mapper<Priced, PricedDto> DTO = Telescope.mapper(Priced.class," +
+          " PricedDto.class, toFormattedNumber(Priced::total, PricedDto::total, \"$#,##0.00\"," +
+          " java.util.Locale.US));\n" +
+          "}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    // A DecimalFormat shared between threads is not observed to race while it formats, only while
+    // it parses, so the copy forward makes is held by the generated method's own text as well.
+    final var fn = c.generated().get("fb.PricedToPricedDtoBridgeTotalFn");
+    final var forward = fn.substring(fn.indexOf(" forward("), fn.indexOf(" backward("));
+    assertTrue(forward.contains("((java.text.DecimalFormat) FORMAT.clone()).format(v)"), forward);
+    try (final var loader = load(c)) {
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) field(loader, "fb.Prices", "DTO");
+      assertEquals(OpticNode.Runs.GENERATED, mapper.explain().declared().orElseThrow().runs());
+      final var text = loader.loadClass("fb.PricedDto").getConstructor(String.class);
+      final var priced = loader.loadClass("fb.Priced").getConstructor(BigDecimal.class);
+      final var total = loader.loadClass("fb.Priced").getMethod("total");
+      final var written = loader.loadClass("fb.PricedDto").getMethod("total");
+      final var start = new CountDownLatch(1);
+      try (final var pool = Executors.newFixedThreadPool(8)) {
+        final var calls = new ArrayList<Future<?>>();
+        for (var t = 0; t < 8; t++) {
+          final var base = t * 1_000_000L;
+          calls.add(
+            pool.submit(() -> {
+              start.await();
+              for (var i = 0; i < 20_000; i++) {
+                final var value = BigDecimal.valueOf(base + i, 2);
+                final var expected = String.format(Locale.US, "$%,.2f", value);
+                assertEquals(expected, written.invoke(mapper.forward(priced.newInstance(value))));
+                assertEquals(value, total.invoke(mapper.backward(text.newInstance(expected))));
+              }
+              return null;
+            })
+          );
+        }
+        start.countDown();
+        for (final var call : calls) {
+          call.get();
+        }
+      }
+    }
+  }
+
+  @Test
   @DisplayName("without the processor, the same field builds the runtime mapper from its rows")
   void withoutTheProcessorTheFieldBuildsTheRuntimeMapper() throws Exception {
     final var c = ProcessorHarness.compileFully(
@@ -361,10 +736,81 @@ class BridgeFieldTest {
       },
       new String[] { "Rows.ID", "a @Bridge mapper compiles only rows written in place as a Mapping factory call" },
       new String[] {
+        "toFormattedNumber(User::id, UserDto::kind, Rows.PATTERN)",
+        "a @Bridge mapper takes the pattern of a toFormattedNumber row as a string constant",
+      },
+      new String[] {
+        "toFormattedNumber(User::id, UserDto::kind, \"0\", java.util.Locale.of(\"de\"))",
+        "a @Bridge mapper takes the locale of a toFormattedNumber row as a static final field",
+      },
+      new String[] { "toFormatted(User::address, UserDto::kind, \"yyyy\")", "toFormatted" },
+      new String[] {
         "constant(UserDto::kind, String.valueOf(1))",
         "a value in a @Bridge mapper must be a literal or an enum constant",
       },
-      new String[] { "when(User::isAdmin, drop(User::secret))", "when(...) has no generated form yet" },
+      new String[] { "when(User::isAdmin, drop(User::secret))", PairingMessages.whenWrapsOnly("Drop", "secret", null) },
+      new String[] {
+        "when(User::isAdmin, to(User::name, UserDto::name))",
+        PairingMessages.whenWrapsOnly("SameTypedTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, toOneWay(User::name, UserDto::name, Conv::trim))",
+        PairingMessages.whenWrapsOnly("ForwardOnlyTransformTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, Rows.ID)",
+        "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call",
+      },
+      new String[] {
+        "when(User::isAdmin, Rows.make())",
+        "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call",
+      },
+      new String[] {
+        "when(User::isAdmin, to(User::name, UserDto::name, Conv::trim, Conv::pad))",
+        PairingMessages.whenWrapsOnly("TypedTransformTo", "name", "name"),
+      },
+      new String[] {
+        "when(User::isAdmin, toOrElse(User::nick, UserDto::nick, \"a\"))",
+        PairingMessages.whenWrapsOnly("TypedTransformTo", "nick", "nick"),
+      },
+      new String[] {
+        "when(User::isAdmin, via(User::address, UserDto::address, Rows.SAME))",
+        PairingMessages.whenWrapsOnly("Via", "address", "address"),
+      },
+      new String[] {
+        "when(User::isAdmin, via(User::address, UserDto::address, Conv.class))",
+        PairingMessages.whenWrapsOnly("ViaClass", "address", "address"),
+      },
+      new String[] {
+        "when(User::isAdmin, zip(Telescope.path(User::address, Address::city)," +
+        " Telescope.path(UserDto::address, Address::city)))",
+        "zip(...) has no generated form yet",
+      },
+      new String[] {
+        "when(Rows.pred(), constant(UserDto::kind, \"a\"))",
+        "a @Bridge mapper tests a predicate written as a method reference",
+      },
+      new String[] {
+        "when(HIDDEN_TEST, constant(UserDto::kind, \"a\"))",
+        "Mappers.HIDDEN_TEST cannot be called from the generated bridge in package 'fb'",
+      },
+      new String[] {
+        "when(Mappers::secretly, constant(UserDto::kind, \"a\"))",
+        "Mappers.secretly cannot be called from the generated bridge in package 'fb'",
+      },
+      new String[] {
+        "to(Telescope.path(UserDto::handle, Handle::value), Telescope.path(UserDto::handle, Handle::value))",
+        "this path starts at UserDto, which is not User or a class it extends",
+      },
+      new String[] {
+        "when(User::isAdmin, when(User::isAdmin, constant(UserDto::kind, \"a\")))",
+        PairingMessages.whenNested(),
+      },
+      new String[] { "when(Rows.OPEN, constant(UserDto::kind, \"a\"))", "OPEN is not static and final" },
+      new String[] {
+        "when(User::isAdmin, constant(Telescope.of(UserDto.class).field(UserDto::kind), \"a\"))",
+        "a telescope path or another expression has no generated form yet",
+      },
       new String[] {
         "to(Telescope.of(User.class).field(User::address).field(a -> a.city()), UserDto::kind)",
         "an inline lambda in a path can't be compiled into the generated bridge",
@@ -395,8 +841,8 @@ class BridgeFieldTest {
         "filter(...) in a path has no generated form",
       },
       new String[] {
-        "to(Telescope.path(User::address, Address::city), Telescope.path(UserDto::address, Address::city))",
-        "a row whose source and target are both telescope paths has no generated form yet",
+        "to(Telescope.path(User::address, Address::city), Telescope.path(User::address, Address::city))",
+        "this path starts at User, which is not UserDto or a class it extends",
       },
       new String[] { "to(Rows.CITY, UserDto::kind)", "this argument is not such a path" },
       new String[] {
@@ -416,9 +862,10 @@ class BridgeFieldTest {
         "filter(...) in a path has no generated form",
       },
       new String[] {
-        "to(Telescope.of(User.class).field(User::address).field(Address::city)," +
-        " Telescope.of(UserDto.class).field(UserDto::address).field(Address::city))",
-        "a row whose source and target are both telescope paths has no generated form yet",
+        "to(Telescope.of(User.class).field(User::address).<Object>field(Address::city)," +
+        " Telescope.of(UserDto.class).<Object>field(UserDto::handle))",
+        "the path writes fb.Handle, which is not the java.lang.String the source path reads; end both paths at a" +
+        " property of one type",
       },
       new String[] {
         "to(User::email, UserDto::contact), to(Telescope.of(User.class).field(User::email), UserDto::contact)",
@@ -469,10 +916,7 @@ class BridgeFieldTest {
         "toOneWay(User::name, UserDto::name, Mappers::lower)",
         "Mappers.lower cannot be called from the generated bridge in package 'fb'",
       },
-      new String[] {
-        "toOrElse(User::nick, UserDto::nick, \"a\", String::isBlank)",
-        "toOrElse(...) with a predicate has no generated form yet",
-      },
+      new String[] { "toOrElse(User::nick, UserDto::nick, \"a\", Rows.OPEN)", "OPEN is not static and final" },
       new String[] {
         "constant(UserDto::kind, \"a\"), compute(UserDto::kind, Conv::region)",
         "duplicate override row for target field 'kind'",
@@ -525,6 +969,11 @@ class BridgeFieldTest {
           "  static java.util.function.Supplier<String> MUTABLE = () -> \"m\";\n" +
           "  @SuppressWarnings(\"rawtypes\") static final java.util.function.Supplier RAW = () -> 1;\n" +
           "  static final WriteHint.WriteStrategy STRATEGY = WriteHint.WriteStrategy.SETTERS;\n" +
+          "  static java.util.function.Predicate<Object> OPEN = o -> true;\n" +
+          "  static java.util.function.Predicate<Object> pred() { return o -> true; }\n" +
+          "  static Mapping<User, UserDto> make() { return ID; }\n" +
+          "  static final Mapper<Address, Address> SAME = Telescope.mapper(Address.class, Address.class);\n" +
+          "  static final String PATTERN = String.valueOf(\"0\");\n" +
           "}\n",
         "fb.Admin",
         "package fb; final class Admin { static boolean is(User u) { return false; } }",
@@ -540,7 +989,9 @@ class BridgeFieldTest {
           " Telescope.mapperForward(User.class, UserDto.class, " +
           rows.replace("User::isAdmin", "Admin::is") +
           ");\n  private static String lower(final String s) { return s; }\n" +
-          "  private static final java.util.function.Supplier<String> HIDDEN = () -> \"h\";\n}\n"
+          "  private static final java.util.function.Supplier<String> HIDDEN = () -> \"h\";\n" +
+          "  private static final java.util.function.Predicate<Object> HIDDEN_TEST = o -> true;\n" +
+          "  private static boolean secretly(final User u) { return true; }\n}\n"
       )
     );
     assertFalse(c.success(), "the row must be refused");
@@ -2484,7 +2935,7 @@ class BridgeFieldTest {
     return List.of(
       new String[] {
         "  @Bridge static final Telescope<User, UserDto> USER = Telescope.map(User.class, UserDto.class);",
-        "must be initialised by a Telescope.mapper(...) or Telescope.mapperForward(...)",
+        "must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)",
       },
       new String[] {
         "  @Bridge(UserDto.class) static final ForwardMapper<User, UserDto> USER =" +

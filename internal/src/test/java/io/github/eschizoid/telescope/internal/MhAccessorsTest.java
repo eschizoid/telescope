@@ -110,6 +110,33 @@ class MhAccessorsTest {
     assertEquals("err", thrown.getMessage());
   }
 
+  @Test
+  @DisplayName("biConsumer hands an array to a variable-arity setter of its own type as it is")
+  void biConsumerPassesAnArrayToAVariableAritySetterAsItIs() throws Throwable {
+    final var handle = LOOKUP.unreflect(Box.class.getMethod("setTags", String[].class));
+    final var box = new Box(0);
+    final var tags = new String[] { "a", "b" };
+    MhAccessors.biConsumer(handle).accept(box, tags);
+    assertSame(tags, box.getTags());
+  }
+
+  @Test
+  @DisplayName("biFunction hands an array to a fluent variable-arity setter of its own type as it is")
+  void biFunctionPassesAnArrayToAVariableAritySetterAsItIs() throws Throwable {
+    final var handle = LOOKUP.unreflect(Box.class.getMethod("withTags", String[].class));
+    final var box = new Box(0);
+    final var tags = new String[] { "a", "b" };
+    assertSame(box, MhAccessors.biFunction(handle).apply(box, tags));
+    assertSame(tags, box.getTags());
+  }
+
+  @Test
+  @DisplayName("function hands an array to a variable-arity static method of its own type as it is")
+  void functionPassesAnArrayToAVariableArityMethodAsItIs() throws Throwable {
+    final var handle = LOOKUP.unreflect(Box.class.getMethod("joined", String[].class));
+    assertEquals("a+b", MhAccessors.function(handle).apply(new String[] { "a", "b" }));
+  }
+
   /** Test fixture exposing a getter, void + fluent setters, a factory, and throwing methods. */
   @Test
   @DisplayName("an uninstantiable class reports as the same throwable from either substrate")
@@ -198,6 +225,25 @@ class MhAccessorsTest {
     public Box withName(final String name) {
       this.name = name;
       return this;
+    }
+
+    private String[] tags;
+
+    public String[] getTags() {
+      return tags;
+    }
+
+    public void setTags(final String... tags) {
+      this.tags = tags;
+    }
+
+    public Box withTags(final String... tags) {
+      this.tags = tags;
+      return this;
+    }
+
+    public static String joined(final String... parts) {
+      return String.join("+", parts);
     }
 
     public void boom() {

@@ -24,10 +24,10 @@ and the row names the workaround.
 | ------------------------- | ------------------------------------------------------------------- | :-----: | :-------: |
 | Core mapping              | [Implicit same-name mapping](#implicit-same-name-mapping)           |   ✅    |    ✅     |
 | Core mapping              | [Explicit rename](#explicit-rename)                                 |   ✅    |    ✅     |
-| Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ⚠️     |
-| Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ❌     |
+| Core mapping              | [Nested source path](#nested-source-path)                           |   ✅    |    ✅     |
+| Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️    |    ⚠️     |
 | Conversions               | [Implicit type conversions](#implicit-type-conversions)             |   ⚠️    |    ⚠️     |
-| Conversions               | [Format strings](#format-strings)                                   |   ⚠️    |    ⚠️     |
+| Conversions               | [Format strings](#format-strings)                                   |   ✅    |    ✅     |
 | Conversions               | [Expressions](#expressions)                                         |   ✅    |    ✅     |
 | Conversions               | [Constants and defaults](#constants-and-defaults)                   |   ✅    |    ✅     |
 | Collections & containers  | [Collection element mapping](#collection-element-mapping)           |   ✅    |    ✅     |
@@ -45,17 +45,16 @@ and the row names the workaround.
 | Policies & null handling  | [Unmapped-target policy](#unmapped-target-policy)                   |   ✅    |    ✅     |
 | Policies & null handling  | [Null value strategies](#null-value-strategies)                     |   ⚠️    |    ⚠️     |
 | Policies & null handling  | [Null check strategy](#null-check-strategy)                         |   ⚠️    |    ⚠️     |
-| Policies & null handling  | [Conditional mapping](#conditional-mapping)                         |   ⚠️    |    ❌     |
+| Policies & null handling  | [Conditional mapping](#conditional-mapping)                         |   ⚠️    |    ⚠️     |
 | Advanced                  | [Config inheritance](#config-inheritance)                           |   ⚠️    |    ⚠️     |
 | Advanced                  | [Decorators](#decorators)                                           |   ✅    |    ✅     |
 | Advanced                  | [DI component models](#di-component-models)                         |   ✅    |    ✅     |
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 13 ✅ · 16 ⚠️ · 0 ❌ · Generated: 12 ✅ · 15 ⚠️ · 2 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 14 ✅ · 15 ⚠️ · 0 ❌ · Generated: 14 ✅ · 15 ⚠️ · 0 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
-generated path has no form for a mapper over several sources or for a conditional row, and each of those two rows names
-the workaround.
+generated path scores at least as high as the runtime on every row.
 
 ## Core mapping
 
@@ -164,7 +163,7 @@ generated bridge cannot express is refused by name' (the `to(Address::city, Addr
 
 ### Nested source path
 
-**Runtime: ✅ full** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(source = "customer.address.city", target =
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(source = "customer.address.city", target =
 "city") — dotted path into nested source
 
 **telescope:**
@@ -199,12 +198,14 @@ A path through `field` steps alone reads a null object on the way as the leaf's 
 builds a null object unless the value is null: a source path writes back on `backward` and `patch`, a target path on
 `forward`.
 
-**Generated path:** partial, because nested -> nested has no generated form. A source path into a target property, and a
-source property into a target path, written in place from `Telescope.of` or `Telescope.ofBean`, or as
-`Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads and direct
-calls to each class's accessors and write strategy, and handle a null object on the way as the runtime does. A row with
-a path on both sides is refused with "a row whose source and target are both telescope paths has no generated form yet".
-A path held in a variable, a generated navigator (the `OrderTelescope.of()` form above), a step other than `field`
+**Generated path:** full, all three shapes. A source path into a target property, a source property into a target path,
+and a row with a path on both sides, each path written in place from `Telescope.of` or `Telescope.ofBean`, or as
+`Telescope.path(...)`, which generates the same code as that chain, compile into a null-safe chain of reads, each object
+read once, and direct calls to each class's accessors and write strategy, and handle a null object on the way as the
+runtime does. A row with a path on both sides reads through the one and writes through the other in each direction the
+mapper converts, after the other paths through the same first property in the order the rows came, and takes no part in
+`patch`, on both paths. Its two paths end at a property of one type, or the row is refused by name. A path held in a
+variable, a generated navigator (the `OrderTelescope.of()` form above, tracked separately), a step other than `field`
 (`filter`, `then`, `fieldByName`) and a lambda step are refused on the row by name. A mapper that writes through a path
 refuses one through a class no write strategy builds, on both paths in the same words.
 
@@ -217,16 +218,18 @@ telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Te
 core/src/test/java/io/github/eschizoid/telescope/NestedSourcePathTest.java and NestedTargetPathTest.java;
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a row reading the
 source through a path converts the same way on both paths, a null object on the way included' and 'a row writing a
-source property into the target through a path converts the same way on both paths, a null object on the way included';
+source property into the target through a path converts the same way on both paths, a null object on the way included'
+and 'a row with a path on both sides converts the same way on both paths, a null object on either side included';
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `steps` (the paths a field compiles, and the
-refusal of every other step) and `read` of a `to` row (a path on both sides refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a row the generated bridge
-cannot express is refused by name' (the path cases);
+refusal of every other step) and `pathToPath` (a path on both sides, and the refusal of two paths ending at different
+types); codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a row the generated
+bridge cannot express is refused by name' (the path cases) and 'a field reading the source through a path into a target
+path runs its generated bridge, giving what the runtime mapper gives';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/PathShorthandBridgeTest.java</sub>
 
 ### Multiple source parameters
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one
 target built from several sources
 
 **telescope:**
@@ -252,11 +255,19 @@ compile time like toDto(Customer, Address); (2) each source must have a distinct
 (MapStruct disambiguates by parameter name) require pre-aggregating into a holder record; (3) forward-only:
 backward()/patch() throw (MapStruct multi-source is also inherently one-way, so this is minor).
 
-**Generated path:** missing. `Telescope.merge` has no generated form: a `@Bridge` field must be initialised by a
-`Telescope.mapper(...)` or `Telescope.mapperForward(...)` call written in place, and any other initializer is refused
-with that message. The workaround is a record holding the sources, as the source of a `mapperForward` field whose rows
-read each source through a path (`to(path(ProfileSources::audit, Audit::createdBy), Profile::createdBy)`); that keeps
-the call typed, at the cost of one row per property where `merge` backfills by name.
+**Generated path:** partial, and closer to MapStruct's typed signature than the runtime. A `@Bridge` field initialised
+by the `Telescope.merge(...)` call above written in place compiles into a bridge with a typed
+`forward(Customer customer, Audit audit)`, its parameters in the order the rows first name their classes, and a
+`forward(Sources)` the field's mapper calls, so `forward(Sources.of(customer, audit))` builds the same target on both
+paths. Each component is decided as the runtime decides it: a `from` row binds the component it names, and an `auto` row
+each component of a name its source has that no row before it binds, so where two sources carry one name the first
+`auto` fills it. Two rows binding one component, a row naming no component and an `auto` match of two types are refused
+when the field is compiled, in the words the runtime refuses them with when the mapper is built, and a missing source
+fails `forward` in the runtime's words, at the same component. The generated path's own limits: the target is a public
+record declaring no type parameters, a bean target is refused by name, and so are a primitive component no row binds and
+a `from` row reading a type its component does not hold (possible when javac infers the row's shared type as a supertype
+of both), each of which the runtime path accepts and then fails to construct on every `forward`, the second with "Failed
+to construct". Like the runtime merge, it is forward only.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
 javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;
@@ -265,10 +276,16 @@ rows) and `auto(Class)` (same-name backfill); core/src/test/java/io/github/eschi
 'forward assembles a target from two sources, class inference picks each slot', '3-source forward — same factory shape,
 just more rows', '5-source forward — same factory, 5 sources, 5 rows', and 'forward called with a Sources bag missing
 one of the row source classes throws naming the class' (IllegalStateException at forward time);
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `read` (an initializer other than a
-`Telescope.mapper` or `mapperForward` call refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a field that is not static
-final, or not a mapper call, is refused by name'</sub>
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `merged` (the rows a merge field compiles);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `emitMerge` (each component decided as
+the runtime merge decides it);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, the `merge*` messages both
+paths refuse and fail with; codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the
+test 'a merge on a @Bridge field builds the same target on both paths, typed or from the bag, and refuses alike';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a merge field's mapper runs
+its generated bridge forward, and refuses backward as the runtime does' and 'a merge field the generated bridge cannot
+build is refused by name'; benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/MergeBenchmark.java,
+`bridgeField` and `bridgeTyped` against `handBag` and `handMerge`</sub>
 
 ## Conversions
 
@@ -313,7 +330,9 @@ example `'total' got "12x", not a BigDecimal`, the same message on both paths. T
 
 What stays explicit: narrowing (`long` to `int`, `double` to `float`, `double` to `BigDecimal`, which has no NaN or
 infinity), and dates and times against a `String`, which need a format. Each is refused when the mapper is built, or at
-compile time on `@Bridge`, with a message naming the `to(source, target, forward, backward)` row that converts it.
+compile time on `@Bridge`, with a message naming the row that converts it: `toFormatted(source, target, pattern)` for a
+date or a time written into a `String` (see [Format strings](#format-strings)), and
+`to(source, target, forward, backward)` for the others.
 
 **Generated path:** partial for the same reason as the runtime path. The bridge decides each pair through the same
 `PairingRules`, so it converts and refuses the same pairs; the `to(source, target, forward, backward)` row that converts
@@ -335,49 +354,74 @@ core/src/test/java/io/github/eschizoid/telescope/BuiltInConversionTest.java; doc
 
 ### Format strings
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Mapping(numberFormat = "$#.00") /
-@Mapping(dateFormat = "dd.MM.yyyy") — annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code for
-both directions.
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** @Mapping(numberFormat = "$#.00") / @Mapping(dateFormat =
+"dd.MM.yyyy") — annotation attribute, MapStruct generates DecimalFormat/DateTimeFormatter code for both directions.
 
 **telescope:**
 
 ```java
-private static final DateTimeFormatter D = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+// Both directions: forward formats, backward and patch parse the text back.
+Telescope.mapper(Order.class, OrderDto.class,
+    toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy"),
+    toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00"),
+    toFormatted(Order::placedAt, OrderDto::placedAt, "yyyy-MM-dd HH:mm", ZoneOffset.UTC)); // an Instant needs a zone
 
-// toOneWay rows need mapperForward; Telescope.mapper refuses them at build time
-Telescope.mapperForward(Order.class, OrderDto.class,
-    to(Order::shipDate, OrderDto::shipDateText, D::format, s -> LocalDate.parse(s, D)), // parse leg serves a Mapper
-    toOneWay(Order::createdAt, OrderDto::createdAtIso, Instant::toString));             // forward-only
+// Forward only, for a pattern that does not read back:
+Telescope.mapperForward(Order.class, OrderView.class,
+    toFormattedOneWay(Order::shipDate, OrderView::month, "MMMM yyyy"));
 
-// Codegen (@Bridge field) form — the formatter is a static helper named by method reference:
-public record UserEntity(String id, Instant expiresAt) {
+// Codegen (@Bridge field) form, the same rows:
+public record Order(LocalDate shipDate, BigDecimal total) {
   @Bridge
-  static final ForwardMapper<UserEntity, UserDto> DTO = Telescope.mapperForward(
-    UserEntity.class,
-    UserDto.class,
-    toOneWay(UserEntity::expiresAt, UserDto::expiresAt, DateHelpers::expiry)
-  );
+  static final Mapper<Order, OrderDto> DTO = Telescope.mapper(Order.class, OrderDto.class,
+    toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy"),
+    toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00", Locale.US));
 }
 ```
 
-No format-string attribute exists anywhere — no numberFormat/dateFormat analog, and a repo-wide grep finds no
-DecimalFormat/DateTimeFormatter machinery in main code. The use case is fully achievable with a typed transform row
-holding your own formatter (compile-checked, refactor-safe, arguably safer than a stringly pattern), but the migrator
-hand-writes the formatter and, for bidirectional number formats, the parse leg including checked-exception handling that
-MapStruct generates.
+`toFormatted` writes a `LocalDate`, `LocalTime`, `LocalDateTime`, `OffsetDateTime`, `OffsetTime`, `ZonedDateTime`,
+`Instant`, `Year`, `YearMonth` or `MonthDay` into a `String` property through a `DateTimeFormatter` pattern, with a
+`ZoneId` overload. `toFormattedNumber` writes a primitive number, its wrapper, a `BigInteger` or a `BigDecimal` through
+a `DecimalFormat` pattern, with a `Locale` overload. The two-way rows parse on `backward` and `patch`, and their
+`OneWay` siblings, which `Telescope.mapper` refuses by name, format forward only. Both properties are method references,
+and `javac` refuses a source property that is not a date, a time or a number.
 
-**Generated path:** partial, with more ceremony than the runtime path. The generated bridge cannot hold an inline
-lambda, which is refused on the row, so each formatted field names a static helper method (`toOneWay`, or
-`to(src, tgt, Helper::format, Helper::parse)` for both directions) or a `BridgeFn`, and the bridge calls it directly.
+The pattern is checked when the row is built: one the JDK does not compile, one naming a field the class lacks (`HH:mm`
+for a `LocalDate`), and an `Instant` given no zone are each refused by name, with the property named. A two-way row is
+also probed with dates across three centuries and with months whose English names share a first letter, and with numbers
+of the digits the pattern writes, and a pattern whose text reads back as another value is refused: `yy-MM-dd` reads
+1899-12-31 back as 2099-12-31, `dd MMMMM yyyy` reads January back as July, and `0.#E0` reads 127 back as 130. Writing
+less than the whole time is not refused: `yyyy-MM-dd HH:mm` reads back the time with no seconds. Text that does not
+parse fails with the target property, the text and the format named,
+`'shipDate' got "2026/12/31", not a LocalDate in the format "dd.MM.yyyy"`, the same message on both paths. A number
+reads back only when the whole text is read, and into an integral class only when it converts exactly. Where MapStruct
+parses with `DecimalFormat.parse`, which stops at the first character it cannot read, telescope refuses trailing text.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java,
-`to(Accessor, Accessor, Function, Function)` (typed transform, with an Instant::toString/Instant::parse example) and
-`toOneWay` (forward-only); codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a converter on a
-`@Bridge` field is a method reference or a `BridgeFn`, compiled into a small generated class, and an inline lambda is
-refused on the row); README.md, "When MapStruct is the right pick" (which names `Mapping.via(...)` as the plain-Java
-stand-in for qualifier dispatch); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the
-test 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field' (number<->String
-transform round-trip)</sub>
+**Generated path:** full. On a `@Bridge` field the pattern is a string constant, which the processor checks at compile
+time through the same shared decision, and `MapperVerifierProcessor` checks it on a runtime mapper call too. The
+generated bridge holds a `DateTimeFormatter` as a `static final` constant and calls it directly; a `DecimalFormat`,
+which is not safe to share between threads, is copied from a `static final` prototype for each call on both paths. A
+zone or a locale is a `static final` field the bridge can name, such as `ZoneOffset.UTC` or `Locale.GERMANY`. A pattern
+that is not a compile-time constant, and a zone or a locale given as a call such as `ZoneId.of("Europe/Paris")`, are
+refused on the row by name, while the runtime builds them: the bridge's formatter is a constant built from text the
+processor reads, which is an inherent limit of the generated path, recorded in ADR-0019. Hold the value in a
+`static final` field, or build the mapper without `@Bridge`.
+
+What stays explicit on both paths: text parsed into a date or a number on a forward-only mapper whose source holds the
+text, `java.util.Date` and `Calendar`, and a date pattern in a locale other than the default, each of which takes a
+`to(src, tgt, forward, backward)` or `toOneWay` row.
+
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `toFormatted`,
+`toFormattedOneWay`, `toFormattedNumber` and `toFormattedNumberOneWay`;
+core/src/main/java/io/github/eschizoid/telescope/mapping/Formatted.java (the runtime conversion);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/TextFormats.java (which patterns are accepted, and
+how a number reads back) and PairingMessages.java, `formattedPhrase` and the `format*` refusals;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `formatted`, `temporalFn` and `numberFn`
+(the generated conversion); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the
+test 'a formatted row on a @Bridge field formats, parses, refuses and fails the same way on both paths';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessorTest.java, the nested 'Formatted
+rows' tests; core/src/test/java/io/github/eschizoid/telescope/FormattedRowTest.java;
+benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/FormattedRowBenchmark.java</sub>
 
 ### Expressions
 
@@ -464,10 +508,11 @@ round-trips backward as itself rather than the original null.
 
 **Generated path:** a constant or default is a literal or an enum constant, which the bridge writes in place, and
 `toOrElseGet` names its supplier by method reference. That covers MapStruct's surface, whose `constant` is a literal and
-whose `defaultValue` is strict-null. What the runtime adds beyond it does not compile: the predicate-gated `toOrElse`
-and `toOrElseGet` are refused with "toOrElse(...) with a predicate has no generated form yet", a value computed in place
-(`String.valueOf(1)`) with "a value in a @Bridge mapper must be a literal or an enum constant", and a nested target
-written as a telescope path on the row; a constant at a nested pair goes on that pair's own `@Bridge` field.
+whose `defaultValue` is strict-null. The predicate-gated `toOrElse` and `toOrElseGet` compile too, the predicate a
+method reference or a `static final` field holding one, tested only on a value that is not null, as the runtime tests
+it. A value computed in place (`String.valueOf(1)`) is refused with "a value in a @Bridge mapper must be a literal or an
+enum constant", and so is a nested target written as a telescope path on the row; a constant at a nested pair goes on
+that pair's own `@Bridge` field.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `constant(Accessor, Object)`
 (javadoc names the @Mapping constant gap), `constant(Telescope, Object)` (nested target), both `toOrElse` overloads
@@ -477,10 +522,11 @@ core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java
 default); core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java, every test (null->default,
 pass-through, lazy supplier, empty-string/empty-collection predicates);
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java (a constant or default on a `@Bridge` field
-is a literal or an enum constant, and a predicate-gated row is refused);
+is a literal or an enum constant, and `orElse` compiles the predicate-gated rows);
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a default computed by a
 supplier converts the same on both paths' and 'a row the generated bridge cannot express is refused by name' (the
-predicate-gated and computed-value cases);
+computed-value cases); codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'a
+when(...) row and a toOrElse row with a predicate convert the same way on both paths, in each direction';
 codegen/src/test/java/io/github/eschizoid/telescope/codegen/ConstantLiteralEmissionTest.java; README.md, the `constant`
 / `compute` example under "Mapping"</sub>
 
@@ -1264,7 +1310,7 @@ calls the converter on the value it reads); codegen/src/main/java/io/github/esch
 
 ### Conditional mapping
 
-**Runtime: ⚠️ partial** · **Generated: ❌ missing** · **MapStruct:** @Condition presence-check methods (e.g. only map
+**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** @Condition presence-check methods (e.g. only map
 non-blank strings)
 
 **telescope:**
@@ -1291,12 +1337,19 @@ Also: when(...) wraps only telescope-based rows (plain to(srcAcc, tgtAcc)/via/dr
 pointer to toOrElse), when(...) is keyed to the type pair its inner row is keyed to, so its predicate receives the
 source converted at that pair, and there is no conditional analog on the patch/update path.
 
-**Generated path:** missing. Neither shape compiles: `when(...)` is refused with "when(...) has no generated form yet",
-and the predicate-gated `toOrElse` and `toOrElseGet` with "toOrElse(...) with a predicate has no generated form yet".
-The strict-null `toOrElse` and `toOrElseGet` compile, which covers the null presence check. Any other condition moves
-into a method the row names: a converter that holds the predicate,
-`toOneWay(Order::promoCode, OrderDto::promoCode, Promos::orNone)`, or a `compute` row reading the whole source,
-`compute(OrderDto::shipCountry, Orders::shipCountry)`; or the mapper stays on the runtime path.
+**Generated path:** partial, with the runtime's limits and one of its own. Both shapes compile when each predicate is a
+method reference or a `static final` field holding one; an inline lambda, as in the example above, is refused on the row
+by name. `when(...)` gates a source path, a target path, a path on each side, a constant and a supplied or computed
+value, and refuses a nested `when` and every other inner row in the runtime's words. The bridge tests the predicate
+through a `Predicate`, as the runtime does, writes the gated row where it accepts the source and leaves the property to
+the rest of the rows and the name pairing where it does not, reports a predicate that throws in the runtime's words, and
+leaves the row out of `backward` and `patch`. The generated path's own limit: where a gated constant or value fills a
+property no source property of its name fills, the runtime starts that property as a default-tree instance of its type,
+and the generated bridge builds that instance only when it is made of public records declaring no type parameters,
+primitives, platform classes and classes no write strategy allocates, each of which it fills with null or the
+primitive's default, as the runtime does. Any other default tree is refused by name, though the runtime builds it: a
+record that is not public or declares type parameters, and a bean with a public no-argument constructor or a public
+static `builder()`, whether it is the property's type or a component of a record below it.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
 javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the
@@ -1308,10 +1361,15 @@ rejection of field-iso and nested inners with alternative hints) and the 'Predic
 core/src/test/java/io/github/eschizoid/telescope/MappingWhenTest.java, the nested classes for gated flat-to-nested,
 constant, compute, nested-to-flat, nested-to-nested and zip rows, and 'Construction-time rejection — invalid inner
 rows'; core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java;
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `Rows.read` (`when` falls to the refusal of
-a row with no generated form) and `orElse` (the predicate-gated forms refused);
-codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the test 'a row the generated bridge
-cannot express is refused by name' (the `when` and predicate-gated `toOrElse` cases)</sub>
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `gated` (the inner rows a `when` compiles,
+and the runtime's refusals of the rest) and `orElse` (the predicate-gated forms);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the tests 'a when(...) row and a
+toOrElse row with a predicate convert the same way on both paths, in each direction' and 'a when(...) predicate that
+throws fails forward in the same words on both paths';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeFieldTest.java, the tests 'a row the generated bridge
+cannot express is refused by name' (the `when` cases), 'a field with when(...) rows and a predicate toOrElse runs its
+generated bridge, giving what the runtime gives' and 'a when(...) row filling a bean no source property fills is refused
+by name, since its default is a bean'</sub>
 
 ## Advanced
 

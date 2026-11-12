@@ -49,6 +49,10 @@ import org.openjdk.jmh.infra.Blackhole;
  *       through cached {@code LambdaMetafactory}-built {@code Function}/{@code BiConsumer}
  *       dispatchers. No codegen on the consumer's build.
  *   <li>{@code _codegen_*} — telescope's {@code @Bridge}-emitted {@code *Bridge.BRIDGE} constant.
+ *   <li>{@code _field_call_*} — the same field called through the generated {@code Mappings}
+ *       interface its source and target implement, {@code bean.toMcFlatRec()}, which should cost
+ *       what the {@code _field_*} row costs. {@code flat_handwritten_*} is their control: the reads
+ *       and the constructor call written by hand, a row no change to telescope moves.
  *   <li>{@code _field_*} — the mapper a {@code @Bridge} field declares ({@link McFieldMappers}),
  *       running the bridge generated from its rows, over twins of the {@code _codegen_*} shapes.
  *       Direct method-reference + canonical-constructor calls at every hop — the same dispatch
@@ -189,6 +193,20 @@ public class MapStructComparisonBenchmark {
     bh.consume(McFieldMappers.FLAT.forward(fieldFlatBean));
   }
 
+  @Benchmark
+  public void flat_telescope_field_call_forward(final Blackhole bh) {
+    // The same field reached through the generated McFieldFlatBeanMappings the bean implements:
+    // a default method reading the static final field and calling its forward on the bean.
+    bh.consume(fieldFlatBean.toMcFlatRec());
+  }
+
+  @Benchmark
+  public void flat_handwritten_forward(final Blackhole bh) {
+    // The control: the five getter reads and the canonical constructor call, written by hand.
+    final var bean = fieldFlatBean;
+    bh.consume(new McFlatRec(bean.getId(), bean.getEmail(), bean.getName(), bean.getAge(), bean.isActive()));
+  }
+
   // ---------- Flat — backward (record → bean) ----------
 
   @Benchmark
@@ -214,6 +232,20 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void flat_telescope_field_backward(final Blackhole bh) {
     bh.consume(McFieldMappers.FLAT.backward(flatRec));
+  }
+
+  @Benchmark
+  public void flat_telescope_field_call_backward(final Blackhole bh) {
+    // The same field's backward, reached through the generated McFlatRecMappings the record
+    // implements.
+    bh.consume(flatRec.toMcFieldFlatBean());
+  }
+
+  @Benchmark
+  public void flat_handwritten_backward(final Blackhole bh) {
+    // The control: the five accessor reads and the all-arguments constructor call, written by hand.
+    final var rec = flatRec;
+    bh.consume(new McFieldFlatBean(rec.id(), rec.email(), rec.name(), rec.age(), rec.active()));
   }
 
   // ---------- Nested — forward ----------

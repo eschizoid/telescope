@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -69,13 +70,28 @@ class BuiltInConversionTest {
     }
 
     @Test
-    @DisplayName("an element that is no number fails naming the property that holds it")
+    @DisplayName("an element that is no number fails naming the property that holds it and the element's index")
     void anUnparsableElementIsNamed() {
       final var mapper = Telescope.mapper(Order.class, OrderDto.class);
       final var failure = assertThrows(IllegalArgumentException.class, () ->
-        mapper.forward(new Order("1", "1", "OPEN", "true", List.of("x")))
+        mapper.forward(new Order("1", "1", "OPEN", "true", List.of("2", "x")))
       );
-      assertEquals("'tags' got \"x\", not a Long", failure.getMessage());
+      assertEquals("'tags[1]' got \"x\", not a Long", failure.getMessage());
+      assertInstanceOf(NumberFormatException.class, failure.getCause());
+    }
+
+    record Prices(Map<String, String> byCode) {}
+
+    record PricesDto(Map<String, Integer> byCode) {}
+
+    @Test
+    @DisplayName("a value of a map that is no number fails naming the property that holds it and the value's key")
+    void anUnparsableMapValueIsNamedByItsKey() {
+      final var mapper = Telescope.mapper(Prices.class, PricesDto.class);
+      final var failure = assertThrows(IllegalArgumentException.class, () ->
+        mapper.forward(new Prices(Map.of("eur", "x")))
+      );
+      assertEquals("'byCode[eur]' got \"x\", not an Integer", failure.getMessage());
     }
 
     @Test

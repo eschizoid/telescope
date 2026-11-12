@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
@@ -19,6 +20,7 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
@@ -896,6 +898,25 @@ public sealed class Telescope<
   }
 
   /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The failure a generated bridge
+   * throws when the predicate of a {@code when(...)} row throws {@code failure}, carrying it as its
+   * cause: the same words the runtime mapper reports, naming {@code inner}, the class of the row
+   * the predicate gates, and {@code sourceField}, the source property that row reads, or null.
+   *
+   * @param inner the simple name of the gated row's class, as {@code TelescopeTo}
+   * @param sourceField the method name of the source accessor the gated row reads, or null
+   * @param failure what the predicate threw
+   * @return the failure to throw
+   */
+  public static IllegalStateException whenPredicateThrew(
+    final String inner,
+    final String sourceField,
+    final Throwable failure
+  ) {
+    return new IllegalStateException(PairingMessages.whenPredicateThrew(inner, sourceField, failure), failure);
+  }
+
+  /**
    * <b>Codegen-support seam — NOT for hand-written call sites.</b> The lens a generated {@code
    * <X>Telescope} navigator composes for one component, carrying the same fusion identity — owner
    * class and component name — that {@link #field(Accessor)} records for the same accessor. A
@@ -1205,6 +1226,21 @@ public sealed class Telescope<
   ) {
     for (final var step : steps) {
       if (step instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+        if (!r.row().equals("toOneWay")) {
+          final var formatted = r.sourceField();
+          final var property = LambdaIntrospection.receiverClassOf(r.src()).isRecord()
+            ? formatted
+            : PropertyNames.property(formatted);
+          throw new IllegalArgumentException(
+            PairingMessages.formatOneWayInMapper(
+              factoryName,
+              source.getSimpleName(),
+              target.getSimpleName(),
+              r.row(),
+              property
+            )
+          );
+        }
         throw new IllegalArgumentException(
           factoryName +
             "(" +
@@ -1426,6 +1462,13 @@ public sealed class Telescope<
    * runtime class; {@link Sources#of(Object[])} throws on duplicates. If two same-typed sources are
    * needed, pre-aggregate them into a named holder record before the merge.
    *
+   * <p><b>On a {@code @Bridge} field.</b> A {@code static final} field initialised by this call
+   * written in place, its target a public record, compiles into a bridge with one static {@code
+   * forward} taking the sources as typed parameters, in the order the rows first name their
+   * classes, and one taking the {@link Sources} bag, which the field's mapper calls. Both fill each
+   * component and fail on a missing source as this mapper does, in the same words, and the
+   * processor refuses a row this factory refuses, in the same words, when the field is compiled.
+   *
    * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
    * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,
    * Object)} both throw on the returned mapper. For bidirectional same-source mapping, use {@link
@@ -1442,9 +1485,46 @@ public sealed class Telescope<
    * @see Sources#builder()
    */
   @SafeVarargs
-  @SuppressWarnings("varargs")
+  @SuppressWarnings({ "varargs", "unchecked" })
   public static <T> Mapper<Sources, T> merge(final Class<T> target, final MergeStep<T>... steps) {
-    return Merge.build(target, steps);
+    // A @Bridge field of the calling class declares this mapper when the processor generated a
+    // bridge from its rows; the caller is read here, in the factory the field's initializer calls.
+    final var declaration = DeepMap.mergeDeclaration(initialisingCaller(), target, steps);
+    if (declaration.provider() == null) return Merge.build(target, steps, declaration.node());
+    final var fn = (BridgeFn<Sources, T>) bridgeFnOf(declaration.provider().bridge());
+    return (Mapper<Sources, T>) BridgeRegistry.specialise(
+      declaration.provider(),
+      Mapper.ofGeneratedForwardOnly(fn, Sources.class, target, List.of(declaration.node()))
+    );
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The failure a bridge generated
+   * from a {@code Telescope.merge} row throws when it is given no source of the class {@code
+   * missing}, which the row writing {@code targetField} reads, among sources of the classes {@code
+   * present}: the same words the runtime merge fails in.
+   *
+   * @param present the classes of the sources given, in the order to name them
+   * @param missing the class no source given is of
+   * @param targetField the target property the row needing that source writes
+   * @return the failure to throw
+   */
+  public static IllegalStateException mergeSourceMissing(
+    final Collection<Class<?>> present,
+    final Class<?> missing,
+    final String targetField
+  ) {
+    return Merge.sourceMissing(present, missing, targetField);
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The failure of {@code backward}
+   * on a bridge generated from a {@code Telescope.merge} row, in the words of the runtime merge.
+   *
+   * @return the failure to throw
+   */
+  public static UnsupportedOperationException mergeHasNoInverse() {
+    return new UnsupportedOperationException(PairingMessages.mergeForwardOnly());
   }
 
   /**

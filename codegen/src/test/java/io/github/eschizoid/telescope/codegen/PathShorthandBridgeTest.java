@@ -11,6 +11,7 @@ import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -53,7 +54,10 @@ class PathShorthandBridgeTest {
         "  public Line getLine() { return line; }\n  public void setLine(final Line v) { line = v; }\n" +
         "  public int getTotal() { return total; }\n  public void setTotal(final int v) { total = v; }\n}\n"
     ),
-    ProcessorHarness.source("ps.CartDto", "package ps; public record CartDto(String sku, int count, int total) {}")
+    ProcessorHarness.source("ps.CartDto", "package ps; public record CartDto(String sku, int count, int total) {}"),
+    ProcessorHarness.source("ps.Spot", "package ps; public record Spot(String city, int zip) {}"),
+    ProcessorHarness.source("ps.Ship", "package ps; public record Ship(Spot place, String tag) {}"),
+    ProcessorHarness.source("ps.Shipment", "package ps; public record Shipment(Ship ship, int qty) {}")
   );
 
   /**
@@ -145,6 +149,19 @@ class PathShorthandBridgeTest {
           " to(Telescope.path(Cart::getLine, Line::getCount), CartDto::count)"
       ),
       Arguments.of(
+        "a path on each side, of three steps",
+        STATIC_PATH,
+        "Order.class, Shipment.class",
+        "to(" +
+          city3 +
+          ", Telescope.of(Shipment.class).field(Shipment::ship).field(Ship::place).field(Spot::city))," +
+          " to(" +
+          zip3 +
+          ", Telescope.of(Shipment.class).field(Shipment::ship).field(Ship::place).field(Spot::zip))",
+        "to(path(Order::customer, Outer::address, Inner::city), path(Shipment::ship, Ship::place, Spot::city))," +
+          " to(Telescope.path(Order::customer, Outer::address, Inner::zip), path(Shipment::ship, Ship::place, Spot::zip))"
+      ),
+      Arguments.of(
         "a target path through beans",
         STATIC_PATH,
         "CartDto.class, Cart.class",
@@ -177,5 +194,20 @@ class PathShorthandBridgeTest {
     }
     assertEquals(chain.resources(), shorthand.resources());
     assertEquals(messages(chain), messages(shorthand));
+  }
+
+  @Test
+  @DisplayName("a row with a path on each side compiles with nothing for the verifier to report")
+  void aPathOnEachSideLeavesTheVerifierSilent() {
+    final var compiled = compiled(
+      STATIC_PATH,
+      "Order.class, Shipment.class",
+      "to(path(Order::customer, Outer::address, Inner::city), path(Shipment::ship, Ship::place, Spot::city))"
+    );
+    assertTrue(compiled.success(), compiled::errorMessages);
+    assertTrue(compiled.generated().containsKey("ps.OrderToShipmentBridge"), () ->
+      compiled.generated().keySet().toString()
+    );
+    assertEquals(List.of(), messages(compiled));
   }
 }

@@ -9,6 +9,11 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.io.Serializable;
+import java.text.DecimalFormat;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAccessor;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -32,6 +37,14 @@ import java.util.function.Supplier;
  *
  * <p>Symmetrical with {@link Edit#over(Telescope, Function)} / {@link Telescope#all(Edit[])} —
  * varargs of typed rows, declarative, count-visible-at-a-glance.
+ *
+ * <p><b>Formatting.</b> A date, a time or a number written into a {@code String} property as text
+ * in a pattern takes a formatted row, which formats forward and parses back: {@link
+ * #toFormatted(Accessor, Accessor, String) toFormatted(Order::shipDate, OrderDto::shipDate,
+ * "dd.MM.yyyy")} through a {@code DateTimeFormatter}, and {@link #toFormattedNumber(Accessor,
+ * Accessor, String) toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00")} through a {@code
+ * DecimalFormat}. Each has a {@code OneWay} sibling for a forward-only mapper. The pattern is
+ * checked when the row is built, and in a {@code @Bridge} mapper at compile time.
  *
  * <p><b>Type-pair keying.</b> Each {@link #to to(srcAcc, tgtAcc)} / {@link #via via(srcAcc, tgtAcc,
  * mapper)} row carries the receiver classes of its accessors via {@code SerializedLambda}. {@link
@@ -196,6 +209,190 @@ public sealed interface Mapping<A, B>
   }
 
   /**
+   * Writes a date or a time into a {@code String} property as text in {@code pattern}, a {@link
+   * DateTimeFormatter} pattern, and reads it back in the same pattern: MapStruct's
+   * {@code @Mapping(dateFormat = "dd.MM.yyyy")}, with both properties named by method reference.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy"));
+   * // forward: 2026-12-31 -> "31.12.2026"; backward and patch: "31.12.2026" -> 2026-12-31
+   * }</pre>
+   *
+   * <p>The source property holds a {@code LocalDate}, {@code LocalTime}, {@code LocalDateTime},
+   * {@code OffsetDateTime}, {@code OffsetTime}, {@code ZonedDateTime}, {@code Instant}, {@code
+   * Year}, {@code YearMonth} or {@code MonthDay}; an {@code Instant} needs a zone, given through
+   * {@link #toFormatted(Accessor, Accessor, String, ZoneId)}. The pattern is read in the default
+   * format locale, as {@link DateTimeFormatter#ofPattern(String)} reads it, and text is parsed by
+   * that formatter's smart resolution. A null value converts to null either way.
+   *
+   * <p><b>Checked when the row is built.</b> A pattern the JDK does not compile, one naming a field
+   * the property's class lacks ({@code "HH:mm"} for a {@code LocalDate}), and one whose text does
+   * not read back as a value of the class ({@code "MM/yyyy"} for a {@code LocalDate}, which has no
+   * day) are refused by name, with the property named. Text that does not parse fails on {@code
+   * backward} or {@code patch} with the target property, the text and the format named: {@code
+   * 'shipDate' got "2026/12/31", not a LocalDate in the format "dd.MM.yyyy"}.
+   *
+   * <p>In a {@code @Bridge} mapper the pattern is a string constant, which the processor checks at
+   * compile time the same way, and the generated bridge holds the formatter as a {@code static
+   * final} constant and calls it directly.
+   *
+   * <p>For a pattern that does not read back, convert forward only with {@link
+   * #toFormattedOneWay(Accessor, Accessor, String)}.
+   */
+  static <A, B, X extends TemporalAccessor> Mapping<A, B> toFormatted(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern
+  ) {
+    return Formatted.row("toFormatted", src, tgt, pattern, null, null);
+  }
+
+  /**
+   * As {@link #toFormatted(Accessor, Accessor, String)}, formatting and parsing in {@code zone}, as
+   * {@link DateTimeFormatter#withZone(ZoneId)} does: the zone an {@code Instant} is written in, and
+   * the one a {@code ZonedDateTime} or an {@code OffsetDateTime} is converted to before it is
+   * written.
+   *
+   * <pre>{@code
+   * toFormatted(Event::at, EventDto::at, "yyyy-MM-dd HH:mm", ZoneOffset.UTC)
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the zone is a {@code static final} field the generated bridge
+   * can name, such as {@code ZoneOffset.UTC} or a constant of your own.
+   */
+  static <A, B, X extends TemporalAccessor> Mapping<A, B> toFormatted(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern,
+    final ZoneId zone
+  ) {
+    Objects.requireNonNull(zone, "Mapping.toFormatted: zone is null");
+    return Formatted.row("toFormatted", src, tgt, pattern, zone, null);
+  }
+
+  /**
+   * Forward-only sibling of {@link #toFormatted(Accessor, Accessor, String)}: writes the date or
+   * time as text in {@code pattern} and never reads it back, so a pattern that drops a field the
+   * class is read from, such as {@code "MMMM yyyy"} for a {@code LocalDate}, is accepted. Like
+   * {@link #toOneWay}, it is taken by {@link Telescope#mapperForward} and refused by name by {@link
+   * Telescope#mapper}.
+   *
+   * <pre>{@code
+   * Telescope.mapperForward(Order.class, OrderView.class,
+   *     toFormattedOneWay(Order::shipDate, OrderView::month, "MMMM yyyy"));
+   * }</pre>
+   */
+  static <A, B, X extends TemporalAccessor> Mapping<A, B> toFormattedOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern
+  ) {
+    return Formatted.row("toFormattedOneWay", src, tgt, pattern, null, null);
+  }
+
+  /**
+   * As {@link #toFormattedOneWay(Accessor, Accessor, String)}, formatting in {@code zone}, as
+   * {@link #toFormatted(Accessor, Accessor, String, ZoneId)} does.
+   */
+  static <A, B, X extends TemporalAccessor> Mapping<A, B> toFormattedOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern,
+    final ZoneId zone
+  ) {
+    Objects.requireNonNull(zone, "Mapping.toFormattedOneWay: zone is null");
+    return Formatted.row("toFormattedOneWay", src, tgt, pattern, zone, null);
+  }
+
+  /**
+   * Writes a number into a {@code String} property as text in {@code pattern}, a {@link
+   * DecimalFormat} pattern, and reads it back in the same pattern: MapStruct's
+   * {@code @Mapping(numberFormat = "$#.00")}.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     toFormattedNumber(Order::total, OrderDto::total, "$#,##0.00"));
+   * // forward: 1234.5 -> "$1,234.50"; backward and patch: "$1,234.50" -> 1234.50
+   * }</pre>
+   *
+   * <p>The source property holds a {@code byte}, {@code short}, {@code int}, {@code long}, {@code
+   * float} or {@code double}, a wrapper of one, a {@code BigInteger} or a {@code BigDecimal}. The
+   * symbols are those of the default format locale, as {@code new DecimalFormat(pattern)} reads
+   * them; {@link #toFormattedNumber(Accessor, Accessor, String, Locale)} names a locale. Rounding
+   * is the {@code DecimalFormat} default, half-even. A null value converts to null either way.
+   *
+   * <p><b>Reading back.</b> The whole text must read as a number in the pattern. An integral
+   * property, a {@code BigInteger} and a {@code BigDecimal} take the number only when it converts
+   * exactly, so {@code "$12.50"} does not read back into an {@code int}; a {@code float} or a
+   * {@code double} takes the nearest value. Text that does not read back fails on {@code backward}
+   * or {@code patch} with the target property, the text and the format named: {@code 'total' got
+   * "12,50", not a BigDecimal in the format "$#,##0.00"}.
+   *
+   * <p><b>Checked when the row is built.</b> A pattern the JDK does not compile is refused by name,
+   * with the property named. In a {@code @Bridge} mapper the pattern is a string constant, which
+   * the processor checks at compile time the same way.
+   *
+   * <p><b>Threads.</b> A {@code DecimalFormat} is not safe to share between threads, so each call
+   * formats or parses through a copy of one built when the row is, on both paths.
+   */
+  static <A, B, X extends Number> Mapping<A, B> toFormattedNumber(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern
+  ) {
+    return Formatted.row("toFormattedNumber", src, tgt, pattern, null, null);
+  }
+
+  /**
+   * As {@link #toFormattedNumber(Accessor, Accessor, String)}, with the decimal and grouping
+   * symbols of {@code locale}.
+   *
+   * <pre>{@code
+   * toFormattedNumber(Order::total, OrderDto::total, "#,##0.00", Locale.GERMANY) // "1.234,50"
+   * }</pre>
+   *
+   * <p>In a {@code @Bridge} mapper the locale is a {@code static final} field the generated bridge
+   * can name, such as {@code Locale.GERMANY} or a constant of your own.
+   */
+  static <A, B, X extends Number> Mapping<A, B> toFormattedNumber(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern,
+    final Locale locale
+  ) {
+    Objects.requireNonNull(locale, "Mapping.toFormattedNumber: locale is null");
+    return Formatted.row("toFormattedNumber", src, tgt, pattern, null, locale);
+  }
+
+  /**
+   * Forward-only sibling of {@link #toFormattedNumber(Accessor, Accessor, String)}: writes the
+   * number as text in {@code pattern} and never reads it back. Taken by {@link
+   * Telescope#mapperForward} and refused by name by {@link Telescope#mapper}.
+   */
+  static <A, B, X extends Number> Mapping<A, B> toFormattedNumberOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern
+  ) {
+    return Formatted.row("toFormattedNumberOneWay", src, tgt, pattern, null, null);
+  }
+
+  /**
+   * As {@link #toFormattedNumberOneWay(Accessor, Accessor, String)}, with the symbols of {@code
+   * locale}.
+   */
+  static <A, B, X extends Number> Mapping<A, B> toFormattedNumberOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, String> tgt,
+    final String pattern,
+    final Locale locale
+  ) {
+    Objects.requireNonNull(locale, "Mapping.toFormattedNumberOneWay: locale is null");
+    return Formatted.row("toFormattedNumberOneWay", src, tgt, pattern, null, locale);
+  }
+
+  /**
    * Enum correspondence by constant name. Maps each {@code SE} constant to the {@code TE} constant
    * of the same {@link Enum#name() name}; backward direction is symmetric.
    *
@@ -302,6 +499,9 @@ public sealed interface Mapping<A, B>
    * <p>Backward direction is identity; the asymmetry of {@link #toOrElse(Accessor, Accessor,
    * Object)} applies here too. Reach for the explicit 4-arg {@link #to(Accessor, Accessor,
    * Function, Function)} when both directions need bespoke logic.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and tests it only on a value that is not null.
    */
   static <A, B, X> Mapping<A, B> toOrElse(
     final Accessor<A, X> src,
@@ -347,6 +547,9 @@ public sealed interface Mapping<A, B>
    * <pre>{@code
    * toOrElseGet(Src::traceId, Dst::traceId, UUID::randomUUID, String::isBlank)
    * }</pre>
+   *
+   * <p>A {@code @Bridge} field compiles the row when the supplier and the predicate are each a
+   * method reference or a {@code static final} field holding one.
    */
   static <A, B, X> Mapping<A, B> toOrElseGet(
     final Accessor<A, X> src,
@@ -473,6 +676,19 @@ public sealed interface Mapping<A, B>
    * lattice's intrinsic {@link Telescope#set} broadcasts the value to every focus on the target
    * side, and {@link Telescope#read} returns the first focus on the source side. For positional N:N
    * — Nth source value at Nth target focus — use {@link #zip(Telescope, Telescope)} instead.
+   *
+   * <p><b>Paths through properties.</b> When both paths step through properties alone, forward
+   * reads the source path, a null object on the way read as null, and writes the value through the
+   * target path, building a null object on the way unless the value is null; backward does the same
+   * the other way. The row claims neither first property: each pairs by name, or not, as it would
+   * without the row, and the value is written over it. {@code patch} overlays target properties and
+   * takes no part in the row.
+   *
+   * <p>A {@code @Bridge} field compiles the row when both paths are written in place, each from
+   * {@code Telescope.of(Type.class)} or {@code Telescope.ofBean(Type.class)} through {@code field}
+   * steps alone or as {@code Telescope.path(...)}, and end at a property of one type: reads become
+   * a null-safe chain of locals, each object read once, and writes call each class's accessors and
+   * write strategy directly. Any other path is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
     return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);
@@ -920,6 +1136,12 @@ public sealed interface Mapping<A, B>
    * exception is decorated with the failing row's inner-kind + source field and rethrown as an
    * {@link IllegalStateException}. The decoration points the user back at the {@code when(...)}
    * call site rather than at an opaque internal stack frame.
+   *
+   * <p>A {@code @Bridge} field compiles the row when the predicate is a method reference or a
+   * {@code static final} field holding one, and the inner row is a path row, a constant or a
+   * compute row the field compiles on its own: the bridge tests the predicate through a {@code
+   * Predicate} and reports a failure in the same words. A nested {@code when} and any other inner
+   * row are refused on the row in the words the runtime refuses them with.
    */
   static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
     return new Conditional<>(predicate, inner);

@@ -286,6 +286,10 @@ from "compile-checked" to "runtime-checked" is a regression.
 ### Codegen-support seams (public, not for hand-written call sites)
 
 - `hop(OpticNode)` — appends an introspection node; generated navigators call it after each step.
+- `whenPredicateThrew(String, String, Throwable)` — the failure a generated bridge throws when a `when(...)` predicate
+  throws, in the words the runtime mapper reports it with, which `PairingMessages` holds for both.
+- `mergeSourceMissing(Collection, Class, String)` and `mergeHasNoInverse()` — the failures a bridge generated from a
+  `Telescope.merge` field throws for a missing source and for `backward`, in the runtime merge's words.
 - `componentLens(Class, String, getter, setter)` — the lens a navigator composes per component, carrying the fusion
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
@@ -356,7 +360,8 @@ class declaring the field, named in full.
 | `FocusProcessor.java`                                     | scans `@Focus`, emits the record version of the Telescope navigator (canonical-ctor rebuild).                                                                                                                                                                                                                                                                |
 | `BeanFocusProcessor.java`                                 | scans `@BeanFocus`, delegates to `emitBeanNavigator` (builder, all-args constructor or setters rebuild, in the shared `BeanWriteStrategy.AUTO_ORDER`).                                                                                                                                                                                                       |
 | `BridgeProcessor.java`                                    | scans `@Bridge`, generates the bidirectional Iso class plus the BRIDGE static constant. Handles all type-pair combinations (record↔record, record↔POJO, POJO↔POJO).                                                                                                                                                                                          |
-| `FieldRows.java`                                          | reads the rows of a `@Bridge` field's `Telescope.mapper(...)` call through the javac tree API in a processing round, into the configuration `BridgeProcessor` emits from (ADR-0022). Converters and suppliers become small generated `BridgeFn` / `Supplier` classes; every other row is refused by name on the row.                                         |
+| `FieldRows.java`                                          | reads the rows of a `@Bridge` field's `Telescope.mapper(...)` or `Telescope.merge(...)` call through the javac tree API in a processing round, into the configuration `BridgeProcessor` emits from (ADR-0022). Converters and suppliers become small generated `BridgeFn` / `Supplier` classes; every other row is refused by name on the row.               |
+| `MappingsInterfaces.java`                                 | the `<Type>Mappings` interfaces `BridgeProcessor` writes for each type a `@Bridge` field converts (ADR-0023), in the round the field is first seen so an `implements` clause compiled with them resolves. Each default method calls the field's `forward` or `backward`.                                                                                     |
 | `FromMapProcessor.java`                                   | scans `@FromMap`, emits the reflection-free `Map<String, Object>` → record binder (ADR-0010). Uses the sealed `Coercion` taxonomy for per-component conversion.                                                                                                                                                                                              |
 | `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`.                                                                                                                                                           |
 | `TelescopeMapperProcessor.java`                           | scans core's `@TelescopeMapper` / `@TelescopeTransformer` interfaces and emits a Spring `@Component` implementation for each. Refuses on the interface when Spring is not on the classpath. Covered by the Spring starter's tests, which is where its JaCoCo coverage is reported.                                                                           |
@@ -725,12 +730,12 @@ JVM/codegen-only under AOT).
     regression gate.
 16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
     converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.
-17. **0017 — `telescope-jpa`.** (Proposed.) Persistence-aware container copies through a `ContainerCopy` SPI (an
-    unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all against
-    the Jakarta Persistence API.
-18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
-    guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
-    Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
+17. **0017 — `telescope-jpa`.** (Accepted, not built.) Persistence-aware container copies through a `ContainerCopy` SPI
+    (an unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all
+    against the Jakarta Persistence API.
+18. **0018 — Generated mapper parity with MapStruct.** (Accepted, shipped.) Closes the gaps on the `@Bridge` path in
+    order: cycle guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths,
+    update in place. Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
 19. **0019 — Which differences between the paths may remain.** (Accepted, shipped.) Only inherent limits stay in the
     cross-path registers, each refused by name on the path that cannot do the work: a private constructor, a non-public
     constructor in another package, a builder with no method for a `final` field that has no initializer, a `via` row
@@ -748,8 +753,8 @@ JVM/codegen-only under AOT).
     calling class and pair, once, and builds the runtime mapper from the same rows when the processor did not run. Rows
     the bridge cannot express are refused by name. Retires the string-keyed per-field annotations and amends ADR-0018's
     steps 3 to 6.
-23. **0023 — A generated `Mappings` interface.** (Accepted, not built.) The processor generates `<Source>Mappings` with
-    a default method `to<Target>()` per `@Bridge` field, so a type that implements it converts itself
+23. **0023 — A generated `Mappings` interface.** (Accepted, shipped.) The processor generates `<Source>Mappings` with a
+    default method `to<Target>()` per `@Bridge` field, so a type that implements it converts itself
     (`invoice.toInvoiceDto()`); a two-way mapper adds `to<Source>()` on `<Target>Mappings`. No new `@Bridge` attribute;
     a name clash is refused by name.
 24. **0024 — Typed `before` and `after` edit rows.** (Proposed.) `before(over(...))`, `after(over(...))` and their

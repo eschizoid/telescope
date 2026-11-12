@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
 import io.github.eschizoid.telescope.codegen.ctorbox.CityRow;
@@ -30,6 +31,7 @@ import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.temporal.TemporalAccessor;
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -6425,6 +6427,63 @@ class CrossPathCorpusTest {
   }
 
   private static final List<ResultRow> RESULT_ROWS = List.of(
+    // A forward-only mapper never calls a via class's backward, so a backward no value of the
+    // target's property can be handed is no reason to refuse it on either path.
+    new ResultRow(
+      "a forward-only via row whose class's backward takes a Comparable the target never is",
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer a) {}\n",
+        "public class %1$sHw {\n" +
+          "  public static Integer forward(final String s) { return 7; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        plainField(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        ),
+        plainRuntime(
+          true,
+          "io.github.eschizoid.telescope.mapping.Mapping.<%1$sSrc, %1$sTgt>via(%1$sSrc::a, %1$sTgt::a, %1$sHw.class)"
+        )
+      ),
+      "#0(a=7)"
+    ),
+    // A property paired under two names is named by both in a refusal of its value, and of an
+    // element's, with the element's index after the target's name.
+    new ResultRow(
+      "a renamed list whose element is no number, named by both names and the element's index",
+      List.of(
+        sampled("%1$sSrc", "java.util.List<String> x", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        "public record %1$sTgt(java.util.List<Integer> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed list of lists whose element is no number, named by both names and both indexes",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<java.util.List<String>> x",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\", \"x\")))"
+        ),
+        "public record %1$sTgt(java.util.List<java.util.List<Integer>> y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y[0][1]' got \"x\", not an Integer"
+    ),
+    new ResultRow(
+      "a renamed scalar that is no number, named by both names",
+      List.of(
+        sampled("%1$sSrc", "String x", "new %1$sSrc(\"x\")"),
+        "public record %1$sTgt(Integer y) {}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.to(%1$sSrc::x, %1$sTgt::y)")
+      ),
+      REFUSED + "IllegalArgumentException: 'x → y' got \"x\", not an Integer"
+    ),
     new ResultRow(
       "a String property with one setter, a transform returning Object that holds a String",
       resultRow(valueBean("%1$sTgt", "String", "\"q\""), "Object", "a"),
@@ -7562,7 +7621,15 @@ class CrossPathCorpusTest {
           .allMatch(e -> e.getSource() == null || e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
       () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
     );
-    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    // The Mappings interfaces call the field, which exists whatever its rows are.
+    assertTrue(
+      processed
+        .generated()
+        .keySet()
+        .stream()
+        .allMatch(name -> name.endsWith("Mappings")),
+      () -> "no bridge is written: " + processed.generated().keySet()
+    );
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
     assertTrue(
       !plain.success() &&
@@ -7664,6 +7731,7 @@ class CrossPathCorpusTest {
     if (value instanceof String text) return "\"" + text + "\"";
     if (value instanceof Number number) return number.toString();
     if (value instanceof Boolean || value instanceof Character) return value.toString();
+    if (value instanceof TemporalAccessor temporal) return temporal.toString();
     // A constant renders as its enum's name without the cell prefix, so a cell owes the enum a
     // conversion produced as well as the constant.
     if (value instanceof Enum<?> constant) {
@@ -9801,10 +9869,146 @@ class CrossPathCorpusTest {
       "#0(total=\"1\")"
     ),
     new EnumCell(
-      "an element that is no number fails naming the property holding it",
+      "an element of a list that is no number fails naming the property and the element's index",
       Directions.BOTH,
       List.of(
         bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a list of lists that is no number fails naming both indexes",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.List<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.List.of(\"1\"), java.util.List.of(\"2\", \"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.List<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.List.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1][1]' got \"x\", not an Integer",
+      "#0(ids=[[\"2\"]])",
+      "#0(ids=[[\"2\"]])"
+    ),
+    new EnumCell(
+      "a list of Optional texts converts each present value, an empty one staying empty",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.empty()))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      "#0(ids=[of 1, empty])",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
+      "an Optional element of a list that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.List<java.util.Optional<String>> ids",
+          "new %1$sSrc(java.util.List.of(java.util.Optional.of(\"1\"), java.util.Optional.of(\"x\")))"
+        ),
+        sampled(
+          "%1$sTgt",
+          "java.util.List<java.util.Optional<Integer>> ids",
+          "new %1$sTgt(java.util.List.of(java.util.Optional.of(2)))"
+        )
+      ),
+      FAILS + "'ids[1]' got \"x\", not an Integer",
+      "#0(ids=[of \"2\"])",
+      "#0(ids=[of \"2\"])"
+    ),
+    new EnumCell(
+      "a value of a map that is no number fails naming the property and the value's key",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Map<String, String> ids", "new %1$sSrc(java.util.Map.of(\"k1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Map<String, Integer> ids", "new %1$sTgt(java.util.Map.of(\"k\", 2))")
+      ),
+      FAILS + "'ids[k1]' got \"x\", not an Integer",
+      "#0(ids={k=\"2\"})",
+      "#0(ids={k=\"2\"})"
+    ),
+    new EnumCell(
+      "an element of a list into a sorted set that is no number fails naming the element's index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.List<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"2\", \"x\"))"),
+        sampled(
+          "%1$sTgt",
+          "java.util.TreeSet<Integer> ids",
+          "new %1$sTgt(new java.util.TreeSet<>(java.util.Set.of(2)))"
+        )
+      ),
+      FAILS + "'ids[2]' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    // Both paths read whether an element has an index to name from the
+    // property's declared type, so a list held by a property declared as
+    // no list gives none.
+    new EnumCell(
+      "an element of a Collection holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Collection<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    new EnumCell(
+      "an element of a Deque holding a list fails naming the property, the declaration having no index",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(
+          BRIDGE_TO_TGT,
+          "java.util.Deque<String> ids",
+          "new %1$sSrc(new java.util.LinkedList<>(java.util.List.of(\"1\", \"x\")))"
+        ),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      FAILS + "'ids' got \"x\", not an Integer",
+      "#0(ids=[\"2\"])",
+      "#0(ids=[\"2\"])"
+    ),
+    // An Iterable is no container either path lifts over, so the pair is refused before any
+    // element is read.
+    new EnumCell(
+      "an Iterable holding a list, against a list of numbers, is refused",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "Iterable<String> ids", "new %1$sSrc(java.util.List.of(\"1\", \"x\"))"),
+        sampled("%1$sTgt", "java.util.List<Integer> ids", "new %1$sTgt(java.util.List.of(2))")
+      ),
+      REFUSED + "'ids' has incompatible source/target shapes",
+      null,
+      null
+    ),
+    new EnumCell(
+      "an element of a set that is no number fails naming the property, the element having no position",
+      Directions.BOTH,
+      List.of(
+        bridgedSrc(BRIDGE_TO_TGT, "java.util.Set<String> ids", "new %1$sSrc(java.util.Set.of(\"x\"))"),
         sampled("%1$sTgt", "java.util.Set<Integer> ids", "new %1$sTgt(java.util.Set.of(2))")
       ),
       FAILS + "'ids' got \"x\", not an Integer",
@@ -12391,6 +12595,1069 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  private static final String BOTH_NAME = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::name");
+  private static final String BOTH_AGE = pathOf("of", "%1$sSrc", "%1$sSrc::customer", "%1$sMid::age");
+  private static final String BOTH_TO_LABEL = pathOf("of", "%1$sTgt", "%1$sTgt::ship", "%1$sDock::label");
+  private static final String BOTH_TO_N = pathOf("of", "%1$sTgt", "%1$sTgt::ship", "%1$sDock::n");
+  private static final String DOCK = "public record %1$sDock(String label, int n) {}\n";
+  private static final String MID = "public record %1$sMid(String name, int age) {}\n";
+  private static final String SHIP_SPOT = "public record %1$sShip(%1$sSpot place, String tag) {}\n";
+  private static final String SPOT = "public record %1$sSpot(String city, int zip) {}\n";
+  private static final String BOTH_TO_CITY = shorthandOf("%1$sTgt::ship", "%1$sShip::place", "%1$sSpot::city");
+  private static final String BOTH_TO_ZIP = shorthandOf("%1$sTgt::ship", "%1$sShip::place", "%1$sSpot::zip");
+
+  /** The rows of a three-step pair reading the city and the zip into a three-step target path. */
+  private static List<String> threeStepsAcross(final String srcSample, final String tgtSample) {
+    final var city = "to(" + SHORT_CITY + ", " + BOTH_TO_CITY + ")";
+    final var zip = "to(" + SHORT_ZIP + ", " + BOTH_TO_ZIP + ")";
+    return List.of(
+      sampled("%1$sSrc", "%1$sOuter customer, int qty", srcSample),
+      OUTER_INNER,
+      INNER,
+      typedField(false, city, zip),
+      sampled("%1$sTgt", "%1$sShip ship, int qty", tgtSample),
+      SHIP_SPOT,
+      SPOT,
+      runtimeMapper(false, "", city, zip)
+    );
+  }
+
+  private static final List<NestedPath> BOTH_SIDES_PATHS = List.of(
+    new NestedPath(
+      "a path of two steps into a path of two steps, two rows sharing each prefix, both ways",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        typedField(false, "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")", "to(" + BOTH_AGE + ", " + BOTH_TO_N + ")"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        runtimeMapper(
+          false,
+          "",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")",
+          "to(" + BOTH_AGE + ", " + BOTH_TO_N + ")"
+        )
+      ),
+      "#0(ship=#1(label=\"n\", n=4), qty=3)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)",
+      "#0(customer=#1(name=\"n\", age=4), qty=1)"
+    ),
+    new NestedPath(
+      "a path(...) of three steps into a path(...) of three steps, two rows sharing each prefix",
+      false,
+      threeStepsAcross(
+        "new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 75), \"L\"), 3)",
+        "new %1$sTgt(new %1$sShip(new %1$sSpot(\"R\", 5), \"T\"), 1)"
+      ),
+      "#0(ship=#1(place=#2(city=\"P\", zip=75), tag=null), qty=3)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a path of three steps through a null object on each side, which writes nothing",
+      false,
+      threeStepsAcross("new %1$sSrc(null, 3)", "new %1$sTgt(null, 1)"),
+      "#0(ship=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=null, qty=1)"
+    ),
+    new NestedPath(
+      "a path of three steps through a null second object on each side",
+      false,
+      threeStepsAcross("new %1$sSrc(new %1$sOuter(null, \"L\"), 3)", "new %1$sTgt(new %1$sShip(null, \"T\"), 1)"),
+      "#0(ship=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=#1(address=null, label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a path of two steps into a path of three steps, building each object for a value",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        typedField(false, "to(" + BOTH_NAME + ", " + BOTH_TO_CITY + ")"),
+        sampled("%1$sTgt", "%1$sShip ship, int qty", "new %1$sTgt(new %1$sShip(new %1$sSpot(\"R\", 5), \"T\"), 1)"),
+        SHIP_SPOT,
+        SPOT,
+        runtimeMapper(false, "", "to(" + BOTH_NAME + ", " + BOTH_TO_CITY + ")")
+      ),
+      "#0(ship=#1(place=#2(city=\"n\", zip=0), tag=null), qty=3)",
+      "#0(customer=#1(name=\"R\", age=0), qty=1)",
+      "#0(customer=#1(name=\"n\", age=4), qty=1)"
+    ),
+    new NestedPath(
+      "a path into a bean target, rebuilt through its setters",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int total", "new %1$sSrc(new %1$sMid(\"a\", 3), 2)"),
+        MID,
+        typedField(
+          false,
+          "to(" + BOTH_NAME + ", " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(" + BOTH_AGE + ", " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var l = new %1$sLine(); l.setSku(\"s\"); l.setCount(5); final var t = new %1$sTgt();" +
+            " t.setLine(l); t.setTotal(1); return t;",
+          "%1$sLine line",
+          "int total"
+        ),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + BOTH_NAME + ", " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getSku") + ")",
+          "to(" + BOTH_AGE + ", " + pathOf("ofBean", "%1$sTgt", "%1$sTgt::getLine", "%1$sLine::getCount") + ")"
+        )
+      ),
+      "#0(line=#1(count=3, sku=\"a\"), total=2)",
+      "#0(customer=#1(name=\"s\", age=5), total=1)",
+      "#0(customer=#1(name=\"a\", age=3), total=1)"
+    ),
+    new NestedPath(
+      "a path out of a bean source, written back through its setters",
+      false,
+      List.of(
+        sampledBean(
+          "%1$sSrc",
+          "final var l = new %1$sLine(); l.setSku(\"a\"); final var s = new %1$sSrc(); s.setLine(l);" +
+            " s.setTotal(2); return s;",
+          "%1$sLine line",
+          "int total"
+        ),
+        sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count = 4"),
+        typedField(false, "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getSku") + ", " + BOTH_TO_LABEL + ")"),
+        sampled("%1$sTgt", "%1$sDock ship, int total", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        runtimeMapper(
+          false,
+          "",
+          "to(" + shorthandOf("%1$sSrc::getLine", "%1$sLine::getSku") + ", " + BOTH_TO_LABEL + ")"
+        )
+      ),
+      "#0(ship=#1(label=\"a\", n=0), total=2)",
+      "#0(line=#1(count=4, sku=\"m\"), total=1)",
+      "#0(line=#1(count=4, sku=\"a\"), total=1)"
+    ),
+    new NestedPath(
+      "a path into a path whose first property pairs by name on both sides",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sBox box, int qty", "new %1$sSrc(new %1$sBox(\"x\", \"y\"), 3)"),
+        "public record %1$sBox(String a, String b) {}\n",
+        typedField(
+          false,
+          "to(" + shorthandOf("%1$sSrc::box", "%1$sBox::a") + ", " + shorthandOf("%1$sTgt::box", "%1$sBox::b") + ")"
+        ),
+        sampled("%1$sTgt", "%1$sBox box, int qty", "new %1$sTgt(new %1$sBox(\"m\", \"k\"), 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(" + shorthandOf("%1$sSrc::box", "%1$sBox::a") + ", " + shorthandOf("%1$sTgt::box", "%1$sBox::b") + ")"
+        )
+      ),
+      "#0(box=#1(a=\"x\", b=\"x\"), qty=3)",
+      "#0(box=#1(a=\"k\", b=\"k\"), qty=1)",
+      "#0(box=#1(a=\"m\", b=\"k\"), qty=1)"
+    ),
+    new NestedPath(
+      "rows writing one leaf through a path apply in the order they came, in each direction",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, String nick, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), \"k\", 3)"),
+        MID,
+        typedField(
+          false,
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")",
+          "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::alias)"
+        ),
+        sampled("%1$sTgt", "%1$sDock ship, String alias, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), \"a\", 1)"),
+        DOCK,
+        runtimeMapper(
+          false,
+          "",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")",
+          "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::alias)"
+        )
+      ),
+      "#0(ship=#1(label=\"k\", n=0), alias=\"n\", qty=3)",
+      "#0(customer=#1(name=\"a\", age=0), nick=\"m\", qty=1)",
+      "#0(customer=#1(name=\"a\", age=4), nick=\"m\", qty=1)"
+    ),
+    new NestedPath(
+      "a path out of a property another row renames, which backward writes over",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, %1$sMid>to(%1$sSrc::customer, %1$sTgt::buyer)",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"
+        ),
+        sampled(
+          "%1$sTgt",
+          "%1$sMid buyer, %1$sDock ship, int qty",
+          "new %1$sTgt(new %1$sMid(\"m\", 7), new %1$sDock(\"k\", 5), 1)"
+        ),
+        DOCK,
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, %1$sMid>to(%1$sSrc::customer, %1$sTgt::buyer)",
+          "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"
+        )
+      ),
+      "#0(buyer=#1(name=\"n\", age=4), ship=#2(label=\"n\", n=0), qty=3)",
+      "#0(customer=#1(name=\"k\", age=7), qty=1)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a property read back through a target path, with a source path through it written over that",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        "public record %1$sHolder(%1$sMid mid) {}\n",
+        typedField(
+          false,
+          "to(%1$sSrc::customer, " + pathOf("of", "%1$sTgt", "%1$sTgt::holder", "%1$sHolder::mid") + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::label)"
+        ),
+        sampled(
+          "%1$sTgt",
+          "%1$sHolder holder, String label, int qty",
+          "new %1$sTgt(new %1$sHolder(new %1$sMid(\"m\", 7)), \"z\", 1)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::customer, " + pathOf("of", "%1$sTgt", "%1$sTgt::holder", "%1$sHolder::mid") + ")",
+          "to(" + BOTH_NAME + ", %1$sTgt::label)"
+        )
+      ),
+      "#0(holder=#1(mid=#2(name=\"n\", age=4)), label=\"n\", qty=3)",
+      "#0(customer=#1(name=\"z\", age=7), qty=1)",
+      "#0(customer=#1(name=\"z\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a forward-only path into a path",
+      true,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        MID,
+        typedField(true, "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(null, 1)"),
+        DOCK,
+        runtimeMapper(true, "", "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")")
+      ),
+      "#0(ship=#1(label=\"n\", n=0), qty=3)",
+      null,
+      null
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a row with a path on both sides converts the same way on both paths, a null object on either side included"
+  )
+  void aRowWithAPathOnBothSidesConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(BOTH_SIDES_PATHS, "Nb");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** The predicates, suppliers and functions the when(...) and toOrElse rows name. */
+  private static final String WHEN_HELP =
+    "public class %1$sHelp {\n" +
+    "  public static final java.util.function.Predicate<Object> ALWAYS = o -> true;\n" +
+    "  public static boolean yes(final Object o) { return true; }\n" +
+    "  public static boolean no(final Object o) { return false; }\n" +
+    "  public static boolean boom(final Object o) { throw new IllegalArgumentException(\"no \" + o); }\n" +
+    "  public static Boolean unknown(final Object o) { return null; }\n" +
+    "  public static boolean negative(final Integer n) { return n < 0; }\n" +
+    "  public static String k() { return \"k\"; }\n" +
+    "  public static Integer zero() { return 0; }\n" +
+    "  public static final %1$sHelp INSTANCE = new %1$sHelp();\n" +
+    "  public boolean accepts(final Object o) { return true; }\n" +
+    "  public static String full(final %1$sSrc s) { return s.a() + \"!\"; }\n" +
+    "}\n";
+
+  /** {@code to(...)} of a row a when(...) row gates, written in full for the runtime mapper. */
+  private static String gated(final String predicate, final String inner) {
+    return "when(" + predicate + ", " + MAPPING_PREFIX + inner + ")";
+  }
+
+  /**
+   * The declarations of a pair of {@code Src(String a, String c)} and {@code Tgt(String a, String
+   * c)}.
+   */
+  private static List<String> flatGated(final boolean forwardOnly, final String... rows) {
+    return List.of(
+      sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", \"c\")"),
+      sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", \"y\")"),
+      WHEN_HELP,
+      typedField(forwardOnly, rows),
+      runtimeMapper(forwardOnly, "", rows)
+    );
+  }
+
+  private static final List<NestedPath> WHEN_ROWS = List.of(
+    new NestedPath(
+      "a constant over a namesake it pairs with, under a predicate the source passes",
+      false,
+      flatGated(false, gated("%1$sHelp::yes", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant over a namesake it pairs with, under a predicate the source fails",
+      false,
+      flatGated(false, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"c\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a supplied value under a predicate held in a static final field",
+      false,
+      flatGated(false, gated("%1$sHelp.ALWAYS", "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::k)")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant under a predicate that is a method of a static final field",
+      false,
+      flatGated(false, gated("%1$sHelp.INSTANCE::accepts", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "#0(a=\"a\", c=\"k\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant over a namesake a drop row reads, under a predicate the source fails",
+      false,
+      flatGated(
+        false,
+        "<%1$sSrc, %1$sTgt>drop(%1$sSrc::c)",
+        gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")
+      ),
+      "#0(a=\"a\", c=null)",
+      "#0(a=\"x\", c=null)",
+      "#0(a=\"x\", c=\"c\")"
+    ),
+    new NestedPath(
+      "a source path into a namesake a drop row reads, under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, String label", "new %1$sSrc(new %1$sMid(\"n\", 4), \"l\")"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"m\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::label)",
+          gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt>drop(%1$sSrc::label)",
+          gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")
+        )
+      ),
+      "#0(label=null)",
+      "#0(customer=null, label=null)",
+      "#0(customer=#1(name=\"n\", age=4), label=\"l\")"
+    ),
+    new NestedPath(
+      "a value supplied into a record of values no write strategy allocates, under a predicate the source fails",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public class %1$sHeld {\n  private %1$sHeld(final String v) {}\n}\n",
+        "public record %1$sRec(String[] names, java.util.List<String> tags, java.time.LocalDate day, %1$sHeld held," +
+          " double rate) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return null; }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=#1(names=null, tags=null, day=null, held=null, rate=0.0))",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a value computed from the source under a predicate the source passes",
+      false,
+      flatGated(false, gated("%1$sHelp::yes", "<%1$sSrc, %1$sTgt, String>compute(%1$sTgt::c, %1$sHelp::full)")),
+      "#0(a=\"a\", c=\"a!\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a constant under a predicate that is a method of the source",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a, boolean open", "new %1$sSrc(\"a\", false)"),
+        sampled("%1$sTgt", "String a, boolean open, String c", "new %1$sTgt(\"x\", true, \"y\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(true, gated("%1$sSrc::open", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+        runtimeMapper(true, "", gated("%1$sSrc::open", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")"))
+      ),
+      "#0(a=\"a\", open=false, c=null)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a value supplied into a record no source property fills, under a predicate the source fails, which leaves its default tree",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public record %1$sLeaf(String z) {}\n",
+        "public record %1$sRec(String x, int y, %1$sLeaf leaf) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return new %1$sRec(\"m\", 1, null); }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=#1(x=null, y=0, leaf=#2(z=null)))",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a value supplied into a record that reaches itself, under a predicate the source fails, which leaves it null",
+      true,
+      List.of(
+        sampled("%1$sSrc", "String a", "new %1$sSrc(\"a\")"),
+        "public record %1$sRec(String x, int y, %1$sRec next) {}\n",
+        sampled("%1$sTgt", "String a, %1$sRec r", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s").replace(
+          "public static String k()",
+          "public static %1$sRec rec() { return new %1$sRec(\"m\", 1, null); }\n  public static String k()"
+        ),
+        typedField(true, gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)")),
+        runtimeMapper(true, "", gated("%1$sHelp::no", "<%1$sSrc, %1$sTgt, %1$sRec>compute(%1$sTgt::r, %1$sHelp::rec)"))
+      ),
+      "#0(a=\"a\", r=null)",
+      null,
+      null
+    ),
+    new NestedPath(
+      "a source property written through a target path under a predicate the source passes, never read back",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=#1(label=\"n\", n=0), qty=3)",
+      "#0(nick=null, qty=1)",
+      "#0(nick=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a source property written through a target path under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::no", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::no", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=null, qty=3)",
+      "#0(nick=null, qty=1)",
+      "#0(nick=\"n\", qty=1)"
+    ),
+    new NestedPath(
+      "a source path read into a converted namesake under a predicate the source fails",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, Integer label", "new %1$sSrc(new %1$sMid(\"n\", 4), 9)"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"12\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)")),
+        runtimeMapper(false, "", gated("%1$sHelp::no", "to(" + BOTH_NAME + ", %1$sTgt::label)"))
+      ),
+      "#0(label=\"9\")",
+      "#0(customer=null, label=12)",
+      "#0(customer=#1(name=\"n\", age=4), label=12)"
+    ),
+    new NestedPath(
+      "a source path read into a converted namesake under a predicate the source passes",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, Integer label", "new %1$sSrc(new %1$sMid(\"n\", 4), 9)"),
+        MID,
+        sampled("%1$sTgt", "String label", "new %1$sTgt(\"12\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", %1$sTgt::label)")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", %1$sTgt::label)"))
+      ),
+      "#0(label=\"n\")",
+      "#0(customer=null, label=12)",
+      "#0(customer=#1(name=\"n\", age=4), label=12)"
+    ),
+    new NestedPath(
+      "a path into a path under a predicate the source passes, a null object on the way",
+      false,
+      List.of(
+        sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(null, 3)"),
+        MID,
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::yes", "to(" + BOTH_NAME + ", " + BOTH_TO_LABEL + ")"))
+      ),
+      "#0(ship=null, qty=3)",
+      "#0(customer=null, qty=1)",
+      "#0(customer=null, qty=1)"
+    ),
+    new NestedPath(
+      "a source path of one step under a predicate, whose property still pairs by name",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String label, String other", "new %1$sSrc(\"l\", \"o\")"),
+        sampled("%1$sTgt", "String label, String other", "new %1$sTgt(\"m\", \"p\")"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          gated("%1$sHelp::yes", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::label") + ", %1$sTgt::other)")
+        ),
+        runtimeMapper(
+          false,
+          "",
+          gated("%1$sHelp::yes", "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::label") + ", %1$sTgt::other)")
+        )
+      ),
+      "#0(label=\"l\", other=\"l\")",
+      "#0(label=\"m\", other=\"p\")",
+      "#0(label=\"m\", other=\"p\")"
+    ),
+    new NestedPath(
+      "a source property written through a gated target path and into another property, which claims it once",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, String alias, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), \"a\", 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"),
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::nick, %1$sTgt::alias)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          gated("%1$sHelp::yes", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"),
+          "<%1$sSrc, %1$sTgt, String>to(%1$sSrc::nick, %1$sTgt::alias)"
+        )
+      ),
+      "#0(ship=#1(label=\"n\", n=0), alias=\"n\", qty=3)",
+      "#0(nick=\"a\", qty=1)",
+      "#0(nick=\"a\", qty=1)"
+    ),
+    new NestedPath(
+      "a toOrElse whose predicate accepts a blank value, both ways",
+      false,
+      flatGated(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)"),
+      "#0(a=\"a\", c=\"c\")",
+      "#0(a=\"x\", c=\"y\")",
+      "#0(a=\"x\", c=\"y\")"
+    ),
+    new NestedPath(
+      "a toOrElse whose predicate accepts the value, which takes the fallback",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", \" \")"),
+        sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", \" \")"),
+        WHEN_HELP,
+        typedField(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)"),
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", String::isBlank)")
+      ),
+      "#0(a=\"a\", c=\"d\")",
+      "#0(a=\"x\", c=\" \")",
+      "#0(a=\"x\", c=\" \")"
+    ),
+    new NestedPath(
+      "a toOrElse given a null value, which takes the fallback without testing the predicate",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, String c", "new %1$sSrc(\"a\", null)"),
+        sampled("%1$sTgt", "String a, String c", "new %1$sTgt(\"x\", null)"),
+        WHEN_HELP,
+        typedField(false, "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", %1$sHelp::boom)"),
+        runtimeMapper(false, "", "<%1$sSrc, %1$sTgt, String>toOrElse(%1$sSrc::c, %1$sTgt::c, \"d\", %1$sHelp::boom)")
+      ),
+      "#0(a=\"a\", c=\"d\")",
+      "#0(a=\"x\", c=null)",
+      "#0(a=\"x\", c=null)"
+    ),
+    new NestedPath(
+      "a toOrElseGet whose predicate accepts the value, which takes the supplied fallback",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String a, Integer c", "new %1$sSrc(\"a\", -2)"),
+        sampled("%1$sTgt", "String a, Integer c", "new %1$sTgt(\"x\", 5)"),
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(
+          false,
+          "<%1$sSrc, %1$sTgt, Integer>toOrElseGet(%1$sSrc::c, %1$sTgt::c, %1$sHelp::zero, %1$sHelp::negative)"
+        ),
+        runtimeMapper(
+          false,
+          "",
+          "<%1$sSrc, %1$sTgt, Integer>toOrElseGet(%1$sSrc::c, %1$sTgt::c, %1$sHelp::zero, %1$sHelp::negative)"
+        )
+      ),
+      "#0(a=\"a\", c=0)",
+      "#0(a=\"x\", c=5)",
+      "#0(a=\"x\", c=5)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a when(...) row and a toOrElse row with a predicate convert the same way on both paths, in each direction"
+  )
+  void aConditionalRowConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(WHEN_ROWS, "Wh");
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A when(...) row whose predicate throws, and the failure both paths owe for {@code
+   * Src.sample()}.
+   */
+  private record ThrowingWhen(String name, List<String> declarations, String failure) {}
+
+  private static final List<ThrowingWhen> THROWING_WHEN = List.of(
+    new ThrowingWhen(
+      "a predicate throwing an exception of its own, gating a constant",
+      flatGated(false, gated("%1$sHelp::boom", "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\")")),
+      "IllegalStateException: Mapping.when(...) predicate threw — inner=Constant (sourceField=<telescope>)." +
+        " Predicate failure: IllegalArgumentException: no %1$sSrc[a=a, c=c] / IllegalArgumentException"
+    ),
+    new ThrowingWhen(
+      "a predicate unboxing a null result, gating a write through a target path",
+      List.of(
+        sampled("%1$sSrc", "String nick, int qty", "new %1$sSrc(\"n\", 3)"),
+        sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(null, 1)"),
+        DOCK,
+        WHEN_HELP.replace("%1$sSrc s) { return s.a()", "Object s) { return s"),
+        typedField(false, gated("%1$sHelp::unknown", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")")),
+        runtimeMapper(false, "", gated("%1$sHelp::unknown", "to(%1$sSrc::nick, " + BOTH_TO_LABEL + ")"))
+      ),
+      "IllegalStateException: Mapping.when(...) predicate threw — inner=TelescopeTo (sourceField=nick)." +
+        " Predicate failure: NullPointerException / NullPointerException"
+    )
+  );
+
+  @Test
+  @DisplayName("a when(...) predicate that throws fails forward in the same words on both paths")
+  void aThrowingWhenPredicateFailsInTheSameWordsOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : THROWING_WHEN) {
+      final var prefix = "Wt" + index++;
+      final var header = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), header + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": " + plain.errorMessages());
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final var nested = nestedBridgesFirst(processed, plain, prefix);
+      final var bridge = emitted(processed, plain, prefix, nested);
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var sample = src.getMethod("sample").invoke(null);
+      final var owed = row.failure().formatted(prefix);
+      final var generated = failureOf(() -> bridge.getMethod("forward", src).invoke(null, sample));
+      final var reflective = failureOf(() -> mapper.forward(sample));
+      if (!owed.equals(generated)) failures.add(row.name() + ": generated gave " + generated + ", owed " + owed);
+      if (!owed.equals(reflective)) failures.add(row.name() + ": reflective gave " + reflective + ", owed " + owed);
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code attempt} threw, as its class, its message and its cause's class, or what it gave.
+   */
+  private static String failureOf(final Attempt attempt) {
+    try {
+      return "gave " + attempt.get();
+    } catch (final InvocationTargetException e) {
+      return described(e.getCause());
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return described(e);
+    }
+  }
+
+  private static String described(final Throwable failure) {
+    return (
+      failure.getClass().getSimpleName() +
+      ": " +
+      failure.getMessage() +
+      " / " +
+      (failure.getCause() == null ? "no cause" : failure.getCause().getClass().getSimpleName())
+    );
+  }
+
+  /**
+   * A {@code @Bridge} field initialised by {@code Telescope.merge} and the runtime merge of the
+   * same rows: the declarations, each with {@code %1$s} as the row's prefix, among them {@code
+   * %1$sBag} with a {@code sample()} bag and the {@code args()} the typed {@code forward} takes,
+   * and what both owe: the target forward builds, or the failure both report. {@code generated} is
+   * the refusal the processor owes where it refuses the rows, which the runtime owes when the
+   * mapper is built.
+   */
+  private record MergeCase(String name, List<String> declarations, String owed, String generated) {}
+
+  private static final String MERGE_STEP = "io.github.eschizoid.telescope.mapping.MergeStep.";
+  private static final String MERGE_CUSTOMER =
+    "public record %1$sCustomer(String id, String email, String region) {}\n";
+  private static final String MERGE_AUDIT =
+    "public record %1$sAudit(String createdBy, long createdAt, String region) {}\n";
+  private static final String MERGE_TGT =
+    "public record %1$sTgt(String id, String email, String createdBy, long createdAt, String region) {}\n";
+
+  /**
+   * The declarations of a merge into {@code %1$sTgt} of {@code rows}, given {@code bag} and {@code
+   * args}.
+   */
+  private static List<String> merging(
+    final List<String> records,
+    final String bag,
+    final String args,
+    final String... rows
+  ) {
+    final var qualified = new ArrayList<String>();
+    for (final var row : rows) qualified.add(MERGE_STEP + row);
+    final var all = new ArrayList<>(records);
+    all.add(
+      "public class %1$sCarrier {\n" +
+        "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+        "  public static final io.github.eschizoid.telescope.conversion.Mapper<io.github.eschizoid.telescope.Sources," +
+        " %1$sTgt> MERGE = io.github.eschizoid.telescope.Telescope.merge(%1$sTgt.class,\n    " +
+        String.join(",\n    ", qualified) +
+        ");\n}\n"
+    );
+    all.add(
+      "public class %1$sBag {\n" +
+        "  public static io.github.eschizoid.telescope.Sources sample() {\n" +
+        "    return io.github.eschizoid.telescope.Sources.of(" +
+        bag +
+        ");\n  }\n" +
+        "  public static Object[] args() {\n    return new Object[] { " +
+        args +
+        " };\n  }\n}\n"
+    );
+    all.add(
+      "public class %1$sRuntime {\n" +
+        "  public static Object mapper() {\n" +
+        "    return io.github.eschizoid.telescope.Telescope.merge(%1$sTgt.class,\n      " +
+        String.join(",\n      ", qualified) +
+        ");\n  }\n}\n"
+    );
+    return all;
+  }
+
+  private static final String CUSTOMER = "new %1$sCustomer(\"c-1\", \"a@x\", \"emea\")";
+  private static final String AUDIT = "new %1$sAudit(\"sys\", 7L, \"apac\")";
+
+  private static final List<MergeCase> MERGES = List.of(
+    new MergeCase(
+      "two sources backfilled by name, the first to name a property filling it",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        CUSTOMER + ", " + AUDIT,
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"emea\")",
+      null
+    ),
+    new MergeCase(
+      "two sources backfilled in the other order, the other filling the name both carry",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        AUDIT + ", " + CUSTOMER,
+        AUDIT + ", " + CUSTOMER,
+        "auto(%1$sAudit.class)",
+        "auto(%1$sCustomer.class)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "an explicit row per source, a component no row writes left null",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        CUSTOMER + ", " + AUDIT,
+        "from(%1$sCustomer::email, %1$sTgt::email)",
+        "from(%1$sAudit::createdAt, %1$sTgt::createdAt)",
+        "from(%1$sAudit::region, %1$sTgt::region)"
+      ),
+      "#0(id=null, email=\"a@x\", createdBy=null, createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "an explicit row before a backfill, which the backfill leaves",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER + ", " + AUDIT,
+        AUDIT + ", " + CUSTOMER,
+        "from(%1$sAudit::region, %1$sTgt::region)",
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)",
+        "from(%1$sAudit::createdAt, %1$sTgt::createdAt)"
+      ),
+      "#0(id=\"c-1\", email=\"a@x\", createdBy=\"sys\", createdAt=7, region=\"apac\")",
+      null
+    ),
+    new MergeCase(
+      "a bag missing a source a row reads, which forward refuses at its first component",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        CUSTOMER,
+        CUSTOMER + ", null",
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      "IllegalStateException: " +
+        PairingMessages.mergeSourceMissing(PACKAGE + ".%1$sAudit", "%1$sAudit", "createdBy", List.of("%1$sCustomer")) +
+        " / no cause",
+      null
+    ),
+    new MergeCase(
+      "a nested record, handed across as it is",
+      merging(
+        List.of(
+          "public record %1$sAddr(String city) {}\n",
+          "public record %1$sCustomer(String id, %1$sAddr addr) {}\n",
+          MERGE_AUDIT,
+          "public record %1$sTgt(String id, %1$sAddr addr, String createdBy) {}\n"
+        ),
+        "new %1$sCustomer(\"c\", new %1$sAddr(\"Oslo\")), " + AUDIT,
+        "new %1$sCustomer(\"c\", new %1$sAddr(\"Oslo\")), " + AUDIT,
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)"
+      ),
+      "#0(id=\"c\", addr=#1(city=\"Oslo\"), createdBy=\"sys\")",
+      null
+    ),
+    new MergeCase(
+      "five sources, each read through its own row",
+      merging(
+        List.of(
+          "public record %1$sA(String a) {}\n",
+          "public record %1$sB(String b) {}\n",
+          "public record %1$sC(int c) {}\n",
+          "public record %1$sD(String d) {}\n",
+          "public record %1$sE(String e) {}\n",
+          "public record %1$sTgt(String a, String b, int c, String d, String e) {}\n"
+        ),
+        "new %1$sE(\"e\"), new %1$sA(\"a\"), new %1$sC(3), new %1$sB(\"b\"), new %1$sD(\"d\")",
+        "new %1$sA(\"a\"), new %1$sB(\"b\"), new %1$sC(3), new %1$sD(\"d\"), new %1$sE(\"e\")",
+        "auto(%1$sA.class)",
+        "from(%1$sB::b, %1$sTgt::b)",
+        "auto(%1$sC.class)",
+        "from(%1$sD::d, %1$sTgt::d)",
+        "auto(%1$sE.class)"
+      ),
+      "#0(a=\"a\", b=\"b\", c=3, d=\"d\", e=\"e\")",
+      null
+    ),
+    new MergeCase(
+      "a backfill matching a name of two types, refused in the same words",
+      merging(
+        List.of("public record %1$sCustomer(String id, String createdAt) {}\n", MERGE_AUDIT, MERGE_TGT),
+        "",
+        "",
+        "from(%1$sAudit::createdBy, %1$sTgt::createdBy)",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(1, "%1$sCustomer", "createdAt", "class java.lang.String", "long")
+    ),
+    new MergeCase(
+      "a backfill matching a name of two parameterized types, refused naming each as the runtime names it",
+      merging(
+        List.of(
+          "public record %1$sCustomer(java.util.List<java.util.List<String>> xs) {}\n",
+          "public record %1$sTgt(java.util.List<java.util.Set<? extends Number>> xs) {}\n"
+        ),
+        "",
+        "",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(
+        0,
+        "%1$sCustomer",
+        "xs",
+        "java.util.List<java.util.List<java.lang.String>>",
+        "java.util.List<java.util.Set<? extends java.lang.Number>>"
+      )
+    ),
+    new MergeCase(
+      "a backfill matching a name of an interface and a class, refused naming each as the runtime names it",
+      merging(
+        List.of("public record %1$sCustomer(Runnable r) {}\n", "public record %1$sTgt(Object r) {}\n"),
+        "",
+        "",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeAutoTypesDiffer(
+        0,
+        "%1$sCustomer",
+        "r",
+        "interface java.lang.Runnable",
+        "class java.lang.Object"
+      )
+    ),
+    new MergeCase(
+      "a row writing a component an earlier row writes, refused in the same words",
+      merging(
+        List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT),
+        "",
+        "",
+        "auto(%1$sCustomer.class)",
+        "from(%1$sAudit::region, %1$sTgt::region)"
+      ),
+      null,
+      PairingMessages.mergeClaimedTwice(1, "region")
+    ),
+    new MergeCase(
+      "a row writing no component of the target, refused in the same words",
+      merging(List.of(MERGE_CUSTOMER, MERGE_AUDIT, MERGE_TGT), "", "", "from(%1$sCustomer::id, %1$sTgt::toString)"),
+      null,
+      PairingMessages.mergeNotATarget(
+        0,
+        "toString",
+        "%1$sTgt",
+        List.of("id", "email", "createdBy", "createdAt", "region")
+      )
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a merge on a @Bridge field builds the same target on both paths, typed or from the bag, and refuses alike"
+  )
+  void aMergeBuildsTheSameTargetOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : MERGES) {
+      final var prefix = "Mg" + index++;
+      final var header = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), header + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new)
+      );
+      final var classes = plain.define(MethodHandles.lookup());
+      final var built = failureOf(() ->
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null)
+      );
+      if (row.generated() != null) {
+        final var refusal = row.generated().formatted(prefix);
+        if (processed.success() || !processed.hasError(refusal)) {
+          failures.add(row.name() + ": the processor owed '" + refusal + "', saw " + processed.errorMessages());
+        }
+        if (!built.equals("IllegalArgumentException: " + refusal + " / no cause")) {
+          failures.add(row.name() + ": the runtime owed '" + refusal + "', saw " + built);
+        }
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var warnings = warningsInGenerated(processed);
+      if (!warnings.isEmpty()) failures.add(row.name() + ": the generated code warns: " + warnings);
+      @SuppressWarnings("unchecked")
+      final var mapper = (Mapper<Object, Object>) classes
+        .get(PACKAGE + "." + prefix + "Runtime")
+        .getMethod("mapper")
+        .invoke(null);
+      final var bag = classes.get(PACKAGE + "." + prefix + "Bag");
+      final var sources = bag.getMethod("sample").invoke(null);
+      final var args = (Object[]) bag.getMethod("args").invoke(null);
+      final var bridge = defineAdded(processed, plain, name -> true).get(PACKAGE + ".SourcesTo" + prefix + "TgtBridge");
+      if (bridge == null) {
+        failures.add(row.name() + ": the processor wrote no bridge");
+        continue;
+      }
+      final var typed = Arrays.stream(bridge.getMethods())
+        .filter(m -> m.getName().equals("forward") && m.getParameterCount() == args.length)
+        .filter(m -> m.getParameterCount() != 1 || m.getParameterTypes()[0] != Sources.class)
+        .findFirst()
+        .orElseThrow();
+      final var owed = row.owed().formatted(prefix);
+      final var attempts = new LinkedHashMap<String, Attempt>();
+      attempts.put("reflective", () -> mapper.forward(sources));
+      attempts.put("generated from the bag", () -> bridge.getMethod("forward", Sources.class).invoke(null, sources));
+      attempts.put("generated from typed sources", () -> typed.invoke(null, args));
+      for (final var attempt : attempts.entrySet()) {
+        final var gave = owed.startsWith("#") ? shapeOf(attempt.getValue()) : failureOf(attempt.getValue());
+        if (!gave.equals(owed)) failures.add(
+          row.name() + ", " + attempt.getKey() + ": gave " + gave + ", owed " + owed
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
   private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
     throws ReflectiveOperationException {
@@ -13756,13 +15023,6 @@ class CrossPathCorpusTest {
    */
   private static final String PATH_ROW_UNCOMPILED = "a telescope path or another expression has no generated form yet";
 
-  /**
-   * What the processor refuses a row with a path on both sides with, which has no generated form
-   * yet.
-   */
-  private static final String PATH_BOTH_UNCOMPILED =
-    "a row whose source and target are both telescope paths has no generated form yet";
-
   /** The value a compute row supplies, and the predicate a when row gates on, for each row. */
   private static final String UNPAIRED_HELP =
     "public class %1$sHelp {\n" +
@@ -13891,7 +15151,7 @@ class CrossPathCorpusTest {
         TARGET_B_UNPAIRED_X,
         "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
       ),
-      PATH_BOTH_UNCOMPILED,
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -13913,7 +15173,7 @@ class CrossPathCorpusTest {
           MAPPING_PREFIX +
           "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
       ),
-      "when(...) has no generated form yet",
+      NO_SOURCE_FOR_B,
       NO_SOURCE_FOR_B
     ),
     new UnpairedBeside(
@@ -13980,6 +15240,16 @@ class CrossPathCorpusTest {
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
+      "a source property beside a row given a path on both sides",
+      unpairedDeclarations(
+        false,
+        SOURCE_Y_UNPAIRED_X,
+        "<%1$sSrc, %1$sTgt, String>to(" + pathOn("Src", "x") + ", " + pathOn("Tgt", "c") + ")"
+      ),
+      NO_TARGET_FOR_Y,
+      NO_TARGET_FOR_Y
+    ),
+    new UnpairedBeside(
       "a source property beside a constant row under when",
       unpairedDeclarations(
         false,
@@ -13988,7 +15258,7 @@ class CrossPathCorpusTest {
           MAPPING_PREFIX +
           "<%1$sSrc, %1$sTgt, String>constant(%1$sTgt::c, \"k\"))"
       ),
-      "when(...) has no generated form yet",
+      NO_TARGET_FOR_Y,
       NO_TARGET_FOR_Y
     ),
     new UnpairedBeside(
@@ -14604,6 +15874,23 @@ class CrossPathCorpusTest {
         plainRuntime(false)
       ),
       "#0(value=\"x!!\")",
+      true
+    ),
+    // A variable-arity setter of the property's own array type takes the array as it is, as a
+    // Java call passes it, not as the one element of a new array.
+    new IntoRow(
+      "an array property with a variable-arity setter of its own type",
+      List.of(
+        sampled("%1$sSrc", "String[] tags", "new %1$sSrc(new String[] {\"a\", \"b\"})"),
+        "public class %1$sTgt {\n  private String[] tags;\n  private String seen = \"none\";\n  public %1$sTgt() {}\n" +
+          "  public String[] getTags() { return tags; }\n" +
+          "  public void setTags(final String... v) { tags = v; seen = v.length + \":\" + String.join(\"+\", v); }\n" +
+          "  public String getSeen() { return seen; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n",
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "#0(seen=\"2:a+b\", tags=#1())",
       true
     ),
     new IntoRow(
@@ -15400,7 +16687,15 @@ class CrossPathCorpusTest {
         .allMatch(e -> e.getSource() != null && e.getSource().getName().endsWith(prefix + "SrcCarrier.java")),
       () -> "javac owed a refusal of the field's row alone, saw " + describe(processed)
     );
-    assertTrue(processed.generated().isEmpty(), () -> "nothing is written: " + processed.generated().keySet());
+    // The Mappings interfaces call the field, which exists whatever its rows are.
+    assertTrue(
+      processed
+        .generated()
+        .keySet()
+        .stream()
+        .allMatch(name -> name.endsWith("Mappings")),
+      () -> "no bridge is written: " + processed.generated().keySet()
+    );
     final var plain = ProcessorHarness.compileFully(List.of(), List.of(), all.toArray(JavaFileObject[]::new));
     assertFalse(plain.success(), "the runtime row compiled");
     assertTrue(
@@ -17051,6 +18346,64 @@ class CrossPathCorpusTest {
         viaClassRow("children")
       ),
       PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "%1$sCh")
+    ),
+    // A String gives Comparable its own type, so it is never a
+    // Comparable<Integer>, though it is a Comparable.
+    new ViaNeverFits(
+      "a String property, to a class whose forward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final Comparable<Integer> c) { return 1; }\n" +
+          "  public static String backward(final Integer i) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "source",
+        "children",
+        "java.lang.String",
+        "java.lang.Comparable<java.lang.Integer>"
+      )
+    ),
+    // A two-way mapper calls the class's backward, which no Integer can be handed.
+    new ViaNeverFits(
+      "an Integer target, to a class whose backward takes a Comparable of another type",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 1; }\n" +
+          "  public static String backward(final Comparable<Long> c) { return \"b\"; }\n}\n",
+        "public record %1$sSrc(String children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(Integer children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperArgumentsNeverFit(
+        "%1$sSrc",
+        "%1$sTgt",
+        "target",
+        "children",
+        "java.lang.Integer",
+        "java.lang.Comparable<java.lang.Long>"
+      )
+    ),
+    // Containers of two kinds are not lifted over, so the class's methods are
+    // handed each whole property, which they cannot take.
+    new ViaNeverFits(
+      "a List of text into a Set of numbers, through a class converting one element",
+      List.of(
+        "public class %1$sChMap {\n" +
+          "  public static Integer forward(final String s) { return 99; }\n" +
+          "  public static String backward(final Integer i) { return \"via\"; }\n}\n",
+        "public record %1$sSrc(java.util.List<String> children) {}\n",
+        viaChild("children"),
+        "public record %1$sTgt(java.util.Set<Integer> children) {}\n",
+        viaClassRow("children")
+      ),
+      PairingMessages.viaMapperNeverFits("%1$sSrc", "%1$sTgt", "source", "children", "String")
     ),
     new ViaNeverFits(
       "a List source whose element is ? super Ch, through the mapper class",
@@ -18834,6 +20187,510 @@ class CrossPathCorpusTest {
       attempt.get();
       return null;
     } catch (final InvocationTargetException e) {
+      return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return String.valueOf(e.getMessage());
+    }
+  }
+
+  /**
+   * A formatted row on a {@code @Bridge} field, through both paths: the declarations, each with
+   * {@code %1$s} as the cell's prefix, and what both paths owe forward, backward and in {@code
+   * patch}. The field, {@code %1$sSrcCarrier.MAPPER}, is read once from the compilation the
+   * processor ran on, where it runs the generated bridge, and once from the same sources compiled
+   * without it, where it builds the runtime mapper from the same rows. {@code Src.sample()} and
+   * {@code Tgt.sample()} build the inputs, and {@code patch} lays {@code Tgt.sample()} over {@code
+   * Src.sample()}; a forward-only cell owes neither backward nor patch.
+   *
+   * <p>A refusal is owed as {@link #REFUSED} followed by the words both refusals contain: the
+   * processor's error, and the failure of the field's initializer without it. A failure is owed as
+   * {@link #FAILS} followed by the words both thrown messages contain.
+   */
+  private record FormatCell(
+    String name,
+    Directions directions,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  /**
+   * The {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} with {@code rows}, as source.
+   */
+  private static String formatField(final Directions directions, final String... rows) {
+    return directions == Directions.BOTH
+      ? fieldBridge("%1$sSrc", "%1$sTgt", rows)
+      : forwardFieldBridge("%1$sSrc", "%1$sTgt", rows);
+  }
+
+  /** A pair of records holding {@code components}, each with a {@code sample()}. */
+  private static List<String> formatPair(
+    final String srcComponents,
+    final String srcSample,
+    final String tgtComponents,
+    final String tgtSample
+  ) {
+    return List.of(
+      sampled("%1$sSrc", srcComponents, "new %1$sSrc(" + srcSample + ")"),
+      sampled("%1$sTgt", tgtComponents, "new %1$sTgt(" + tgtSample + ")")
+    );
+  }
+
+  private static List<String> formatCell(final List<String> pair, final String... more) {
+    final var all = new ArrayList<>(pair);
+    all.addAll(List.of(more));
+    return all;
+  }
+
+  private static final String FORMAT_DAY = "java.time.LocalDate.of(2026, 12, 31)";
+
+  private static final List<FormatCell> FORMAT_CELLS = List.of(
+    new FormatCell(
+      "a date formats forward and parses back",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "\"01.02.2027\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy\")")
+      ),
+      "#0(day=\"31.12.2026\")",
+      "#0(day=2027-02-01)",
+      "#0(day=2027-02-01)"
+    ),
+    new FormatCell(
+      "a null date converts to null both ways, and patch keeps the source's",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.time.LocalDate day, java.time.LocalDate due",
+          "null, " + FORMAT_DAY,
+          "String day, String due",
+          "null, null"
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy\")",
+          "toFormatted(%1$sSrc::due, %1$sTgt::due, \"dd.MM.yyyy\")"
+        )
+      ),
+      "#0(day=null, due=\"31.12.2026\")",
+      "#0(day=null, due=null)",
+      "#0(day=null, due=2026-12-31)"
+    ),
+    new FormatCell(
+      "an Instant is written and read in the zone a static final field holds",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.time.Instant at",
+          "java.time.Instant.parse(\"2026-12-31T22:30:00Z\")",
+          "String at",
+          "\"2027-01-01 01:15\""
+        ),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd HH:mm\", %1$sZones.PLUS_TWO)"),
+        "public class %1$sZones {\n" +
+          "  public static final java.time.ZoneId PLUS_TWO = java.time.ZoneOffset.ofHours(2);\n}\n"
+      ),
+      "#0(at=\"2027-01-01 00:30\")",
+      "#0(at=2026-12-31T23:15:00Z)",
+      "#0(at=2026-12-31T23:15:00Z)"
+    ),
+    new FormatCell(
+      "a pattern held in a constant, and one that does not read back, format forward only",
+      Directions.FORWARD,
+      formatCell(
+        formatPair(
+          "java.time.LocalDateTime at, java.time.LocalDate day",
+          "java.time.LocalDateTime.of(2026, 12, 31, 8, 5), " + FORMAT_DAY,
+          "String at, String day",
+          "null, null"
+        ),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, %1$sPatterns.STAMP)",
+          "toFormattedOneWay(%1$sSrc::day, %1$sTgt::day, \"MM/yyyy\")"
+        ),
+        "public class %1$sPatterns {\n  public static final String STAMP = \"HH:mm 'on' dd.MM\";\n}\n"
+      ),
+      "#0(at=\"08:05 on 31.12\", day=\"12/2026\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "numbers of each class format forward and parse back exactly",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.math.BigDecimal total, int count, Long big, double weight, java.math.BigInteger id",
+          "new java.math.BigDecimal(\"1234.5\"), 1200, 7L, 2.25, java.math.BigInteger.TEN",
+          "String total, String count, String big, String weight, String id",
+          "\"$9,876.50\", \"3,400\", \"12\", \"0.125\", \"4\""
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"$#,##0.00\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"#,##0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::big, %1$sTgt::big, \"0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::weight, %1$sTgt::weight, \"0.0##\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::id, %1$sTgt::id, \"#000\", java.util.Locale.US)"
+        )
+      ),
+      "#0(total=\"$1,234.50\", count=\"1,200\", big=\"7\", weight=\"2.25\", id=\"010\")",
+      "#0(total=9876.50, count=3400, big=12, weight=0.125, id=4)",
+      "#0(total=9876.50, count=3400, big=12, weight=0.125, id=4)"
+    ),
+    new FormatCell(
+      "null text reads back into a primitive as its default, and a pattern outside ASCII is held as written",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "int count, java.math.BigDecimal total",
+          "5, new java.math.BigDecimal(\"1234.5\")",
+          "String count, String total",
+          "null, \"9.876,50 €\""
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"#,##0.00 €\", java.util.Locale.GERMANY)"
+        )
+      ),
+      "#0(count=\"5\", total=\"1.234,50 €\")",
+      "#0(count=0, total=9876.50)",
+      "#0(count=5, total=9876.50)"
+    ),
+    new FormatCell(
+      "a number formats forward only in the default locale",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("long n", "42L", "String n", "null"),
+        formatField(Directions.FORWARD, "toFormattedNumberOneWay(%1$sSrc::n, %1$sTgt::n, \"0000\")")
+      ),
+      "#0(n=\"0042\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a date that does not parse fails naming the target property, the text and the format",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String shipped", "\"2026/12/31\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::shipped, \"dd.MM.yyyy\")")
+      ),
+      "#0(shipped=\"31.12.2026\")",
+      FAILS + "'shipped' got \"2026/12/31\", not a LocalDate in the format \"dd.MM.yyyy\"",
+      FAILS + "'shipped' got \"2026/12/31\", not a LocalDate in the format \"dd.MM.yyyy\""
+    ),
+    new FormatCell(
+      "a number with text after it fails rather than reading the number before it",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "java.math.BigDecimal.ONE", "String total", "\"$12.50 off\""),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"$#,##0.00\", java.util.Locale.US)"
+        )
+      ),
+      "#0(total=\"$1.00\")",
+      FAILS + "'total' got \"$12.50 off\", not a BigDecimal in the format \"$#,##0.00\"",
+      FAILS + "'total' got \"$12.50 off\", not a BigDecimal in the format \"$#,##0.00\""
+    ),
+    new FormatCell(
+      "a fraction does not read back into an int",
+      Directions.BOTH,
+      formatCell(
+        formatPair("int count", "3", "String count", "\"1.5\""),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"0.#\", java.util.Locale.US)")
+      ),
+      "#0(count=\"3\")",
+      FAILS + "'count' got \"1.5\", not an int in the format \"0.#\"",
+      FAILS + "'count' got \"1.5\", not an int in the format \"0.#\""
+    ),
+    new FormatCell(
+      "a date pattern the JDK does not compile is refused by name",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy{\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': \"dd.MM.yyyy{\" is not a date and time pattern: Pattern includes" +
+        " reserved character: '{'.",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a number pattern the JDK does not compile is refused by name",
+      Directions.BOTH,
+      formatCell(
+        formatPair("double weight", "1.0", "String weight", "null"),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::weight, %1$sTgt::weight, \"#.##.0\")")
+      ),
+      REFUSED +
+        "Mapping.toFormattedNumber(...) on 'weight': \"#.##.0\" is not a number pattern: Multiple decimal" +
+        " separators in pattern \"#.##.0\".",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern whose text does not read back is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"MM/yyyy\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': the text the pattern \"MM/yyyy\" writes, such as \"02/2001\"," +
+        " does not read back as a LocalDate",
+      null,
+      null
+    ),
+    new FormatCell(
+      "an Instant given no zone is refused, naming the overload that takes one",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.time.Instant at", "null", "String at", "null"),
+        formatField(Directions.FORWARD, "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd\")")
+      ),
+      REFUSED +
+        "Mapping.toFormattedOneWay(...) on 'at': an Instant has a date and a time only in a time zone, and the" +
+        " pattern \"yyyy-MM-dd\" is given none. Pass the zone: toFormattedOneWay(source, target, pattern," +
+        " ZoneOffset.UTC).",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern naming a field the class lacks is refused",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalTime opens", "null", "String opens", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::opens, %1$sTgt::opens, \"dd.MM HH:mm\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'opens': the pattern \"dd.MM HH:mm\" names a field a LocalTime does" +
+        " not have",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a forward-only formatted row is refused by a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "null", "String total", "null"),
+        formatField(Directions.BOTH, "toFormattedNumberOneWay(%1$sSrc::total, %1$sTgt::total, \"0.00\")")
+      ),
+      REFUSED +
+        "Telescope.mapper(%1$sSrc, %1$sTgt, ...) cannot accept a Mapping.toFormattedNumberOneWay(...) row for" +
+        " 'total': it formats forward only, and the mapper converts both ways.",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a two-digit year reads another century back, and is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"yy-MM-dd\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': the pattern \"yy-MM-dd\" writes 1899-12-31 as \"99-12-31\", which" +
+        " reads back as 2099-12-31",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a number pattern writing fewer digits than a value has is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("long n", "1L", "String n", "null"),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::n, %1$sTgt::n, \"0.#E0\")")
+      ),
+      REFUSED + "Mapping.toFormattedNumber(...) on 'n': the pattern \"0.#E0\" writes 127 as \"1.3E2\"",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern computed when the mapper is built",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "\"01.02.2027\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, %1$sPatterns.DAY)"),
+        "public class %1$sPatterns {\n  public static final String DAY = String.valueOf(\"dd.MM.yyyy\");\n}\n"
+      ),
+      "#0(day=\"31.12.2026\")",
+      "#0(day=2027-02-01)",
+      null
+    ),
+    new FormatCell(
+      "a zone given as a call",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.time.Instant at", "java.time.Instant.parse(\"2026-12-31T22:30:00Z\")", "String at", "null"),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd HH:mm\", java.time.ZoneOffset.ofHours(2))"
+        )
+      ),
+      "#0(at=\"2027-01-01 00:30\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a locale given as a call",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "new java.math.BigDecimal(\"1234.5\")", "String total", "null"),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedNumberOneWay(%1$sSrc::total, %1$sTgt::total, \"#,##0.00\", java.util.Locale.of(\"de\"))"
+        )
+      ),
+      "#0(total=\"1.234,50\")",
+      null,
+      null
+    )
+  );
+
+  /**
+   * Formatted rows the generated path refuses and the runtime builds, each with the fragment the
+   * generated path refuses it with. The generated bridge holds the formatter as a constant built
+   * when its class loads, from a pattern the processor reads and checks while it compiles, so it
+   * needs the pattern's text and a field it can name for the zone or the locale; a value a call
+   * computes exists only once the mapper is built, which is when the runtime reads it.
+   *
+   * <p>An entry keeps its cell's generated side from failing and nothing else: the runtime side is
+   * held to the cell's owed shapes, and an entry no cell reaches fails.
+   */
+  private static final Map<String, String> FORMATTED_GENERATED_LIMITS = Map.of(
+    // Inherent: the processor needs the pattern's text, which a call computes only at run
+    // time.
+    "a pattern computed when the mapper is built",
+    "takes the pattern of a toFormatted row as a string constant",
+    // Inherent: the bridge's constant formatter names the zone as a field; a call has no
+    // name.
+    "a zone given as a call",
+    "takes the zone of a toFormattedOneWay row as a static final field",
+    // Inherent: the bridge's constant formatter names the locale as a field; a call has no
+    // name.
+    "a locale given as a call",
+    "takes the locale of a toFormattedNumberOneWay row as a static final field"
+  );
+
+  @Test
+  @DisplayName("a formatted row on a @Bridge field formats, parses, refuses and fails the same way on both paths")
+  void aFormattedRowAgreesOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var limited = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var cell : FORMAT_CELLS) {
+      final var prefix = "Fm" + index++;
+      final var head = "package " + PACKAGE + ";\nimport static io.github.eschizoid.telescope.mapping.Mapping.*;\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var carrier = PACKAGE + "." + prefix + "SrcCarrier";
+      final Attempt runtimeField = () -> classes.get(carrier).getField("MAPPER").get(null);
+      if (cell.forward().startsWith(REFUSED)) {
+        final var owed = cell.forward().formatted(prefix).substring(REFUSED.length());
+        if (processed.success() || !processed.hasError(owed)) {
+          failures.add(
+            cell.name() + ": the generated path owed a refusal naming " + owed + ", saw " + describe(processed)
+          );
+        }
+        final var refusal = initializerFailure(runtimeField);
+        if (refusal == null || !refusal.contains(owed)) {
+          failures.add(cell.name() + ": the runtime owed a refusal naming " + owed + ", saw " + refusal);
+        }
+        continue;
+      }
+      final var limit = FORMATTED_GENERATED_LIMITS.get(cell.name());
+      if (limit != null) {
+        limited.add(cell.name());
+        if (processed.success() || !processed.hasError(limit)) {
+          failures.add(
+            cell.name() + ": the generated path owed a refusal naming " + limit + ", saw " + describe(processed)
+          );
+        }
+      } else if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var warnings = warningsInGenerated(processed);
+      if (!warnings.isEmpty()) failures.add(cell.name() + ": the generated code warns: " + warnings);
+      final var sides = new ArrayList<Map.Entry<String, Map.Entry<Object, ClassLoader>>>();
+      if (limit == null) {
+        final var loader = new ServicesLoader(processed);
+        final var generatedField = loader.loadClass(carrier).getField("MAPPER").get(null);
+        if (generatedField.getClass().getClassLoader() != loader) {
+          failures.add(cell.name() + ": the processed field holds " + generatedField.getClass().getName());
+        }
+        sides.add(Map.entry("generated", Map.entry(generatedField, (ClassLoader) loader)));
+      }
+      sides.add(Map.entry("reflective", Map.entry(runtimeField.get(), classes.get(carrier).getClassLoader())));
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", cell.forward()));
+      if (cell.backward() != null) owed.add(Map.entry("backward", cell.backward()));
+      if (cell.patch() != null) owed.add(Map.entry("patch", cell.patch()));
+      for (final var side : sides) {
+        final var field = side.getValue().getKey();
+        final var on = side.getValue().getValue();
+        final Class<?> src = Class.forName(PACKAGE + "." + prefix + "Src", true, on);
+        final Class<?> tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, on);
+        final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+        final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+        for (final var operation : owed) {
+          @SuppressWarnings("unchecked")
+          final Attempt attempt = switch (operation.getKey()) {
+            case "forward" -> cell.directions() == Directions.FORWARD
+              ? () -> ((ForwardMapper<Object, Object>) field).forward(srcSample.get())
+              : () -> ((Mapper<Object, Object>) field).forward(srcSample.get());
+            case "backward" -> () -> ((Mapper<Object, Object>) field).backward(tgtSample.get());
+            default -> () -> ((Mapper<Object, Object>) field).patch(srcSample.get(), tgtSample.get());
+          };
+          final var expected = operation.getValue();
+          if (expected.startsWith(FAILS)) {
+            final var message = expected.substring(FAILS.length()).formatted(prefix);
+            final var thrown = refusalOf(attempt);
+            if (thrown == null || !thrown.contains(message)) {
+              failures.add(
+                cell.name() + ", " + operation.getKey() + ": " + side.getKey() + " owed " + message + ", saw " + thrown
+              );
+            }
+            continue;
+          }
+          final var shape = shapeOf(attempt);
+          if (!shape.equals(expected)) {
+            failures.add(
+              cell.name() + ", " + operation.getKey() + ": " + side.getKey() + " gave " + shape + ", owed " + expected
+            );
+          }
+        }
+      }
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " format cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+    // A register entry no cell reaches is a note about something nobody checks.
+    assertEquals(FORMATTED_GENERATED_LIMITS.keySet(), limited);
+  }
+
+  /** The message a field's initializer fails with, or null where it does not fail. */
+  private static String initializerFailure(final Attempt read) {
+    try {
+      read.get();
+      return null;
+    } catch (final ExceptionInInitializerError e) {
       return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return String.valueOf(e.getMessage());

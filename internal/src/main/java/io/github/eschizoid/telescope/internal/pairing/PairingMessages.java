@@ -331,6 +331,39 @@ public final class PairingMessages {
   }
 
   /**
+   * A {@code via} row whose mapper is handed one side's property as it is, though the parameter its
+   * methods take fixes type arguments no value of the property has: {@code propertyType} gives the
+   * parameter's class other ones, so every call would pass a value of the wrong type.
+   */
+  public static String viaMapperArgumentsNeverFit(
+    final String source,
+    final String target,
+    final String side,
+    final String property,
+    final String propertyType,
+    final String parameterType
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": via row hands the " +
+      side +
+      "'s '" +
+      property +
+      "', a " +
+      propertyType +
+      ", to a mapper of " +
+      parameterType +
+      ", but a " +
+      propertyType +
+      " is never one, since it gives that class other type arguments. Give the row a mapper of the" +
+      " property's own type."
+    );
+  }
+
+  /**
    * A {@code via} row whose mapper's result is written into one side's property, though no value of
    * the class the mapper returns can be an instance of the class the property takes there, the
    * class that side fixes the property's type variable to among them: every write would fail.
@@ -796,6 +829,164 @@ public final class PairingMessages {
       ", or make " +
       record +
       " a bean with a setter for each property the mapper writes."
+    );
+  }
+
+  /**
+   * The refusal of a {@code when(...)} row whose inner row is another {@code when(...)}. Both paths
+   * refuse with these words.
+   */
+  public static String whenNested() {
+    return (
+      "Mapping.when(...) does not nest. Combine predicates with Predicate#and / Predicate#or " +
+      "on a single when(...) row instead of stacking when(when(...))."
+    );
+  }
+
+  /**
+   * The refusal of a {@code when(...)} row whose inner row, of the row class {@code kind}, is not a
+   * row it gates: one reading the source property {@code sourceField} into the target property
+   * {@code targetField}, either null where the row names none. Both paths refuse with these words.
+   */
+  public static String whenWrapsOnly(final String kind, final String sourceField, final String targetField) {
+    final var alternativeHint = kind.equals("ForwardOnlyTransformTo")
+      ? "Mapping.toOneWay(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
+        "predicate into the forward function (return the source value or a default based on the " +
+        "predicate)."
+      : "For field-level predicate gating on flat accessors, use Mapping.toOrElse(src, tgt, " +
+        "defaultValue, predicate) — the source-value predicate applies the default when matched.";
+    final var fields =
+      sourceField == null && targetField == null
+        ? ""
+        : " (" +
+          (sourceField == null ? "<telescope>" : sourceField) +
+          " → " +
+          (targetField == null ? "<telescope>" : targetField) +
+          ")";
+    return (
+      "Mapping.when(...) wraps only telescope-based rows: to(srcAcc, targetTelescope), " +
+      "to(srcTelescope, tgtAcc), to(srcTelescope, tgtTelescope), zip(srcTelescope, tgtTelescope), " +
+      "constant(targetTelescope, value), compute(targetTelescope, supplier). " +
+      alternativeHint +
+      " Got inner row of kind " +
+      kind +
+      fields +
+      "."
+    );
+  }
+
+  /**
+   * What a {@code when(...)} row's predicate throwing {@code failure} is reported with: the class
+   * of the row it gates, {@code inner}, and the source property that row reads, {@code
+   * sourceField}, or null where it reads none. Both paths report it in these words.
+   */
+  public static String whenPredicateThrew(final String inner, final String sourceField, final Throwable failure) {
+    final var failureMessage = failure.getMessage();
+    return (
+      "Mapping.when(...) predicate threw — inner=" +
+      inner +
+      " (sourceField=" +
+      (sourceField == null ? "<telescope>" : sourceField) +
+      "). Predicate failure: " +
+      className(failure.getClass()) +
+      (failureMessage == null ? "" : ": " + failureMessage)
+    );
+  }
+
+  /** Why a mapper {@code Telescope.merge} builds converts no way but forward. Both paths say it. */
+  public static String mergeForwardOnly() {
+    return (
+      "Telescope.merge produces a forward-only mapper — the multi-source case has no general " +
+      "inverse. Use Mapper.forward(...) only; backward/patch are unsupported."
+    );
+  }
+
+  /**
+   * The failure of a merge's forward given no source of the class {@code missing}, by its binary
+   * and simple names, which the row writing the target property {@code targetField} reads, among
+   * the sources of the simple names {@code present}. Both paths fail in these words.
+   */
+  public static String mergeSourceMissing(
+    final String missing,
+    final String missingSimple,
+    final String targetField,
+    final List<String> present
+  ) {
+    return (
+      "Telescope.merge: forward called without a source for class " +
+      missing +
+      " (required by the row writing target field '" +
+      targetField +
+      "'). Sources bag contains: " +
+      present +
+      ". Pass a value of " +
+      missingSimple +
+      " via Sources.of(...) or Sources.builder().with(...)."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which is not a property
+   * of {@code target}, whose properties are {@code known}. Both paths refuse with these words.
+   */
+  public static String mergeNotATarget(
+    final int index,
+    final String tgtName,
+    final String target,
+    final List<String> known
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " targets '" +
+      tgtName +
+      "', which is not a settable component/property of " +
+      target +
+      ". Known fields: " +
+      known +
+      "."
+    );
+  }
+
+  /**
+   * The refusal of the merge row at {@code index} writing {@code tgtName}, which a row before it
+   * writes. Both paths refuse with these words.
+   */
+  public static String mergeClaimedTwice(final int index, final String tgtName) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " writes target field '" +
+      tgtName +
+      "' which an earlier step already claimed. Each target component may be written by at most one row."
+    );
+  }
+
+  /**
+   * The refusal of the {@code auto(source)} merge row at {@code index}, which matched {@code name}
+   * by name between a source property of the type {@code sourceType} and a target property of the
+   * type {@code targetType}, each written as {@code java.lang.reflect.Type} writes it. Both paths
+   * refuse with these words.
+   */
+  public static String mergeAutoTypesDiffer(
+    final int index,
+    final String source,
+    final String name,
+    final String sourceType,
+    final String targetType
+  ) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " auto(" +
+      source +
+      ") matched field '" +
+      name +
+      "' by name but types differ: source=" +
+      sourceType +
+      ", target=" +
+      targetType +
+      ". Pre-convert the value into a matching-typed holder record, or rename to break the name match if this row was unintentional."
     );
   }
 
@@ -1511,16 +1702,34 @@ public final class PairingMessages {
     );
   }
 
-  /** A {@code String} paired with a date or time, whose text has no one format. */
-  public static String textNeedsFormat(final String componentName, final String srcType, final String tgtType) {
-    return (
+  /**
+   * A {@code String} paired with a date or time, whose text has no one format. Where the date or
+   * time is the source, {@code formatsSource}, the refusal names the rows that take the pattern;
+   * otherwise the rows that take a conversion each way.
+   */
+  public static String textNeedsFormat(
+    final String componentName,
+    final String srcType,
+    final String tgtType,
+    final boolean formatsSource
+  ) {
+    final var head =
       "Component '" +
       componentName +
       "' pairs " +
       srcType +
       " with " +
       tgtType +
-      ", and text converts to and from a date or time only in a format, which nothing here names. " +
+      ", and text converts to and from a date or time only in a format, which nothing here names. ";
+    if (formatsSource) {
+      return (
+        head +
+        "Convert it with a toFormatted(source, target, pattern) row, which formats and parses in the" +
+        " pattern the text uses, or a toFormattedOneWay(source, target, pattern) row on a forward-only mapper."
+      );
+    }
+    return (
+      head +
       "Convert it with a " +
       TWO_WAY_ROW +
       " row that parses and formats in the format the text uses, or a " +
@@ -1533,7 +1742,7 @@ public final class PairingMessages {
    * A value a built-in conversion cannot convert: a {@code String} that is no {@code what}, read
    * from {@code componentName}. {@code what} is the phrase {@link #scalarPhrase} gives, and the
    * message reads {@code 'total' got "12x", not a BigDecimal}. An element of a container is named
-   * by the property holding it.
+   * by the property holding it, and {@link #notAValueAt} adds where in the container it is.
    */
   public static String notAValue(final String componentName, final String value, final String what) {
     return notAValueHead(componentName) + value + notAValueTail(what);
@@ -1541,13 +1750,251 @@ public final class PairingMessages {
 
   /** The text {@link #notAValue} puts before the value, which generated code writes as is. */
   public static String notAValueHead(final String componentName) {
+    return notAValueName(componentName) + "' got \"";
+  }
+
+  /**
+   * The component a property paired under two names is named by in a refusal of its value: {@code
+   * name → label} for a source's {@code name} written into a target's {@code label}. An element of
+   * such a property is named by it too, as {@code 'name → label[1]'}.
+   */
+  public static String renamedComponent(final String source, final String target) {
+    return source + " → " + target;
+  }
+
+  /**
+   * The text {@link #notAValue} opens with, up to the end of the property's name: {@code 'total}.
+   * An element of a container is named by the property holding it.
+   */
+  public static String notAValueName(final String componentName) {
     final var bracket = componentName.indexOf('[');
-    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket)) + "' got \"";
+    return "'" + (bracket < 0 ? componentName : componentName.substring(0, bracket));
+  }
+
+  /**
+   * Where an element is in its container, as {@link #notAValueAt} writes it: {@code [1]} for the
+   * element at index 1 of a list, {@code [k]} for the value at key {@code k} of a map.
+   */
+  public static String elementPosition(final Object position) {
+    return "[" + position + "]";
+  }
+
+  /**
+   * {@code message}, a refusal {@link #notAValue} gives for an element of {@code componentName}'s
+   * container, with {@code position}, where that element is as {@link #elementPosition} writes it,
+   * after the property's name: {@code 'a' got "x", not an Integer} for the element at index 1 reads
+   * {@code 'a[1]' got "x", not an Integer}. The position of an element within that element, already
+   * there, follows it, so an element of a list of lists reads {@code 'a[1][0]'}. An element of a
+   * set or of an {@code Optional} has no position but its value, which the message already shows.
+   * Null where {@code message} is no such refusal.
+   */
+  public static String notAValueAt(final String message, final String componentName, final String position) {
+    final var name = notAValueName(componentName);
+    if (message == null || !(message.startsWith(name + "'") || message.startsWith(name + "["))) {
+      return null;
+    }
+    return name + position + message.substring(name.length());
   }
 
   /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
   public static String notAValueTail(final String what) {
     return "\", not " + what;
+  }
+
+  /**
+   * What text a formatted row reads back has to be, with its article: {@code a LocalDate in the
+   * format "dd.MM.yyyy"}, {@code an int in the format "#,##0"}, by {@code type}, the property's
+   * type as a message names it.
+   */
+  public static String formattedPhrase(final String type, final String pattern) {
+    return article(type) + type + " in the format \"" + pattern + "\"";
+  }
+
+  private static String article(final String noun) {
+    return "aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ";
+  }
+
+  /** The head every refusal of a formatted row starts with: the row and the property it formats. */
+  private static String formattedRow(final String row, final String property) {
+    return "Mapping." + row + "(...) on '" + property + "': ";
+  }
+
+  /** A date and time row given a property of a class it does not format. */
+  public static String formatNotATemporal(
+    final String row,
+    final String property,
+    final String type,
+    final String formatted
+  ) {
+    return (
+      formattedRow(row, property) +
+      "it formats " +
+      formatted +
+      ", and " +
+      type +
+      " is none of them. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /** A number row given a property of a class it does not format. */
+  public static String formatNotANumber(final String row, final String property, final String type) {
+    return (
+      formattedRow(row, property) +
+      "it formats a byte, short, int, long, float or double, their wrappers, BigInteger and BigDecimal, and " +
+      type +
+      " is none of them. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A pattern the JDK does not compile, as a {@code kind} pattern ({@code date and time} or {@code
+   * number}), for the reason it gives.
+   */
+  public static String formatPatternInvalid(
+    final String row,
+    final String property,
+    final String pattern,
+    final String kind,
+    final String reason
+  ) {
+    return formattedRow(row, property) + "\"" + pattern + "\" is not a " + kind + " pattern: " + reason + ".";
+  }
+
+  /** A date and time pattern naming a field the property's type does not have. */
+  public static String formatPatternMissesField(
+    final String row,
+    final String property,
+    final String pattern,
+    final String type,
+    final String reason
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the pattern \"" +
+      pattern +
+      "\" names a field " +
+      article(type) +
+      type +
+      " does not have (" +
+      reason +
+      "). Name only the fields of " +
+      type +
+      "."
+    );
+  }
+
+  /** An {@code Instant} formatted through a pattern with fields, given no zone to read them in. */
+  public static String formatNeedsZone(final String row, final String property, final String pattern) {
+    return (
+      formattedRow(row, property) +
+      "an Instant has a date and a time only in a time zone, and the pattern \"" +
+      pattern +
+      "\" is given none. Pass the zone: " +
+      row +
+      "(source, target, pattern, ZoneOffset.UTC)."
+    );
+  }
+
+  /**
+   * A pattern whose text, {@code text} for a sample value, does not read back as a value of the
+   * property's type, which a row converting both ways reads on {@code backward} and {@code patch}.
+   */
+  public static String formatDoesNotReadBack(
+    final String row,
+    final String property,
+    final String pattern,
+    final String type,
+    final String text,
+    final String reason
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the text the pattern \"" +
+      pattern +
+      "\" writes, such as \"" +
+      text +
+      "\", does not read back as " +
+      article(type) +
+      type +
+      " (" +
+      reason +
+      "), which backward and patch need. Name every field " +
+      article(type) +
+      type +
+      " is read from, or use " +
+      row +
+      "OneWay on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A pattern whose text for {@code value}, {@code text}, reads back as {@code back}, another
+   * value, which a row converting both ways would write on {@code backward} and {@code patch}.
+   */
+  public static String formatReadsBackAs(
+    final String row,
+    final String property,
+    final String pattern,
+    final String value,
+    final String text,
+    final String back
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the pattern \"" +
+      pattern +
+      "\" writes " +
+      value +
+      " as \"" +
+      text +
+      "\", which reads back as " +
+      back +
+      ", so backward and patch would write another value than the one formatted. " +
+      (TextFormats.formatsNumber(row)
+        ? "Write every digit the values hold, without scientific notation, or use "
+        : "Write each field in full, such as yyyy for the year and MM for the month, or use ") +
+      row +
+      "OneWay on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A forward-only formatted row given to a mapper that converts both ways, which it cannot do for
+   * {@code property}.
+   */
+  public static String formatOneWayInMapper(
+    final String factory,
+    final String source,
+    final String target,
+    final String row,
+    final String property
+  ) {
+    return (
+      factory +
+      "(" +
+      source +
+      ", " +
+      target +
+      ", ...) cannot accept a Mapping." +
+      row +
+      "(...) row for '" +
+      property +
+      "': it formats forward only, and the mapper converts both ways. Use Telescope.mapperForward(" +
+      source +
+      ", " +
+      target +
+      ", ...), or Mapping." +
+      row.substring(0, row.length() - "OneWay".length()) +
+      "(...), which also parses."
+    );
   }
 
   /**

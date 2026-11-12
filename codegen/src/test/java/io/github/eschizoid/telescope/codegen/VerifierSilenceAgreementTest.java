@@ -114,6 +114,131 @@ class VerifierSilenceAgreementTest {
     """;
 
   @Nested
+  @DisplayName("A via row naming a class whose methods cannot take the property they are handed is refused by both")
+  class ViaClassNeverFits {
+
+    private static final String CLASS = """
+      class @@Hw {
+        public static Integer forward(final String s) { return 99; }
+        public static String backward(final Integer i) { return "via"; }
+      }
+      """;
+
+    @Test
+    @DisplayName("a class converting one element, over a List of text into a Set of numbers")
+    void aListIntoASetThroughAnElementClassIsRefusedByBoth() {
+      assertBothRefuse(
+        verified(
+          "Vcl",
+          CLASS +
+            "record @@Src(List<String> a) {}\n" +
+            "record @@Tgt(java.util.Set<Integer> a) {}\n" +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a class converting one element, over the element itself on the target")
+    void aTargetTheBackwardCannotTakeIsRefusedByBoth() {
+      assertBothRefuse(
+        verified(
+          "Vct",
+          CLASS +
+            "record @@Src(String a) {}\n" +
+            "record @@Tgt(List<Integer> a) {}\n" +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a class whose forward takes a Comparable of another type than a String property gives it")
+    void aParameterOfOtherTypeArgumentsIsRefusedByBoth() {
+      assertBothRefuse(
+        verified(
+          "Vcc",
+          """
+            class @@Hw {
+              public static Integer forward(final Comparable<Integer> c) { return 1; }
+              public static String backward(final Integer i) { return "b"; }
+            }
+            record @@Src(String a) {}
+            record @@Tgt(Integer a) {}
+            """ +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a class whose forward takes a Comparable of the type a String property gives it")
+    void aParameterOfTheSameTypeArgumentsIsAcceptedByBoth() {
+      assertBothAccept(
+        verified(
+          "Vcs",
+          """
+            class @@Hw {
+              public static Integer forward(final Comparable<String> c) { return 1; }
+              public static String backward(final Integer i) { return "b"; }
+            }
+            record @@Src(String a) {}
+            record @@Tgt(Integer a) {}
+            """ +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    /** A class whose backward takes a Comparable of another type than an Integer gives it. */
+    private static final String OTHER_BACKWARD = """
+      class @@Hw {
+        public static Integer forward(final String s) { return 1; }
+        public static String backward(final Comparable<Long> c) { return "b"; }
+      }
+      record @@Src(String a) {}
+      record @@Tgt(Integer a) {}
+      """;
+
+    @Test
+    @DisplayName("a backward of other type arguments is refused on a mapper that converts both ways")
+    void aBackwardOfOtherTypeArgumentsIsRefusedBothWays() {
+      assertBothRefuse(
+        verified(
+          "Vcb",
+          OTHER_BACKWARD + holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a backward of other type arguments is accepted on a forward-only mapper, which never calls it")
+    void aBackwardOfOtherTypeArgumentsIsAcceptedForwardOnly() {
+      assertBothAccept(
+        verified(
+          "Vcf",
+          OTHER_BACKWARD +
+            holder("Telescope.mapperForward(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("a class converting one element, over two Lists it converts element by element")
+    void twoListsTheClassLiftsOverAreAcceptedByBoth() {
+      assertBothAccept(
+        verified(
+          "Vca",
+          CLASS +
+            "record @@Src(List<String> a) {}\n" +
+            "record @@Tgt(List<Integer> a) {}\n" +
+            holder("Telescope.mapper(@@Src.class, @@Tgt.class, via(@@Src::a, @@Tgt::a, @@Hw.class))")
+        )
+      );
+    }
+  }
+
+  @Nested
   @DisplayName("A source property no row reads, whose same-named target a row of its pair fills, is refused by both")
   class KeptName {
 

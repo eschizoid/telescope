@@ -1,6 +1,6 @@
 # ADR-0023: A generated `Mappings` interface for calling a mapper from the value
 
-**Status:** Accepted · **Date:** 2026-10-23
+**Status:** Accepted, shipped · **Date:** 2026-10-23
 
 ## Context
 
@@ -50,7 +50,10 @@ reports it missing if no round writes it. A default method on that interface can
    reverse method.
 4. **Two methods that would share a name on one interface are refused by name,** on the `@Bridge` field that adds the
    second. This happens when one source has mappers to two targets with the same simple name in different packages, or
-   to the same target through two fields. The message names both fields and suggests the hand-written method.
+   to the same target through two fields. The message names both fields and suggests the hand-written method. The
+   refusal applies where the type names its interface in its `implements` clause; for a type that does not, the
+   interface leaves the name out and nothing is reported, so a pair and its reverse each declared by a two-way field,
+   which compiled before the interface existed, still compile.
 5. **The default method costs what calling the field costs.** It reads a `static final` field and makes one call, which
    the JIT inlines; a paired benchmark against `Invoice.DTO.forward(invoice)` holds it to that.
 6. **Without the processor the build fails on the missing interface.** A type that implements `<Source>Mappings` needs

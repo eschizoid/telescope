@@ -73,19 +73,33 @@ Invoice back   = Invoice.DTO.backward(dto);
 Invoice.DTO.explain();                         // "Runs: generated — the bridge InvoiceToInvoiceDtoBridge, ..."
 ```
 
-If you would rather write `invoice.toDto()`, add a one-line method to the record yourself. It costs one extra method
-call over calling the `static final` field, and the DTO can carry the reverse. Telescope can't generate these, because
-an annotation processor can't add methods to your record.
+If you would rather write `invoice.toInvoiceDto()`, name the interface the processor generates for each side in its
+`implements` clause. An annotation processor can't add methods to your record, but it can write an interface whose
+default methods call the field, and javac resolves an `implements` clause once a round has written the type it names:
 
 ```java
-public InvoiceDto toDto() {
-  return DTO.forward(this);
-} // on Invoice
+public record Invoice(Long id, String customer, String currency, long totalCents) implements InvoiceMappings {
+  @Bridge
+  static final Mapper<Invoice, InvoiceDto> DTO = mapper(Invoice.class, InvoiceDto.class /* rows as above */);
+}
 
-public Invoice toInvoice() {
-  return Invoice.DTO.backward(this);
-} // on InvoiceDto
+public record InvoiceDto(
+  Long invoiceId,
+  String customer,
+  String currency,
+  long totalCents
+) implements InvoiceDtoMappings {}
+
+InvoiceDto dto = invoice.toInvoiceDto(); // Invoice.DTO.forward(invoice)
+
+Invoice back = dto.toInvoice(); // Invoice.DTO.backward(dto)
 ```
+
+The default method reads the `static final` field and makes one call, so it costs what calling the field costs. The
+interface exists only where the processor runs, so a type that implements it does not compile without the processor,
+while the field form runs either way. A one-line method of your own under another name, such as
+`InvoiceDto toDto() { return DTO.forward(this); }`, works with or without the processor.
+[codegen.md](codegen.md#a-value-that-converts-itself-typemappings) has the rules.
 
 The field can sit on the source itself, as here, or with other mappers in a class or an interface of their own. A field
 of an interface is `static final` without saying so:

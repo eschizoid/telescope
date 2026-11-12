@@ -96,6 +96,17 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean isExtendable(final Type t) {
+    return (
+      rawType(t) instanceof Class<?> c &&
+      !c.isPrimitive() &&
+      !c.isArray() &&
+      !c.isEnum() &&
+      !Modifier.isFinal(c.getModifiers())
+    );
+  }
+
+  @Override
   public boolean isAbstractType(final Type t) {
     return rawType(t) instanceof Class<?> c && (c.isInterface() || Modifier.isAbstract(c.getModifiers()));
   }

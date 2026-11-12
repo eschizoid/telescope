@@ -21,6 +21,7 @@ import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
+import io.github.eschizoid.telescope.internal.pairing.TextFormats;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -50,7 +51,8 @@ import javax.lang.model.util.ElementFilter;
 /**
  * Reads the rows of a {@code @Bridge} field's {@code Telescope.mapper(...)} or {@code
  * Telescope.mapperForward(...)} initializer into the configuration the bridge emitter takes for a
- * pair. A row the generated bridge cannot express is refused by name, on the row.
+ * pair, and those of a {@code Telescope.merge(...)} initializer into the rows its bridge is written
+ * from. A row the generated bridge cannot express is refused by name, on the row.
  *
  * <p>The rows are read during a processing round, when the bridge can still be written. The tree
  * API resolves a method reference there by attributing the expression on demand, so a row names the
@@ -74,13 +76,18 @@ final class FieldRows {
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
-  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward");
+  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward", "merge");
+  private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
   private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
   private static final Set<String> ROW_FACTORIES = Set.of(
     "to",
     "toOneWay",
     "toOrElse",
     "toOrElseGet",
+    "toFormatted",
+    "toFormattedOneWay",
+    "toFormattedNumber",
+    "toFormattedNumberOneWay",
     "enumTo",
     "via",
     "drop",
@@ -93,7 +100,29 @@ final class FieldRows {
   );
 
   /** What the reader found for a field. */
-  sealed interface Result permits Parsed, Refused {}
+  sealed interface Result permits Parsed, Merged, Refused {}
+
+  /**
+   * The rows of a {@code Telescope.merge(...)} initializer building {@code target} from several
+   * sources: each row, in order, and the classes of the sources, in the order the rows first name
+   * them, which the generated {@code forward} takes as its parameters. {@code rowKinds} and {@code
+   * rowAccessors} are what the generated provider records, as a mapper's are.
+   */
+  record Merged(
+    TypeElement target,
+    List<MergeRow> rows,
+    List<TypeElement> sources,
+    List<String> rowKinds,
+    List<String> rowAccessors
+  ) implements Result {}
+
+  /**
+   * One merge row, at {@code index} among the rows: {@code from(Source::read, Target::written)},
+   * naming its source class, the method it reads and the target property it writes, or {@code
+   * auto(Source.class)}, naming its source class alone, with a null {@code read} and {@code
+   * written}. {@code at} is the tree a refusal of the row is reported on.
+   */
+  record MergeRow(int index, TypeElement source, ExecutableElement read, String written, Tree at) {}
 
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
@@ -127,7 +156,10 @@ final class FieldRows {
     Map<String, String> beanStrategies,
     String defaultStrategy,
     List<SourcePath> sourcePaths,
-    List<TargetPath> targetPaths
+    List<TargetPath> targetPaths,
+    List<PathToPath> pathsToPaths,
+    Map<String, Gate> gatedTargets,
+    Map<Integer, Gate> gatedPaths
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -149,9 +181,10 @@ final class FieldRows {
 
   /**
    * A row reading the source through a path into the target property {@code target}: the properties
-   * the path steps through from the source, in order, and the method each is read by.
+   * the path steps through from the source, in order, and the method each is read by. {@code order}
+   * is the row's place among the field's rows.
    */
-  record SourcePath(String target, List<String> properties, List<String> methods) {
+  record SourcePath(String target, List<String> properties, List<String> methods, int order) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
     String name() {
       return String.join(".", properties);
@@ -160,14 +193,50 @@ final class FieldRows {
 
   /**
    * A row writing the source property {@code source} into the target through a path: the properties
-   * the path steps through from the target, in order, and the method each is read by.
+   * the path steps through from the target, in order, and the method each is read by. {@code order}
+   * is the row's place among the field's rows.
    */
-  record TargetPath(String source, List<String> properties, List<String> methods) {
+  record TargetPath(String source, List<String> properties, List<String> methods, int order) {
     /** The properties the path steps through, joined with dots, as the shared spec names it. */
     String name() {
       return String.join(".", properties);
     }
   }
+
+  /**
+   * A row reading the source through one path and writing the value into the target through
+   * another: {@code read} steps through the source, with no target property, and {@code written}
+   * through the target, with no source property. Both carry the row's place among the field's rows.
+   */
+  record PathToPath(SourcePath read, TargetPath written) {}
+
+  /**
+   * The predicate a {@code when(...)} row gates its inner row on, and what a failure of it names:
+   * {@code predicate} is a {@code Predicate} written as Java, a {@code static final} field holding
+   * one when {@code held}, and otherwise a method reference that takes a cast to the type it tests;
+   * {@code inner} the class of the row the runtime builds for the inner row, and {@code
+   * sourceField} the method name of the source accessor it names, or null. A gated row's target
+   * property is the key of {@link Parsed#gatedTargets}, and a gated path's place among the rows the
+   * key of {@link Parsed#gatedPaths}.
+   */
+  record Gate(String predicate, boolean held, String inner, String sourceField) {
+    /** The Java expression testing {@code value}, of type {@code type}. */
+    String test(final String type, final String value) {
+      return held
+        ? predicate + ".test(" + value + ")"
+        : "((java.util.function.Predicate<? super " + type + ">) " + predicate + ").test(" + value + ")";
+    }
+  }
+
+  /** The rows a {@code when(...)} row gates, by the class the runtime builds for each. */
+  private static final Set<String> GATED = Set.of(
+    "TelescopeTo",
+    "FromTelescopeTo",
+    "TelescopeToTelescope",
+    "Constant",
+    "Compute",
+    "ComputeFromSource"
+  );
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
   record GeneratedClass(String qualifiedName, String source) {}
@@ -506,11 +575,12 @@ final class FieldRows {
         variable.getInitializer() == null ? variable : variable.getInitializer(),
         "@Bridge field " +
           fieldName +
-          " must be initialised by a Telescope.mapper(...) or Telescope.mapperForward(...) call written in" +
-          " place, whose rows the processor compiles into the bridge"
+          " must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)" +
+          " call written in place, whose rows the processor compiles into the bridge"
       );
     }
     final var call = (MethodInvocationTree) variable.getInitializer();
+    if (factory.equals("merge")) return merged(unit, call, fieldName);
     final var strict = factory.equals("mapper");
     final var args = call.getArguments();
     final var source = args.size() < 2 ? null : classLiteral(unit, args.get(0));
@@ -533,6 +603,84 @@ final class FieldRows {
     final var offThePair = rows.hintsOffThePair();
     if (offThePair != null) return offThePair;
     return rows.parsed();
+  }
+
+  /**
+   * The rows of a {@code Telescope.merge(Target.class, rows...)} call written in place: each a
+   * {@code MergeStep.from} of two method references or an {@code auto} of a class literal, into a
+   * public record. Every other row, and every other target, is refused by name.
+   */
+  private Result merged(final CompilationUnitTree unit, final MethodInvocationTree call, final String fieldName) {
+    final var args = call.getArguments();
+    final var target = args.isEmpty() ? null : classLiteral(unit, args.getFirst());
+    if (target == null) {
+      return new Refused(call, "@Bridge field " + fieldName + " must name its target class as a class literal");
+    }
+    if (target.getKind() != ElementKind.RECORD || !target.getModifiers().contains(Modifier.PUBLIC)) {
+      return new Refused(
+        args.getFirst(),
+        "a @Bridge merge builds a public record, and " +
+          target.getSimpleName() +
+          " is not one; build this mapper without @Bridge to run it on the runtime path"
+      );
+    }
+    final var rows = new ArrayList<MergeRow>();
+    final var sources = new LinkedHashSet<TypeElement>();
+    final var kinds = new ArrayList<String>();
+    final var accessors = new ArrayList<String>();
+    for (var i = 1; i < args.size(); i++) {
+      final var index = i - 1;
+      final var arg = args.get(i);
+      if (
+        !(arg instanceof MethodInvocationTree row) ||
+        !(elementAt(unit, row.getMethodSelect()) instanceof ExecutableElement step) ||
+        !(step.getEnclosingElement() instanceof TypeElement owner) ||
+        !owner.getQualifiedName().contentEquals(MERGE_STEP_FQN)
+      ) {
+        return new Refused(
+          arg,
+          "a @Bridge merge compiles only rows written in place as MergeStep.from(Source::property," +
+            " Target::property) or MergeStep.auto(Source.class)"
+        );
+      }
+      final var rowArgs = row.getArguments();
+      if (step.getSimpleName().contentEquals("auto")) {
+        final var source = classLiteral(unit, rowArgs.getFirst());
+        if (source == null) {
+          return new Refused(
+            rowArgs.getFirst(),
+            "a @Bridge merge compiles auto(...) of a class literal, as Customer.class"
+          );
+        }
+        sources.add(source);
+        rows.add(new MergeRow(index, source, null, null, row));
+        kinds.add("AutoSameName");
+        accessors.add(env.getElementUtils().getBinaryName(source) + ">");
+        continue;
+      }
+      for (final var reference : rowArgs) {
+        if (!(reference instanceof MemberReferenceTree)) {
+          return new Refused(
+            reference,
+            "a @Bridge merge compiles from(...) of two method references, as from(Customer::name, Profile::name)," +
+              " so both paths read the same accessor"
+          );
+        }
+      }
+      final var read = trees.getElement(TreePath.getPath(unit, rowArgs.get(0)));
+      final var written = trees.getElement(TreePath.getPath(unit, rowArgs.get(1)));
+      if (!(read instanceof ExecutableElement reader) || !(written instanceof ExecutableElement writer)) {
+        return Refused.javacReports(row);
+      }
+      // An accessor takes the object it reads as its argument, so its reference is unbound and
+      // names the class it is applied to.
+      final var source = (TypeElement) elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      sources.add(source);
+      rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
+      kinds.add("FromInferred");
+      accessors.add(reader.getSimpleName() + ">" + writer.getSimpleName());
+    }
+    return new Merged(target, List.copyOf(rows), List.copyOf(sources), List.copyOf(kinds), List.copyOf(accessors));
   }
 
   /** The rows of one call, accumulated into the pair's configuration. */
@@ -563,6 +711,19 @@ final class FieldRows {
     private String defaultStrategy;
     private final List<SourcePath> sourcePaths = new ArrayList<>();
     private final List<TargetPath> targetPaths = new ArrayList<>();
+    private final List<PathToPath> pathsToPaths = new ArrayList<>();
+
+    /** How many rows have been read, which is the place of the row being read. */
+    private int order;
+
+    /** Whether the row being read is the inner row of a {@code when(...)}, which claims nothing. */
+    private boolean gating;
+
+    /** The target property the last constant or compute row read fills. */
+    private String lastFilled;
+
+    private final Map<String, Gate> gatedTargets = new LinkedHashMap<>();
+    private final Map<Integer, Gate> gatedPaths = new LinkedHashMap<>();
 
     /** The classes a path of these rows steps through below its root, by qualified name. */
     private final Set<String> pathIntermediates = new HashSet<>();
@@ -633,12 +794,16 @@ final class FieldRows {
         beanStrategies,
         defaultStrategy,
         sourcePaths,
-        targetPaths
+        targetPaths,
+        pathsToPaths,
+        gatedTargets,
+        gatedPaths
       );
     }
 
     /** Reads one row, or answers why it cannot be compiled. */
     Refused read(final ExpressionTree arg) {
+      order++;
       if (!(arg instanceof MethodInvocationTree row)) {
         return new Refused(
           arg,
@@ -668,7 +833,8 @@ final class FieldRows {
           row,
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
-            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant and compute, and the hints writeBean and" +
+            " to, toOneWay, toOrElse, toOrElseGet, toFormatted, toFormattedOneWay, toFormattedNumber," +
+            " toFormattedNumberOneWay, via, drop, constant, compute and when, and the hints writeBean and" +
             " writeBeans"
         );
       }
@@ -697,11 +863,7 @@ final class FieldRows {
         case "to" -> switch (rowArgs.size()) {
           case 2 -> pathParameter(rowExec, 0)
             ? pathParameter(rowExec, 1)
-              ? new Refused(
-                  row,
-                  "a row whose source and target are both telescope paths has no generated form yet; write the" +
-                    " source as a path into a target property, or a source property into a target path"
-                )
+              ? pathToPath(row)
               : sourcePath(row)
             : pathParameter(rowExec, 1)
               ? targetPath(row)
@@ -711,6 +873,8 @@ final class FieldRows {
         };
         case "toOneWay" -> converting(row, false);
         case "toOrElse", "toOrElseGet" -> orElse(row, kind);
+        case "when" -> gated(row);
+        case "toFormatted", "toFormattedOneWay", "toFormattedNumber", "toFormattedNumberOneWay" -> formatted(row, kind);
         case "via" -> via(row);
         case "drop" -> drop(row);
         case "constant" -> filled(row, true);
@@ -762,20 +926,17 @@ final class FieldRows {
             "' does not hold; end the path at a property of that type"
         );
       }
-      final var properties = new ArrayList<String>();
-      final var methods = new ArrayList<String>();
-      for (final var hop : hops) {
-        properties.add(((Accessor) hop).property());
-        methods.add(((Accessor) hop).method());
-      }
-      final var named = String.join(".", properties);
+      final var written = sourcePathOf(t.property(), hops);
+      final var named = written.name();
       if (!targetsWritten.add(t.property())) {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
-      final var claimed = sourceWrites.write(named, t.property());
-      if (claimed != null) return new Refused(row, claimed);
-      if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
-      sourcePaths.add(new SourcePath(t.property(), List.copyOf(properties), List.copyOf(methods)));
+      if (!gating) {
+        final var claimed = sourceWrites.write(named, t.property());
+        if (claimed != null) return new Refused(row, claimed);
+        if (sourceWrites.fannedOut(named)) fannedOutAt.putIfAbsent(named, row);
+      }
+      sourcePaths.add(written);
       stepsThrough(hops);
       rowKinds.add("FromTelescopeTo");
       rowAccessors.add(named + ">" + t.method());
@@ -808,21 +969,218 @@ final class FieldRows {
             "' holds; end the path at a property of that type, which backward reads back into it"
         );
       }
+      final var written = targetPathOf(s.property(), hops);
+      final var named = written.name();
+      if (!gating) {
+        final var claimed = sourceWrites.write(s.property(), named);
+        if (claimed != null) return new Refused(row, claimed);
+        if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
+      }
+      targetPaths.add(written);
+      stepsThrough(hops);
+      rowKinds.add("TelescopeTo");
+      rowAccessors.add(s.method() + ">" + named);
+      return null;
+    }
+
+    /**
+     * A {@code when(predicate, row)} row: the inner row, read as it is read on its own but claiming
+     * nothing, gated on the predicate, which forward tests on the source. The runtime refuses a
+     * nested {@code when} and any row it does not gate, and so does the reader, in the same words.
+     * The predicate is a method reference or a {@code static final} field holding one.
+     */
+    private Refused gated(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      if (
+        !(args.get(1) instanceof MethodInvocationTree inner) ||
+        !(elementAt(unit, inner.getMethodSelect()) instanceof ExecutableElement innerExec) ||
+        !(innerExec.getEnclosingElement() instanceof TypeElement innerOwner) ||
+        !innerOwner.getQualifiedName().contentEquals(MAPPING_FQN)
+      ) {
+        return new Refused(
+          args.get(1),
+          "a @Bridge mapper compiles a when(...) row whose inner row is written in place as a Mapping factory call"
+        );
+      }
+      final var kind = innerKind(innerExec, inner);
+      if (kind.equals("Conditional")) return new Refused(row, PairingMessages.whenNested());
+      final var innerArgs = inner.getArguments();
+      if (!GATED.contains(kind)) {
+        return new Refused(
+          row,
+          PairingMessages.whenWrapsOnly(
+            kind,
+            referencedName(innerArgs.get(0)),
+            kind.equals("Drop") ? null : referencedName(innerArgs.get(1))
+          )
+        );
+      }
+      final var predicate = predicateValue(args.get(0));
+      if (predicate instanceof Refused refused) return refused;
+      final var sourceField = kind.equals("TelescopeTo") ? referencedName(innerArgs.get(0)) : null;
+      // The inner row takes the place of the when(...) row among the rows.
+      order--;
+      gating = true;
+      lastFilled = null;
+      final var refused = read(inner);
+      gating = false;
+      if (refused != null) return refused;
+      final var gate = new Gate(((Gate) predicate).predicate(), ((Gate) predicate).held(), kind, sourceField);
+      if (kind.startsWith("Compute") || kind.equals("Constant")) {
+        gatedTargets.put(lastFilled, gate);
+      } else {
+        gatedPaths.put(order, gate);
+      }
+      // The runtime builds one Conditional row, which names the inner row's flat accessors alone.
+      rowKinds.set(rowKinds.size() - 1, "Conditional");
+      rowAccessors.set(
+        rowAccessors.size() - 1,
+        (kind.equals("TelescopeTo") ? sourceField : "") +
+          ">" +
+          (kind.equals("FromTelescopeTo") ? referencedName(innerArgs.get(1)) : "")
+      );
+      return null;
+    }
+
+    /**
+     * The class of the row the runtime builds for {@code row}, a call of the factory {@code exec}.
+     */
+    private String innerKind(final ExecutableElement exec, final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      return switch (exec.getSimpleName().toString()) {
+        case "to" -> args.size() != 2
+          ? "TypedTransformTo"
+          : pathParameter(exec, 0)
+            ? pathParameter(exec, 1)
+              ? "TelescopeToTelescope"
+              : "FromTelescopeTo"
+            : pathParameter(exec, 1)
+              ? "TelescopeTo"
+              : "SameTypedTo";
+        case "toOneWay" -> "ForwardOnlyTransformTo";
+        case "via" -> args.size() == 4 ? "ViaMethods" : classLiteral(unit, args.get(2)) != null ? "ViaClass" : "Via";
+        case "drop" -> "Drop";
+        case "constant" -> "Constant";
+        case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(ComputeForms.computeForm(exec))
+          ? "ComputeFromSource"
+          : "Compute";
+        case "zip" -> "TelescopeToTelescope";
+        case "when" -> "Conditional";
+        default -> "TypedTransformTo";
+      };
+    }
+
+    /** The name of the method {@code arg} references, or null when it is not a method reference. */
+    private static String referencedName(final ExpressionTree arg) {
+      return arg instanceof MemberReferenceTree reference ? reference.getName().toString() : null;
+    }
+
+    /**
+     * The predicate {@code arg} names, as a {@link Gate} carrying only its Java text: a {@code
+     * static final} field holding a predicate, or a method reference written with its class in
+     * full, which the bridge calls through the same kind of predicate the runtime does; or the
+     * refusal.
+     */
+    private Object predicateValue(final ExpressionTree arg) {
+      if (
+        (arg instanceof IdentifierTree || arg instanceof MemberSelectTree) &&
+        elementAt(unit, arg) instanceof VariableElement held &&
+        held.getKind() == ElementKind.FIELD
+      ) {
+        if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+          return new Refused(
+            arg,
+            "a @Bridge mapper tests a predicate the generated bridge can name: a method reference" +
+              " (Orders::shipped), or a static final field holding the predicate; " +
+              held.getSimpleName() +
+              " is not static and final"
+          );
+        }
+        final var owner = (TypeElement) held.getEnclosingElement();
+        if (!reachable(held, owner)) return new Refused(arg, unreachable(owner, held.getSimpleName()));
+        return new Gate(owner.getQualifiedName() + "." + held.getSimpleName(), true, null, null);
+      }
+      if (!(arg instanceof MemberReferenceTree reference)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper tests a predicate written as a method reference (Orders::shipped, String::isBlank)," +
+            " or a static final field holding one; this argument is neither"
+        );
+      }
+      final var checked = call(arg, "v", 1);
+      if (checked instanceof Refused refused) return refused;
+      final var qualifier = elementAt(unit, reference.getQualifierExpression());
+      final String receiver;
+      if (qualifier instanceof TypeElement type) {
+        receiver = type.getQualifiedName().toString();
+      } else {
+        // A reference call(...) accepts is on a type or on a static final field.
+        final var held = (VariableElement) qualifier;
+        receiver = ((TypeElement) held.getEnclosingElement()).getQualifiedName() + "." + held.getSimpleName();
+      }
+      return new Gate(receiver + "::" + reference.getName(), false, null, null);
+    }
+
+    /**
+     * A {@code to(path, path)} row: the properties the source path steps through, read into the
+     * value the target path writes. Both paths end at a property of one type, since forward writes
+     * the value the one reads through the other and backward writes it back. The row claims no
+     * source property and no target property, as the runtime mapper's claims none: the first
+     * property of each path pairs by name, or not, as it would without the row, and the value is
+     * written over it.
+     */
+    private Refused pathToPath(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var read = steps(args.get(0), source);
+      if (read instanceof Refused refused) return refused;
+      final var written = steps(args.get(1), target);
+      if (written instanceof Refused refused) return refused;
+      final var readHops = (List<?>) read;
+      final var writtenHops = (List<?>) written;
+      final var from = (Accessor) readHops.getLast();
+      final var into = (Accessor) writtenHops.getLast();
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(from.type(), into.type()) || !types.isAssignable(into.type(), from.type())) {
+        return new Refused(
+          args.get(1),
+          "the path writes " +
+            shown(into) +
+            ", which is not the " +
+            shown(from) +
+            " the source path reads; end both paths at a property of one type, which backward reads back" +
+            " across"
+        );
+      }
+      final var readPath = sourcePathOf(null, readHops);
+      final var writtenPath = targetPathOf(null, writtenHops);
+      pathsToPaths.add(new PathToPath(readPath, writtenPath));
+      stepsThrough(readHops);
+      stepsThrough(writtenHops);
+      rowKinds.add("TelescopeToTelescope");
+      rowAccessors.add(readPath.name() + ">" + writtenPath.name());
+      return null;
+    }
+
+    /** The source path {@code hops} step through into {@code target}, at this row's place. */
+    private SourcePath sourcePathOf(final String target, final List<?> hops) {
       final var properties = new ArrayList<String>();
       final var methods = new ArrayList<String>();
       for (final var hop : hops) {
         properties.add(((Accessor) hop).property());
         methods.add(((Accessor) hop).method());
       }
-      final var named = String.join(".", properties);
-      final var claimed = sourceWrites.write(s.property(), named);
-      if (claimed != null) return new Refused(row, claimed);
-      if (sourceWrites.fannedOut(s.property())) fannedOutAt.putIfAbsent(s.property(), row);
-      targetPaths.add(new TargetPath(s.property(), List.copyOf(properties), List.copyOf(methods)));
-      stepsThrough(hops);
-      rowKinds.add("TelescopeTo");
-      rowAccessors.add(s.method() + ">" + named);
-      return null;
+      return new SourcePath(target, List.copyOf(properties), List.copyOf(methods), order);
+    }
+
+    /** The target path {@code hops} step through from {@code source}, at this row's place. */
+    private TargetPath targetPathOf(final String source, final List<?> hops) {
+      final var properties = new ArrayList<String>();
+      final var methods = new ArrayList<String>();
+      for (final var hop : hops) {
+        properties.add(((Accessor) hop).property());
+        methods.add(((Accessor) hop).method());
+      }
+      return new TargetPath(source, List.copyOf(properties), List.copyOf(methods), order);
     }
 
     /**
@@ -1008,6 +1366,251 @@ final class FieldRows {
     }
 
     /**
+     * A formatted row, {@code kind}: the source property written into the target's {@code String}
+     * property through a pattern, which must be a string constant, with a zone or a locale held in
+     * a {@code static final} field the bridge can name. The shared spec decides the pattern for the
+     * property's class as the runtime decides it, and the processor writes the row's conversion as
+     * a {@code BridgeFn} class holding the formatter as a constant.
+     */
+    private Refused formatted(final MethodInvocationTree row, final String kind) {
+      final var args = row.getArguments();
+      final var src = accessor(args.get(0), source);
+      if (src instanceof Refused refused) return refused;
+      final var tgt = accessor(args.get(1), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var s = (Accessor) src;
+      final var t = (Accessor) tgt;
+      final var oneWay = TextFormats.oneWay(kind);
+      if (oneWay && strict) {
+        return new Refused(
+          row,
+          PairingMessages.formatOneWayInMapper("Telescope.mapper", simple(source), simple(target), kind, s.property())
+        );
+      }
+      final var pattern = constantString(args.get(2));
+      if (pattern == null) {
+        return new Refused(
+          args.get(2),
+          "a @Bridge mapper takes the pattern of a " +
+            kind +
+            " row as a string constant, which the processor checks and the generated bridge holds; this" +
+            " argument is not one"
+        );
+      }
+      final var number = TextFormats.formatsNumber(kind);
+      final String given;
+      if (args.size() == 4) {
+        given = heldField(args.get(3));
+        if (given == null) {
+          return new Refused(
+            args.get(3),
+            "a @Bridge mapper takes the " +
+              (number ? "locale" : "zone") +
+              " of a " +
+              kind +
+              " row as a static final field the generated bridge can name, such as " +
+              (number ? "Locale.GERMANY" : "ZoneOffset.UTC") +
+              "; this argument is not one"
+          );
+        }
+      } else {
+        given = null;
+      }
+      final var types = env.getTypeUtils();
+      if (!(s.type() instanceof DeclaredType declared)) {
+        return new Refused(
+          args.get(0),
+          "the type " + s.type() + " this accessor reads is no class a formatted row takes"
+        );
+      }
+      final var typeElement = (TypeElement) declared.asElement();
+      final var typeName = env.getElementUtils().getBinaryName(typeElement).toString();
+      final var shown = s.primitive() ? types.unboxedType(s.type()).toString() : typeElement.getSimpleName().toString();
+      final var refusal = TextFormats.refusal(kind, s.property(), typeName, shown, pattern, !number && given != null);
+      if (refusal != null) return new Refused(row, refusal);
+      final var refused = write(row, s.property(), t.property(), kind + ":" + pattern + ":" + given);
+      if (refused != null) return refused;
+      if (!transforms.containsKey(s.property())) {
+        final var name = bridgeName + camel(s.property()) + "Fn";
+        transforms.put(s.property(), qualified(name));
+        if (oneWay) forwardOnly.add(s.property());
+        final var failure = PairingMessages.formattedPhrase(shown, pattern);
+        classes.add(
+          number
+            ? numberFn(name, s.type(), typeName, pattern, given, oneWay, t.property(), failure)
+            : temporalFn(name, s.type(), typeName, pattern, given, oneWay, t.property(), failure)
+        );
+      }
+      rowKinds.add(oneWay ? "ForwardOnlyTransformTo" : "TypedTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
+      return null;
+    }
+
+    /** The value of {@code arg} where it is a string literal or a constant variable; else null. */
+    private String constantString(final ExpressionTree arg) {
+      if (arg instanceof LiteralTree literal) return literal.getValue() instanceof String text ? text : null;
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      return elementAt(unit, arg) instanceof VariableElement variable &&
+        variable.getConstantValue() instanceof String text
+        ? text
+        : null;
+    }
+
+    /**
+     * The qualified reference to the {@code static final} field {@code arg} names, where the
+     * generated bridge can reach it; else null.
+     */
+    private String heldField(final ExpressionTree arg) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (
+        !(elementAt(unit, arg) instanceof VariableElement held) ||
+        held.getKind() != ElementKind.FIELD ||
+        !held.getModifiers().contains(Modifier.STATIC) ||
+        !held.getModifiers().contains(Modifier.FINAL)
+      ) {
+        return null;
+      }
+      final var owner = (TypeElement) held.getEnclosingElement();
+      return reachable(held, owner) ? owner.getQualifiedName() + "." + held.getSimpleName() : null;
+    }
+
+    /** The head of the class the processor writes for a formatted row, through its constant. */
+    private StringBuilder formatHead(final String name, final TypeMirror from, final String constant) {
+      final var out = new StringBuilder();
+      if (!pkg.isEmpty()) out.append("package ").append(pkg).append(";\n\n");
+      return out
+        .append("/** Generated by telescope-codegen: a formatted row of ")
+        .append(bridgeName)
+        .append(". */\n")
+        .append("public final class ")
+        .append(name)
+        .append(" implements io.github.eschizoid.telescope.conversion.BridgeFn<")
+        .append(from)
+        .append(", java.lang.String> {\n\n")
+        .append(constant)
+        .append("\n");
+    }
+
+    /**
+     * The opening of the {@code backward} of a formatted row's class, which for a forward-only row
+     * refuses, as the class of a {@code toOneWay} row does; true where it continues.
+     */
+    private static boolean backwardHead(final StringBuilder out, final TypeMirror from, final boolean oneWay) {
+      out.append("  @Override\n  public ").append(from).append(" backward(final java.lang.String v) {\n");
+      if (oneWay) {
+        out.append("    throw new UnsupportedOperationException(\"the row converts forward only\");\n  }\n}\n");
+        return false;
+      }
+      out.append("    if (v == null) return null;\n");
+      return true;
+    }
+
+    /** The failure of text {@code v} that does not read back, in the spec's words. */
+    private static String failure(final String property, final String phrase) {
+      return (
+        javaLiteral(PairingMessages.notAValueHead(property)) +
+        " + v + " +
+        javaLiteral(PairingMessages.notAValueTail(phrase))
+      );
+    }
+
+    private GeneratedClass temporalFn(
+      final String name,
+      final TypeMirror from,
+      final String typeName,
+      final String pattern,
+      final String zone,
+      final boolean oneWay,
+      final String property,
+      final String phrase
+    ) {
+      final var constant =
+        "  private static final java.time.format.DateTimeFormatter FORMAT =\n" +
+        "    java.time.format.DateTimeFormatter.ofPattern(" +
+        javaLiteral(pattern) +
+        ")" +
+        (zone == null ? "" : ".withZone(" + zone + ")") +
+        ";\n";
+      final var out = formatHead(name, from, constant);
+      out
+        .append("  @Override\n  public java.lang.String forward(final ")
+        .append(from)
+        .append(" v) {\n    return v == null ? null : FORMAT.format(v);\n  }\n\n");
+      if (backwardHead(out, from, oneWay)) {
+        out
+          .append("    try {\n      return FORMAT.parse(v, ")
+          .append(typeName.replace('$', '.'))
+          .append("::from);\n    } catch (final java.time.DateTimeException e) {\n")
+          .append("      throw new java.lang.IllegalArgumentException(")
+          .append(failure(property, phrase))
+          .append(", e);\n    }\n  }\n}\n");
+      }
+      return new GeneratedClass(qualified(name), out.toString());
+    }
+
+    private GeneratedClass numberFn(
+      final String name,
+      final TypeMirror from,
+      final String typeName,
+      final String pattern,
+      final String locale,
+      final boolean oneWay,
+      final String property,
+      final String phrase
+    ) {
+      final var constant =
+        "  private static final java.text.DecimalFormat FORMAT = format();\n\n" +
+        "  private static java.text.DecimalFormat format() {\n" +
+        "    final var format = new java.text.DecimalFormat(\n      " +
+        javaLiteral(pattern) +
+        ",\n      java.text.DecimalFormatSymbols.getInstance(" +
+        (locale == null ? "java.util.Locale.getDefault(java.util.Locale.Category.FORMAT)" : locale) +
+        ")\n    );\n" +
+        "    format.setParseBigDecimal(true);\n" +
+        "    return format;\n" +
+        "  }\n";
+      final var out = formatHead(name, from, constant);
+      out
+        .append("  @Override\n  public java.lang.String forward(final ")
+        .append(from)
+        .append(" v) {\n    return v == null ? null : ((java.text.DecimalFormat) FORMAT.clone()).format(v);\n  }\n\n");
+      if (backwardHead(out, from, oneWay)) {
+        final var scalar = TextFormats.numberOf(typeName);
+        final var exact = TextFormats.exactConversion(scalar);
+        final var inexact = TextFormats.inexactConversion(scalar);
+        out
+          .append("    final var position = new java.text.ParsePosition(0);\n")
+          .append(
+            "    final java.lang.Number parsed = ((java.text.DecimalFormat) FORMAT.clone()).parse(v, position);\n"
+          )
+          .append("    if (parsed == null || position.getIndex() != v.length()) throw failure(v, null);\n");
+        if (inexact != null) {
+          out.append("    return parsed.").append(inexact).append("();\n");
+        } else {
+          out.append("    if (!(parsed instanceof java.math.BigDecimal exact)) throw failure(v, null);\n");
+          if (exact == null) {
+            out.append("    return exact;\n");
+          } else {
+            out
+              .append("    try {\n      return exact.")
+              .append(exact)
+              .append(
+                "();\n    } catch (final java.lang.ArithmeticException e) {\n      throw failure(v, e);\n    }\n"
+              );
+          }
+        }
+        out
+          .append("  }\n\n")
+          .append("  private static java.lang.IllegalArgumentException failure(\n")
+          .append("    final java.lang.String v,\n    final java.lang.Throwable cause\n  ) {\n")
+          .append("    return new java.lang.IllegalArgumentException(")
+          .append(failure(property, phrase))
+          .append(", cause);\n  }\n}\n");
+      }
+      return new GeneratedClass(qualified(name), out.toString());
+    }
+
+    /**
      * {@code side} as the row's converter takes or gives it, where the property's own type names a
      * type variable of its class: javac types a method reference to a member of a class named raw
      * by the erasure, or by the type the row's type arguments give it, and the class the processor
@@ -1175,11 +1778,13 @@ final class FieldRows {
       return null;
     }
 
+    /**
+     * A {@code toOrElse} or {@code toOrElseGet} row: forward writes the fallback where the source
+     * value is null, or where the row's predicate, tested only on a value that is not null, accepts
+     * it, and the value itself otherwise; backward writes the target value back as it is.
+     */
     private Refused orElse(final MethodInvocationTree row, final String kind) {
       final var args = row.getArguments();
-      if (args.size() != 3) {
-        return new Refused(row, kind + "(...) with a predicate has no generated form yet");
-      }
       final var src = accessor(args.get(0), source);
       if (src instanceof Refused refused) return refused;
       final var tgt = accessor(args.get(1), target);
@@ -1205,9 +1810,17 @@ final class FieldRows {
       }
       final var unnamed = unnameable(s, t);
       if (unnamed != null) return unnamed;
+      final String missing;
+      if (args.size() == 4) {
+        final var predicate = predicateValue(args.get(3));
+        if (predicate instanceof Refused refused) return refused;
+        missing = "v == null || " + ((Gate) predicate).test(s.type().toString(), "v");
+      } else {
+        missing = "v == null";
+      }
       final var name = bridgeName + camel(s.property()) + "Fn";
       transforms.put(s.property(), qualified(name));
-      classes.add(bridgeFn(name, s.type(), t.type(), "v == null ? " + fallback + " : v", "v"));
+      classes.add(bridgeFn(name, s.type(), t.type(), missing + " ? " + fallback + " : v", "v"));
       rowKinds.add("TypedTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
       return null;
@@ -1463,6 +2076,7 @@ final class FieldRows {
       if (filledAs == null || !nameable(filledAs)) return unnameable(t);
       final var name = bridgeName + camel(t.property()) + (constant ? "Constant" : "Compute");
       computes.put(t.property(), qualified(name));
+      lastFilled = t.property();
       classes.add(supplier(name, filledAs, value));
       rowKinds.add(constant ? "Constant" : "Compute");
       rowAccessors.add(">");
@@ -1610,6 +2224,7 @@ final class FieldRows {
         return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
       }
       computedFrom.put(t.property(), value);
+      lastFilled = t.property();
       rowKinds.add("ComputeFromSource");
       rowAccessors.add(">");
       return null;
@@ -2228,6 +2843,28 @@ final class FieldRows {
    * gives.
    */
   private record Held(String expression, TypeMirror gives) {}
+
+  /**
+   * {@code text} as a Java string literal, every character outside printable ASCII written as a
+   * unicode escape, so the generated source reads the same in any encoding.
+   */
+  private static String javaLiteral(final String text) {
+    final var out = new StringBuilder("\"");
+    for (var i = 0; i < text.length(); i++) {
+      final var c = text.charAt(i);
+      if (c == '"' || c == '\\') {
+        out.append('\\').append(c);
+      } else if (c < 0x20) {
+        // A unicode escape of a line terminator ends the literal, so a control is written in octal.
+        out.append(String.format(Locale.ROOT, "\\%03o", (int) c));
+      } else if (c > 0x7e) {
+        out.append(String.format(Locale.ROOT, "\\u%04x", (int) c));
+      } else {
+        out.append(c);
+      }
+    }
+    return out.append('"').toString();
+  }
 
   /** The Java literal of the default value of the primitive {@code kind}. */
   private static String primitiveDefault(final TypeKind kind) {

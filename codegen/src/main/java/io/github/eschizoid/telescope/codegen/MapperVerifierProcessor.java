@@ -3,7 +3,9 @@ package io.github.eschizoid.telescope.codegen;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.LambdaExpressionTree;
+import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
@@ -29,6 +31,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
+import io.github.eschizoid.telescope.internal.pairing.TextFormats;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -58,8 +61,10 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.util.ElementFilter;
@@ -120,6 +125,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
+  private static final String OBJECT_FQN = "java.lang.Object";
   // The telescope navigation calls that read a component of the path's current focus through an
   // accessor, so the first of them on a path names a property of the path's root.
   private static final Set<String> ROOT_HOPS = Set.of(
@@ -422,7 +428,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var read = rows.read(field);
       if (read instanceof FieldRows.Refused) continue;
       fieldsRead.add(key);
-      final var parsed = (FieldRows.Parsed) read;
+      // A merge reads its sources through no pairing of its own for the verifier to agree with.
+      if (!(read instanceof FieldRows.Parsed parsed)) continue;
       if (!elements.getPackageOf(parsed.source()).equals(elements.getPackageOf(owner))) continue;
       final var renamedTo = new HashMap<String, List<String>>();
       for (final var rename : parsed.renames().entrySet()) {
@@ -1657,7 +1664,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             classSides(sourceEl, targetEl),
             srcName,
             tgtName,
-            srcName + " → " + tgtName,
+            PairingMessages.renamedComponent(srcName, tgtName),
             at,
             new HashSet<>(),
             forwardOnly
@@ -2013,10 +2020,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             null
           );
         }
-        case "toOneWay" -> {
+        case "toOneWay", "toFormattedOneWay", "toFormattedNumberOneWay" -> {
           return strict ? null : accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
-        case "enumTo", "toOrElse", "toOrElseGet", "via" -> {
+        case "enumTo", "toOrElse", "toOrElseGet", "toFormatted", "toFormattedNumber", "via" -> {
           return accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
         case "drop" -> {
@@ -2180,6 +2187,148 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       return null;
     }
 
+    /**
+     * Reports a {@code via} row naming a class, {@code named}, that hands one side's property to
+     * the class's methods of one name as it is, though none of them takes a class a value of that
+     * property can be an instance of, with the refusal construction gives the same row. The
+     * source's property is handed to {@code forward} and the target's to {@code backward}.
+     * Construction may lift the class over the elements of two containers of one kind instead, so
+     * such a pair is left to it, and so is a class one of whose methods of that name is not public,
+     * which some callers can reach and others cannot.
+     */
+    private void verifyViaClass(
+      final MethodInvocationTree row,
+      final ExpressionTree named,
+      final Prop src,
+      final Prop tgt,
+      final boolean forwardOnly
+    ) {
+      final var using = classLiteral(named);
+      if (using == null || !(types.asElement(using) instanceof TypeElement mapper)) {
+        return;
+      }
+      final var srcView = rules.containerViewOf(src.type());
+      final var tgtView = rules.containerViewOf(tgt.type());
+      final var srcShape = rules.settledAgainst(srcView, tgtView);
+      final var tgtShape = rules.settledAgainst(tgtView, srcView);
+      if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
+        return;
+      }
+      final var forwards = viaParameters(mapper, "forward");
+      final var backwards = viaParameters(mapper, "backward");
+      if (forwards == null || backwards == null) {
+        return;
+      }
+      final var source = src.owner().getSimpleName().toString();
+      final var target = tgt.owner().getSimpleName().toString();
+      final var forward = rules.viaNeverFitsRefusal(
+        source,
+        target,
+        "source",
+        src.name(),
+        src.type(),
+        forwards,
+        true,
+        this::boxedName
+      );
+      if (forward != null) {
+        report(row, forward);
+        return;
+      }
+      final var backward = rules.viaNeverFitsRefusal(
+        source,
+        target,
+        "target",
+        tgt.name(),
+        tgt.type(),
+        backwards,
+        !forwardOnly,
+        this::boxedName
+      );
+      if (backward != null) {
+        report(row, backward);
+      }
+    }
+
+    /**
+     * The parameter types, as declared, of the static methods of one parameter named {@code name}
+     * that {@code mapper} declares or inherits from a superclass, a method hiding one of its
+     * superclass's that takes the same class; null where one of them is not public.
+     */
+    private List<TypeMirror> viaParameters(final TypeElement mapper, final String name) {
+      final var found = new ArrayList<TypeMirror>();
+      final var hidden = new ArrayList<TypeMirror>();
+      for (var type = mapper; type != null && !type.getQualifiedName().contentEquals(OBJECT_FQN); ) {
+        for (final var method : ElementFilter.methodsIn(type.getEnclosedElements())) {
+          if (!method.getSimpleName().contentEquals(name) || method.getParameters().size() != 1) {
+            continue;
+          }
+          if (!method.getModifiers().contains(Modifier.STATIC)) {
+            continue;
+          }
+          final var parameter = types.erasure(method.getParameters().getFirst().asType());
+          if (hidden.stream().anyMatch(h -> types.isSameType(h, parameter))) {
+            continue;
+          }
+          hidden.add(parameter);
+          if (method.getModifiers().contains(Modifier.PRIVATE)) {
+            continue;
+          }
+          if (!method.getModifiers().contains(Modifier.PUBLIC)) {
+            return null;
+          }
+          found.add(method.getParameters().getFirst().asType());
+        }
+        type = types.asElement(type.getSuperclass()) instanceof TypeElement superclass ? superclass : null;
+      }
+      return found;
+    }
+
+    /**
+     * The simple name of {@code type}'s erasure, its wrapper where it is a primitive, as the
+     * runtime names a parameter's class.
+     */
+    private String boxedName(final TypeMirror type) {
+      return simpleName(props.boxed(types.erasure(type)));
+    }
+
+    /**
+     * Reports the refusal the shared spec gives a formatted row whose pattern is a string constant,
+     * which construction gives the same row; a pattern computed at run time is left to
+     * construction.
+     */
+    private void verifyFormatted(final MethodInvocationTree row, final String rowName, final Prop src) {
+      final var rowArgs = row.getArguments();
+      if (rowArgs.size() < 3) return;
+      final var pattern = constantString(rowArgs.get(2));
+      if (pattern == null) return;
+      final var type = src.type();
+      final var primitive = type.getKind().isPrimitive();
+      final var boxed = primitive ? types.boxedClass((PrimitiveType) type).asType() : type;
+      if (!(boxed instanceof DeclaredType declared)) return;
+      final var element = (TypeElement) declared.asElement();
+      final var shown = primitive ? type.toString() : element.getSimpleName().toString();
+      final var zoned = !TextFormats.formatsNumber(rowName) && rowArgs.size() == 4;
+      final var refusal = TextFormats.refusal(
+        rowName,
+        src.name(),
+        elements.getBinaryName(element).toString(),
+        shown,
+        pattern,
+        zoned
+      );
+      if (refusal != null) report(row, refusal);
+    }
+
+    /** The value of {@code arg} where it is a string literal or a constant variable; else null. */
+    private String constantString(final ExpressionTree arg) {
+      if (arg instanceof LiteralTree literal) return literal.getValue() instanceof String text ? text : null;
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      return elementAt(arg) instanceof VariableElement variable && variable.getConstantValue() instanceof String text
+        ? text
+        : null;
+    }
+
     /** A row given two accessors, keyed to the classes they are applied to, or null. */
     private KeyedRow accessorRow(final MethodInvocationTree row, final PairWalk.RowKind kind) {
       final var rowArgs = row.getArguments();
@@ -2215,9 +2364,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var rowName = rowExec.getSimpleName().toString();
       final var rowArgs = row.getArguments();
       switch (rowName) {
-        case "to", "toOrElse", "toOrElseGet", "toOneWay", "enumTo", "via" -> {
+        case
+          "to",
+          "toOrElse",
+          "toOrElseGet",
+          "toOneWay",
+          "toFormatted",
+          "toFormattedOneWay",
+          "toFormattedNumber",
+          "toFormattedNumberOneWay",
+          "enumTo",
+          "via" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
+          if (src != null && TextFormats.isFormattedRow(rowName)) verifyFormatted(row, rowName, src);
           if ("to".equals(rowName) && rowArgs.size() == 2 && isTelescopeParameter(rowExec, 0)) {
             verifySourcePath(row, rowName, rowArgs.get(0), srcType, srcSimple, tgtSimple);
           }
@@ -2225,6 +2385,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           }
           if (src == null || tgt == null) return false;
+          if ("via".equals(rowName) && rowArgs.size() == 3) {
+            verifyViaClass(row, rowArgs.get(2), src, tgt, forwardOnly);
+          }
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
           // here; nested-keyed rows are still shape-checked against their own types below. Both
@@ -2242,8 +2405,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               report(row, PairingMessages.duplicateTargetRow(srcSimple, tgtSimple, tgt.name()));
               return true;
             }
-            // Construction refuses a toOneWay row of a mapper that converts both ways for itself.
-            final var refusedRow = "toOneWay".equals(rowName) && !forwardOnly;
+            // Construction refuses a toOneWay row, or a forward-only formatted one, of a mapper
+            // that
+            // converts both ways for itself.
+            final var oneWayRow =
+              "toOneWay".equals(rowName) || (TextFormats.isFormattedRow(rowName) && TextFormats.oneWay(rowName));
+            final var refusedRow = oneWayRow && !forwardOnly;
             if (!refusedRow && writes.write(src.name(), tgt.name(), row, true)) return true;
           }
           // Only the 2-arg same-typed to(src, tgt) carries no conversion — the one row shape the
@@ -2251,7 +2418,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           // carries user functions (or a user default), which construction accepts as-is.
           if ("to".equals(rowName) && rowArgs.size() == 2) {
             final var seen = new HashSet<String>();
-            final var componentName = src.name() + " → " + tgt.name();
+            final var componentName = PairingMessages.renamedComponent(src.name(), tgt.name());
             final var sides = classSides(src.owner(), tgt.owner());
             final var srcName = propertyName(src.method(), src.owner());
             final var tgtName = propertyName(tgt.method(), tgt.owner());

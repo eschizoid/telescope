@@ -23,7 +23,11 @@ import org.openjdk.jmh.annotations.State;
  * <p>How to read it: the {@code explicitRows} vs {@code autoRows} split isolates the auto-row
  * resolution tax; {@code handMerge} is the floor (two direct reads per source, one constructor
  * call). The gap between {@code explicitRows} and the floor is the staging-map + name-keyed
- * construct cost a positional bind would target.
+ * construct cost a positional bind would target. {@code bridgeField} and {@code bridgeTyped} run
+ * the same backfill through the bridge a {@code @Bridge} merge field generates, from the bag
+ * through the field's mapper and from the two sources directly, each paired with {@code handMerge},
+ * and {@code handBag} is the floor of the bag form: the same constructor call after looking each
+ * source up in the bag.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=MergeBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
@@ -72,6 +76,24 @@ public class MergeBenchmark {
   @Benchmark
   public Profile autoRows() {
     return autoMerge.forward(sources);
+  }
+
+  @Benchmark
+  public Profile bridgeField() {
+    return MergeBridges.PROFILE.forward(sources);
+  }
+
+  @Benchmark
+  public Profile bridgeTyped() {
+    return SourcesToProfileBridge.forward(customer, audit);
+  }
+
+  /** The floor of the bag form: each source looked up in the bag, then one constructor call. */
+  @Benchmark
+  public Profile handBag() {
+    final var c = sources.byClass(Customer.class);
+    final var a = sources.byClass(Audit.class);
+    return new Profile(c.id(), c.email(), c.name(), a.createdBy(), a.createdAt(), a.region());
   }
 
   /** The floor: direct reads, one constructor call, no staging map. */
