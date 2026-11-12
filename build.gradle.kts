@@ -153,7 +153,7 @@ jreleaser {
 
     project {
         name.set("telescope")
-        description.set("Deep-copy DSL for Java records and POJOs.")
+        description.set("Typed mappers for Java records and POJOs between the REST, service and entity layers of a JVM service.")
         authors.set(listOf("Mariano Gonzalez"))
         license.set("Apache-2.0")
         links {

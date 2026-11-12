@@ -11,9 +11,13 @@
 [![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Telescope maps and updates Java records and POJOs with method references instead of strings. You write a mapper as an
-ordinary Java expression, the compiler checks every field it names, and an annotation processor turns it into plain Java
-that runs in about MapStruct's time on the benchmarks below.
+Telescope is the mapping layer between the REST, service and entity layers of a JVM service.
+
+A service usually holds the same data three times: as the wire DTO a REST endpoint reads and writes, as the domain type
+the service works with, and as the entity it persists. Telescope gives each hop between two of those layers one typed
+mapper. You write the mapper as an ordinary Java expression with method references instead of strings, the compiler
+checks every field it names, and an annotation processor turns it into plain Java. That generated code runs in about
+MapStruct's time on the benchmarks below.
 
 ```java
 public record Invoice(String id, Customer customer, long totalCents, String internalNote) {
@@ -44,6 +48,40 @@ along with everything else. Fields with the same name on both sides map without 
 `telescope-codegen` processor reads the expression and generates the conversion, which calls `id()`,
 `customer().email()` and `Money.format(invoice)` directly, with no reflection. Leave the processor off the build and the
 same field runs the same rows at run time instead, with the same result.
+
+## From the wire to the database
+
+| Hop                       | What telescope does there                                                                               | Guide                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md)     |
+| Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                 | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md) |
+| Service and entity        | `into` updates a managed entity in place, and `ADDERS` fills a collection through its adder             | [docs/pojos.md](docs/pojos.md)                                                         |
+
+At the REST endpoint, a mapped handler can return a single value, a `List`, `Set`, `Optional`, `Page` or
+`ResponseEntity`, and with springdoc on the classpath the API documentation shows the response type. `toFormatted` and
+`toFormattedNumber` rows write a date or a number as text in a pattern you give. `@TelescopeMapper` and
+`@TelescopeTransformer` turn an interface into an injectable bean on Spring and on Quarkus.
+
+Inside the service, `Telescope.merge(...)` builds one value from several sources, and fields convert between common
+types such as a number and its text without a row. `explain()` and `trace()` describe what a mapper does, and the
+compile-time verifier reports what the mapper would refuse. A type that implements its generated `<Type>Mappings`
+interface converts itself, as in `order.toOrderDto()`.
+
+At the entity, `into` clears and refills a collection the entity already holds instead of replacing it, so a managed
+`@OneToMany` keeps its identity. Under `ADDERS`, each element goes through the entity's adder, which is where a
+bidirectional association sets its back-reference. With Hibernate on the classpath, the runtime mapper reads a lazy
+proxy as the entity class it stands for, except inside a native image.
+[`examples/springboot/order-jpa/`](examples/springboot/order-jpa/) maps a JPA order model on Spring Boot and Hibernate,
+lazy proxies included.
+
+Two modules are planned and not built yet. `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
+register mappers with Jackson and bind JSON straight to a type. `telescope-jpa`
+([ADR-0017](docs/adr/0017-jpa-integration.md)) would leave a collection the persistence provider has not loaded
+untouched during a copy or an `into`. Typed `before` and `after` edit rows are proposed in
+[ADR-0024](docs/adr/0024-typed-before-and-after-edit-rows.md).
+
+Telescope can also replace MapStruct. The cheat sheet below pairs MapStruct's annotations with telescope's rows, and on
+the latest benchmark run a generated mapper took 0.88 to 1.02 times MapStruct's time.
 
 ---
 
@@ -311,19 +349,46 @@ Everything is on Maven Central under `io.github.eschizoid`.
 
 ## Documentation
 
-| Guide                                                                  | Covers                                                                 |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| [docs/navigation.md](docs/navigation.md)                               | every path operation, containers, sealed cases, filters and multi-edit |
-| [docs/type-conversion.md](docs/type-conversion.md)                     | mappers, rows and structural conversion                                |
-| [docs/pojos.md](docs/pojos.md)                                         | beans, write strategies and mixing beans with records                  |
-| [docs/codegen.md](docs/codegen.md)                                     | `@Bridge`, `@Focus`, `@BeanFocus`, `@FromMap`, Lombok and JPMS setup   |
-| [docs/introspection.md](docs/introspection.md)                         | `explain()`, `trace()` and logging                                     |
-| [docs/effects.md](docs/effects.md)                                     | updates inside async, validated, either and optional results           |
-| [docs/native-image.md](docs/native-image.md)                           | what a GraalVM native image needs                                      |
-| [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md)           | telescope and MapStruct side by side, in detail                        |
-| [docs/mapstruct-migration.md](docs/mapstruct-migration.md)             | moving one mapper at a time, and running both tools together           |
-| [docs/mapstruct-parity.md](docs/mapstruct-parity.md)                   | every MapStruct feature and its telescope equivalent                   |
-| [docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) | benchmark method, environment and every result                         |
+The guides are grouped by the hop they cover, then by the MapStruct comparison and the runtime.
+
+### REST endpoint and service
+
+| Guide                                                          | Covers                                                                                            |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [spring-boot-starter/README.md](spring-boot-starter/README.md) | mapped responses and request bodies, springdoc, the mapper registry and generated beans on Spring |
+| [quarkus/README.md](quarkus/README.md)                         | the mapper registry and generated beans on Quarkus                                                |
+
+### Inside the service
+
+| Guide                                              | Covers                                                                                 |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [docs/type-conversion.md](docs/type-conversion.md) | mappers, rows and structural conversion                                                |
+| [docs/codegen.md](docs/codegen.md)                 | `@Bridge`, `<Type>Mappings`, `@Focus`, `@BeanFocus`, `@FromMap`, Lombok and JPMS setup |
+| [docs/introspection.md](docs/introspection.md)     | `explain()`, `trace()` and logging                                                     |
+| [docs/navigation.md](docs/navigation.md)           | every path operation, containers, sealed cases, filters and multi-edit                 |
+| [docs/effects.md](docs/effects.md)                 | updates inside async, validated, either and optional results                           |
+
+### Service and entity
+
+| Guide                                                                | Covers                                                                      |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| [docs/pojos.md](docs/pojos.md)                                       | beans, write strategies, `into` and `ADDERS`, and mixing beans with records |
+| [docs/adr/0017-jpa-integration.md](docs/adr/0017-jpa-integration.md) | the planned `telescope-jpa` module                                          |
+
+### MapStruct and performance
+
+| Guide                                                                  | Covers                                                       |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md)           | telescope and MapStruct side by side, in detail              |
+| [docs/mapstruct-migration.md](docs/mapstruct-migration.md)             | moving one mapper at a time, and running both tools together |
+| [docs/mapstruct-parity.md](docs/mapstruct-parity.md)                   | every MapStruct feature and its telescope equivalent         |
+| [docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) | benchmark method, environment and every result               |
+
+### Runtime
+
+| Guide                                        | Covers                            |
+| -------------------------------------------- | --------------------------------- |
+| [docs/native-image.md](docs/native-image.md) | what a GraalVM native image needs |
 
 ## Constraints
 
