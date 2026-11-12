@@ -140,23 +140,24 @@ The `_mapstruct_*` rows call the MapStruct mapper `INSTANCE`, and they are the c
 `flat_handwritten_*` rows write the reads and the constructor call by hand, and no change to telescope moves them, so
 they are the control for comparing one run with another.
 
-The current figures come from Run 11, GitHub Actions run 43205917517 on `main`, with 3 forks of 10 measured iterations
-and the `gc` profiler. Each figure is telescope's time divided by MapStruct's time on that run, so a figure below 1
-means telescope was faster. Where the error bands of the two rows overlap, the table gives a range.
+The current figures come from Run 12, two GitHub Actions runs on `main` with 5 forks of 10 measured iterations each and
+the `gc` profiler: 43253695278 measured flat and nested, and 43253711409 measured deep, Map and Set. Each carries its
+own MapStruct rows. Each figure is telescope's time divided by MapStruct's time on the run that measured it, so a figure
+below 1 means telescope was faster. Where the error bands of the two rows overlap, the table gives a range.
 
 | Tier   | forward, `@Bridge` field | forward, `BRIDGE_FN` | forward, `BRIDGE.read` | backward, `BRIDGE.set` | forward, runtime mapper | bytes per call, generated and MapStruct |
 | ------ | ------------------------ | -------------------- | ---------------------- | ---------------------- | ----------------------- | --------------------------------------- |
-| flat   | 1.07                     | 0.99 to 1.02         | 1.03                   | 0.99 to 1.01           | 2.60                    | 32                                      |
-| nested | 0.98                     | 0.99 to 1.01         | 0.98 to 1.00           | 1.00 to 1.02           | 1.72                    | 48                                      |
-| deep   | not measured             | 0.98                 | 1.00 to 1.07           | 0.95                   | 1.23                    | 376                                     |
-| Map    | not measured             | not measured         | 0.92                   | 0.97 to 1.07           | 1.10                    | 7,528                                   |
-| Set    | not measured             | not measured         | 0.91                   | 0.97                   | 0.99 to 1.03            | 7,544 or 7,576 a fork, on both sides    |
+| flat   | 1.00 to 1.01             | 1.00 to 1.01         | 1.01                   | 1.00 to 1.01           | 1.79                    | 32                                      |
+| nested | 1.00 to 1.01             | 1.00 to 1.01         | 0.99 to 1.00           | 0.98                   | 1.34                    | 48                                      |
+| deep   | not measured             | 0.94                 | 0.94                   | 0.88                   | 1.20                    | 376                                     |
+| Map    | not measured             | not measured         | 0.96 to 1.07           | 0.93                   | 1.07                    | 7,528                                   |
+| Set    | not measured             | not measured         | 0.94 to 1.04           | 0.98                   | 1.07                    | 7,544 or 7,576 a fork, on both sides    |
 
-The hand-written flat rows measured 5.13 ns forward and 5.16 ns backward, slower than MapStruct and every generated call
-shape on that run. Telescope's flat forward `@Bridge` field and deep forward `BRIDGE.read` rows split across forks, and
-so did MapStruct's two Map rows. The per-fork figures, the control comparison with the previous run, the runtime
-backward ratios, the earlier runs and the methodology are in
-[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md#run-11-2026-11-12-three-forks-and-a-hand-written-control).
+The hand-written flat rows measured 5.18 ns forward and 5.19 ns backward, slower than MapStruct and every generated call
+shape on that run. No flat or nested row split across forks. On the deep and container run MapStruct's deep rows split,
+one fork on each side of Set forward ran slow, and so did one of telescope's Map forward forks. The per-fork figures,
+the control comparison with earlier runs, the runtime backward ratios, the earlier runs and the methodology are in
+[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md#run-12-2026-11-12-five-forks-in-two-halves).
 The `ContainerAllocationBenchmark` measurements are in
 [`docs/perf-runtime-collections.md`](../docs/perf-runtime-collections.md).
 

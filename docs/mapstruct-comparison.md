@@ -193,49 +193,48 @@ text still need a row, and the refusal names it.
 
 ## Measured performance
 
-The README's [Measured performance](../README.md#measured-performance) table has the current figures, from Actions
-run 43205917517. On that run each call shape of the generated mapper ran within 7 percent of MapStruct's time on every
-tier.
+The README's [Measured performance](../README.md#measured-performance) table has the current figures, from Actions runs
+43253695278 and 43253711409. On those runs every call shape of the generated mapper ran within 7 percent of MapStruct's
+time, or faster, on every tier.
 
 - Forward, from the source bean to the target record, the `BRIDGE_FN` constant a class-level `@Bridge` generates took
-  0.99 to 1.02 times MapStruct's time on flat, 0.99 to 1.01 on nested, and 0.98 on deep.
-- Forward, the composable `BRIDGE.read` value took 1.03 times MapStruct's time on flat, 0.98 to 1.00 on nested, 1.00 to
-  1.07 on deep, 0.91 on the Set field, and 0.92 on the Map field.
-- Forward, the mapper a `@Bridge` field declares took 1.07 times MapStruct's time on flat and 0.98 on nested. One of its
-  three flat forks ran at 4.56 ns and the other two at 4.00, against MapStruct's 3.90 to 3.94.
-- Backward, from the record to the bean, `BRIDGE.set` took 0.99 to 1.01 times MapStruct's time on flat, 1.00 to 1.02 on
-  nested, 0.95 on deep, 0.97 on the Set field, and 0.97 to 1.07 on the Map field.
-- Telescope's generated mappers allocated the same bytes per call as MapStruct on every row but the Set field, where
-  each fork of either side allocated either 7,544 or 7,576 bytes.
+  1.00 to 1.01 times MapStruct's time on flat and nested, and 0.94 on deep.
+- Forward, the composable `BRIDGE.read` value took 1.01 times MapStruct's time on flat, 0.99 to 1.00 on nested, 0.94 on
+  deep, 0.94 to 1.04 on the Set field, and 0.96 to 1.07 on the Map field.
+- Forward, the mapper a `@Bridge` field declares took 1.00 to 1.01 times MapStruct's time on flat and on nested.
+- Backward, from the record to the bean, `BRIDGE.set` took 1.00 to 1.01 times MapStruct's time on flat. It took less
+  time than MapStruct on nested, deep, the Set field and the Map field, at 0.98, 0.88, 0.98 and 0.93.
+- Telescope's generated mappers allocated the same bytes per call as MapStruct on every row but Set forward, where each
+  fork of either side allocated either 7,544 or 7,576 bytes: all five of telescope's forks allocated 7,576, and four of
+  MapStruct's five did.
 
-<!-- metrics: from MapStructComparisonBenchmark, Actions run 43205917517 -->
+<!-- metrics: from MapStructComparisonBenchmark, Actions runs 43253695278 and 43253711409 -->
 
-| Tier, generated mapper against MapStruct | forward, `BRIDGE_FN` | forward, `BRIDGE.read`        | backward, `BRIDGE.set`        | bytes per call, both sides |
-| ---------------------------------------- | -------------------- | ----------------------------- | ----------------------------- | -------------------------- |
-| flat, 5 scalars                          | 0.99 to 1.02 times   | 1.03 times                    | 0.99 to 1.01 times            | 32                         |
-| nested, one nested type                  | 0.99 to 1.01 times   | 0.98 to 1.00 times            | 1.00 to 1.02 times            | 48                         |
-| deep, 3 levels and list hops             | 0.98 times           | 1.00 to 1.07 times, see below | 0.95 times                    | 376                        |
-| Map field, 100 entries                   | not measured         | 0.92 times                    | 0.97 to 1.07 times, see below | 7,528                      |
-| Set field, 100 entries                   | not measured         | 0.91 times                    | 0.97 times                    | 7,544 or 7,576 a fork      |
+| Tier, generated mapper against MapStruct | forward, `BRIDGE_FN` | forward, `BRIDGE.read`        | backward, `BRIDGE.set` | bytes per call, both sides |
+| ---------------------------------------- | -------------------- | ----------------------------- | ---------------------- | -------------------------- |
+| flat, 5 scalars                          | 1.00 to 1.01 times   | 1.01 times                    | 1.00 to 1.01 times     | 32                         |
+| nested, one nested type                  | 1.00 to 1.01 times   | 0.99 to 1.00 times            | 0.98 times             | 48                         |
+| deep, 3 levels and list hops             | 0.94 times           | 0.94 times                    | 0.88 times             | 376                        |
+| Map field, 100 entries                   | not measured         | 0.96 to 1.07 times, see below | 0.93 times             | 7,528                      |
+| Set field, 100 entries                   | not measured         | 0.94 to 1.04 times, see below | 0.98 times             | 7,544 or 7,576 a fork      |
 
-The table comes from GitHub Actions run 43205917517 on `main` at `b79f2b3d`, using the included JMH workloads with
-MapStruct 1.6.3 on JDK 25. The run used 3 forks of 10 measured iterations each. MapStruct's own rows are the control, so
-each ratio is read within this one run. Where the error bands of the two rows overlap, the table gives a range instead
-of one ratio. The [methodology, per-fork figures, and earlier runs](perf-mapstruct-comparison.md) are recorded
-separately.
+The table comes from two GitHub Actions runs on `main` at `26ae7f15`, using the included JMH workloads with MapStruct
+1.6.3 on JDK 25: run 43253695278 measured flat and nested, and run 43253711409 measured deep and the two fields. Each
+used 5 forks of 10 measured iterations and carries its own MapStruct rows, which are the control, so each ratio is read
+within the run that measured it. Where the error bands of the two rows overlap, the table gives a range instead of one
+ratio. The [methodology, per-fork figures, and earlier runs](perf-mapstruct-comparison.md) are recorded separately.
 
-Some rows split across forks. On deep forward, one of telescope's three `BRIDGE.read` forks ran at 70.5 ns and the other
-two at 64.7 and 66.8, against MapStruct's 64.1 to 66.2. On both Map rows, one of MapStruct's forks ran slower than its
-other two. On Map forward telescope ran below all three, and on Map backward it ran at about 1.11 times MapStruct's
-fastest fork.
+No flat or nested row split across forks. On Set forward one fork on each side ran slow, and the other four on each side
+tied. On Map forward one of telescope's five forks ran at 1,453 ns and the other four at 1,201 to 1,235, against
+MapStruct's 1,192 to 1,325; without that fork telescope's figure would be 0.98 times MapStruct's. MapStruct's own deep
+forks spread from 51.7 to 56.3 ns forward, while telescope's stayed between 49.8 and 51.1.
 
 Runtime mappers are slower than generated ones, and the gap shrinks as the work per call grows. Without codegen,
-`Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same run it measured 2.60
-times MapStruct forward on flat, 1.72 on nested, and 1.23 on deep. On the 100-entry fields it measured 0.99 to 1.03
-times on Set and 1.10 times on Map. It allocated the same bytes as MapStruct on every tier except the container fields:
-32 bytes more on Map in every fork, and 7,576 bytes in every fork on Set. On flat and nested shapes the gap is a fixed
-4.5 to 6.3 ns per call. Deep and container shapes add a cost per converted element, so their absolute gap grows while
-the ratio falls.
+`Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same runs it measured
+1.79 times MapStruct forward on flat, 1.34 on nested, and 1.20 on deep. On the 100-entry fields it measured 1.07 times
+on Set and on Map. It allocated the same bytes as MapStruct on every tier except the container fields: 32 bytes more on
+Map in every fork, and 7,576 bytes in every fork on Set. On flat and nested shapes the gap is a fixed 1.9 to 3.6 ns per
+call. Deep and container shapes add a cost per converted element, so their absolute gap grows while the ratio falls.
 
 Flat, nested, and deep conversions take well under a microsecond with both kinds of mapper. The 100-entry container rows
 take more than one with both. Read the tier that matches your shape. You can reproduce any of it from the

@@ -8,41 +8,42 @@ and propose remediations where the gap is structural.
 **Telescope codegen is in MapStruct's performance class, and allocates what MapStruct allocates on every tier measured,
 up to the 32 bytes the Set rows vary by from fork to fork.** Separate runs land on runners of different speeds, so a
 ratio built from two of them is not a measurement. Each ratio below is read within one run, and the last column sets the
-same ratio from three runs side by side.
+same ratio from four runs side by side.
 
-The latest full run is [Run 11](#run-11-2026-11-12-three-forks-and-a-hand-written-control), and the README's figures
-come from it.
+The latest measurement is [Run 12](#run-12-2026-11-12-five-forks-in-two-halves), and the README's figures come from it.
 
-| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio        | Runs 9, 10, 11   | allocation                       |
-| ----------------------------------- | ---------------: | ---------------: | ------------ | ---------------- | -------------------------------- |
-| flat (5 scalars)                    | 3.928 ± 0.021 ns | 4.043 ± 0.039 ns | 1.03         | 1.08, 1.06, 1.03 | 32 B/op both                     |
-| nested (one nested type)            | 6.768 ± 0.035 ns | 6.724 ± 0.028 ns | 0.98 to 1.00 | 1.06, 1.05, 0.99 | 48 B/op both                     |
-| deep (3 levels + 2 list hops)       |  65.07 ± 0.63 ns |  67.34 ± 1.66 ns | 1.00 to 1.07 | 1.00, 1.01, 1.03 | 376 B/op both                    |
-| container, Map-valued (100 entries) | 1560.5 ± 62.7 ns | 1436.9 ± 24.7 ns | 0.92         | 1.05, 0.95, 0.92 | 7,528 B/op both                  |
-| container, Set-valued (100 entries) |  1720.4 ± 9.0 ns |  1560.5 ± 7.8 ns | 0.91         | 1.05, 0.99, 0.91 | 7,544 or 7,576 B/op a fork, both |
+| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio        | Runs 9, 10, 11, 12     | allocation                       |
+| ----------------------------------- | ---------------: | ---------------: | ------------ | ---------------------- | -------------------------------- |
+| flat (5 scalars)                    | 4.560 ± 0.012 ns | 4.597 ± 0.012 ns | 1.01         | 1.08, 1.06, 1.03, 1.01 | 32 B/op both                     |
+| nested (one nested type)            | 6.989 ± 0.019 ns | 6.966 ± 0.019 ns | 0.99 to 1.00 | 1.06, 1.05, 0.99, 1.00 | 48 B/op both                     |
+| deep (3 levels + 2 list hops)       |  53.64 ± 0.97 ns |  50.40 ± 0.23 ns | 0.94         | 1.00, 1.01, 1.03, 0.94 | 376 B/op both                    |
+| container, Map-valued (100 entries) | 1251.0 ± 25.1 ns | 1270.9 ± 45.9 ns | 0.96 to 1.07 | 1.05, 0.95, 0.92, 1.02 | 7,528 B/op both                  |
+| container, Set-valued (100 entries) | 1213.5 ± 37.6 ns | 1196.5 ± 25.6 ns | 0.94 to 1.04 | 1.05, 0.99, 0.91, 0.99 | 7,544 or 7,576 B/op a fork, both |
 
-GitHub Actions run 43205917517, `ubuntu-latest`, 3 forks of 10 measured iterations. The telescope column is the
-composable `BRIDGE.read` value a class-level `@Bridge` generates. The `ratio` column is this run alone, and it gives a
-range where the two rows' error bands overlap. The `Runs 9, 10, 11` column is the same pooled ratio on Actions runs
-38008688244, 41877328599 and 43205917517, so a single cell does not travel out of context.
+Run 12 is two GitHub Actions runs on `ubuntu-latest`, each of 5 forks of 10 measured iterations: 43253695278 measured
+the flat and nested rows and 43253711409 the deep and container rows, each with its own MapStruct rows. The telescope
+column is the composable `BRIDGE.read` value a class-level `@Bridge` generates. The `ratio` column is the run that
+measured the row, and it gives a range where the two rows' error bands overlap. The `Runs 9, 10, 11, 12` column is the
+same pooled ratio on Actions runs 38008688244, 41877328599, 43205917517 and Run 12's two, so a single cell does not
+travel out of context.
 
-Flat and nested hold within 8 percent of MapStruct on every one of the three runs. Deep forward is 1.03 pooled on Run
-11, but one of telescope's three forks ran at 70.5 ns and the other two at 64.7 and 66.8, against MapStruct's 64.1 to
-66.2, so the bands touch. Both container rows ran below MapStruct on Run 11 and above it on Run 9, which is the spread
-to quote, not the latest value. On Set, every fork of either side allocated either 7,544 or 7,576 bytes; Run 11 put all
-three of telescope's forks on 7,576 and two of MapStruct's three on 7,544, while Run 10 put two of telescope's four
-forks on 7,544 and all of MapStruct's on 7,576. The benchmark measures framework overhead rather than a service-shaped
-workload, so read each tier as a range.
+Flat and nested hold within 8 percent of MapStruct on every one of the four runs. Deep forward has run from 0.94 to
+1.03; on Run 12 none of telescope's five forks split, at 49.8 to 51.1 ns, while MapStruct's ran at 51.7 to 56.3. Both
+container rows have been above MapStruct on one run and below it on another, and on Run 12 both overlap it, so the
+spread is the figure to quote, not the latest value. On Set, every fork of either side allocated either 7,544 or 7,576
+bytes, and the split moves between runs: Run 12 put all five of telescope's forward forks on 7,576 and four of
+MapStruct's five, Run 11 all three of telescope's and one of MapStruct's three, and Run 10 two of telescope's four and
+all of MapStruct's. The benchmark measures framework overhead rather than a service-shaped workload, so read each tier
+as a range.
 
-Runtime tier, same run: flat 2.60x, nested 1.72x, deep 1.23x, Set 1.01x and Map 1.10x forward. MapStruct has no
-equivalent to this tier, since it is what you get with no annotations and no build step, so these ratios say what the
-convenience costs, not who wins.
+Runtime tier, Run 12: flat 1.79x, nested 1.34x, deep 1.20x, Set 1.07x and Map 1.07x forward. MapStruct has no equivalent
+to this tier, since it is what you get with no annotations and no build step, so these ratios say what the convenience
+costs, not who wins.
 
 The Map row once carried an allocation win, 6,712 against 7,528 bytes per operation, and it was not one. An
 interface-typed `Map` field rebuilt as a `HashMap` where MapStruct builds a `LinkedHashMap`, so the two sides were
 building different containers and the cheaper one was being read as the better result. Telescope now builds the same
-container, an ordered source keeps its order across the conversion, and both sides allocate 7,528 B/op on Runs 9, 10
-and 11.
+container, an ordered source keeps its order across the conversion, and both sides allocate 7,528 B/op on Runs 9 to 12.
 
 ### What the container tier is for
 
@@ -488,7 +489,8 @@ against telescope's 1,262 to 1,275, which is why that row reads as a range.
 GitHub Actions run 43205917517 measured every row of `MapStructComparisonBenchmark` on `main` at `b79f2b3d`. It used
 `ubuntu-latest` (the `ubuntu-26.04` image, version 20261101.186.1), JDK 25.0.5, JMH 1.37, MapStruct 1.6.3, 3 forks, 3
 warmup and 10 measured iterations of 3 s each, and `-Pjmh.profilers=gc`. It is the first full run with the
-`flat_handwritten_*` and `flat_telescope_field_call_*` rows.
+`flat_handwritten_*` and `flat_telescope_field_call_*` rows. [Run 12](#run-12-2026-11-12-five-forks-in-two-halves)
+replaces it in the README; it stays here as the three-fork reading.
 
 ### The controls first
 
@@ -581,16 +583,109 @@ Read these with the control table above in mind. Two ratios moved by more than 1
 Runtime flat forward moved from 3.02 to 2.60, runtime Set forward from 1.16 to 1.01 pooled, and runtime flat backward
 from 2.67 to 2.35, each by 12 to 14%. Every other ratio the README quotes moved by less than 10%.
 
+## Run 12, 2026-11-12: five forks in two halves
+
+A five-fork run of every row takes more than two hours, longer than the `Benchmarks` workflow's 120-minute job limit, so
+Run 12 is two runs split by tier. Both measured `main` at `26ae7f15` on `ubuntu-latest` with JDK 25.0.5, JMH 1.37,
+MapStruct 1.6.3, 5 forks, 3 warmup and 10 measured iterations of 3 s each, and `-Pjmh.profilers=gc`:
+
+- **43253695278** ran `MapStructComparisonBenchmark.(flat|nested).*`, hand-written control included, on the
+  `ubuntu-26.04` image version 20261111.196.1.
+- **43253711409** ran `MapStructComparisonBenchmark.(container|deep).*` on image version 20261101.186.1.
+
+Each half carries its own MapStruct rows, so every ratio below is read within the run that measured it, and no figure
+from one half compares with a figure from the other. Between `b79f2b3d` and `26ae7f15` the code this benchmark runs did
+not change: the commits touch the examples and the `Sources` class behind `Telescope.merge`.
+
+### The controls first
+
+The hand-written flat rows held still against Run 11: 5.180 ± 0.015 ns forward and 5.187 ± 0.015 backward, against 5.130
+and 5.160, so up 1% and 0.5%. The rows around them on the same run did not. MapStruct's flat rows rose by 16% forward
+and 13% backward and its nested rows by 3% and 7%; telescope's generated flat rows rose by 9 to 17%; and the runtime
+mapper's flat and nested rows fell by 19 to 21%. A runner moves each row by its own amount, so one control row that
+holds still cannot normalise the others, and only ratios within a run are published.
+
+The deep and container half has no hand-written row. It ran on the same image version as Run 11, and MapStruct's own
+rows still moved by −18% and −17% on deep, −29% and −39% on Set, and −20% on both Map rows, forward and backward.
+
+### Run 12 against MapStruct
+
+MapStruct's rows are the control. A range replaces a single ratio where the two rows' error bands overlap.
+
+| Row, codegen against MapStruct | MapStruct (ns/op) | `@Bridge` field (ns/op) | ratio        | `BRIDGE.read` or `.set` (ns/op) | ratio        | `BRIDGE_FN` (ns/op) | ratio        | `static forward` (ns/op) | ratio        | allocation, B/op |
+| ------------------------------ | ----------------: | ----------------------: | ------------ | ------------------------------: | ------------ | ------------------: | ------------ | -----------------------: | ------------ | ---------------- |
+| flat forward                   |     4.560 ± 0.012 |           4.582 ± 0.016 | 1.00 to 1.01 |                   4.597 ± 0.012 | 1.01         |       4.585 ± 0.016 | 1.00 to 1.01 |            4.593 ± 0.014 | 1.01         | 32 all           |
+| flat backward                  |     4.566 ± 0.019 |           4.586 ± 0.020 | 1.00 to 1.01 |                   4.578 ± 0.012 | 1.00 to 1.01 |       4.592 ± 0.014 | 1.00 to 1.01 |                          |              | 32 all           |
+| nested forward                 |     6.989 ± 0.019 |           7.027 ± 0.038 | 1.00 to 1.01 |                   6.966 ± 0.019 | 0.99 to 1.00 |       7.014 ± 0.033 | 1.00 to 1.01 |            7.003 ± 0.031 | 0.99 to 1.01 | 48 all           |
+| nested backward                |     7.162 ± 0.028 |           6.968 ± 0.017 | 0.97         |                   6.987 ± 0.016 | 0.98         |       7.054 ± 0.033 | 0.98         |                          |              | 48 all           |
+| deep forward                   |    53.644 ± 0.965 |                         |              |                  50.401 ± 0.229 | 0.94         |      50.514 ± 0.440 | 0.94         |           50.163 ± 0.163 | 0.94         | 376 all          |
+| deep backward                  |    56.640 ± 0.742 |                         |              |                  49.925 ± 0.162 | 0.88         |                     |              |                          |              | 376 all          |
+| Set, 100 entries, forward      |     1213.5 ± 37.6 |                         |              |                   1196.5 ± 25.6 | 0.94 to 1.04 |                     |              |                          |              | see below        |
+| Set, 100 entries, backward     |     2517.2 ± 22.3 |                         |              |                   2457.7 ± 25.4 | 0.98         |                     |              |                          |              | see below        |
+| Map, 100 entries, forward      |     1251.0 ± 25.1 |                         |              |                   1270.9 ± 45.9 | 0.96 to 1.07 |                     |              |                          |              | 7,528 both       |
+| Map, 100 entries, backward     |     1317.2 ± 37.9 |                         |              |                   1228.5 ± 19.6 | 0.93         |                     |              |                          |              | 7,528 both       |
+
+The generated mapper reached through the `Mappings` interface, `flat_telescope_field_call_*`, measured 4.563 ± 0.013 ns
+forward, 1.00 to 1.01 times MapStruct, and 4.573 ± 0.020 backward, 0.99 to 1.01. It allocated 32 B/op both ways.
+
+On the Set rows, each fork of either side allocated either 7,544 or 7,576 B/op. Forward, all five of telescope's forks
+allocated 7,576, and MapStruct allocated 7,576 in four forks and 7,544 in one, so telescope's pooled figure sits above
+MapStruct's by one fork's difference, 7,576 against 7,570. Backward, both sides allocated 7,544 in four forks and 7,576
+in one, 7,550 each.
+
+The runtime rows, as ratios to MapStruct on the same run: flat 1.79 forward and 1.65 backward, nested 1.34 and 1.26,
+deep 1.20 and 1.12, Set forward 1.07, and Map forward 1.07. The runtime mapper allocated what MapStruct allocated on
+flat, nested and deep, 7,560 B/op against 7,528 on Map in every fork, and 7,576 on Set in every fork.
+
+### Against the hand-written control
+
+As ratios to the hand-written flat row, MapStruct measured 0.88 forward and 0.88 backward, the `@Bridge` field 0.88 and
+0.88, `BRIDGE.read` and `.set` 0.89 and 0.88, `BRIDGE_FN` 0.89 and 0.89, and `static forward` 0.89. The runtime mapper
+measured 1.58 and 1.45. Every one of them allocated 32 B/op, the same as the hand-written row, which again ran slower
+than MapStruct and every generated call shape.
+
+### Reading Run 12 per fork
+
+Every flat and nested row, MapStruct's and telescope's, agreed across its five forks to within 0.2 ns. The split rows
+are all in the deep and container half:
+
+- **Deep.** MapStruct's forward forks measured 51.7, 52.1, 52.5, 55.6 and 56.3 ns, and its backward forks 55.4 to 59.3.
+  None of telescope's deep rows split: `BRIDGE.read` measured 49.8 to 51.1, `static forward` 49.9 to 50.5, `BRIDGE_FN`
+  49.7 to 52.0, and `BRIDGE.set` 49.6 to 50.2. Against MapStruct's fastest fork alone, `BRIDGE.read` is 0.97 forward and
+  `BRIDGE.set` 0.90 backward.
+- **Set forward.** One fork on each side ran slow, MapStruct's at 1,363 ns and telescope's at 1,298. The other four ran
+  at 1,169 to 1,183 for MapStruct and 1,163 to 1,178 for telescope, a tie.
+- **Map forward.** One of telescope's forks ran at 1,453 ns and the other four at 1,201 to 1,235. MapStruct's ran at
+  1,192 to 1,325 with no single outlier. Without telescope's slow fork its pooled figure would be 0.98 times
+  MapStruct's.
+- **Map backward and Set backward.** Both sides spread across forks, MapStruct at 1,204 to 1,411 and telescope at 1,185
+  to 1,302 on Map, and 2,473 to 2,574 against 2,416 to 2,534 on Set.
+- **Runtime Set forward.** Three forks measured 1,251 to 1,255 ns and two 1,349 and 1,355.
+
+### What moved from Run 11
+
+The splits Run 11 showed did not recur. Flat forward on the `@Bridge` field went from 1.07 to a range of 1.00 to 1.01,
+with all five forks between 4.57 and 4.60 ns. Deep forward on `BRIDGE.read` went from 1.03 pooled, with one slow fork in
+three, to 0.94 with none in five. Nested backward no longer ties MapStruct: the `@Bridge` field measured 0.97,
+`BRIDGE.set` 0.98 and `BRIDGE_FN` 0.98, each with disjoint bands, against 0.88, 0.90 and 0.86 on Run 10.
+
+Among the ratios the README quotes, the generated mapper's moved by less than 11% everywhere: the largest moves were Map
+forward from 0.92 to 1.02 and deep forward from 1.03 to 0.94, both on the half whose MapStruct rows moved by 17 to 39%.
+The runtime mapper's flat and nested ratios moved by more than 15%, from 2.60 to 1.79 and 2.35 to 1.65 on flat and from
+1.72 to 1.34 and 1.66 to 1.26 on nested. Its own time fell by 19 to 21% while the hand-written control held within 1%
+and the code it runs did not change, so this is the runner treating the runtime path differently from the generated one,
+not a speed-up in telescope.
+
 ## So is there a real gap?
 
 **A small one on deep forward, and nothing in the emitted code explains it.** The ratios are in the headline table; this
 section is where the deep residual is characterised; the Bottom line and Remediation 2 summarise it and should move with
 through the document.
 
-**On the current code it does not show on the zero-dispatch rows.** The analysis below was measured before #551. Since
-then deep forward `static forward` measured 0.99 to 1.00 times MapStruct on Run 9 and 0.98 on Run 11, and `BRIDGE_FN`
-0.99 and 0.98. Only `BRIDGE.read` still sits above MapStruct, at 1.00 to 1.07 on Run 11, where one of its three forks
-ran at 70.5 ns.
+**On the current code it does not show.** The analysis below was measured before #551. Since then deep forward
+`static forward` measured 0.99 to 1.00 times MapStruct on Run 9, 0.98 on Run 11 and 0.94 on Run 12, and `BRIDGE_FN`
+0.99, 0.98 and 0.94. `BRIDGE.read` measured 1.00 to 1.07 on Run 11, where one of its three forks ran at 70.5 ns, and
+0.94 on Run 12, where none of its five forks split.
 
 **It is not dispatch.** The zero-dispatch `static forward` floor is itself above MapStruct — 67.155 against 63.418 on
 run 4, bands disjoint — so the residual is there before any lattice hop. The wrapper tax cannot account for it either:
@@ -709,15 +804,15 @@ on flat and nested and within about a nanosecond of it on deep, with the bands o
 [Run 5](#run-5--deep-forward-across-forks).
 
 **Deep was briefly published as ~1.07× flat-out.** The number was R3's measurement, Actions run 34470676359, which
-headed this document until Run 11. What was wrong was presenting it as deep's figure rather than as one end of a spread,
-1.06×–1.18× across the runs before #551 with run 4's 1.059× at the bottom. The headline table's `Runs 9, 10, 11` column
-gives the current code the same treatment.
+headed this document until Run 11 replaced it. What was wrong was presenting it as deep's figure rather than as one end
+of a spread, 1.06×–1.18× across the runs before #551 with run 4's 1.059× at the bottom. The headline table's
+`Runs 9, 10, 11, 12` column gives the current code the same treatment.
 
 ## Bottom line
 
 Telescope codegen is in MapStruct's performance class. The headline table has the figures and says which of them are
 stable across runs and which are ranges. The short version: flat and nested sit within 8 percent of MapStruct on each of
-the last three runs, deep and the two container shapes are ranges, and allocation matches on every tier but Set, where
+the last four runs, deep and the two container shapes are ranges, and allocation matches on every tier but Set, where
 each fork of either side allocates either 7,544 or 7,576 B/op, so the pooled figures can differ by up to 32 bytes in
 either direction.
 
