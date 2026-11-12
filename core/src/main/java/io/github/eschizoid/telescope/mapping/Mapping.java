@@ -608,10 +608,11 @@ public sealed interface Mapping<A, B>
    *
    * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
    * Telescope.of(Target.class)} or {@code Telescope.ofBean(Target.class)} through {@code field}
-   * steps alone, each a method reference to a property, or as {@code Telescope.path(Target::a,
-   * A::b)}, which compiles to the same code: writes call each class's accessors and write strategy
-   * directly, and reads back become a null-safe chain of locals. Any other path, a lambda step
-   * among them, is refused on the row by name.
+   * steps alone, each a method reference to a property, as {@code Telescope.path(Target::a, A::b)},
+   * or as a generated navigator's chain, {@code TargetTelescope.of().a().b()}, each of which
+   * compiles to the same code: writes call each class's accessors and write strategy directly, and
+   * reads back become a null-safe chain of locals. Any other path, a lambda step among them, is
+   * refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
     return new TelescopeTo<>(src, targetTelescope);
@@ -649,10 +650,11 @@ public sealed interface Mapping<A, B>
    *
    * <p>A {@code @Bridge} field compiles the row when the path is written in place, from {@code
    * Telescope.of(Source.class)} or {@code Telescope.ofBean(Source.class)} through {@code field}
-   * steps alone, each a method reference to a property, or as {@code Telescope.path(Source::a,
-   * A::b)}, which compiles to the same code: reads become a null-safe chain of locals, one per
-   * object, and writes call the accessors and the write strategy directly. Any other path, a lambda
-   * step among them, is refused on the row by name.
+   * steps alone, each a method reference to a property, as {@code Telescope.path(Source::a, A::b)},
+   * or as a generated navigator's chain, {@code SourceTelescope.of().a().b()}, each of which
+   * compiles to the same code: reads become a null-safe chain of locals, one per object, and writes
+   * call the accessors and the write strategy directly. Any other path, a lambda step among them,
+   * is refused on the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Accessor<B, X> tgt) {
     return new FromTelescopeTo<>(srcTelescope, tgt);
@@ -686,9 +688,10 @@ public sealed interface Mapping<A, B>
    *
    * <p>A {@code @Bridge} field compiles the row when both paths are written in place, each from
    * {@code Telescope.of(Type.class)} or {@code Telescope.ofBean(Type.class)} through {@code field}
-   * steps alone or as {@code Telescope.path(...)}, and end at a property of one type: reads become
-   * a null-safe chain of locals, each object read once, and writes call each class's accessors and
-   * write strategy directly. Any other path is refused on the row by name.
+   * steps alone, as {@code Telescope.path(...)} or as a generated navigator's chain, and end at a
+   * property of one type: reads become a null-safe chain of locals, each object read once, and
+   * writes call each class's accessors and write strategy directly. Any other path is refused on
+   * the row by name.
    */
   static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
     return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);

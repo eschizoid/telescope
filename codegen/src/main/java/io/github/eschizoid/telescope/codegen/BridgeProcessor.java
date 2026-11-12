@@ -1033,6 +1033,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
       }
     }
+    // A row naming a navigator a processor has yet to write is read once the navigator exists:
+    // typing the row before then would type it against a class that is missing.
+    if (!roundEnv.processingOver() && rows.namesUnwrittenNavigator(field, initializer)) {
+      fieldRetries.add(key);
+      return;
+    }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Merged merged) {
       fieldCarriers.add(carrier.getQualifiedName().toString());
