@@ -46,4 +46,15 @@ public enum WriteStrategy {
    * or a name-matched constructor, which {@link #AUTO} would prefer.
    */
   SETTERS,
+
+  /**
+   * As {@link #SETTERS}, except that each collection property a field of its name stores is filled
+   * one element at a time through its adder, a public instance method taking the collection's
+   * element: {@code addLine} for {@code lines}. The collection needs no setter, which is the shape
+   * of an entity that wires the back-reference of a bidirectional association in its adder. A
+   * target with such a collection and no adder for it is a compile error naming the property, and
+   * the generated {@code into} fills the collection the target holds through the adder too, after
+   * clearing it. Mirrors the runtime {@code WriteHint.writeBean(cls, ADDERS)}.
+   */
+  ADDERS,
 }

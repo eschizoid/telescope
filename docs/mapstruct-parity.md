@@ -32,7 +32,7 @@ and the row names the workaround.
 | Conversions               | [Constants and defaults](#constants-and-defaults)                   |   ✅    |    ✅     |
 | Collections & containers  | [Collection element mapping](#collection-element-mapping)           |   ✅    |    ✅     |
 | Collections & containers  | [Map mapping](#map-mapping)                                         |   ⚠️    |    ⚠️     |
-| Collections & containers  | [Collection target strategies](#collection-target-strategies)       |   ⚠️    |    ⚠️     |
+| Collections & containers  | [Collection target strategies](#collection-target-strategies)       |   ✅    |    ✅     |
 | Collections & containers  | [Stream support](#stream-support)                                   |   ⚠️    |    ⚠️     |
 | Lifecycle & customization | [Before/after hooks](#beforeafter-hooks)                            |   ✅    |    ✅     |
 | Lifecycle & customization | [Context parameters](#context-parameters)                           |   ⚠️    |    ⚠️     |
@@ -52,7 +52,7 @@ and the row names the workaround.
 | Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️    |    ⚠️     |
 | Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️    |    ⚠️     |
 
-**Tally — Runtime: 14 ✅ · 15 ⚠️ · 0 ❌ · Generated: 14 ✅ · 15 ⚠️ · 0 ❌.** On the runtime path no feature area is
+**Tally — Runtime: 15 ✅ · 14 ⚠️ · 0 ❌ · Generated: 15 ✅ · 14 ⚠️ · 0 ❌.** On the runtime path no feature area is
 unreachable; every ⚠️ row has a working idiom for its core use case, with the residual gaps named in its notes. The
 generated path scores at least as high as the runtime on every row.
 
@@ -643,7 +643,7 @@ paths'; codegen/src/test/java/io/github/eschizoid/telescope/codegen/SortedMapKey
 
 ### Collection target strategies
 
-**Runtime: ⚠️ partial** · **Generated: ⚠️ partial** · **MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY /
+**Runtime: ✅ full** · **Generated: ✅ full** · **MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY /
 SETTER_PREFERRED / ADDER_PREFERRED / TARGET_IMMUTABLE; @MappingTarget updates an existing target's collections
 
 **telescope:**
@@ -653,48 +653,63 @@ SETTER_PREFERRED / ADDER_PREFERRED / TARGET_IMMUTABLE; @MappingTarget updates an
 // (ArrayList/LinkedList/Vector/CopyOnWriteArrayList/TreeSet/ConcurrentHashMap/... + user subclasses)
 final Mapper<Order, OrderEntity> mapper = Telescope.mapper(
     Order.class, OrderEntity.class,
-    writeBeans(SETTERS),                           // pin bean write strategy tree-wide
+    writeBean(OrderEntity.class, ADDERS),          // lines filled through addLine(LineEntity)
     writeBean(CashRegisterEntity.class, BUILDER)); // per-class override
 
 // @MappingTarget analog — mutate an existing managed entity in place:
 final OrderEntity managed = repository.findById(id).orElseThrow();
-mapper.into(managed, dto);   // collection fields REPLACED via setItems(...), not merged
+mapper.into(managed, dto);   // getLines() cleared and refilled through addLine, same list instance
 repository.save(managed);
 ```
 
 What exists: (1) target collection concrete type preserved on fresh allocation, with plan-time errors instead of silent
-ArrayList substitution; (2) Mapper.into(target, source) is the @MappingTarget analog — setter-based in-place update,
-roughly ACCESSOR_ONLY/SETTER_PREFERRED semantics; (3) writeBean/writeBeans pins the bean construction strategy per
-class. What's genuinely missing: ADDER_PREFERRED (no orderEntity.addLineItem(x) adder dispatch — the JPA bidirectional
-back-reference wiring use case has no telescope equivalent), and true collection MERGE on an existing target (into()
-replaces the collection reference via the setter; it never getItems().clear()/addAll() into the existing instance —
-matters for Hibernate PersistentCollection orphan-removal). into() also needs a public setter for every property the
-mapper writes, refusing by name a property that has none (see [In-place update methods](#in-place-update-methods)), and
-rejects record targets.
+ArrayList substitution; (2) SETTER_PREFERRED is the default: a collection is written through its setter by `forward`;
+(3) ADDER_PREFERRED is the `ADDERS` write strategy (`writeBean(X.class, ADDERS)`, `writeBeans(ADDERS)` or
+`@Bridge(writeStrategy = ADDERS)`): each collection a field of its name stores is filled one element at a time through
+its adder (`addLine` for `lines`), which wires the back-reference of a bidirectional association, and needs no setter; a
+class with such a collection and no adder of its element is refused by the property's name when the mapper is built and
+at compile time; (4) `Mapper.into(target, source)` is the @MappingTarget analog and merges where it can: a `Collection`
+or `Map` the target's getter returns that can be changed is cleared and refilled, so it keeps its identity (orphan
+removal on a managed collection keeps working), through the adder under `ADDERS`, each adder running once per element; a
+null one, or one that cannot be changed (an unmodifiable JDK container, `Arrays.asList`, a library's immutable
+collection), is replaced through the setter, as TARGET_IMMUTABLE does; and only a container property with no setter that
+holds none or an unchangeable one is refused by name. The collection write goes through the `ContainerCopy.Policy` SPI,
+which a persistence module can replace (skip an unloaded collection, merge by `@Id`). The remaining differences:
+ACCESSOR_ONLY on a collection with neither a setter nor an adder has no form, so such a class gains an adder, and
+TARGET_IMMUTABLE as an opt-out of the merge for a modifiable container has no form. into() also needs a public setter
+for every property other than a container that the mapper writes, refusing by name a property that has none (see
+[In-place update methods](#in-place-update-methods)), and rejects record targets.
 
-**Generated path:** partial for the same reasons. Fresh allocation follows the same `ContainerAllocation`, and a strict
-bridge over a bean target gets an `into` of its own, which replaces each collection through its setter as the runtime
-`into` does; where the bridge has no `into`, the field's mapper runs the runtime one. A `writeBean` hint keyed to the
-pair's own source or target compiles. Two hints in the example above do not: a `writeBean` keyed to a class that is
-neither side and that no path of the rows steps through is refused ("a nested pair the generated bridge has no hint for
-yet"), and a `writeBeans` default that reaches a bean below the pair is refused, since the generated bridge builds that
-pair through a bridge of its own. Either goes on the nested pair's own `@Bridge` field, with its own hint.
+**Generated path:** full, for the same reasons. Fresh allocation follows the same `ContainerAllocation`, and a strict
+bridge over a bean target gets an `into` of its own, which refills each container through the same `ContainerCopy`
+methods as the runtime `into` and calls the adder directly under `ADDERS`; where the bridge has no `into`, the field's
+mapper runs the runtime one. A `writeBean` hint keyed to the pair's own source or target compiles, `ADDERS` included. A
+`writeBean` keyed to a class that is neither side and that no path of the rows steps through is refused ("a nested pair
+the generated bridge has no hint for yet"), and a `writeBeans` default that reaches a bean below the pair is refused,
+since the generated bridge builds that pair through a bridge of its own. Either goes on the nested pair's own `@Bridge`
+field, with its own hint.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
-says 'Closes MapStruct's @MappingTarget for the bean path'; setter-based, records rejected, two-phase staged writes);
-core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the nested class 'Bean target — in-place mutation
-preserves target identity' (identity preserved, repeatable);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` and
+`writeSlots` (containers refilled or replaced through `ContainerCopy`, every held container read and one nothing can
+write refused before the first write, containers written before every other property);
+core/src/main/java/io/github/eschizoid/telescope/conversion/ContainerCopy.java, `Policy`, `Refill`, `refuseUnwritable`,
+`refill`, `fill`, `add` and `deferAdders` (the one hook both paths call);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/CollectionWrites.java, `intoWrite` (refill,
+replace through the setter or refuse) and the adder's names and choice;
+internal/src/main/java/io/github/eschizoid/telescope/internal/AdderCalls.java (no adder run on the value `into` reads
+from); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java, `addersWriter` and `adders`;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `intoStatements` (the generated
+`into`, written for a strict bridge only) and `buildExpr` (adder calls under `ADDERS`);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessor.java, `addersRefusal` (a
+`writeBean(..., ADDERS)` row refused at compile time);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'into refills a container
+the target holds where it can change, replaces one it cannot through the setter and refuses one nothing can write, and
+the adders strategy fills a collection through its adder once per element or refuses a class with none, on both paths';
+core/src/test/java/io/github/eschizoid/telescope/MapperIntoCollectionTest.java;
 core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, `liftListIntoTargetRaw` with `allocatorFor` (the
-result's runtime class is the one `ContainerAllocation` decides for the declared type: the class the shared allocation
-table in `PairingRules` names, the family default when it is an interface or abstract class the default implements, or
-the type itself through a no-arg constructor that is not private, and a type none of those reaches throws at plan time);
+result's runtime class is the one `ContainerAllocation` decides for the declared type);
 core/src/test/java/io/github/eschizoid/telescope/ContainerAllocatorCorpusTest.java, 'the reflective path allocates
 exactly what the generated path allocates, and refuses the rest' (every public `java.base` container class);
-core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeBean` / `writeBeans` with
-BUILDER/SETTERS/CONSTRUCTOR — no ADDER; a grep for 'adder' across core/, internal/ and codegen/ finds only the word
-'ladder' (no adder support anywhere); codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
-`intoStatements` and `emitInto` (the generated `into`, written for a strict bridge only) and `beanBelowDefault` (a
-`writeBeans` default reaching a nested bean refused);
 codegen/src/main/java/io/github/eschizoid/telescope/codegen/FieldRows.java, `hintsOffThePair` (a `writeBean` keyed
 elsewhere refused); codegen/src/test/java/io/github/eschizoid/telescope/codegen/WriteHintRowTest.java, the tests 'a
 write hint on a @Bridge field rebuilds the side it names as the runtime path does', 'a writeBean keyed to a class other

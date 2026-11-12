@@ -100,7 +100,10 @@ public final class MhIso {
     if (from.isRecord() && from.getRecordComponents().length > MAX_ARITY) return false;
     if (to.isRecord()) return to.getRecordComponents().length <= MAX_ARITY;
     return switch (writer) {
-      case Beans.SettersWriter<?> ignored -> Beans.isSetterConstructible(to, Beans.propertyNames(to));
+      // The setter fold calls one setter per property; an adder takes each element in turn, which
+      // the array leaf's writer does.
+      case Beans.SettersWriter<?> setters -> !setters.throughAdders &&
+      Beans.isSetterConstructible(to, Beans.propertyNames(to));
       case Beans.ConstructorWriter<?> constructor -> argumentsAreProperties(to, constructor);
       case Beans.BuilderWriter<?> ignored -> true;
       case null -> false;

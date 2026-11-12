@@ -1,7 +1,10 @@
 package io.github.eschizoid.telescope.conversion;
 
+import io.github.eschizoid.telescope.internal.AdderCalls;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
+import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
@@ -19,6 +22,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
@@ -33,7 +37,9 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The shallow copy a conversion makes of a container whose declared type is the same on both sides.
@@ -45,6 +51,18 @@ import java.util.function.Function;
  * ordering, and failing that into the declared type's default. Unmodifiable inputs are returned as
  * they are. The elements, and a map's keys and values, are the source's own.
  *
+ * <p>It is also how {@code into} writes a container property into a target that already holds one:
+ * a held container that can be changed is cleared and refilled with the converted elements, so it
+ * keeps its identity, and one that cannot be changed is replaced through the setter. Under the
+ * {@code ADDERS} write strategy each element goes through the target's adder instead, and the value
+ * {@code into} reads from is built with no adder run on it. Both paths call the same methods here
+ * for it.
+ *
+ * <p>Both decisions go through one {@link Policy}. The standard policy is the behavior described
+ * above. A module that knows more about a container, such as whether a persistence provider has
+ * loaded it, replaces the policy as a whole by registering one implementation of {@link Policy}
+ * through {@link ServiceLoader}; every mapper and every generated bridge then takes it.
+ *
  * <p>Public so generated code in any package can call it; not meant to be called directly.
  */
 public final class ContainerCopy {
@@ -52,16 +70,476 @@ public final class ContainerCopy {
   private ContainerCopy() {}
 
   /**
-   * A shallow copy of {@code source}, or {@code source} itself when it is null or unmodifiable.
+   * How containers are copied and refilled. Every method has the standard behavior as its default,
+   * so an implementation overrides only what it changes and can hand any case back to the standard
+   * behavior: {@link ContainerCopy#standardCopy} for a copy, {@link Refill#standard} for a refill.
+   *
+   * <p>An implementation is registered through {@link ServiceLoader}: a {@code provides} clause in
+   * a module, or a {@code META-INF/services} entry on the class path. At most one may be
+   * registered; it needs a public no-argument constructor, and is loaded once, the first time a
+   * container is copied or refilled.
+   */
+  public interface Policy {
+    /**
+     * The copy of {@code source}, a container whose declared type is {@code declared} on both sides
+     * of a conversion, or {@code source} itself to share it.
+     *
+     * @param source the container to copy, never null
+     * @param declared the type the container is declared as on both sides
+     * @return the container the converted value holds
+     */
+    default Object copy(final Object source, final Class<?> declared) {
+      return standardCopy(source, declared);
+    }
+
+    /**
+     * Writes {@link Refill#incoming()} into the container a target already holds, or through the
+     * target's adder. The standard behavior is {@link Refill#standard}.
+     *
+     * @param refill the write, with the target, its property and both containers
+     */
+    default void refill(final Refill refill) {
+      refill.standard();
+    }
+  }
+
+  /**
+   * One container property {@code into} writes into an existing target, or the adders strategy
+   * fills: the target that holds it, its name, the container the target holds and the converted
+   * container whose elements it is to hold.
+   */
+  public static final class Refill {
+
+    private final Object owner;
+    private final String property;
+    private final Object held;
+    private final Object incoming;
+    private final BiConsumer<Object, Object> adder;
+
+    private Refill(
+      final Object owner,
+      final String property,
+      final Object held,
+      final Object incoming,
+      final BiConsumer<Object, Object> adder
+    ) {
+      this.owner = owner;
+      this.property = property;
+      this.held = held;
+      this.incoming = incoming;
+      this.adder = adder;
+    }
+
+    /** The object whose property is written. */
+    public Object owner() {
+      return owner;
+    }
+
+    /** The name of the property written. */
+    public String property() {
+      return property;
+    }
+
+    /**
+     * The {@code Collection} or {@code Map} the owner holds for the property. Null only where an
+     * adder fills the property and the owner holds no collection.
+     */
+    public Object held() {
+      return held;
+    }
+
+    /**
+     * The {@code Collection} or {@code Map} converted from the source, whose elements the property
+     * is to hold. Never the container {@link #held()} returns. Null only where an adder fills the
+     * property and the source holds no collection, which leaves it empty.
+     */
+    public Object incoming() {
+      return incoming;
+    }
+
+    /** Whether each element is added through the owner's adder rather than to {@link #held()}. */
+    public boolean throughAdder() {
+      return adder != null;
+    }
+
+    /** Adds one element as this write adds it: through the owner's adder, or to {@link #held()}. */
+    @SuppressWarnings("unchecked")
+    public void add(final Object element) {
+      if (adder != null) {
+        adder.accept(owner, element);
+      } else {
+        ((Collection<Object>) held).add(element);
+      }
+    }
+
+    /**
+     * The standard refill: clears {@link #held()}, then adds every element of {@link #incoming()},
+     * through the adder where there is one, and puts every entry where the property is a map.
+     */
+    public void standard() {
+      standardRefill(owner, held, incoming, adder);
+    }
+  }
+
+  /** The policy that is the standard behavior, and the one taken when none is registered. */
+  private static final Policy STANDARD = new Policy() {};
+
+  /** The policy every copy and refill goes through. */
+  private static final Policy POLICY = registeredPolicy();
+
+  private static Policy registeredPolicy() {
+    final var registered = new ArrayList<Policy>();
+    for (final var policy : ServiceLoader.load(Policy.class, ContainerCopy.class.getClassLoader())) {
+      registered.add(policy);
+    }
+    if (registered.size() > 1) throw new IllegalStateException(
+      "ContainerCopy: more than one ContainerCopy.Policy is registered (" +
+        registered
+          .stream()
+          .map(policy -> policy.getClass().getName())
+          .toList() +
+        "); register at most one."
+    );
+    return registered.isEmpty() ? STANDARD : registered.getFirst();
+  }
+
+  /**
+   * A shallow copy of {@code source}, or {@code source} itself when it is null or unmodifiable, as
+   * the registered {@link Policy} decides.
    *
    * @param source the container to copy
    * @param declared the type the container is declared as on both sides
    * @param <C> the container's type
    * @return the copy
    */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings("unchecked")
   public static <C> C of(final C source, final Class<?> declared) {
-    if (source == null || UNMODIFIABLE.contains(source.getClass())) return source;
+    if (source == null) return null;
+    return POLICY == STANDARD ? standardCopy(source, declared) : (C) POLICY.copy(source, declared);
+  }
+
+  /**
+   * Refuses, by name, a container property {@code into} cannot write at all, as {@link
+   * CollectionWrites#intoWrite} decides it from what is known before anything is written: the
+   * target holds no container, or an unmodifiable JDK one, and has no setter, and no adder fills
+   * it. Called for every container property before {@code into} writes anything, so a call refused
+   * here leaves the target as it was.
+   *
+   * @param held the container the target holds for {@code property}, or null
+   * @param incoming the container converted from the source, or null
+   * @param setter whether the target class has a setter for {@code property}
+   * @param adder whether an adder fills {@code property}
+   * @param source the simple name of the mapper's source class
+   * @param target the simple name of the mapper's target class
+   * @param bean the simple name of the target's class
+   * @param property the name of the property
+   * @throws IllegalArgumentException if nothing can write {@code property}
+   */
+  public static void refuseUnwritable(
+    final Object held,
+    final Object incoming,
+    final boolean setter,
+    final boolean adder,
+    final String source,
+    final String target,
+    final String bean,
+    final String property
+  ) {
+    final var write = CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder);
+    if (write == CollectionWrites.IntoWrite.REFUSE) throw unwritable(source, target, bean, property, held, null);
+  }
+
+  /**
+   * Writes {@code incoming}, the container converted from the source, into {@code held}, the {@code
+   * Collection} or {@code Map} {@code owner} holds for {@code property}, where {@link
+   * CollectionWrites#intoWrite} refills it: cleared and then given every element or entry of {@code
+   * incoming}, as the registered {@link Policy} decides, so it keeps its identity. Answers false
+   * where the caller is to write {@code incoming} through the setter instead: the target holds no
+   * container, holds one that cannot be changed, or {@code incoming} is null. A held container
+   * whose refill throws, as one that cannot change throws {@link UnsupportedOperationException} and
+   * a sorted set handed a null throws {@link NullPointerException}, has its elements put back and
+   * is treated as one that cannot be changed.
+   *
+   * @param source the simple name of the mapper's source class
+   * @param target the simple name of the mapper's target class
+   * @param owner the target whose property is written
+   * @param property the name of the property
+   * @param held the container {@code owner} holds, or null
+   * @param incoming the container converted from the source, or null
+   * @param setter whether the target class has a setter for {@code property}
+   * @return whether the property is written; false where the caller writes it through the setter
+   * @throws IllegalArgumentException if the property has no setter and the held container cannot be
+   *     changed
+   */
+  public static boolean refill(
+    final String source,
+    final String target,
+    final Object owner,
+    final String property,
+    final Object held,
+    final Object incoming,
+    final boolean setter
+  ) {
+    return write(source, target, owner, property, held, incoming, null, setter);
+  }
+
+  /**
+   * Fills collection {@code property} of {@code owner} through its {@code adder}, where {@link
+   * CollectionWrites#intoWrite} refills it: {@code held}, the collection {@code owner} holds, is
+   * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
+   * the registered {@link Policy} decides. A null {@code incoming} adds nothing. Answers false
+   * where the held collection cannot be changed and the caller is to write {@code incoming} through
+   * the setter instead.
+   *
+   * @param source the simple name of the mapper's source class
+   * @param target the simple name of the mapper's target class
+   * @param owner the target whose property is written
+   * @param property the name of the property
+   * @param held the collection {@code owner} holds, or null
+   * @param incoming the collection converted from the source, or null
+   * @param adder the target's adder for the property
+   * @param setter whether the target class has a setter for {@code property}
+   * @param <O> the target's type
+   * @param <E> the element type
+   * @return whether the property is written; false where the caller writes it through the setter
+   * @throws IllegalArgumentException if the property has no setter and the held collection cannot
+   *     be changed
+   */
+  @SuppressWarnings("unchecked")
+  public static <O, E> boolean fill(
+    final String source,
+    final String target,
+    final O owner,
+    final String property,
+    final Object held,
+    final Collection<? extends E> incoming,
+    final BiConsumer<? super O, ? super E> adder,
+    final boolean setter
+  ) {
+    return write(source, target, owner, property, held, incoming, (BiConsumer<Object, Object>) adder, setter);
+  }
+
+  private static boolean write(
+    final String source,
+    final String target,
+    final Object owner,
+    final String property,
+    final Object held,
+    final Object incoming,
+    final BiConsumer<Object, Object> adder,
+    final boolean setter
+  ) {
+    return switch (
+      CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder != null)
+    ) {
+      case SET -> false;
+      case REFUSE -> throw unwritable(source, target, beanOf(owner), property, held, null);
+      case REFILL -> refillHeld(source, target, owner, property, held, incoming, adder, setter);
+    };
+  }
+
+  /**
+   * Refills {@code held} with {@code incoming} through the registered {@link Policy}. A refill that
+   * fails, by any exception the container or its adder throws, such as {@code
+   * UnsupportedOperationException} from a container that cannot change or {@code
+   * NullPointerException} from a sorted set handed a null, first has the elements {@code held} had
+   * put back, so whoever else holds it sees it as it was wherever it takes its elements back. The
+   * answer is then false where a setter can write the property instead, and the call is refused by
+   * name, with the failure as its cause, where none can.
+   */
+  private static boolean refillHeld(
+    final String source,
+    final String target,
+    final Object owner,
+    final String property,
+    final Object held,
+    final Object incoming,
+    final BiConsumer<Object, Object> adder,
+    final boolean setter
+  ) {
+    if (held == incoming && adder == null) return true;
+    // The elements are taken before the held collection is cleared, so a source that hands the
+    // target's own collection across still fills it.
+    final Object elements = incoming != null && incoming == held ? new ArrayList<>((Collection<?>) incoming) : incoming;
+    final Object kept = snapshot(held);
+    try {
+      if (POLICY == STANDARD) {
+        standardRefill(owner, held, elements, adder);
+      } else {
+        POLICY.refill(new Refill(owner, property, held, elements, adder));
+      }
+    } catch (final RuntimeException failed) {
+      restore(held, kept, failed);
+      if (setter) return false;
+      throw unwritable(source, target, beanOf(owner), property, held, failed);
+    }
+    return true;
+  }
+
+  /** A copy of what {@code held} holds, to put back if a refill fails; null for no container. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Object snapshot(final Object held) {
+    return switch (held) {
+      case null -> null;
+      case Map map -> new LinkedHashMap<>(map);
+      default -> new ArrayList<>((Collection) held);
+    };
+  }
+
+  /**
+   * Puts {@code kept} back into {@code held}, as {@link #snapshot} took it. A container that will
+   * not take its elements back keeps what it holds, and what it threw is added to {@code failure}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void restore(final Object held, final Object kept, final RuntimeException failure) {
+    if (kept == null) return;
+    try {
+      if (held instanceof Map map) {
+        map.clear();
+        map.putAll((Map) kept);
+      } else {
+        ((Collection) held).clear();
+        ((Collection) held).addAll((Collection) kept);
+      }
+    } catch (final RuntimeException notRestored) {
+      failure.addSuppressed(notRestored);
+    }
+  }
+
+  /** The target's class as a message names it. */
+  private static String beanOf(final Object owner) {
+    return PairingMessages.className(owner.getClass());
+  }
+
+  /** Whether {@code held} is a container that is not known to be unchangeable. */
+  private static boolean changeable(final Object held) {
+    return held != null && !UNMODIFIABLE.contains(held.getClass());
+  }
+
+  private static IllegalArgumentException unwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property,
+    final Object held,
+    final RuntimeException cause
+  ) {
+    return new IllegalArgumentException(
+      PairingMessages.intoUnwritable(source, target, bean, property, held == null ? null : held.getClass().getName()),
+      cause
+    );
+  }
+
+  /**
+   * Passes each of {@code elements} to {@code adder} on {@code owner}, which the adders strategy
+   * does for each collection property of a bean it builds. While {@link #deferAdders} builds a
+   * value of {@code owner}'s class, the elements are recorded instead. A null {@code elements} adds
+   * nothing.
+   *
+   * @param owner the bean being built
+   * @param property the name of the property
+   * @param elements the converted collection, or null
+   * @param adder the bean's adder for the property
+   * @param <O> the bean's type
+   * @param <E> the element type
+   */
+  @SuppressWarnings("unchecked")
+  public static <O, E> void add(
+    final O owner,
+    final String property,
+    final Iterable<? extends E> elements,
+    final BiConsumer<? super O, ? super E> adder
+  ) {
+    AdderCalls.add(owner, property, elements, (BiConsumer<Object, Object>) adder);
+  }
+
+  /**
+   * Builds a value of exactly {@code owner} through {@code build} with none of that class's adders
+   * called on it, which is how {@code into} converts a source whose target is filled through its
+   * adders: the value comes back with the collections its adders were to be handed, for the
+   * target's own adders to take. Any other instance of {@code owner} built on the way has its
+   * adders called before this returns.
+   *
+   * @param owner the class the adders strategy builds
+   * @param build the conversion, {@code forward(source)}
+   * @param <T> the class built
+   * @return the value built and the collections its adders were to be handed
+   */
+  public static <T> Deferred<T> deferAdders(final Class<T> owner, final Supplier<? extends T> build) {
+    final var deferred = AdderCalls.deferring(owner, build::get);
+    return new Deferred<>(deferred.value(), deferred.elements());
+  }
+
+  /**
+   * A value {@link #deferAdders} built, and by property the collection each of its adders was to be
+   * handed.
+   *
+   * @param <T> the class built
+   */
+  public static final class Deferred<T> {
+
+    private final T value;
+    private final Map<String, Object> elements;
+
+    private Deferred(final T value, final Map<String, Object> elements) {
+      this.value = value;
+      this.elements = elements;
+    }
+
+    /** The value built. */
+    public T value() {
+      return value;
+    }
+
+    /**
+     * The collection the adder of {@code property} was to be handed, or null where the converted
+     * value was null.
+     *
+     * @param property the name of the property
+     * @param <C> the property's declared type
+     * @return the converted collection, or null
+     */
+    @SuppressWarnings("unchecked")
+    public <C> C elements(final String property) {
+      return (C) elements.get(property);
+    }
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void standardRefill(
+    final Object owner,
+    final Object held,
+    final Object incoming,
+    final BiConsumer<Object, Object> adder
+  ) {
+    if (held instanceof Map map) {
+      map.clear();
+      if (incoming != null) map.putAll((Map) incoming);
+      return;
+    }
+    if (held != null) ((Collection) held).clear();
+    if (incoming == null) return;
+    if (adder == null) {
+      ((Collection) held).addAll((Collection) incoming);
+    } else {
+      for (final var element : (Collection<?>) incoming) adder.accept(owner, element);
+    }
+  }
+
+  /**
+   * The standard copy: a shallow copy of {@code source} into its own class where it is a JDK
+   * container, else into the nearest JDK class that keeps its ordering, else into the declared
+   * type's default; {@code source} itself when it is unmodifiable. For a {@link Policy} to hand a
+   * container back to.
+   *
+   * @param source the container to copy, not null
+   * @param declared the type the container is declared as on both sides
+   * @param <C> the container's type
+   * @return the copy
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public static <C> C standardCopy(final C source, final Class<?> declared) {
+    if (UNMODIFIABLE.contains(source.getClass())) return source;
     final var own = OWN_CLASS_COPIES.get(source.getClass());
     if (own != NO_COPY) return (C) own.apply(source);
     // An ordering the class cannot be rebuilt with is kept by the JDK class that carries one, where
