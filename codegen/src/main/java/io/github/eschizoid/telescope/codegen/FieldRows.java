@@ -390,13 +390,13 @@ final class FieldRows {
   }
 
   /**
-   * Whether the initializer of {@code field} names, as the start of a call chain, a class whose
-   * simple name ends in {@code Telescope} that the compilation does not have yet: a navigator a
-   * processor writes in this round. Read by name, so nothing is attributed before the class exists,
-   * which would leave the initializer typed against a class that is missing.
+   * Whether {@code initializer}, the call initialising {@code field}, names as the start of a call
+   * chain a class whose simple name ends in {@code Telescope} that the compilation does not have
+   * yet: a navigator a processor writes in this round. Read by name, so nothing is attributed
+   * before the class exists, which would leave the initializer typed against a class that is
+   * missing. A field with no such call names none.
    */
-  boolean namesUnwrittenNavigator(final VariableElement field) {
-    if (!(trees.getTree(field) instanceof VariableTree variable) || variable.getInitializer() == null) return false;
+  boolean namesUnwrittenNavigator(final VariableElement field, final MethodInvocationTree initializer) {
     final var unit = trees.getPath(field).getCompilationUnit();
     final var enclosing = (TypeElement) field.getEnclosingElement();
     final var missing = new boolean[1];
@@ -413,7 +413,7 @@ final class FieldRows {
         }
       }
     }
-      .scan(variable.getInitializer(), null);
+      .scan(initializer, null);
     return missing[0];
   }
 
@@ -1294,18 +1294,8 @@ final class FieldRows {
         references.addAll(calls.getFirst().getArguments());
         stepsAt.addAll(calls.getFirst().getArguments());
       }
-      final var types = env.getTypeUtils();
-      if (!types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) {
-        return new Refused(
-          calls.getFirst(),
-          "this path starts at " +
-            rooted.getSimpleName() +
-            ", which is not " +
-            side.getSimpleName() +
-            " or a class it extends; start it at " +
-            side.getSimpleName()
-        );
-      }
+      final var elsewhere = startedElsewhere(calls.getFirst(), rooted, side);
+      if (elsewhere != null) return elsewhere;
       for (final var step : calls.subList(1, calls.size())) {
         final var name = selectedName(step);
         if (!name.equals("field") || step.getArguments().size() != 1) {
@@ -1361,8 +1351,7 @@ final class FieldRows {
         !root.getSimpleName().contentEquals("of") ||
         !root.getParameters().isEmpty() ||
         !root.getModifiers().contains(Modifier.STATIC) ||
-        !(root.getEnclosingElement() instanceof TypeElement navigator) ||
-        !navigator(navigator)
+        !navigator((TypeElement) root.getEnclosingElement())
       ) {
         return null;
       }
@@ -1379,21 +1368,39 @@ final class FieldRows {
 
     /**
      * Whether {@code type} declares a {@code get()} giving a {@code Telescope}, as a navigator
-     * does.
+     * does. A class declares at most one {@code get()} taking nothing, so the first decides.
      */
     private boolean navigator(final TypeElement type) {
+      final var types = env.getTypeUtils();
       for (final var method : ElementFilter.methodsIn(type.getEnclosedElements())) {
-        if (
-          method.getSimpleName().contentEquals("get") &&
-          method.getParameters().isEmpty() &&
-          !method.getModifiers().contains(Modifier.STATIC) &&
-          env.getTypeUtils().asElement(method.getReturnType()) instanceof TypeElement gives &&
-          gives.getQualifiedName().contentEquals(TELESCOPE_FQN)
-        ) {
-          return true;
+        if (method.getSimpleName().contentEquals("get") && method.getParameters().isEmpty()) {
+          return types.erasure(method.getReturnType()).toString().equals(TELESCOPE_FQN);
         }
       }
       return false;
+    }
+
+    /**
+     * The refusal, at {@code first}, of a path started at {@code rooted} where it is read from
+     * {@code side}, a class that is not {@code rooted} and does not extend it; or null when it is
+     * or does.
+     */
+    private Refused startedElsewhere(
+      final MethodInvocationTree first,
+      final TypeElement rooted,
+      final TypeElement side
+    ) {
+      final var types = env.getTypeUtils();
+      if (types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) return null;
+      return new Refused(
+        first,
+        "this path starts at " +
+          rooted.getSimpleName() +
+          ", which is not " +
+          side.getSimpleName() +
+          " or a class it extends; start it at " +
+          side.getSimpleName()
+      );
     }
 
     /**
@@ -1408,26 +1415,18 @@ final class FieldRows {
       final TypeElement side,
       final String written
     ) {
-      final var types = env.getTypeUtils();
-      if (!types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) {
-        return new Refused(
-          calls.getFirst(),
-          "this path starts at " +
-            rooted.getSimpleName() +
-            ", which is not " +
-            side.getSimpleName() +
-            " or a class it extends; start it at " +
-            side.getSimpleName()
-        );
-      }
+      final var elsewhere = startedElsewhere(calls.getFirst(), rooted, side);
+      if (elsewhere != null) return elsewhere;
       final var hops = new ArrayList<Accessor>();
-      var on = (DeclaredType) side.asType();
+      TypeMirror on = side.asType();
       for (var i = 1; i < calls.size(); i++) {
         final var step = calls.get(i);
         final var name = selectedName(step);
-        final var last = i == calls.size() - 1;
-        if (last && name.equals("get") && step.getArguments().isEmpty() && !hops.isEmpty()) break;
-        final var read = step.getArguments().isEmpty() && on != null ? propertyNamed(on, name, step) : null;
+        if (i == calls.size() - 1 && name.equals("get")) break;
+        // A call taking nothing follows a navigator or a container step, each focused on a class: a
+        // property with neither gives a Telescope, and every Telescope call giving a Telescope
+        // takes an argument, so a row whose mapping call resolves reads past no such property.
+        final var read = step.getArguments().isEmpty() ? propertyNamed((DeclaredType) on, name, step) : null;
         if (read == null) {
           return new Refused(
             step,
@@ -1438,7 +1437,7 @@ final class FieldRows {
           );
         }
         hops.add(read);
-        on = !read.primitive() && read.type() instanceof DeclaredType declared ? declared : null;
+        on = read.type();
       }
       if (hops.isEmpty()) return new Refused(calls.getFirst(), written + "; this navigator steps through no property");
       return hops;

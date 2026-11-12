@@ -201,6 +201,14 @@ class PathShorthandBridgeTest {
    * rows}.
    */
   private static ProcessorHarness.Compilation navigated(final String pair, final String rows) {
+    return navigated("", pair, rows);
+  }
+
+  /**
+   * The model with each record a navigator is generated for, a bean with a navigator, a record
+   * bridged to another, and a holder of {@code members} and one field over {@code rows}.
+   */
+  private static ProcessorHarness.Compilation navigated(final String members, final String pair, final String rows) {
     final var focus = "@io.github.eschizoid.telescope.annotations.Focus ";
     final var sources = new ArrayList<JavaFileObject>();
     sources.add(
@@ -231,10 +239,50 @@ class PathShorthandBridgeTest {
       )
     );
     sources.add(
+      ProcessorHarness.source("ps.Moved", "package ps; public record Moved(Inner address, String label, int qty) {}")
+    );
+    sources.add(
+      ProcessorHarness.source(
+        "ps.Spot",
+        "package ps; " +
+          focus +
+          "@io.github.eschizoid.telescope.annotations.Bridge(Place.class) public record Spot(String city, int zip) {}"
+      )
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Place", "package ps; " + focus + "public record Place(String city, int zip) {}")
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Trip", "package ps; " + focus + "public record Trip(Spot stop, int qty) {}")
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Tagged", "package ps; " + focus + "public record Tagged(String[] tags, int qty) {}")
+    );
+    sources.add(
+      ProcessorHarness.source("ps.Gate", "package ps; " + focus + "public record Gate(String then, String label) {}")
+    );
+    sources.add(ProcessorHarness.source("ps.Held", "package ps; public record Held(Order order) {}"));
+    sources.add(ProcessorHarness.source("ps.Labelled", "package ps; public record Labelled(String title, int qty) {}"));
+    sources.add(
+      ProcessorHarness.source(
+        "ps.Account",
+        "package ps; @io.github.eschizoid.telescope.annotations.BeanFocus public class Account {\n" +
+          "  private String label;\n" +
+          "  private int qty;\n" +
+          "  public Account() {}\n" +
+          "  public String getLabel() { return label; }\n" +
+          "  public void setLabel(final String label) { this.label = label; }\n" +
+          "  public int getQty() { return qty; }\n" +
+          "  public void setQty(final int qty) { this.qty = qty; }\n" +
+          "}\n"
+      )
+    );
+    sources.add(
       ProcessorHarness.source(
         "ps.Mappers",
         HEADER +
           "public final class Mappers {\n" +
+          members +
           "  @Bridge public static final Mapper<" +
           pair.replace(".class", "") +
           "> MAPPER = Telescope.mapper(" +
@@ -245,7 +293,12 @@ class PathShorthandBridgeTest {
       )
     );
     return ProcessorHarness.compileFully(
-      List.<Processor>of(new FocusProcessor(), new BridgeProcessor(), new MapperVerifierProcessor()),
+      List.<Processor>of(
+        new FocusProcessor(),
+        new BeanFocusProcessor(),
+        new BridgeProcessor(),
+        new MapperVerifierProcessor()
+      ),
       List.of("-Atelescope.verify=warn"),
       sources.toArray(JavaFileObject[]::new)
     );
@@ -266,13 +319,7 @@ class PathShorthandBridgeTest {
         " to(Telescope.path(Order::customer, Outer::address, Inner::city), Flat::city)," +
         " to(Telescope.path(Order::customer, Outer::address, Inner::zip), Flat::zip)"
     );
-    assertTrue(navigator.success(), navigator::errorMessages);
-    assertTrue(shorthand.success(), shorthand::errorMessages);
-    for (final var name : List.of("ps.OrderToFlatBridge", "ps.OrderToFlatBridgeProvider")) {
-      assertTrue(shorthand.generated().containsKey(name), () -> shorthand.generated().keySet().toString());
-      assertEquals(shorthand.generated().get(name), navigator.generated().get(name), name);
-    }
-    assertEquals(messages(shorthand), messages(navigator));
+    assertSameBridge("ps.OrderToFlatBridge", shorthand, navigator);
   }
 
   @Test
@@ -292,6 +339,191 @@ class PathShorthandBridgeTest {
   void aNavigatorStepReadingNoPropertyIsRefused() {
     final var refused = navigated("Cart.class, Flat.class", "to(CartTelescope.of().items().each().city(), Flat::city)");
     assertTrue(refused.hasError("each(...) in a path has no generated form"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator ended by get() generates what the path to the class it stops at generates")
+  void aNavigatorEndedByGetGeneratesWhatThePathGenerates() {
+    final var navigator = navigated(
+      "Order.class, Moved.class",
+      "to(OrderTelescope.of().customer().address().get(), Moved::address)," +
+        " to(OrderTelescope.of().customer().label(), Moved::label)"
+    );
+    final var shorthand = navigated(
+      "Order.class, Moved.class",
+      "to(Telescope.path(Order::customer, Outer::address), Moved::address)," +
+        " to(Telescope.path(Order::customer, Outer::label), Moved::label)"
+    );
+    assertSameBridge("ps.OrderToMovedBridge", shorthand, navigator);
+  }
+
+  @Test
+  @DisplayName("a bean's navigator, naming each property without its get, generates what the getter's path generates")
+  void aBeanNavigatorGeneratesWhatThePathGenerates() {
+    final var navigator = navigated(
+      "Account.class, Labelled.class",
+      "to(AccountTelescope.of().label(), Labelled::title)"
+    );
+    final var written = navigated(
+      "Account.class, Labelled.class",
+      "to(Telescope.ofBean(Account.class).field(Account::getLabel), Labelled::title)"
+    );
+    assertSameBridge("ps.AccountToLabelledBridge", written, navigator);
+  }
+
+  /** The first line of each error {@code compilation} reports, in order. */
+  private static List<String> errorLines(final ProcessorHarness.Compilation compilation) {
+    return compilation
+      .errors()
+      .stream()
+      .map(d -> d.getMessage(Locale.ROOT).lines().findFirst().orElse(""))
+      .toList();
+  }
+
+  /**
+   * Both compilations succeed and write the same bridge and provider, with the same diagnostics.
+   */
+  private static void assertSameBridge(
+    final String bridge,
+    final ProcessorHarness.Compilation shorthand,
+    final ProcessorHarness.Compilation navigator
+  ) {
+    assertTrue(navigator.success(), navigator::errorMessages);
+    assertTrue(shorthand.success(), shorthand::errorMessages);
+    for (final var name : List.of(bridge, bridge + "Provider")) {
+      assertTrue(shorthand.generated().containsKey(name), () -> shorthand.generated().keySet().toString());
+      assertEquals(shorthand.generated().get(name), navigator.generated().get(name), name);
+    }
+    assertEquals(messages(shorthand), messages(navigator));
+  }
+
+  @Test
+  @DisplayName("a navigator's get() straight after of() steps through no property and is refused")
+  void aNavigatorGetAfterOfIsRefused() {
+    final var refused = navigated("Order.class, Held.class", "to(OrderTelescope.of().get(), Held::order)");
+    assertTrue(refused.hasError("this navigator steps through no property"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator's get() before further steps is refused by name, as a call that reads no property")
+  void aNavigatorGetBeforeFurtherStepsIsRefused() {
+    final var refused = navigated(
+      "Order.class, Flat.class",
+      "to(OrderTelescope.of().customer().get().field(Outer::label), Flat::label)"
+    );
+    assertTrue(refused.hasError("get(...) in a path has no generated form"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a filter on a navigator's leaf is refused by name, as a call that takes an argument")
+  void aNavigatorFilterIsRefused() {
+    final var refused = navigated(
+      "Order.class, Flat.class",
+      "to(OrderTelescope.of().customer().label().filter(label -> !label.isEmpty()), Flat::label)"
+    );
+    assertTrue(refused.hasError("filter(...) in a path has no generated form"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator call taking an argument is refused, though a property shares its name")
+  void aNavigatorCallNamedAsAPropertyIsRefused() {
+    // At run time then(next) reads label; read by its name alone, the step would read then.
+    final var refused = navigated(
+      "Gate.class, Flat.class",
+      "to(GateTelescope.of().then(Telescope.of(Gate.class).field(Gate::label)), Flat::label)"
+    );
+    assertTrue(refused.hasError("then(...) in a path has no generated form"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator's bridge hop is refused by name, as a call that reads no property")
+  void aNavigatorBridgeHopIsRefused() {
+    final var refused = navigated(
+      "Trip.class, Flat.class",
+      "to(TripTelescope.of().stop().asPlace().city(), Flat::city)"
+    );
+    assertTrue(refused.hasError("asPlace(...) in a path has no generated form"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a call taking nothing past an array leaves the row unread, so javac's error is the only one")
+  void aStepPastAnArrayIsReportedByJavacAlone() {
+    final var refused = navigated(
+      "Tagged.class, Flat.class",
+      "to(TaggedTelescope.of().tags().withIndex(), Flat::label)"
+    );
+    assertEquals(
+      List.of(
+        "no suitable method found for to(io.github.eschizoid.telescope.Telescope.WithIndex<ps.Tagged,java.lang.String[]>,Flat::label)"
+      ),
+      errorLines(refused)
+    );
+  }
+
+  @Test
+  @DisplayName("a navigator path held in a field is refused, as an argument that is not a path written in place")
+  void aNavigatorPathHeldInAFieldIsRefused() {
+    final var refused = navigated(
+      "  static final Telescope<Order, String> LABEL = OrderTelescope.of().customer().label();\n",
+      "Order.class, Flat.class",
+      "to(LABEL, Flat::label)"
+    );
+    assertTrue(refused.hasError("this argument is not such a path"), refused::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator held in a field is refused where its chain starts, as no path written in place")
+  void aNavigatorHeldInAFieldIsRefused() {
+    final var refused = navigated(
+      "  static final OuterTelescope<Order> CUSTOMER = OrderTelescope.of().customer();\n",
+      "Order.class, Flat.class",
+      "to(CUSTOMER.label(), Flat::label)"
+    );
+    assertTrue(refused.hasError("this path starts at CUSTOMER.label(...)"), refused::errorMessages);
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("lookalikes")
+  @DisplayName("a class shaped like a navigator but with no get() giving a Telescope is not read as one")
+  void aLookalikeOfANavigatorIsRefused(final String shape, final String getter) {
+    // Read as a navigator, qty() would be read as Order's qty, whatever the method returns.
+    final var refused = navigated(
+      "  static final class Paths<R> {\n" +
+        "    static Paths<Order> of() { return new Paths<>(); }\n" +
+        getter +
+        "    Telescope<R, Integer> qty() { return null; }\n" +
+        "  }\n",
+      "Order.class, Flat.class",
+      "to(Paths.of().qty(), Flat::qty)"
+    );
+    assertTrue(refused.hasError("this path starts at Paths.of(...)"), refused::errorMessages);
+  }
+
+  private static Stream<Arguments> lookalikes() {
+    return Stream.of(
+      Arguments.of("no get()", ""),
+      Arguments.of("a get() giving its root", "    Order get() { return null; }\n")
+    );
+  }
+
+  @Test
+  @DisplayName("a navigator no processor writes is read in the last round, and javac's errors are the only ones")
+  void aNavigatorNeverWrittenIsReportedByJavacAlone() {
+    final var refused = navigated("Order.class, Flat.class", "to(MissingTelescope.of().label(), Flat::label)");
+    assertEquals(
+      List.of("incompatible types: cannot infer type-variable(s) A,B", "cannot find symbol"),
+      errorLines(refused)
+    );
+  }
+
+  @Test
+  @DisplayName("an unresolved class not named as a navigator is read at once, and javac's errors are the only ones")
+  void anUnresolvedClassIsReportedByJavacAlone() {
+    final var refused = navigated("Order.class, Flat.class", "to(Missing.of().label(), Flat::label)");
+    assertEquals(
+      List.of("incompatible types: cannot infer type-variable(s) A,B", "cannot find symbol"),
+      errorLines(refused)
+    );
   }
 
   @Test
