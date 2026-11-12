@@ -1574,7 +1574,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         final var holds = fieldByName(components, row.written()).type();
         final var gives = (
-          (ExecutableType) types.asMemberOf((DeclaredType) row.source().asType(), row.read())
+          (ExecutableType) types.asMemberOf((DeclaredType) row.sourceType(), row.read())
         ).getReturnType();
         if (!types.isAssignable(gives, holds)) {
           errorAt(
@@ -1656,6 +1656,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     final var targetFq = target.getQualifiedName().toString();
+    // Each source is held as the type its first row gives it; a class the rows give two type
+    // arguments would be read as two different types from the one instance the bag holds.
+    final var sourceTypes = new LinkedHashMap<TypeElement, TypeMirror>();
+    for (final var row : merged.rows()) {
+      final var held = sourceTypes.putIfAbsent(row.source(), row.sourceType());
+      if (held != null && !types.isSameType(held, row.sourceType())) {
+        errorAt(
+          trees,
+          field,
+          row.at(),
+          "the merge row at index " +
+            row.index() +
+            " reads " +
+            row.source().getSimpleName() +
+            " as " +
+            row.sourceType() +
+            ", and a row before it as " +
+            held +
+            "; the bag holds one " +
+            row.source().getSimpleName() +
+            ", so read it as one type"
+        );
+        return;
+      }
+    }
+    final var generic = merged
+      .sources()
+      .stream()
+      .anyMatch(source -> !source.getTypeParameters().isEmpty());
     final var parameters = new ArrayList<String>();
     final var parameterOf = new LinkedHashMap<TypeElement, String>();
     for (final var source : merged.sources()) {
@@ -1664,7 +1693,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (SourceVersion.isKeyword(name) || name.equals("sources")) name = name + "Source";
       while (parameterOf.containsValue(name)) name = name + parameterOf.size();
       parameterOf.put(source, name);
-      parameters.add("final " + source.getQualifiedName() + " " + name);
+      parameters.add("final " + declarable(sourceTypes.get(source)) + " " + name);
     }
     writeClass(
       qualifiedBridge,
@@ -1699,15 +1728,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             "> BRIDGE = io.github.eschizoid.telescope.Telescope.bridge(BRIDGE_FN);"
         );
         out.println();
+        // A generic source is held as the type its rows give it, which the bag's lookup by class
+        // gives only unchecked, and as its raw class where only an auto row names it.
+        final var suppression = generic ? "  @SuppressWarnings({ \"rawtypes\", \"unchecked\" })" : null;
         out.println("  /** Builds the target from each source, given in the order the rows first name them. */");
+        if (suppression != null) out.println(suppression);
         out.println("  public static " + targetFq + " forward(" + String.join(", ", parameters) + ") {");
-        emitMergeBody(out, target, components, bound, source -> parameterOf.get(source), parameterOf);
+        emitMergeBody(out, target, components, bound, source -> parameterOf.get(source), parameterOf, sourceTypes);
         out.println("  }");
         out.println();
         out.println("  /** Builds the target from the sources the bag holds, each looked up by its class. */");
+        if (suppression != null) out.println(suppression);
         out.println("  public static " + targetFq + " forward(final io.github.eschizoid.telescope.Sources sources) {");
         out.println("    if (sources == null) return null;");
-        emitMergeBody(out, target, components, bound, null, parameterOf);
+        emitMergeBody(out, target, components, bound, null, parameterOf, sourceTypes);
         out.println("  }");
         out.println();
         out.println("  /** A merge has no inverse, as on the runtime path. */");
@@ -1736,7 +1770,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> components,
     final Map<String, MergeSlot> bound,
     final Function<TypeElement, String> given,
-    final Map<TypeElement, String> parameterOf
+    final Map<TypeElement, String> parameterOf,
+    final Map<TypeElement, TypeMirror> sourceTypes
   ) {
     final var fetched = new HashSet<TypeElement>();
     final var reads = new LinkedHashMap<String, String>();
@@ -1750,13 +1785,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var local = "__src_" + parameterOf.get(slot.source());
       final var sourceFq = slot.source().getQualifiedName().toString();
+      final var held = declarable(sourceTypes.get(slot.source()));
       if (fetched.add(slot.source())) {
         final String present;
         if (given == null) {
-          out.println("    final " + sourceFq + " " + local + " = sources.byClass(" + sourceFq + ".class);");
+          out.println("    final " + held + " " + local + " = sources.byClass(" + sourceFq + ".class);");
           present = "sources.classes()";
         } else {
-          out.println("    final " + sourceFq + " " + local + " = " + given.apply(slot.source()) + ";");
+          out.println("    final " + held + " " + local + " = " + given.apply(slot.source()) + ";");
           present =
             "java.util.stream.Stream.of(" +
             String.join(", ", parameterOf.values()) +

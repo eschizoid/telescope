@@ -18,6 +18,7 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
@@ -120,9 +121,18 @@ final class FieldRows {
    * One merge row, at {@code index} among the rows: {@code from(Source::read, Target::written)},
    * naming its source class, the method it reads and the target property it writes, or {@code
    * auto(Source.class)}, naming its source class alone, with a null {@code read} and {@code
-   * written}. {@code at} is the tree a refusal of the row is reported on.
+   * written}. {@code sourceType} is the source class as the row gives it: with the type arguments a
+   * {@code from} row's reference carries, as {@code Box<String>} for {@code Box<String>::value},
+   * and erased for an {@code auto} row. {@code at} is the tree a refusal of the row is reported on.
    */
-  record MergeRow(int index, TypeElement source, ExecutableElement read, String written, Tree at) {}
+  record MergeRow(
+    int index,
+    TypeElement source,
+    TypeMirror sourceType,
+    ExecutableElement read,
+    String written,
+    Tree at
+  ) {}
 
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
@@ -653,7 +663,7 @@ final class FieldRows {
           );
         }
         sources.add(source);
-        rows.add(new MergeRow(index, source, null, null, row));
+        rows.add(new MergeRow(index, source, env.getTypeUtils().erasure(source.asType()), null, null, row));
         kinds.add("AutoSameName");
         accessors.add(env.getElementUtils().getBinaryName(source) + ">");
         continue;
@@ -672,11 +682,29 @@ final class FieldRows {
       if (!(read instanceof ExecutableElement reader) || !(written instanceof ExecutableElement writer)) {
         return Refused.javacReports(row);
       }
-      // An accessor takes the object it reads as its argument, so its reference is unbound and
-      // names the class it is applied to.
-      final var source = (TypeElement) elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      // The reader names the source the row reads only when it is an accessor of it: an unbound
+      // reference to an instance method, which reads the value it is handed as the method's
+      // receiver and so takes no argument.
+      final var qualifier = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      final var notAnAccessor = MergeReaders.refusal(
+        index,
+        reader.getEnclosingElement().getSimpleName().toString(),
+        reader.getSimpleName().toString(),
+        qualifier instanceof TypeElement && !reader.getModifiers().contains(Modifier.STATIC)
+      );
+      if (notAnAccessor != null) return new Refused(rowArgs.get(0), notAnAccessor);
+      final var source = (TypeElement) qualifier;
       sources.add(source);
-      rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
+      // The reference is typed as an Accessor<S, X>, whose S is the source with the type arguments
+      // the reference gives it.
+      final var typed = trees.getTypeMirror(TreePath.getPath(unit, rowArgs.get(0)));
+      final var sourceType =
+        typed instanceof DeclaredType accessor &&
+        accessor.getTypeArguments().size() == 2 &&
+        accessor.getTypeArguments().getFirst() instanceof DeclaredType given
+          ? given
+          : source.asType();
+      rows.add(new MergeRow(index, source, sourceType, reader, writer.getSimpleName().toString(), row));
       kinds.add("FromInferred");
       accessors.add(reader.getSimpleName() + ">" + writer.getSimpleName());
     }

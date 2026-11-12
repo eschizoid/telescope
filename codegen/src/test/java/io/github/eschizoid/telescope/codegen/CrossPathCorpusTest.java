@@ -13466,6 +13466,22 @@ class CrossPathCorpusTest {
       null
     ),
     new MergeCase(
+      "a from row over a generic source, read as the type its reference gives it",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          "public record %1$sBox<T>(T value) {}\n",
+          "public record %1$sTgt(String id, String name) {}\n"
+        ),
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "from(%1$sBox<String>::value, %1$sTgt::name)",
+        "from(%1$sCustomer::id, %1$sTgt::id)"
+      ),
+      "#0(id=\"c-1\", name=\"bx\")",
+      null
+    ),
+    new MergeCase(
       "a nested record, handed across as it is",
       merging(
         List.of(
@@ -13552,6 +13568,43 @@ class CrossPathCorpusTest {
         "interface java.lang.Runnable",
         "class java.lang.Object"
       )
+    ),
+    new MergeCase(
+      "a row reading through a static method taking the source, which names no source, refused in the same words",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          MERGE_AUDIT,
+          MERGE_TGT,
+          "public class %1$sH {\n  public static String idOf(final %1$sCustomer c) { return c.id(); }\n}\n"
+        ),
+        "",
+        "",
+        "from(%1$sH::idOf, %1$sTgt::id)",
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      null,
+      PairingMessages.mergeReaderNotAnAccessor(0, "%1$sH::idOf")
+    ),
+    new MergeCase(
+      "a row reading through a method of another object taking the source, refused in the same words",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          MERGE_AUDIT,
+          MERGE_TGT,
+          "public class %1$sH {\n  public static final %1$sH INSTANCE = new %1$sH();\n" +
+            "  public String idOf(final %1$sCustomer c) { return c.id(); }\n}\n"
+        ),
+        "",
+        "",
+        "auto(%1$sAudit.class)",
+        "from(%1$sH.INSTANCE::idOf, %1$sTgt::id)",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeReaderNotAnAccessor(1, "%1$sH::idOf")
     ),
     new MergeCase(
       "a row writing a component an earlier row writes, refused in the same words",

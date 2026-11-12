@@ -990,6 +990,25 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * The refusal of the merge {@code from(...)} row at {@code index} whose reader {@code reference}
+   * is not an accessor of a source class, which names no source the merge could look up. Both paths
+   * and the verifier refuse with these words.
+   */
+  public static String mergeReaderNotAnAccessor(final int index, final String reference) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " reads through " +
+      reference +
+      ", which is not an accessor of a source: a from(...) row reads its source through an instance method" +
+      " of the source's class taking no argument, the class the merge looks the source up by, and a static" +
+      " method or a method of another object names no source. Read it through an accessor of a source" +
+      " class, as from(Customer::name, Profile::name); a value computed from a source belongs in an accessor" +
+      " of that source, or of a holder record given as one more source."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (
