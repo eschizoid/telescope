@@ -75,23 +75,18 @@ class TelescopeMapperBeanModelTest {
   );
 
   @Test
-  @DisplayName("Spring and CDI annotations with no telescope starter are refused until telescope.beans chooses")
-  void bothAnnotationsWithoutAStarterAreRefused() {
+  @DisplayName("Spring and CDI annotations with no telescope starter generate a Spring component")
+  void bothAnnotationsWithoutAStarterGenerateSpring() {
     final var result = ProcessorHarness.compile(
       List.of(new TelescopeMapperProcessor()),
       SPRING_COMPONENT,
       CDI_SCOPE,
       TRANSFORMER
     );
-    assertFalse(result.success());
-    assertTrue(
-      result.hasError(
-        "@TelescopeTransformer finds both Spring and CDI on the classpath of the module that declares this interface," +
-          " and neither telescope starter; pass -Atelescope.beans=spring or -Atelescope.beans=cdi"
-      ),
-      result.errorMessages()
-    );
-    assertFalse(result.generated().containsKey("demo.NameTransformerImpl"));
+    assertTrue(result.success(), result.errorMessages());
+    final var generated = result.generated().get("demo.NameTransformerImpl");
+    assertTrue(generated.contains("@Component(\"\")\npublic final class NameTransformerImpl"), generated);
+    assertFalse(generated.contains("ApplicationScoped"), generated);
   }
 
   @Test

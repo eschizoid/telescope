@@ -143,9 +143,10 @@ the interface, the processor stops with this error on the interface:
 
 The same processor writes a CDI bean instead in a Quarkus application (see the [Quarkus guide](../quarkus/README.md)).
 It picks the container by the telescope starter on the classpath, so with this starter present it writes a Spring
-component even when `jakarta.enterprise.cdi-api` arrives on the classpath through another dependency. Only a module with
-both telescope starters, or with both containers' annotations and neither starter, is refused until you choose the bean
-model with a compiler option. The same option overrides the starter in any build:
+component even when `jakarta.enterprise.cdi-api` arrives on the classpath through another dependency. With no telescope
+starter, Spring's annotations still give a Spring component, whatever CDI annotations sit beside them. Only a module
+with both telescope starters is refused until you choose the bean model with a compiler option. The same option
+overrides the starter in any build:
 
 ```kotlin
 // Gradle

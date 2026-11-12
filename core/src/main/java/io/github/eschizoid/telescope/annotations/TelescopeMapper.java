@@ -18,13 +18,14 @@ import java.lang.annotation.Target;
  * <p>The implementation is a Spring {@code @Component} when {@code telescope-spring-boot-starter}
  * is on the classpath of the declaring module, and an {@code @ApplicationScoped} CDI bean when
  * {@code telescope-quarkus} is; either way {@code telescope-codegen} goes on the annotation
- * processor path. With no telescope starter, the Spring or CDI annotations on the classpath decide.
- * With neither container the processor reports an error on the annotated interface. Both starters,
- * or both containers' annotations with no starter, are reported too, until the compiler option
- * {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi} chooses; the option overrides
- * every case. A CDI projection collects its {@code TelescopeCustomizer} beans through Quarkus ArC's
- * {@code @All}, so it needs ArC as well. The annotation lives in core, next to {@link Bridge}, so
- * each container integration generates its own implementation from the same declaration.
+ * processor path. With no telescope starter, the annotations on the classpath decide: Spring's give
+ * a Spring component, also beside CDI's, and CDI's alone give a CDI bean. With neither container
+ * the processor reports an error on the annotated interface. Both starters are reported too, until
+ * the compiler option {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi} chooses;
+ * the option overrides every case. A CDI projection collects its {@code TelescopeCustomizer} beans
+ * through Quarkus ArC's {@code @All}, so it needs ArC as well. The annotation lives in core, next
+ * to {@link Bridge}, so each container integration generates its own implementation from the same
+ * declaration.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

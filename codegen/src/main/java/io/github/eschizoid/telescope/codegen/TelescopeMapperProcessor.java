@@ -39,11 +39,11 @@ import javax.tools.Diagnostic;
  * <p>The bean model follows the classpath of the module that declares the interface, a Spring
  * component or an {@code @ApplicationScoped} CDI bean. The telescope starter on that classpath
  * decides first: {@code telescope-spring-boot-starter} gives Spring and {@code telescope-quarkus}
- * gives CDI. With neither starter, the container annotation decides: {@code
- * org.springframework.stereotype.Component} gives Spring and {@code
- * jakarta.enterprise.context.ApplicationScoped} gives CDI. Both starters, or both annotations with
- * no starter, refuse the interface, since either guess writes a bean the other container never
- * sees. The compiler option {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi}
+ * gives CDI. Both starters refuse the interface, since either guess writes a bean the other
+ * container never sees. With neither starter, the container annotation decides: {@code
+ * org.springframework.stereotype.Component} gives Spring, also when {@code
+ * jakarta.enterprise.context.ApplicationScoped} is beside it, and that CDI annotation alone gives
+ * CDI. The compiler option {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi}
  * overrides all of this, and is refused when it names a model whose annotation is not there.
  *
  * <p>It also reads {@code @Bridge} and {@code @Bridges}, to know the bridge a carrier class or a
@@ -875,19 +875,8 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     if (quarkusStarter && cdi) {
       return Container.CDI;
     }
-    if (spring && cdi) {
-      error(
-        element,
-        annotation +
-          " finds both Spring and CDI on the classpath of the module that declares this interface, and neither" +
-          " telescope starter; pass -A" +
-          BEANS_OPTION +
-          "=spring or -A" +
-          BEANS_OPTION +
-          "=cdi to the compiler to choose the bean it generates"
-      );
-      return null;
-    }
+    // With no starter, Spring wins over CDI: a module that has Spring generates a Spring component
+    // whatever else is on its classpath, and CDI needs the annotation alone or the option.
     if (spring) {
       return Container.SPRING;
     }
