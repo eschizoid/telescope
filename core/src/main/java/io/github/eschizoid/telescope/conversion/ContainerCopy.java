@@ -288,8 +288,9 @@ public final class ContainerCopy {
    * CollectionWrites#intoWrite} refills it: {@code held}, the collection {@code owner} holds, is
    * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
    * the registered {@link Policy} decides. A null {@code incoming} adds nothing. Answers false
-   * where the held collection cannot be changed and the caller is to write {@code incoming} through
-   * the setter instead.
+   * where the held collection itself cannot be changed and the caller is to write {@code incoming}
+   * through the setter instead. An exception the adder throws, rejecting an element, is thrown on
+   * as it is once the held collection has its elements back, setter or not.
    *
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
@@ -340,12 +341,14 @@ public final class ContainerCopy {
 
   /**
    * Refills {@code held} with {@code incoming} through the registered {@link Policy}. A refill that
-   * fails, by any exception the container or its adder throws, such as {@code
+   * fails first has the elements {@code held} had put back, so whoever else holds it sees it as it
+   * was wherever it takes its elements back; then {@link CollectionWrites#afterFailedRefill}
+   * decides. An exception the adder throws is the adder rejecting an element and goes to the caller
+   * as it was thrown, never past the adder to the setter. One the container throws, such as {@code
    * UnsupportedOperationException} from a container that cannot change or {@code
-   * NullPointerException} from a sorted set handed a null, first has the elements {@code held} had
-   * put back, so whoever else holds it sees it as it was wherever it takes its elements back. The
-   * answer is then false where a setter can write the property instead, and the call is refused by
-   * name, with the failure as its cause, where none can.
+   * NullPointerException} from a sorted set handed a null, answers false where a setter can write
+   * the property instead, and refuses the call by name, with the failure as its cause, where none
+   * can.
    */
   private static boolean refillHeld(
     final String source,
@@ -362,18 +365,44 @@ public final class ContainerCopy {
     // target's own collection across still fills it.
     final Object elements = incoming != null && incoming == held ? new ArrayList<>((Collection<?>) incoming) : incoming;
     final Object kept = snapshot(held);
+    // What the adder throws is told apart from what the container throws.
+    final BiConsumer<Object, Object> adds =
+      adder == null
+        ? null
+        : (bean, element) -> {
+            try {
+              adder.accept(bean, element);
+            } catch (final RuntimeException rejected) {
+              throw new AdderRejected(rejected);
+            }
+          };
     try {
       if (POLICY == STANDARD) {
-        standardRefill(owner, held, elements, adder);
+        standardRefill(owner, held, elements, adds);
       } else {
-        POLICY.refill(new Refill(owner, property, held, elements, adder));
+        POLICY.refill(new Refill(owner, property, held, elements, adds));
       }
     } catch (final RuntimeException failed) {
-      restore(held, kept, failed);
-      if (setter) return false;
-      throw unwritable(source, target, beanOf(owner), property, held, failed);
+      final var adderThrew = failed instanceof AdderRejected;
+      final var cause = adderThrew ? (RuntimeException) failed.getCause() : failed;
+      restore(held, kept, cause);
+      return switch (CollectionWrites.afterFailedRefill(adderThrew, setter)) {
+        case SET -> false;
+        case REFUSE -> throw unwritable(source, target, beanOf(owner), property, held, cause);
+        case RETHROW -> throw cause;
+      };
     }
     return true;
+  }
+
+  /** Carries what an adder threw out of a refill, so it is not taken for the container's own. */
+  private static final class AdderRejected extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+
+    AdderRejected(final RuntimeException rejected) {
+      super(null, rejected, false, false);
+    }
   }
 
   /** A copy of what {@code held} holds, to put back if a refill fails; null for no container. */

@@ -778,6 +778,8 @@ public class Mapper<A, B> {
    * which needs no setter for it. The value {@code forward} builds for {@code into} to read from
    * runs none of its adders, so each adder runs exactly once per element, on {@code target}, and an
    * adder that changes or drops an element leaves {@code target} as {@code forward} would build it.
+   * An adder that rejects an element by throwing has its exception thrown on, once the collection
+   * the target holds has its elements back; the setter never writes the collection past it.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
