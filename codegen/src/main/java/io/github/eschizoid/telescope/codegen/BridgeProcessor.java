@@ -3426,6 +3426,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // base holds, through ContainerCopy.patched, as the runtime mapper's patch refills it; a
     // collection the rebuild fills through its adders goes into the new bean's own instead.
     final var patchRefilled = patchRefilled(source, sourceFields, sourceRebuild);
+    // Whether the patch body refills any container, and so records its refills to undo them should
+    // a later step throw, as the runtime mapper's patch does.
+    final var patchRefills = new boolean[1];
     final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
@@ -3478,8 +3481,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // identity: a slot null in both partial and base stays null rather than taking the
       // default
       // on a field the caller never wrote.
+      if (patchRefilled.contains(sourceName)) {
+        patchRefills[0] = true;
+      }
       final var written = patchRefilled.contains(sourceName)
-        ? CONTAINER_COPY + ".patched(base, " + literal(sourceName) + ", " + baseRead + ", " + checkedPartial + ")"
+        ? "__refills.refill(base, " + literal(sourceName) + ", " + baseRead + ", " + checkedPartial + ")"
         : checkedPartial;
       return paired.castInto(
         paired.backwardCasts(),
@@ -3767,7 +3773,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Patch returns a new object whenever base exists, matching the runtime Mapper#patch: a
         // null partial reads as one whose every slot is null, so the body rebuilds base.
         out.println("    if (base == null) return null;");
-        emitMethodBody(out, patchBody);
+        if (patchRefills[0]) {
+          out.println("    final var __refills = " + CONTAINER_COPY + ".patching();");
+          out.println("    try {");
+          emitMethodBody(out, patchBody);
+          out.println("    } catch (final RuntimeException __failed) {");
+          out.println("      __refills.undo(__failed);");
+          out.println("      throw __failed;");
+          out.println("    }");
+        } else {
+          emitMethodBody(out, patchBody);
+        }
         out.println("  }");
         out.println();
         // A generic target is named raw, so each setter call is an unchecked call on a raw type.

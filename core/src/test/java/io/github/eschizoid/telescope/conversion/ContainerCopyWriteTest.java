@@ -18,6 +18,7 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -489,7 +490,7 @@ class ContainerCopyWriteTest {
     @DisplayName("is the held list, cleared and refilled with the incoming elements")
     void refillsTheHeldList() {
       final var held = new ArrayList<>(List.of("stale"));
-      final var patched = ContainerCopy.patched(new Owner(), "tags", held, List.of("x", "y"));
+      final var patched = ContainerCopy.patching().refill(new Owner(), "tags", held, List.of("x", "y"));
       assertSame(held, patched);
       assertEquals(List.of("x", "y"), held);
     }
@@ -498,7 +499,7 @@ class ContainerCopyWriteTest {
     @DisplayName("is the held map, cleared and refilled with the incoming entries")
     void refillsTheHeldMap() {
       final var held = new HashMap<>(Map.of("stale", 0));
-      final var patched = ContainerCopy.patched(new Owner(), "counts", held, Map.of("k", 1));
+      final var patched = ContainerCopy.patching().refill(new Owner(), "counts", held, Map.of("k", 1));
       assertSame(held, patched);
       assertEquals(Map.of("k", 1), held);
     }
@@ -507,9 +508,9 @@ class ContainerCopyWriteTest {
     @DisplayName("is the incoming container where the owner holds none, or the incoming one is null")
     void isTheIncomingOneWhereNothingIsHeld() {
       final var incoming = List.of("x");
-      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", null, incoming));
+      assertSame(incoming, ContainerCopy.patching().refill(new Owner(), "tags", null, incoming));
       final var held = new ArrayList<>(List.of("stale"));
-      assertNull(ContainerCopy.patched(new Owner(), "tags", held, null));
+      assertNull(ContainerCopy.patching().refill(new Owner(), "tags", held, null));
       assertEquals(List.of("stale"), held);
     }
 
@@ -517,7 +518,7 @@ class ContainerCopyWriteTest {
     @DisplayName("is the held container itself, untouched, where the incoming one is that same instance")
     void leavesTheSameInstanceAlone() {
       final var held = new ArrayList<>(List.of("a"));
-      assertSame(held, ContainerCopy.patched(new Owner(), "tags", held, held));
+      assertSame(held, ContainerCopy.patching().refill(new Owner(), "tags", held, held));
       assertEquals(List.of("a"), held);
     }
 
@@ -526,7 +527,7 @@ class ContainerCopyWriteTest {
     void passesOverAnUnmodifiableHeldContainer() {
       final var held = List.of("stale");
       final var incoming = new ArrayList<>(List.of("x"));
-      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", held, incoming));
+      assertSame(incoming, ContainerCopy.patching().refill(new Owner(), "tags", held, incoming));
     }
 
     @Test
@@ -535,7 +536,7 @@ class ContainerCopyWriteTest {
       final var held = new TreeSet<>(Set.of("stale"));
       final var incoming = new ArrayList<String>();
       incoming.add(null);
-      assertSame(incoming, ContainerCopy.patched(new Owner(), "codes", held, incoming));
+      assertSame(incoming, ContainerCopy.patching().refill(new Owner(), "codes", held, incoming));
       assertEquals(Set.of("stale"), held);
     }
 
@@ -543,14 +544,45 @@ class ContainerCopyWriteTest {
     @DisplayName("is the incoming container where the held one cannot even be read")
     void passesOverAHeldContainerThatCannotBeRead() {
       final var incoming = List.of("x");
-      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", new Unreadable(), incoming));
+      assertSame(incoming, ContainerCopy.patching().refill(new Owner(), "tags", new Unreadable(), incoming));
+    }
+
+    @Test
+    @DisplayName("keeps the elements of an incoming view of the held list or map, read before the held one is cleared")
+    void readsAViewOfTheHeldContainerBeforeClearingIt() {
+      final var held = new ArrayList<>(List.of("a", "b"));
+      assertSame(held, ContainerCopy.patching().refill(new Owner(), "tags", held, Collections.unmodifiableList(held)));
+      assertEquals(List.of("a", "b"), held);
+      final var counts = new HashMap<>(Map.of("k", 1));
+      assertSame(counts, ContainerCopy.patching().refill(new Owner(), "counts", counts, Collections.unmodifiableMap(counts)));
+      assertEquals(Map.of("k", 1), counts);
+      final var lines = new ArrayList<>(List.of("a", "b", "c"));
+      ContainerCopy.patching().refill(new Owner(), "tags", lines, lines.subList(1, 3));
+      assertEquals(List.of("b", "c"), lines);
+    }
+
+    @Test
+    @DisplayName("undoes every refill it made, last first, putting back what each container held")
+    void undoesItsRefills() {
+      final var patch = ContainerCopy.patching();
+      final var tags = new ArrayList<>(List.of("a"));
+      final var counts = new HashMap<>(Map.of("k", 1));
+      patch.refill(new Owner(), "tags", tags, List.of("x"));
+      patch.refill(new Owner(), "counts", counts, Map.of("z", 2));
+      patch.refill(new Owner(), "codes", List.of("unmodifiable"), List.of("y"));
+      assertEquals(List.of("x"), tags);
+      final var failure = new IllegalStateException("the rebuild failed");
+      patch.undo(failure);
+      assertEquals(List.of("a"), tags);
+      assertEquals(Map.of("k", 1), counts);
+      assertEquals(0, failure.getSuppressed().length);
     }
 
     @Test
     @DisplayName("is the incoming value where the held value is no container")
     void passesOverAHeldValueThatIsNoContainer() {
       final Object incoming = List.of("x");
-      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", (Object) "not a container", incoming));
+      assertSame(incoming, ContainerCopy.patching().refill(new Owner(), "tags", (Object) "not a container", incoming));
     }
   }
 

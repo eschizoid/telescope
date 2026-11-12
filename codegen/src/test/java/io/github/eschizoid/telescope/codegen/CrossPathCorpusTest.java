@@ -16657,6 +16657,20 @@ class CrossPathCorpusTest {
 
   private static final List<ContainerRow> CONTAINER_ROWS = List.of(
     new ContainerRow(
+      "an unmodifiable view of the list the target holds, which the source hands across",
+      intoPair(
+        "public record %1$sSrc(String name, java.util.List<String> tags) {\n" +
+          "  static java.util.List<String> SHARED;\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    SHARED = new java.util.ArrayList<>(java.util.List.of(\"a\", \"b\"));\n" +
+          "    return new %1$sSrc(\"n\", java.util.Collections.unmodifiableList(SHARED));\n  }\n}\n",
+        taggedTarget("%1$sSrc.SHARED")
+      ),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"a\", \"b\"])" + KEPT
+    ),
+    new ContainerRow(
       "a list the target holds",
       intoPair(
         taggedSource("java.util.List.of(\"x\", \"y\")"),
@@ -17042,6 +17056,53 @@ class CrossPathCorpusTest {
 
   private static final List<ContainerRow> PATCH_ROWS = List.of(
     new ContainerRow(
+      "unmodifiable views of the list and map a bean base holds, which the partial supplies",
+      intoPair(
+        "public class %1$sSrc {\n" +
+          "  static java.util.List<String> TAGS;\n  static java.util.Map<String, Integer> COUNTS;\n" +
+          "  private String name;\n  private java.util.List<String> tags;\n" +
+          "  private java.util.Map<String, Integer> counts;\n  public %1$sSrc() {}\n" +
+          "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
+          "  public java.util.Map<String, Integer> getCounts() { return counts; }\n" +
+          "  public void setCounts(final java.util.Map<String, Integer> v) { counts = v; }\n" +
+          "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
+          "    TAGS = new java.util.ArrayList<>(java.util.List.of(\"a\", \"b\")); s.setTags(TAGS);\n" +
+          "    COUNTS = new java.util.HashMap<>(java.util.Map.of(\"k\", 1)); s.setCounts(COUNTS);\n" +
+          "    return s;\n  }\n}\n",
+        sampled(
+          "%1$sTgt",
+          "String name, java.util.List<String> tags, java.util.Map<String, Integer> counts",
+          "new %1$sTgt(\"renamed\", java.util.Collections.unmodifiableList(%1$sSrc.TAGS)," +
+            " java.util.Collections.unmodifiableMap(%1$sSrc.COUNTS))"
+        )
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(counts={k=1}, name=\"renamed\", tags=[\"a\", \"b\"])" +
+        KEPT +
+        ", the base #0(counts={k=1}, name=\"old\", tags=[\"a\", \"b\"])"
+    ),
+    new ContainerRow(
+      "a list a bean base holds, which the partial supplies, where a setter of the rebuild throws",
+      intoPair(
+        "public class %1$sSrc {\n  private String name;\n" +
+          "  private java.util.List<String> tags = new java.util.ArrayList<>();\n  public %1$sSrc() {}\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String v) {\n" +
+          "    if (\"boom\".equals(v)) { throw new IllegalArgumentException(\"no boom\"); }\n    name = v;\n  }\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
+          "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
+          "    s.getTags().addAll(java.util.List.of(\"a\", \"b\"));\n    return s;\n  }\n}\n",
+        taggedPartial("java.util.List.of(\"x\")").replace("new %1$sTgt(null, ", "new %1$sTgt(\"boom\", ")
+      ),
+      "tags",
+      Call.PATCH,
+      REFUSED + "no boom" + LEFT + "#0(name=\"old\", tags=[\"a\", \"b\"])"
+    ),
+    new ContainerRow(
       "a list a bean base holds, which the partial supplies",
       intoPair(
         taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
@@ -17333,7 +17394,7 @@ class CrossPathCorpusTest {
       try {
         patched = converts.patch(source, tgt.getMethod("sample").invoke(null));
       } catch (final RuntimeException e) {
-        return REFUSED + e.getMessage();
+        return REFUSED + e.getMessage() + LEFT + shape(source, new IdentityHashMap<>());
       }
       final var after = getter.invoke(patched);
       final var kept = after == held ? KEPT : REPLACED;

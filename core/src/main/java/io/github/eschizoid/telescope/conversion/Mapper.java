@@ -619,7 +619,10 @@ public class Mapper<A, B> {
    * bean and the partial supplies a {@code Collection} or {@code Map} property, the container
    * {@code base} holds for it is cleared and refilled with the converted elements, as {@link #into}
    * refills one, and the result holds that same instance, which a persistence provider tracking a
-   * managed collection by instance needs. {@code base} therefore sees the new elements. A container
+   * managed collection by instance needs. {@code base} therefore sees the new elements, and so does
+   * any other object that holds the same container. A patch that throws, from a converter, a
+   * setter or a builder, puts back what each refilled container held, so it leaves {@code base} as
+   * it was. A container
    * that cannot be changed, or cannot be read, is passed over and the converted one written
    * instead, and so is a collection the rebuild fills through its adders, which goes into the new
    * bean's own collection. A record's containers are never refilled. The refill goes through {@link
@@ -656,30 +659,53 @@ public class Mapper<A, B> {
     );
     // The overlay map exists only once the partial supplies a value, so a partial that overlays
     // nothing rebuilds base without allocating it.
+    // Every container is refilled before the rebuild, and every refill is undone if any later step
+    // throws, so a patch that fails leaves base as it was. The generated patch does the same.
+    final var refills = ContainerCopy.patching();
+    try {
+      return (A) overlaid(base, partial, refills);
+    } catch (final RuntimeException failed) {
+      refills.undo(failed);
+      throw failed;
+    }
+  }
+
+  /** {@link #patch}'s rebuild of {@code base} with {@code partial} laid over it. */
+  private Object overlaid(final A base, final B partial, final ContainerCopy.Patch refills) {
     HashMap<String, Object> patched = null;
     // A value a source path fills is written back through the path once the rest is rebuilt, in
     // the table's order.
     List<Map.Entry<PatchEntry, Object>> throughPaths = null;
-    if (partial != null) for (final var entry : patchByTargetField.entrySet()) {
-      final var partialValue =
-        entry.getValue().read() != null
-          ? entry.getValue().read().apply(partial)
-          : targetRefl.read(partial, entry.getKey());
-      if (partialValue == null) continue;
-      if (entry.getValue().overlay() != null) {
-        if (throughPaths == null) throughPaths = new ArrayList<>();
-        throughPaths.add(Map.entry(entry.getValue(), partialValue));
+    if (partial != null) {
+      for (final var entry : patchByTargetField.entrySet()) {
+        final var partialValue =
+          entry.getValue().read() != null
+            ? entry.getValue().read().apply(partial)
+            : targetRefl.read(partial, entry.getKey());
+        if (partialValue == null) {
+          continue;
+        }
+        if (entry.getValue().overlay() != null) {
+          if (throughPaths == null) {
+            throughPaths = new ArrayList<>();
+          }
+          throughPaths.add(Map.entry(entry.getValue(), partialValue));
+        }
+        if (entry.getValue().sourceField() == null) {
+          continue;
+        }
+        if (patched == null) {
+          patched = new HashMap<>();
+        }
+        final var sourceField = entry.getValue().sourceField();
+        final var converted = entry.getValue().backward().apply(partialValue);
+        patched.put(
+          sourceField,
+          patchRefilled().contains(sourceField)
+            ? refills.refill(base, sourceField, sourceRefl.read(base, sourceField), converted)
+            : converted
+        );
       }
-      if (entry.getValue().sourceField() == null) continue;
-      if (patched == null) patched = new HashMap<>();
-      final var sourceField = entry.getValue().sourceField();
-      final var converted = entry.getValue().backward().apply(partialValue);
-      patched.put(
-        sourceField,
-        patchRefilled().contains(sourceField)
-          ? ContainerCopy.patched(base, sourceField, sourceRefl.read(base, sourceField), converted)
-          : converted
-      );
     }
     final var overlay = patched;
     Object rebuilt =
@@ -688,10 +714,12 @@ public class Mapper<A, B> {
         : sourceRefl.construct(sourceClass, name ->
             overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
           );
-    if (throughPaths != null) for (final var path : throughPaths) {
-      rebuilt = path.getKey().overlay().apply(rebuilt, path.getValue());
+    if (throughPaths != null) {
+      for (final var path : throughPaths) {
+        rebuilt = path.getKey().overlay().apply(rebuilt, path.getValue());
+      }
     }
-    return (A) rebuilt;
+    return rebuilt;
   }
 
   /**
