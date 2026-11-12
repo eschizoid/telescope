@@ -19,9 +19,10 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 3. **Respect the optics lattice.** Any new feature that converts / composes / lifts / transforms between types must
    route through `Iso` / `Lens` / `Prism` / `Affine` / `Traversal` in `:internal/optics/`. NO hand-rolled
    `Function<Object, Object>` plumbing. See the "Lattice-first" decision below for the full contract.
-4. **North star: dethrone MapStruct.** Every feature decision should make telescope a credible drop-in replacement for
-   the MapStruct user. Codegen path needs to match MapStruct's runtime efficiency; runtime path needs to be competitive
-   enough for non-hot loops.
+4. **North star: dethrone MapStruct, then own the hops.** Every feature decision should keep telescope a credible
+   drop-in replacement for the MapStruct user (codegen at MapStruct's speed, runtime competitive for non-hot loops).
+   Beyond that, telescope is the mapping layer between the REST, service and entity layers: new work is weighed by which
+   hop it strengthens.
 5. **World-class ergonomics.** Public APIs should read like English at the call site. Static-imported row factories over
    varargs of typed rows. Sealed permits, not class hierarchies. Fluent navigators, not string-keyed paths.
 6. **A performance claim needs a measurement, and the measurement needs a control.** Numbers come from the `Benchmarks`
@@ -63,8 +64,9 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 
 ## What this library is
 
-A Java 25 deep-copy DSL for records and POJOs: build a path through an immutable graph, then read / write / update /
-traverse / convert / lift-through-an-effect using one type.
+A Java 25 mapping library for records and POJOs, used as the mapping layer between the REST, service and entity layers
+of a JVM service: build a path through an immutable graph, then read / write / update / traverse / convert /
+lift-through-an-effect using one type.
 
 Two layers, hard line between them:
 

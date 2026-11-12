@@ -5,7 +5,7 @@ plugins {
     jacoco
 }
 
-description = "telescope-core — deep-copy DSL for Java records and POJOs"
+description = "telescope-core — typed mappers for Java records and POJOs between the REST, service and entity layers of a JVM service"
 
 base {
     archivesName = "telescope-core"
@@ -146,7 +146,7 @@ publishing {
 
             pom {
                 name.set("telescope-core")
-                description.set("Telescope — a deep-copy DSL for Java records and POJOs.")
+                description.set("Typed mappers for Java records and POJOs between the REST, service and entity layers of a JVM service.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2025")
 
