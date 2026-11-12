@@ -134,11 +134,23 @@ one that wraps the default with logging or metrics, the starter does not create 
 `@TelescopeMapper` and `@TelescopeTransformer` are declared in `telescope-core`, and so are the interfaces your beans
 extend. None of them depends on Spring. The `TelescopeMapperProcessor` in `telescope-codegen` writes a class named
 `<Interface>Impl` next to each annotated interface and marks it `@Component`, so the interface needs to sit in a package
-that your application's component scan covers. If Spring is not on the classpath of the module that declares the
-interface, the processor stops with this error on the interface:
+that your application's component scan covers. If neither Spring nor CDI is on the classpath of the module that declares
+the interface, the processor stops with this error on the interface:
 
 ```
-@TelescopeMapper generates a Spring component; add telescope-spring-boot-starter to the classpath of the module that declares this interface
+@TelescopeMapper generates a Spring component or a CDI bean; add telescope-spring-boot-starter or telescope-quarkus to the classpath of the module that declares this interface
+```
+
+The same processor writes a CDI bean instead when the classpath holds CDI and not Spring, as in a Quarkus application
+(see the [Quarkus guide](../quarkus/README.md)). When a Spring module also has `jakarta.enterprise.cdi-api` on its
+classpath, the processor cannot tell which container will run the bean and refuses the interface until you choose one
+with a compiler option:
+
+```kotlin
+// Gradle
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-Atelescope.beans=spring")
+}
 ```
 
 The examples below use these imports:

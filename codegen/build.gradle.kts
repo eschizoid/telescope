@@ -53,11 +53,11 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.jacocoTestReport {
-    // TelescopeMapperProcessor is exercised by the Spring starter's in-process compiler harness,
-    // where its Spring-specific annotations and generated beans are available. The codegen report
-    // cannot import execution data from that separate Gradle module, so counting this integration
-    // processor here would report the same covered code as untested in this module. The
-    // :spring-boot-starter report includes it instead.
+    // TelescopeMapperProcessor is exercised by the Spring starter's and the Quarkus starter's
+    // in-process compiler harnesses, where the container annotations and generated beans are
+    // available. The codegen report cannot import execution data from those separate Gradle
+    // modules, so counting this integration processor here would report the same covered code as
+    // untested in this module. The :spring-boot-starter and :quarkus reports include it instead.
     // Built from the source set's classes (not classDirectories.files, which resolves eagerly and
     // drops the task dependencies Gradle needs to validate this task).
     classDirectories.setFrom(

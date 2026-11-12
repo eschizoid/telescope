@@ -104,6 +104,17 @@ tasks.jacocoTestReport {
     // jacocoTestReport classpath input. Gradle's strict task validation refuses to assume the
     // order — declare it explicitly.
     mustRunAfter(jandex)
+    // TelescopeMapperProcessor lives in :codegen, and its CDI branch runs only under this module's
+    // tests, where the CDI and ArC annotations exist. The :codegen report excludes it; report it here
+    // too, so the lines these tests execute are attributed to it.
+    val codegen = project(":codegen")
+    dependsOn(":codegen:classes")
+    classDirectories.from(
+        codegen.layout.buildDirectory.dir("classes/java/main").map { dir ->
+            fileTree(dir) { include("**/TelescopeMapperProcessor*.class") }
+        },
+    )
+    sourceDirectories.from(codegen.file("src/main/java"))
     reports {
         csv.required.set(true)
         xml.required.set(true)
@@ -130,6 +141,8 @@ dependencies {
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation("io.quarkus:quarkus-junit-component")
+    testImplementation(testFixtures(project(":codegen")))
+    testAnnotationProcessor(project(":codegen"))
 }
 
 publishing {
