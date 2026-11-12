@@ -22,6 +22,7 @@ import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
+import io.github.eschizoid.telescope.internal.pairing.TextFormats;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -84,6 +85,10 @@ final class FieldRows {
     "toOneWay",
     "toOrElse",
     "toOrElseGet",
+    "toFormatted",
+    "toFormattedOneWay",
+    "toFormattedNumber",
+    "toFormattedNumberOneWay",
     "enumTo",
     "via",
     "drop",
@@ -839,7 +844,8 @@ final class FieldRows {
           row,
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
-            " to, toOneWay, toOrElse, toOrElseGet, via, drop, constant, compute and when, and the hints writeBean and" +
+            " to, toOneWay, toOrElse, toOrElseGet, toFormatted, toFormattedOneWay, toFormattedNumber," +
+            " toFormattedNumberOneWay, via, drop, constant, compute and when, and the hints writeBean and" +
             " writeBeans"
         );
       }
@@ -879,6 +885,7 @@ final class FieldRows {
         case "toOneWay" -> converting(row, false);
         case "toOrElse", "toOrElseGet" -> orElse(row, kind);
         case "when" -> gated(row);
+        case "toFormatted", "toFormattedOneWay", "toFormattedNumber", "toFormattedNumberOneWay" -> formatted(row, kind);
         case "via" -> via(row);
         case "drop" -> drop(row);
         case "constant" -> filled(row, true);
@@ -1367,6 +1374,251 @@ final class FieldRows {
       rowKinds.add(twoWay ? "TypedTransformTo" : "ForwardOnlyTransformTo");
       rowAccessors.add(s.method() + ">" + t.method());
       return null;
+    }
+
+    /**
+     * A formatted row, {@code kind}: the source property written into the target's {@code String}
+     * property through a pattern, which must be a string constant, with a zone or a locale held in
+     * a {@code static final} field the bridge can name. The shared spec decides the pattern for the
+     * property's class as the runtime decides it, and the processor writes the row's conversion as
+     * a {@code BridgeFn} class holding the formatter as a constant.
+     */
+    private Refused formatted(final MethodInvocationTree row, final String kind) {
+      final var args = row.getArguments();
+      final var src = accessor(args.get(0), source);
+      if (src instanceof Refused refused) return refused;
+      final var tgt = accessor(args.get(1), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var s = (Accessor) src;
+      final var t = (Accessor) tgt;
+      final var oneWay = TextFormats.oneWay(kind);
+      if (oneWay && strict) {
+        return new Refused(
+          row,
+          PairingMessages.formatOneWayInMapper("Telescope.mapper", simple(source), simple(target), kind, s.property())
+        );
+      }
+      final var pattern = constantString(args.get(2));
+      if (pattern == null) {
+        return new Refused(
+          args.get(2),
+          "a @Bridge mapper takes the pattern of a " +
+            kind +
+            " row as a string constant, which the processor checks and the generated bridge holds; this" +
+            " argument is not one"
+        );
+      }
+      final var number = TextFormats.formatsNumber(kind);
+      final String given;
+      if (args.size() == 4) {
+        given = heldField(args.get(3));
+        if (given == null) {
+          return new Refused(
+            args.get(3),
+            "a @Bridge mapper takes the " +
+              (number ? "locale" : "zone") +
+              " of a " +
+              kind +
+              " row as a static final field the generated bridge can name, such as " +
+              (number ? "Locale.GERMANY" : "ZoneOffset.UTC") +
+              "; this argument is not one"
+          );
+        }
+      } else {
+        given = null;
+      }
+      final var types = env.getTypeUtils();
+      if (!(s.type() instanceof DeclaredType declared)) {
+        return new Refused(
+          args.get(0),
+          "the type " + s.type() + " this accessor reads is no class a formatted row takes"
+        );
+      }
+      final var typeElement = (TypeElement) declared.asElement();
+      final var typeName = env.getElementUtils().getBinaryName(typeElement).toString();
+      final var shown = s.primitive() ? types.unboxedType(s.type()).toString() : typeElement.getSimpleName().toString();
+      final var refusal = TextFormats.refusal(kind, s.property(), typeName, shown, pattern, !number && given != null);
+      if (refusal != null) return new Refused(row, refusal);
+      final var refused = write(row, s.property(), t.property(), kind + ":" + pattern + ":" + given);
+      if (refused != null) return refused;
+      if (!transforms.containsKey(s.property())) {
+        final var name = bridgeName + camel(s.property()) + "Fn";
+        transforms.put(s.property(), qualified(name));
+        if (oneWay) forwardOnly.add(s.property());
+        final var failure = PairingMessages.formattedPhrase(shown, pattern);
+        classes.add(
+          number
+            ? numberFn(name, s.type(), typeName, pattern, given, oneWay, t.property(), failure)
+            : temporalFn(name, s.type(), typeName, pattern, given, oneWay, t.property(), failure)
+        );
+      }
+      rowKinds.add(oneWay ? "ForwardOnlyTransformTo" : "TypedTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
+      return null;
+    }
+
+    /** The value of {@code arg} where it is a string literal or a constant variable; else null. */
+    private String constantString(final ExpressionTree arg) {
+      if (arg instanceof LiteralTree literal) return literal.getValue() instanceof String text ? text : null;
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      return elementAt(unit, arg) instanceof VariableElement variable &&
+        variable.getConstantValue() instanceof String text
+        ? text
+        : null;
+    }
+
+    /**
+     * The qualified reference to the {@code static final} field {@code arg} names, where the
+     * generated bridge can reach it; else null.
+     */
+    private String heldField(final ExpressionTree arg) {
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      if (
+        !(elementAt(unit, arg) instanceof VariableElement held) ||
+        held.getKind() != ElementKind.FIELD ||
+        !held.getModifiers().contains(Modifier.STATIC) ||
+        !held.getModifiers().contains(Modifier.FINAL)
+      ) {
+        return null;
+      }
+      final var owner = (TypeElement) held.getEnclosingElement();
+      return reachable(held, owner) ? owner.getQualifiedName() + "." + held.getSimpleName() : null;
+    }
+
+    /** The head of the class the processor writes for a formatted row, through its constant. */
+    private StringBuilder formatHead(final String name, final TypeMirror from, final String constant) {
+      final var out = new StringBuilder();
+      if (!pkg.isEmpty()) out.append("package ").append(pkg).append(";\n\n");
+      return out
+        .append("/** Generated by telescope-codegen: a formatted row of ")
+        .append(bridgeName)
+        .append(". */\n")
+        .append("public final class ")
+        .append(name)
+        .append(" implements io.github.eschizoid.telescope.conversion.BridgeFn<")
+        .append(from)
+        .append(", java.lang.String> {\n\n")
+        .append(constant)
+        .append("\n");
+    }
+
+    /**
+     * The opening of the {@code backward} of a formatted row's class, which for a forward-only row
+     * refuses, as the class of a {@code toOneWay} row does; true where it continues.
+     */
+    private static boolean backwardHead(final StringBuilder out, final TypeMirror from, final boolean oneWay) {
+      out.append("  @Override\n  public ").append(from).append(" backward(final java.lang.String v) {\n");
+      if (oneWay) {
+        out.append("    throw new UnsupportedOperationException(\"the row converts forward only\");\n  }\n}\n");
+        return false;
+      }
+      out.append("    if (v == null) return null;\n");
+      return true;
+    }
+
+    /** The failure of text {@code v} that does not read back, in the spec's words. */
+    private static String failure(final String property, final String phrase) {
+      return (
+        javaLiteral(PairingMessages.notAValueHead(property)) +
+        " + v + " +
+        javaLiteral(PairingMessages.notAValueTail(phrase))
+      );
+    }
+
+    private GeneratedClass temporalFn(
+      final String name,
+      final TypeMirror from,
+      final String typeName,
+      final String pattern,
+      final String zone,
+      final boolean oneWay,
+      final String property,
+      final String phrase
+    ) {
+      final var constant =
+        "  private static final java.time.format.DateTimeFormatter FORMAT =\n" +
+        "    java.time.format.DateTimeFormatter.ofPattern(" +
+        javaLiteral(pattern) +
+        ")" +
+        (zone == null ? "" : ".withZone(" + zone + ")") +
+        ";\n";
+      final var out = formatHead(name, from, constant);
+      out
+        .append("  @Override\n  public java.lang.String forward(final ")
+        .append(from)
+        .append(" v) {\n    return v == null ? null : FORMAT.format(v);\n  }\n\n");
+      if (backwardHead(out, from, oneWay)) {
+        out
+          .append("    try {\n      return FORMAT.parse(v, ")
+          .append(typeName.replace('$', '.'))
+          .append("::from);\n    } catch (final java.time.DateTimeException e) {\n")
+          .append("      throw new java.lang.IllegalArgumentException(")
+          .append(failure(property, phrase))
+          .append(", e);\n    }\n  }\n}\n");
+      }
+      return new GeneratedClass(qualified(name), out.toString());
+    }
+
+    private GeneratedClass numberFn(
+      final String name,
+      final TypeMirror from,
+      final String typeName,
+      final String pattern,
+      final String locale,
+      final boolean oneWay,
+      final String property,
+      final String phrase
+    ) {
+      final var constant =
+        "  private static final java.text.DecimalFormat FORMAT = format();\n\n" +
+        "  private static java.text.DecimalFormat format() {\n" +
+        "    final var format = new java.text.DecimalFormat(\n      " +
+        javaLiteral(pattern) +
+        ",\n      java.text.DecimalFormatSymbols.getInstance(" +
+        (locale == null ? "java.util.Locale.getDefault(java.util.Locale.Category.FORMAT)" : locale) +
+        ")\n    );\n" +
+        "    format.setParseBigDecimal(true);\n" +
+        "    return format;\n" +
+        "  }\n";
+      final var out = formatHead(name, from, constant);
+      out
+        .append("  @Override\n  public java.lang.String forward(final ")
+        .append(from)
+        .append(" v) {\n    return v == null ? null : ((java.text.DecimalFormat) FORMAT.clone()).format(v);\n  }\n\n");
+      if (backwardHead(out, from, oneWay)) {
+        final var scalar = TextFormats.numberOf(typeName);
+        final var exact = TextFormats.exactConversion(scalar);
+        final var inexact = TextFormats.inexactConversion(scalar);
+        out
+          .append("    final var position = new java.text.ParsePosition(0);\n")
+          .append(
+            "    final java.lang.Number parsed = ((java.text.DecimalFormat) FORMAT.clone()).parse(v, position);\n"
+          )
+          .append("    if (parsed == null || position.getIndex() != v.length()) throw failure(v, null);\n");
+        if (inexact != null) {
+          out.append("    return parsed.").append(inexact).append("();\n");
+        } else {
+          out.append("    if (!(parsed instanceof java.math.BigDecimal exact)) throw failure(v, null);\n");
+          if (exact == null) {
+            out.append("    return exact;\n");
+          } else {
+            out
+              .append("    try {\n      return exact.")
+              .append(exact)
+              .append(
+                "();\n    } catch (final java.lang.ArithmeticException e) {\n      throw failure(v, e);\n    }\n"
+              );
+          }
+        }
+        out
+          .append("  }\n\n")
+          .append("  private static java.lang.IllegalArgumentException failure(\n")
+          .append("    final java.lang.String v,\n    final java.lang.Throwable cause\n  ) {\n")
+          .append("    return new java.lang.IllegalArgumentException(")
+          .append(failure(property, phrase))
+          .append(", cause);\n  }\n}\n");
+      }
+      return new GeneratedClass(qualified(name), out.toString());
     }
 
     /**
@@ -2602,6 +2854,28 @@ final class FieldRows {
    * gives.
    */
   private record Held(String expression, TypeMirror gives) {}
+
+  /**
+   * {@code text} as a Java string literal, every character outside printable ASCII written as a
+   * unicode escape, so the generated source reads the same in any encoding.
+   */
+  private static String javaLiteral(final String text) {
+    final var out = new StringBuilder("\"");
+    for (var i = 0; i < text.length(); i++) {
+      final var c = text.charAt(i);
+      if (c == '"' || c == '\\') {
+        out.append('\\').append(c);
+      } else if (c < 0x20) {
+        // A unicode escape of a line terminator ends the literal, so a control is written in octal.
+        out.append(String.format(Locale.ROOT, "\\%03o", (int) c));
+      } else if (c > 0x7e) {
+        out.append(String.format(Locale.ROOT, "\\u%04x", (int) c));
+      } else {
+        out.append(c);
+      }
+    }
+    return out.append('"').toString();
+  }
 
   /** The Java literal of the default value of the primitive {@code kind}. */
   private static String primitiveDefault(final TypeKind kind) {

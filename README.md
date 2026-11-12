@@ -193,18 +193,20 @@ earlier runs, and the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub A
 
 ## Coming from MapStruct
 
-| MapStruct                                                | telescope                                                   |
-| -------------------------------------------------------- | ----------------------------------------------------------- |
-| `@Mapping(source = "customerName", target = "fullName")` | `to(Order::customerName, OrderDto::fullName)`               |
-| `@Mapping(source = "customer.city", target = "city")`    | `to(path(Order::customer, Customer::city), OrderDto::city)` |
-| `@Mapping(target = "tenant", constant = "production")`   | `constant(OrderDto::tenant, "production")`                  |
-| `@Mapping(target = "label", expression = "java(...)")`   | `compute(OrderDto::label, Labels::of)`                      |
-| `@Mapping(target = "region", defaultValue = "EMEA")`     | `toOrElse(Order::region, OrderDto::region, "EMEA")`         |
-| `@Mapping(target = "internalNote", ignore = true)`       | `drop(Order::internalNote)`                                 |
-| `@Mapper(uses = LineMapper.class)`                       | `via(Order::lines, OrderDto::lines, LineMapper.class)`      |
-| `@InheritInverseConfiguration` on a second method        | `backward(...)` on the same mapper                          |
-| `@MappingTarget` to update an existing bean              | `into(existingBean, source)`                                |
-| `unmappedTargetPolicy = ReportingPolicy.ERROR`           | the default for `Telescope.mapper(...)`                     |
+| MapStruct                                                  | telescope                                                        |
+| ---------------------------------------------------------- | ---------------------------------------------------------------- |
+| `@Mapping(source = "customerName", target = "fullName")`   | `to(Order::customerName, OrderDto::fullName)`                    |
+| `@Mapping(source = "customer.city", target = "city")`      | `to(path(Order::customer, Customer::city), OrderDto::city)`      |
+| `@Mapping(target = "tenant", constant = "production")`     | `constant(OrderDto::tenant, "production")`                       |
+| `@Mapping(target = "label", expression = "java(...)")`     | `compute(OrderDto::label, Labels::of)`                           |
+| `@Mapping(target = "region", defaultValue = "EMEA")`       | `toOrElse(Order::region, OrderDto::region, "EMEA")`              |
+| `@Mapping(target = "shipDate", dateFormat = "dd.MM.yyyy")` | `toFormatted(Order::shipDate, OrderDto::shipDate, "dd.MM.yyyy")` |
+| `@Mapping(target = "total", numberFormat = "$#.00")`       | `toFormattedNumber(Order::total, OrderDto::total, "$#.00")`      |
+| `@Mapping(target = "internalNote", ignore = true)`         | `drop(Order::internalNote)`                                      |
+| `@Mapper(uses = LineMapper.class)`                         | `via(Order::lines, OrderDto::lines, LineMapper.class)`           |
+| `@InheritInverseConfiguration` on a second method          | `backward(...)` on the same mapper                               |
+| `@MappingTarget` to update an existing bean                | `into(existingBean, source)`                                     |
+| `unmappedTargetPolicy = ReportingPolicy.ERROR`             | the default for `Telescope.mapper(...)`                          |
 
 A MapStruct mapper names its fields in strings inside annotations, because Java annotations only accept constants. Its
 processor checks those strings when it compiles, but a plain IDE rename doesn't update them; only the MapStruct IDE

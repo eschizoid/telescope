@@ -3,7 +3,9 @@ package io.github.eschizoid.telescope.codegen;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
+import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.LambdaExpressionTree;
+import com.sun.source.tree.LiteralTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
 import com.sun.source.tree.MethodInvocationTree;
@@ -30,6 +32,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
+import io.github.eschizoid.telescope.internal.pairing.TextFormats;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -59,8 +62,10 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.util.ElementFilter;
@@ -2049,10 +2054,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             null
           );
         }
-        case "toOneWay" -> {
+        case "toOneWay", "toFormattedOneWay", "toFormattedNumberOneWay" -> {
           return strict ? null : accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
-        case "enumTo", "toOrElse", "toOrElseGet", "via" -> {
+        case "enumTo", "toOrElse", "toOrElseGet", "toFormatted", "toFormattedNumber", "via" -> {
           return accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
         case "drop" -> {
@@ -2321,6 +2326,43 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       return simpleName(props.boxed(types.erasure(type)));
     }
 
+    /**
+     * Reports the refusal the shared spec gives a formatted row whose pattern is a string constant,
+     * which construction gives the same row; a pattern computed at run time is left to
+     * construction.
+     */
+    private void verifyFormatted(final MethodInvocationTree row, final String rowName, final Prop src) {
+      final var rowArgs = row.getArguments();
+      if (rowArgs.size() < 3) return;
+      final var pattern = constantString(rowArgs.get(2));
+      if (pattern == null) return;
+      final var type = src.type();
+      final var primitive = type.getKind().isPrimitive();
+      final var boxed = primitive ? types.boxedClass((PrimitiveType) type).asType() : type;
+      if (!(boxed instanceof DeclaredType declared)) return;
+      final var element = (TypeElement) declared.asElement();
+      final var shown = primitive ? type.toString() : element.getSimpleName().toString();
+      final var zoned = !TextFormats.formatsNumber(rowName) && rowArgs.size() == 4;
+      final var refusal = TextFormats.refusal(
+        rowName,
+        src.name(),
+        elements.getBinaryName(element).toString(),
+        shown,
+        pattern,
+        zoned
+      );
+      if (refusal != null) report(row, refusal);
+    }
+
+    /** The value of {@code arg} where it is a string literal or a constant variable; else null. */
+    private String constantString(final ExpressionTree arg) {
+      if (arg instanceof LiteralTree literal) return literal.getValue() instanceof String text ? text : null;
+      if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
+      return elementAt(arg) instanceof VariableElement variable && variable.getConstantValue() instanceof String text
+        ? text
+        : null;
+    }
+
     /** A row given two accessors, keyed to the classes they are applied to, or null. */
     private KeyedRow accessorRow(final MethodInvocationTree row, final PairWalk.RowKind kind) {
       final var rowArgs = row.getArguments();
@@ -2356,9 +2398,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var rowName = rowExec.getSimpleName().toString();
       final var rowArgs = row.getArguments();
       switch (rowName) {
-        case "to", "toOrElse", "toOrElseGet", "toOneWay", "enumTo", "via" -> {
+        case
+          "to",
+          "toOrElse",
+          "toOrElseGet",
+          "toOneWay",
+          "toFormatted",
+          "toFormattedOneWay",
+          "toFormattedNumber",
+          "toFormattedNumberOneWay",
+          "enumTo",
+          "via" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
+          if (src != null && TextFormats.isFormattedRow(rowName)) verifyFormatted(row, rowName, src);
           if ("to".equals(rowName) && rowArgs.size() == 2 && isTelescopeParameter(rowExec, 0)) {
             verifySourcePath(row, rowName, rowArgs.get(0), srcType, srcSimple, tgtSimple);
           }
@@ -2386,8 +2439,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
               report(row, PairingMessages.duplicateTargetRow(srcSimple, tgtSimple, tgt.name()));
               return true;
             }
-            // Construction refuses a toOneWay row of a mapper that converts both ways for itself.
-            final var refusedRow = "toOneWay".equals(rowName) && !forwardOnly;
+            // Construction refuses a toOneWay row, or a forward-only formatted one, of a mapper
+            // that
+            // converts both ways for itself.
+            final var oneWayRow =
+              "toOneWay".equals(rowName) || (TextFormats.isFormattedRow(rowName) && TextFormats.oneWay(rowName));
+            final var refusedRow = oneWayRow && !forwardOnly;
             if (!refusedRow && writes.write(src.name(), tgt.name(), row, true)) return true;
           }
           // Only the 2-arg same-typed to(src, tgt) carries no conversion — the one row shape the

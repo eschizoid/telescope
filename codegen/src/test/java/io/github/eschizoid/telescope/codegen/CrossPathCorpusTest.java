@@ -31,6 +31,7 @@ import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.temporal.TemporalAccessor;
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -7730,6 +7731,7 @@ class CrossPathCorpusTest {
     if (value instanceof String text) return "\"" + text + "\"";
     if (value instanceof Number number) return number.toString();
     if (value instanceof Boolean || value instanceof Character) return value.toString();
+    if (value instanceof TemporalAccessor temporal) return temporal.toString();
     // A constant renders as its enum's name without the cell prefix, so a cell owes the enum a
     // conversion produced as well as the constant.
     if (value instanceof Enum<?> constant) {
@@ -20222,6 +20224,510 @@ class CrossPathCorpusTest {
       attempt.get();
       return null;
     } catch (final InvocationTargetException e) {
+      return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return String.valueOf(e.getMessage());
+    }
+  }
+
+  /**
+   * A formatted row on a {@code @Bridge} field, through both paths: the declarations, each with
+   * {@code %1$s} as the cell's prefix, and what both paths owe forward, backward and in {@code
+   * patch}. The field, {@code %1$sSrcCarrier.MAPPER}, is read once from the compilation the
+   * processor ran on, where it runs the generated bridge, and once from the same sources compiled
+   * without it, where it builds the runtime mapper from the same rows. {@code Src.sample()} and
+   * {@code Tgt.sample()} build the inputs, and {@code patch} lays {@code Tgt.sample()} over {@code
+   * Src.sample()}; a forward-only cell owes neither backward nor patch.
+   *
+   * <p>A refusal is owed as {@link #REFUSED} followed by the words both refusals contain: the
+   * processor's error, and the failure of the field's initializer without it. A failure is owed as
+   * {@link #FAILS} followed by the words both thrown messages contain.
+   */
+  private record FormatCell(
+    String name,
+    Directions directions,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  /**
+   * The {@code @Bridge} field of {@code %1$sSrc} to {@code %1$sTgt} with {@code rows}, as source.
+   */
+  private static String formatField(final Directions directions, final String... rows) {
+    return directions == Directions.BOTH
+      ? fieldBridge("%1$sSrc", "%1$sTgt", rows)
+      : forwardFieldBridge("%1$sSrc", "%1$sTgt", rows);
+  }
+
+  /** A pair of records holding {@code components}, each with a {@code sample()}. */
+  private static List<String> formatPair(
+    final String srcComponents,
+    final String srcSample,
+    final String tgtComponents,
+    final String tgtSample
+  ) {
+    return List.of(
+      sampled("%1$sSrc", srcComponents, "new %1$sSrc(" + srcSample + ")"),
+      sampled("%1$sTgt", tgtComponents, "new %1$sTgt(" + tgtSample + ")")
+    );
+  }
+
+  private static List<String> formatCell(final List<String> pair, final String... more) {
+    final var all = new ArrayList<>(pair);
+    all.addAll(List.of(more));
+    return all;
+  }
+
+  private static final String FORMAT_DAY = "java.time.LocalDate.of(2026, 12, 31)";
+
+  private static final List<FormatCell> FORMAT_CELLS = List.of(
+    new FormatCell(
+      "a date formats forward and parses back",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "\"01.02.2027\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy\")")
+      ),
+      "#0(day=\"31.12.2026\")",
+      "#0(day=2027-02-01)",
+      "#0(day=2027-02-01)"
+    ),
+    new FormatCell(
+      "a null date converts to null both ways, and patch keeps the source's",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.time.LocalDate day, java.time.LocalDate due",
+          "null, " + FORMAT_DAY,
+          "String day, String due",
+          "null, null"
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy\")",
+          "toFormatted(%1$sSrc::due, %1$sTgt::due, \"dd.MM.yyyy\")"
+        )
+      ),
+      "#0(day=null, due=\"31.12.2026\")",
+      "#0(day=null, due=null)",
+      "#0(day=null, due=2026-12-31)"
+    ),
+    new FormatCell(
+      "an Instant is written and read in the zone a static final field holds",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.time.Instant at",
+          "java.time.Instant.parse(\"2026-12-31T22:30:00Z\")",
+          "String at",
+          "\"2027-01-01 01:15\""
+        ),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd HH:mm\", %1$sZones.PLUS_TWO)"),
+        "public class %1$sZones {\n" +
+          "  public static final java.time.ZoneId PLUS_TWO = java.time.ZoneOffset.ofHours(2);\n}\n"
+      ),
+      "#0(at=\"2027-01-01 00:30\")",
+      "#0(at=2026-12-31T23:15:00Z)",
+      "#0(at=2026-12-31T23:15:00Z)"
+    ),
+    new FormatCell(
+      "a pattern held in a constant, and one that does not read back, format forward only",
+      Directions.FORWARD,
+      formatCell(
+        formatPair(
+          "java.time.LocalDateTime at, java.time.LocalDate day",
+          "java.time.LocalDateTime.of(2026, 12, 31, 8, 5), " + FORMAT_DAY,
+          "String at, String day",
+          "null, null"
+        ),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, %1$sPatterns.STAMP)",
+          "toFormattedOneWay(%1$sSrc::day, %1$sTgt::day, \"MM/yyyy\")"
+        ),
+        "public class %1$sPatterns {\n  public static final String STAMP = \"HH:mm 'on' dd.MM\";\n}\n"
+      ),
+      "#0(at=\"08:05 on 31.12\", day=\"12/2026\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "numbers of each class format forward and parse back exactly",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "java.math.BigDecimal total, int count, Long big, double weight, java.math.BigInteger id",
+          "new java.math.BigDecimal(\"1234.5\"), 1200, 7L, 2.25, java.math.BigInteger.TEN",
+          "String total, String count, String big, String weight, String id",
+          "\"$9,876.50\", \"3,400\", \"12\", \"0.125\", \"4\""
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"$#,##0.00\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"#,##0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::big, %1$sTgt::big, \"0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::weight, %1$sTgt::weight, \"0.0##\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::id, %1$sTgt::id, \"#000\", java.util.Locale.US)"
+        )
+      ),
+      "#0(total=\"$1,234.50\", count=\"1,200\", big=\"7\", weight=\"2.25\", id=\"010\")",
+      "#0(total=9876.50, count=3400, big=12, weight=0.125, id=4)",
+      "#0(total=9876.50, count=3400, big=12, weight=0.125, id=4)"
+    ),
+    new FormatCell(
+      "null text reads back into a primitive as its default, and a pattern outside ASCII is held as written",
+      Directions.BOTH,
+      formatCell(
+        formatPair(
+          "int count, java.math.BigDecimal total",
+          "5, new java.math.BigDecimal(\"1234.5\")",
+          "String count, String total",
+          "null, \"9.876,50 €\""
+        ),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"0\", java.util.Locale.US)",
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"#,##0.00 €\", java.util.Locale.GERMANY)"
+        )
+      ),
+      "#0(count=\"5\", total=\"1.234,50 €\")",
+      "#0(count=0, total=9876.50)",
+      "#0(count=5, total=9876.50)"
+    ),
+    new FormatCell(
+      "a number formats forward only in the default locale",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("long n", "42L", "String n", "null"),
+        formatField(Directions.FORWARD, "toFormattedNumberOneWay(%1$sSrc::n, %1$sTgt::n, \"0000\")")
+      ),
+      "#0(n=\"0042\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a date that does not parse fails naming the target property, the text and the format",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String shipped", "\"2026/12/31\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::shipped, \"dd.MM.yyyy\")")
+      ),
+      "#0(shipped=\"31.12.2026\")",
+      FAILS + "'shipped' got \"2026/12/31\", not a LocalDate in the format \"dd.MM.yyyy\"",
+      FAILS + "'shipped' got \"2026/12/31\", not a LocalDate in the format \"dd.MM.yyyy\""
+    ),
+    new FormatCell(
+      "a number with text after it fails rather than reading the number before it",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "java.math.BigDecimal.ONE", "String total", "\"$12.50 off\""),
+        formatField(
+          Directions.BOTH,
+          "toFormattedNumber(%1$sSrc::total, %1$sTgt::total, \"$#,##0.00\", java.util.Locale.US)"
+        )
+      ),
+      "#0(total=\"$1.00\")",
+      FAILS + "'total' got \"$12.50 off\", not a BigDecimal in the format \"$#,##0.00\"",
+      FAILS + "'total' got \"$12.50 off\", not a BigDecimal in the format \"$#,##0.00\""
+    ),
+    new FormatCell(
+      "a fraction does not read back into an int",
+      Directions.BOTH,
+      formatCell(
+        formatPair("int count", "3", "String count", "\"1.5\""),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::count, %1$sTgt::count, \"0.#\", java.util.Locale.US)")
+      ),
+      "#0(count=\"3\")",
+      FAILS + "'count' got \"1.5\", not an int in the format \"0.#\"",
+      FAILS + "'count' got \"1.5\", not an int in the format \"0.#\""
+    ),
+    new FormatCell(
+      "a date pattern the JDK does not compile is refused by name",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"dd.MM.yyyy{\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': \"dd.MM.yyyy{\" is not a date and time pattern: Pattern includes" +
+        " reserved character: '{'.",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a number pattern the JDK does not compile is refused by name",
+      Directions.BOTH,
+      formatCell(
+        formatPair("double weight", "1.0", "String weight", "null"),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::weight, %1$sTgt::weight, \"#.##.0\")")
+      ),
+      REFUSED +
+        "Mapping.toFormattedNumber(...) on 'weight': \"#.##.0\" is not a number pattern: Multiple decimal" +
+        " separators in pattern \"#.##.0\".",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern whose text does not read back is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"MM/yyyy\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': the text the pattern \"MM/yyyy\" writes, such as \"02/2001\"," +
+        " does not read back as a LocalDate",
+      null,
+      null
+    ),
+    new FormatCell(
+      "an Instant given no zone is refused, naming the overload that takes one",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.time.Instant at", "null", "String at", "null"),
+        formatField(Directions.FORWARD, "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd\")")
+      ),
+      REFUSED +
+        "Mapping.toFormattedOneWay(...) on 'at': an Instant has a date and a time only in a time zone, and the" +
+        " pattern \"yyyy-MM-dd\" is given none. Pass the zone: toFormattedOneWay(source, target, pattern," +
+        " ZoneOffset.UTC).",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern naming a field the class lacks is refused",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalTime opens", "null", "String opens", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::opens, %1$sTgt::opens, \"dd.MM HH:mm\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'opens': the pattern \"dd.MM HH:mm\" names a field a LocalTime does" +
+        " not have",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a forward-only formatted row is refused by a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "null", "String total", "null"),
+        formatField(Directions.BOTH, "toFormattedNumberOneWay(%1$sSrc::total, %1$sTgt::total, \"0.00\")")
+      ),
+      REFUSED +
+        "Telescope.mapper(%1$sSrc, %1$sTgt, ...) cannot accept a Mapping.toFormattedNumberOneWay(...) row for" +
+        " 'total': it formats forward only, and the mapper converts both ways.",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a two-digit year reads another century back, and is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "null"),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, \"yy-MM-dd\")")
+      ),
+      REFUSED +
+        "Mapping.toFormatted(...) on 'day': the pattern \"yy-MM-dd\" writes 1899-12-31 as \"99-12-31\", which" +
+        " reads back as 2099-12-31",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a number pattern writing fewer digits than a value has is refused on a mapper that converts both ways",
+      Directions.BOTH,
+      formatCell(
+        formatPair("long n", "1L", "String n", "null"),
+        formatField(Directions.BOTH, "toFormattedNumber(%1$sSrc::n, %1$sTgt::n, \"0.#E0\")")
+      ),
+      REFUSED + "Mapping.toFormattedNumber(...) on 'n': the pattern \"0.#E0\" writes 127 as \"1.3E2\"",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a pattern computed when the mapper is built",
+      Directions.BOTH,
+      formatCell(
+        formatPair("java.time.LocalDate day", FORMAT_DAY, "String day", "\"01.02.2027\""),
+        formatField(Directions.BOTH, "toFormatted(%1$sSrc::day, %1$sTgt::day, %1$sPatterns.DAY)"),
+        "public class %1$sPatterns {\n  public static final String DAY = String.valueOf(\"dd.MM.yyyy\");\n}\n"
+      ),
+      "#0(day=\"31.12.2026\")",
+      "#0(day=2027-02-01)",
+      null
+    ),
+    new FormatCell(
+      "a zone given as a call",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.time.Instant at", "java.time.Instant.parse(\"2026-12-31T22:30:00Z\")", "String at", "null"),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedOneWay(%1$sSrc::at, %1$sTgt::at, \"yyyy-MM-dd HH:mm\", java.time.ZoneOffset.ofHours(2))"
+        )
+      ),
+      "#0(at=\"2027-01-01 00:30\")",
+      null,
+      null
+    ),
+    new FormatCell(
+      "a locale given as a call",
+      Directions.FORWARD,
+      formatCell(
+        formatPair("java.math.BigDecimal total", "new java.math.BigDecimal(\"1234.5\")", "String total", "null"),
+        formatField(
+          Directions.FORWARD,
+          "toFormattedNumberOneWay(%1$sSrc::total, %1$sTgt::total, \"#,##0.00\", java.util.Locale.of(\"de\"))"
+        )
+      ),
+      "#0(total=\"1.234,50\")",
+      null,
+      null
+    )
+  );
+
+  /**
+   * Formatted rows the generated path refuses and the runtime builds, each with the fragment the
+   * generated path refuses it with. The generated bridge holds the formatter as a constant built
+   * when its class loads, from a pattern the processor reads and checks while it compiles, so it
+   * needs the pattern's text and a field it can name for the zone or the locale; a value a call
+   * computes exists only once the mapper is built, which is when the runtime reads it.
+   *
+   * <p>An entry keeps its cell's generated side from failing and nothing else: the runtime side is
+   * held to the cell's owed shapes, and an entry no cell reaches fails.
+   */
+  private static final Map<String, String> FORMATTED_GENERATED_LIMITS = Map.of(
+    // Inherent: the processor needs the pattern's text, which a call computes only at run
+    // time.
+    "a pattern computed when the mapper is built",
+    "takes the pattern of a toFormatted row as a string constant",
+    // Inherent: the bridge's constant formatter names the zone as a field; a call has no
+    // name.
+    "a zone given as a call",
+    "takes the zone of a toFormattedOneWay row as a static final field",
+    // Inherent: the bridge's constant formatter names the locale as a field; a call has no
+    // name.
+    "a locale given as a call",
+    "takes the locale of a toFormattedNumberOneWay row as a static final field"
+  );
+
+  @Test
+  @DisplayName("a formatted row on a @Bridge field formats, parses, refuses and fails the same way on both paths")
+  void aFormattedRowAgreesOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var limited = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var cell : FORMAT_CELLS) {
+      final var prefix = "Fm" + index++;
+      final var head = "package " + PACKAGE + ";\nimport static io.github.eschizoid.telescope.mapping.Mapping.*;\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var carrier = PACKAGE + "." + prefix + "SrcCarrier";
+      final Attempt runtimeField = () -> classes.get(carrier).getField("MAPPER").get(null);
+      if (cell.forward().startsWith(REFUSED)) {
+        final var owed = cell.forward().formatted(prefix).substring(REFUSED.length());
+        if (processed.success() || !processed.hasError(owed)) {
+          failures.add(
+            cell.name() + ": the generated path owed a refusal naming " + owed + ", saw " + describe(processed)
+          );
+        }
+        final var refusal = initializerFailure(runtimeField);
+        if (refusal == null || !refusal.contains(owed)) {
+          failures.add(cell.name() + ": the runtime owed a refusal naming " + owed + ", saw " + refusal);
+        }
+        continue;
+      }
+      final var limit = FORMATTED_GENERATED_LIMITS.get(cell.name());
+      if (limit != null) {
+        limited.add(cell.name());
+        if (processed.success() || !processed.hasError(limit)) {
+          failures.add(
+            cell.name() + ": the generated path owed a refusal naming " + limit + ", saw " + describe(processed)
+          );
+        }
+      } else if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var warnings = warningsInGenerated(processed);
+      if (!warnings.isEmpty()) failures.add(cell.name() + ": the generated code warns: " + warnings);
+      final var sides = new ArrayList<Map.Entry<String, Map.Entry<Object, ClassLoader>>>();
+      if (limit == null) {
+        final var loader = new ServicesLoader(processed);
+        final var generatedField = loader.loadClass(carrier).getField("MAPPER").get(null);
+        if (generatedField.getClass().getClassLoader() != loader) {
+          failures.add(cell.name() + ": the processed field holds " + generatedField.getClass().getName());
+        }
+        sides.add(Map.entry("generated", Map.entry(generatedField, (ClassLoader) loader)));
+      }
+      sides.add(Map.entry("reflective", Map.entry(runtimeField.get(), classes.get(carrier).getClassLoader())));
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", cell.forward()));
+      if (cell.backward() != null) owed.add(Map.entry("backward", cell.backward()));
+      if (cell.patch() != null) owed.add(Map.entry("patch", cell.patch()));
+      for (final var side : sides) {
+        final var field = side.getValue().getKey();
+        final var on = side.getValue().getValue();
+        final Class<?> src = Class.forName(PACKAGE + "." + prefix + "Src", true, on);
+        final Class<?> tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, on);
+        final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+        final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+        for (final var operation : owed) {
+          @SuppressWarnings("unchecked")
+          final Attempt attempt = switch (operation.getKey()) {
+            case "forward" -> cell.directions() == Directions.FORWARD
+              ? () -> ((ForwardMapper<Object, Object>) field).forward(srcSample.get())
+              : () -> ((Mapper<Object, Object>) field).forward(srcSample.get());
+            case "backward" -> () -> ((Mapper<Object, Object>) field).backward(tgtSample.get());
+            default -> () -> ((Mapper<Object, Object>) field).patch(srcSample.get(), tgtSample.get());
+          };
+          final var expected = operation.getValue();
+          if (expected.startsWith(FAILS)) {
+            final var message = expected.substring(FAILS.length()).formatted(prefix);
+            final var thrown = refusalOf(attempt);
+            if (thrown == null || !thrown.contains(message)) {
+              failures.add(
+                cell.name() + ", " + operation.getKey() + ": " + side.getKey() + " owed " + message + ", saw " + thrown
+              );
+            }
+            continue;
+          }
+          final var shape = shapeOf(attempt);
+          if (!shape.equals(expected)) {
+            failures.add(
+              cell.name() + ", " + operation.getKey() + ": " + side.getKey() + " gave " + shape + ", owed " + expected
+            );
+          }
+        }
+      }
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " format cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+    // A register entry no cell reaches is a note about something nobody checks.
+    assertEquals(FORMATTED_GENERATED_LIMITS.keySet(), limited);
+  }
+
+  /** The message a field's initializer fails with, or null where it does not fail. */
+  private static String initializerFailure(final Attempt read) {
+    try {
+      read.get();
+      return null;
+    } catch (final ExceptionInInitializerError e) {
       return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return String.valueOf(e.getMessage());

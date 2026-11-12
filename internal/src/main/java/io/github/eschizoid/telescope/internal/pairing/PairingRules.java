@@ -327,7 +327,12 @@ public final class PairingRules<T> {
         (target == Scalar.STRING && props.isSubtypeOf(srcType, WellKnown.TEMPORAL));
       if (!text) return null;
       return new PairDecision.Incompatible<>(
-        PairingMessages.textNeedsFormat(componentName, props.typeName(srcType), props.typeName(tgtType))
+        PairingMessages.textNeedsFormat(
+          componentName,
+          props.typeName(srcType),
+          props.typeName(tgtType),
+          target == Scalar.STRING
+        )
       );
     }
     if (source == target) return null;

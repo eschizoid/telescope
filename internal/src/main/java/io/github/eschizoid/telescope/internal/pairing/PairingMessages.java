@@ -1721,16 +1721,34 @@ public final class PairingMessages {
     );
   }
 
-  /** A {@code String} paired with a date or time, whose text has no one format. */
-  public static String textNeedsFormat(final String componentName, final String srcType, final String tgtType) {
-    return (
+  /**
+   * A {@code String} paired with a date or time, whose text has no one format. Where the date or
+   * time is the source, {@code formatsSource}, the refusal names the rows that take the pattern;
+   * otherwise the rows that take a conversion each way.
+   */
+  public static String textNeedsFormat(
+    final String componentName,
+    final String srcType,
+    final String tgtType,
+    final boolean formatsSource
+  ) {
+    final var head =
       "Component '" +
       componentName +
       "' pairs " +
       srcType +
       " with " +
       tgtType +
-      ", and text converts to and from a date or time only in a format, which nothing here names. " +
+      ", and text converts to and from a date or time only in a format, which nothing here names. ";
+    if (formatsSource) {
+      return (
+        head +
+        "Convert it with a toFormatted(source, target, pattern) row, which formats and parses in the" +
+        " pattern the text uses, or a toFormattedOneWay(source, target, pattern) row on a forward-only mapper."
+      );
+    }
+    return (
+      head +
       "Convert it with a " +
       TWO_WAY_ROW +
       " row that parses and formats in the format the text uses, or a " +
@@ -1800,6 +1818,202 @@ public final class PairingMessages {
   /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
   public static String notAValueTail(final String what) {
     return "\", not " + what;
+  }
+
+  /**
+   * What text a formatted row reads back has to be, with its article: {@code a LocalDate in the
+   * format "dd.MM.yyyy"}, {@code an int in the format "#,##0"}, by {@code type}, the property's
+   * type as a message names it.
+   */
+  public static String formattedPhrase(final String type, final String pattern) {
+    return article(type) + type + " in the format \"" + pattern + "\"";
+  }
+
+  private static String article(final String noun) {
+    return "aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ";
+  }
+
+  /** The head every refusal of a formatted row starts with: the row and the property it formats. */
+  private static String formattedRow(final String row, final String property) {
+    return "Mapping." + row + "(...) on '" + property + "': ";
+  }
+
+  /** A date and time row given a property of a class it does not format. */
+  public static String formatNotATemporal(
+    final String row,
+    final String property,
+    final String type,
+    final String formatted
+  ) {
+    return (
+      formattedRow(row, property) +
+      "it formats " +
+      formatted +
+      ", and " +
+      type +
+      " is none of them. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /** A number row given a property of a class it does not format. */
+  public static String formatNotANumber(final String row, final String property, final String type) {
+    return (
+      formattedRow(row, property) +
+      "it formats a byte, short, int, long, float or double, their wrappers, BigInteger and BigDecimal, and " +
+      type +
+      " is none of them. Convert it with a " +
+      TWO_WAY_ROW +
+      " row, or a " +
+      ONE_WAY_ROW +
+      " row on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A pattern the JDK does not compile, as a {@code kind} pattern ({@code date and time} or {@code
+   * number}), for the reason it gives.
+   */
+  public static String formatPatternInvalid(
+    final String row,
+    final String property,
+    final String pattern,
+    final String kind,
+    final String reason
+  ) {
+    return formattedRow(row, property) + "\"" + pattern + "\" is not a " + kind + " pattern: " + reason + ".";
+  }
+
+  /** A date and time pattern naming a field the property's type does not have. */
+  public static String formatPatternMissesField(
+    final String row,
+    final String property,
+    final String pattern,
+    final String type,
+    final String reason
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the pattern \"" +
+      pattern +
+      "\" names a field " +
+      article(type) +
+      type +
+      " does not have (" +
+      reason +
+      "). Name only the fields of " +
+      type +
+      "."
+    );
+  }
+
+  /** An {@code Instant} formatted through a pattern with fields, given no zone to read them in. */
+  public static String formatNeedsZone(final String row, final String property, final String pattern) {
+    return (
+      formattedRow(row, property) +
+      "an Instant has a date and a time only in a time zone, and the pattern \"" +
+      pattern +
+      "\" is given none. Pass the zone: " +
+      row +
+      "(source, target, pattern, ZoneOffset.UTC)."
+    );
+  }
+
+  /**
+   * A pattern whose text, {@code text} for a sample value, does not read back as a value of the
+   * property's type, which a row converting both ways reads on {@code backward} and {@code patch}.
+   */
+  public static String formatDoesNotReadBack(
+    final String row,
+    final String property,
+    final String pattern,
+    final String type,
+    final String text,
+    final String reason
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the text the pattern \"" +
+      pattern +
+      "\" writes, such as \"" +
+      text +
+      "\", does not read back as " +
+      article(type) +
+      type +
+      " (" +
+      reason +
+      "), which backward and patch need. Name every field " +
+      article(type) +
+      type +
+      " is read from, or use " +
+      row +
+      "OneWay on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A pattern whose text for {@code value}, {@code text}, reads back as {@code back}, another
+   * value, which a row converting both ways would write on {@code backward} and {@code patch}.
+   */
+  public static String formatReadsBackAs(
+    final String row,
+    final String property,
+    final String pattern,
+    final String value,
+    final String text,
+    final String back
+  ) {
+    return (
+      formattedRow(row, property) +
+      "the pattern \"" +
+      pattern +
+      "\" writes " +
+      value +
+      " as \"" +
+      text +
+      "\", which reads back as " +
+      back +
+      ", so backward and patch would write another value than the one formatted. " +
+      (TextFormats.formatsNumber(row)
+        ? "Write every digit the values hold, without scientific notation, or use "
+        : "Write each field in full, such as yyyy for the year and MM for the month, or use ") +
+      row +
+      "OneWay on a forward-only mapper."
+    );
+  }
+
+  /**
+   * A forward-only formatted row given to a mapper that converts both ways, which it cannot do for
+   * {@code property}.
+   */
+  public static String formatOneWayInMapper(
+    final String factory,
+    final String source,
+    final String target,
+    final String row,
+    final String property
+  ) {
+    return (
+      factory +
+      "(" +
+      source +
+      ", " +
+      target +
+      ", ...) cannot accept a Mapping." +
+      row +
+      "(...) row for '" +
+      property +
+      "': it formats forward only, and the mapper converts both ways. Use Telescope.mapperForward(" +
+      source +
+      ", " +
+      target +
+      ", ...), or Mapping." +
+      row.substring(0, row.length() - "OneWay".length()) +
+      "(...), which also parses."
+    );
   }
 
   /**

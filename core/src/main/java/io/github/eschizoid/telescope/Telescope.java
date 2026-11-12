@@ -1226,6 +1226,21 @@ public sealed class Telescope<
   ) {
     for (final var step : steps) {
       if (step instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+        if (!r.row().equals("toOneWay")) {
+          final var formatted = r.sourceField();
+          final var property = LambdaIntrospection.receiverClassOf(r.src()).isRecord()
+            ? formatted
+            : PropertyNames.property(formatted);
+          throw new IllegalArgumentException(
+            PairingMessages.formatOneWayInMapper(
+              factoryName,
+              source.getSimpleName(),
+              target.getSimpleName(),
+              r.row(),
+              property
+            )
+          );
+        }
         throw new IllegalArgumentException(
           factoryName +
             "(" +

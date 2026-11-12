@@ -34,6 +34,13 @@ control. Every other difference is a defect to close.
    > the bean, and the field is left at whatever the builder passes. The difference stays in `BeanRebuildCorpusTest`'s
    > register.
 
+   > **Amendment (2026-11-11).** A fourth limit is inherent: a formatted row whose pattern is not a compile-time
+   > constant, or whose zone or locale is not a `static final` field. The generated bridge holds the formatter as a
+   > constant built when its class loads, from a pattern the processor reads and checks while it compiles, so it needs
+   > the pattern's text and a field it can name; a value a call computes exists only once the mapper is built. The
+   > processor refuses such a row by name on the row, and the runtime, which has the value when it builds the mapper,
+   > formats with it. The difference stays in `CrossPathCorpusTest`'s `FORMATTED_GENERATED_LIMITS` register.
+
 2. **Every other difference is a defect.** It gets an issue and a fix that makes both paths give the same result, either
    both converting or both refusing by name. Converting on both is preferred when both can.
 3. **New differences need this test.** A change that adds a register entry says in its pull request which kind it is. An
