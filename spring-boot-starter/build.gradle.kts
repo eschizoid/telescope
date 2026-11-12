@@ -67,6 +67,9 @@ val springdocVersion = "3.2.0"
 dependencies {
     api(project(":core"))
     api("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
+    // telescope-jpa registers itself through core's ServiceLoader SPIs and stays inactive unless
+    // jakarta.persistence is on the class path, so an application with JPA gets it with no setup.
+    runtimeOnly(project(":jpa"))
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:$springBootVersion")
 
     // Optional integrations: each is guarded by @ConditionalOnClass, so none reaches a consumer's classpath.
