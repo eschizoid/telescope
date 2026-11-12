@@ -44,8 +44,8 @@ needed only at compile time.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.eschizoid:telescope-core:2.2.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0")
 }
 ```
 
@@ -54,7 +54,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>2.1.0</version>
+  <version>2.2.0</version>
 </dependency>
 
 <plugin>
@@ -65,7 +65,7 @@ dependencies {
       <path>
         <groupId>io.github.eschizoid</groupId>
         <artifactId>telescope-codegen</artifactId>
-        <version>2.1.0</version>
+        <version>2.2.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>

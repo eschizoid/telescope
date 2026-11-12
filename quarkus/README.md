@@ -16,7 +16,7 @@ The module is built against Quarkus 3.40.1 and needs Java 21 or later.
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope-quarkus:2.1.0")
+    implementation("io.github.eschizoid:telescope-quarkus:2.2.0")
 }
 ```
 
@@ -25,7 +25,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-quarkus</artifactId>
-  <version>2.1.0</version>
+  <version>2.2.0</version>
 </dependency>
 ```
 
@@ -149,8 +149,8 @@ processor:
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope-quarkus:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.eschizoid:telescope-quarkus:2.2.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0")
 }
 ```
 
