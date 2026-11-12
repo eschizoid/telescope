@@ -15,12 +15,40 @@ java {
     }
 }
 
+val jpaJar: Configuration = configurations.create("jpaJar") {
+    isTransitive = false
+}
+
+// telescope-jpa's classes without the module's META-INF/services entries: on the benchmarks' class
+// path its providers would register themselves for every benchmark, not just the one measuring them.
+val jpaUnregistered = tasks.register<Jar>("jpaUnregistered") {
+    archiveFileName = "telescope-jpa-unregistered.jar"
+    destinationDirectory = layout.buildDirectory.dir("jpa-unregistered")
+    val jars: FileCollection = jpaJar
+    // Read inside a closure the archive lists no producer, so the jar is built first by name.
+    dependsOn(jars)
+    from({ jars.map { zipTree(it) } }) {
+        exclude("META-INF/services/**")
+    }
+}
+
 dependencies {
     implementation(project(":core"))
-    jmhImplementation(project(":spring-boot-starter"))
+    jmhImplementation(project(":spring-boot-starter")) {
+        // The starter brings telescope-jpa with its registrations; the copy below is the one wanted.
+        exclude(module = "jpa")
+    }
     jmhAnnotationProcessor(project(":codegen"))
     jmhAnnotationProcessor("org.mapstruct:mapstruct-processor:1.6.3")
     jmhImplementation("org.mapstruct:mapstruct:1.6.3")
+    // LoadCheckBenchmark instantiates telescope-jpa's container policy itself, from a copy of the
+    // module's jar without its service registrations (below), so every other benchmark copies
+    // through the standard policy as before. Hibernate is there so the persistence utility the
+    // policy calls asks a real provider.
+    jpaJar(project(":jpa"))
+    jmhRuntimeOnly(files(jpaUnregistered))
+    jmhRuntimeOnly(libs.jakartaPersistenceApi)
+    jmhRuntimeOnly(libs.hibernateCore)
 }
 
 tasks.withType<JavaCompile>().configureEach {

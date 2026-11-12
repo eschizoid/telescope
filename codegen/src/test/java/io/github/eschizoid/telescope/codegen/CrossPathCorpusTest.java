@@ -16530,6 +16530,11 @@ class CrossPathCorpusTest {
      * {@code into(forward(Src.sample()), Src.sample())}: a second write into what forward built.
      */
     FORWARD_THEN_INTO,
+    /**
+     * {@code patch(Src.sample(), Tgt.sample())}: the property is the source's, and the result's
+     * container is compared with the one the base held.
+     */
+    PATCH,
   }
 
   /** What follows an into that left the property holding the container the target held. */
@@ -16651,6 +16656,20 @@ class CrossPathCorpusTest {
   private static final String WIRED = "#0(id=\"o\", lines=[#1(order=@0, sku=\"a\"), #2(order=@0, sku=\"b\")])";
 
   private static final List<ContainerRow> CONTAINER_ROWS = List.of(
+    new ContainerRow(
+      "an unmodifiable view of the list the target holds, which the source hands across",
+      intoPair(
+        "public record %1$sSrc(String name, java.util.List<String> tags) {\n" +
+          "  static java.util.List<String> SHARED;\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    SHARED = new java.util.ArrayList<>(java.util.List.of(\"a\", \"b\"));\n" +
+          "    return new %1$sSrc(\"n\", java.util.Collections.unmodifiableList(SHARED));\n  }\n}\n",
+        taggedTarget("%1$sSrc.SHARED")
+      ),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"a\", \"b\"])" + KEPT
+    ),
     new ContainerRow(
       "a list the target holds",
       intoPair(
@@ -17012,6 +17031,196 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  /** The name of the method that reads {@code row}'s property of {@code value}. */
+  private static String accessorOf(final Object value, final ContainerRow row) {
+    final var property = row.property();
+    return value.getClass().isRecord()
+      ? property
+      : "get" + Character.toUpperCase(property.charAt(0)) + property.substring(1);
+  }
+
+  /** A bean {@code %1$sSrc} with a name and a list of tags, whose sample holds {@code tags}. */
+  private static String taggedBeanSource(final String tags) {
+    return sampledBean(
+      "%1$sSrc",
+      "final var s = new %1$sSrc(); s.setName(\"old\"); s.setTags(" + tags + "); return s;",
+      "String name",
+      "java.util.List<String> tags"
+    );
+  }
+
+  /** A record {@code %1$sTgt} with a name and a list of tags, whose sample holds {@code tags}. */
+  private static String taggedPartial(final String tags) {
+    return sampled("%1$sTgt", "String name, java.util.List<String> tags", "new %1$sTgt(null, " + tags + ")");
+  }
+
+  private static final List<ContainerRow> PATCH_ROWS = List.of(
+    new ContainerRow(
+      "unmodifiable views of the list and map a bean base holds, which the partial supplies",
+      intoPair(
+        "public class %1$sSrc {\n" +
+          "  static java.util.List<String> TAGS;\n  static java.util.Map<String, Integer> COUNTS;\n" +
+          "  private String name;\n  private java.util.List<String> tags;\n" +
+          "  private java.util.Map<String, Integer> counts;\n  public %1$sSrc() {}\n" +
+          "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
+          "  public java.util.Map<String, Integer> getCounts() { return counts; }\n" +
+          "  public void setCounts(final java.util.Map<String, Integer> v) { counts = v; }\n" +
+          "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
+          "    TAGS = new java.util.ArrayList<>(java.util.List.of(\"a\", \"b\")); s.setTags(TAGS);\n" +
+          "    COUNTS = new java.util.HashMap<>(java.util.Map.of(\"k\", 1)); s.setCounts(COUNTS);\n" +
+          "    return s;\n  }\n}\n",
+        sampled(
+          "%1$sTgt",
+          "String name, java.util.List<String> tags, java.util.Map<String, Integer> counts",
+          "new %1$sTgt(\"renamed\", java.util.Collections.unmodifiableList(%1$sSrc.TAGS)," +
+            " java.util.Collections.unmodifiableMap(%1$sSrc.COUNTS))"
+        )
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(counts={k=1}, name=\"renamed\", tags=[\"a\", \"b\"])" +
+        REPLACED +
+        ", the base #0(counts={k=1}, name=\"old\", tags=[\"a\", \"b\"])"
+    ),
+    new ContainerRow(
+      "a list a bean base holds, which the partial supplies, where a setter the rebuild calls after the list's throws",
+      intoPair(
+        "public class %1$sSrc {\n" +
+          "  private java.util.List<String> tags = new java.util.ArrayList<>();\n  private String name;\n" +
+          "  public %1$sSrc() {}\n" +
+          "  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void setTags(final java.util.List<String> v) { tags = v; }\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String v) {\n" +
+          "    if (\"boom\".equals(v)) { throw new IllegalArgumentException(\"no boom\"); }\n    name = v;\n  }\n" +
+          "  public static %1$sSrc sample() {\n    final var s = new %1$sSrc(); s.setName(\"old\");\n" +
+          "    s.getTags().addAll(java.util.List.of(\"a\", \"b\"));\n    return s;\n  }\n}\n",
+        taggedPartial("java.util.List.of(\"x\")").replace("new %1$sTgt(null, ", "new %1$sTgt(\"boom\", ")
+      ),
+      "tags",
+      Call.PATCH,
+      REFUSED + "no boom" + LEFT + "#0(name=\"old\", tags=[\"a\", \"b\"])"
+    ),
+    new ContainerRow(
+      "a list a bean base holds, which the partial supplies",
+      intoPair(
+        taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
+        taggedPartial("java.util.List.of(\"x\", \"y\")")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\", \"y\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "a map a bean base holds, which the partial supplies",
+      intoPair(
+        sampledBean(
+          "%1$sSrc",
+          "final var s = new %1$sSrc(); s.setLabels(new java.util.HashMap<>(java.util.Map.of(\"stale\", \"s\")));" +
+            " return s;",
+          "java.util.Map<String,String> labels"
+        ),
+        sampled("%1$sTgt", "java.util.Map<String,String> labels", "new %1$sTgt(java.util.Map.of(\"k\", \"v\"))")
+      ),
+      "labels",
+      Call.PATCH,
+      "#0(labels={k=\"v\"})" + REPLACED + ", the base #0(labels={stale=\"s\"})"
+    ),
+    new ContainerRow(
+      "a list a bean base holds, which the partial leaves null",
+      intoPair(taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"), taggedPartial("null")),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"stale\"])" + KEPT + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "an unmodifiable list a bean base holds",
+      intoPair(taggedBeanSource("java.util.List.of(\"stale\")"), taggedPartial("java.util.List.of(\"x\")")),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "a list a bean base rebuilt through its adders holds",
+      intoPair(
+        "public class %1$sSrc {\n  private final java.util.List<String> tags = new java.util.ArrayList<>();\n" +
+          "  public %1$sSrc() {}\n  public java.util.List<String> getTags() { return tags; }\n" +
+          "  public void addTag(final String tag) { tags.add(tag); }\n" +
+          "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.addTag(\"stale\"); return s; }\n}\n",
+        sampled("%1$sTgt", "java.util.List<String> tags", "new %1$sTgt(java.util.List.of(\"x\"))"),
+        ADDERS_FOR_TGT.replace("Tgt.class", "Src.class")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(tags=[\"x\"])" + REPLACED + ", the base #0(tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "a list a record base holds",
+      intoPair(
+        sampled(
+          "%1$sSrc",
+          "String name, java.util.List<String> tags",
+          "new %1$sSrc(\"old\", new java.util.ArrayList<>(java.util.List.of(\"stale\")))"
+        ),
+        taggedPartial("java.util.List.of(\"x\")")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "patch writes the converted container into the result and leaves every container the base holds as it was," +
+      " a view of the base's own and a rebuild that throws included, on both paths"
+  )
+  void patchLeavesTheBaseAloneOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : PATCH_ROWS) {
+      final var prefix = "Pr" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var owed = row.owed().formatted(prefix);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var generatedClasses = new ServicesLoader(processed);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      for (final var side : List.of(
+        Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
+        Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
+      )) {
+        final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
+        if (!gave.equals(owed)) {
+          failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /**
    * A pair whose {@code into} runs adders where {@code forward} runs them too: the declarations,
    * each taking {@code %1$s} as the row's prefix and the last of them the runtime row, and what
@@ -17179,6 +17388,19 @@ class CrossPathCorpusTest {
       }
     }
     final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader);
+    if (row.call() == Call.PATCH) {
+      final var getter = source.getClass().getMethod(accessorOf(source, row));
+      final var held = getter.invoke(source);
+      final Object patched;
+      try {
+        patched = converts.patch(source, tgt.getMethod("sample").invoke(null));
+      } catch (final RuntimeException e) {
+        return REFUSED + e.getMessage() + LEFT + shape(source, new IdentityHashMap<>());
+      }
+      final var after = getter.invoke(patched);
+      final var kept = after == held ? KEPT : REPLACED;
+      return shape(patched, new IdentityHashMap<>()) + kept + ", the base " + shape(source, new IdentityHashMap<>());
+    }
     final var target = row.call() == Call.INTO ? tgt.getMethod("sample").invoke(null) : converts.forward(source);
     final var getter = tgt.getMethod(
       "get" + Character.toUpperCase(row.property().charAt(0)) + row.property().substring(1)

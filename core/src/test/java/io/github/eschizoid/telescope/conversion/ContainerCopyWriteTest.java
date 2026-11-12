@@ -14,10 +14,13 @@ import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -401,6 +404,20 @@ class ContainerCopyWriteTest {
   /** A second policy, which may not be registered beside the first. */
   public static final class SecondPolicy implements ContainerCopy.Policy {}
 
+  /** A policy that does not apply in this runtime, so registering it registers nothing. */
+  public static final class InactivePolicy implements ContainerCopy.Policy {
+
+    @Override
+    public Object copy(final Object source, final Class<?> declared) {
+      throw new AssertionError("an inactive policy is never asked");
+    }
+
+    @Override
+    public boolean active() {
+      return false;
+    }
+  }
+
   /**
    * A loader that defines its own {@link ContainerCopy} and the test policies, and serves a {@code
    * META-INF/services} entry naming {@code policies}, so the class it defines loads them as the
@@ -418,7 +435,8 @@ class ContainerCopyWriteTest {
         final var own =
           name.startsWith(ContainerCopy.class.getName()) ||
           name.startsWith(ContainerCopyWriteTest.class.getName() + "$RecordingPolicy") ||
-          name.startsWith(ContainerCopyWriteTest.class.getName() + "$SecondPolicy");
+          name.startsWith(ContainerCopyWriteTest.class.getName() + "$SecondPolicy") ||
+          name.startsWith(ContainerCopyWriteTest.class.getName() + "$InactivePolicy");
         if (!own) return super.loadClass(name, resolve);
         synchronized (getClassLoadingLock(name)) {
           final var loaded = findLoadedClass(name);
@@ -438,6 +456,59 @@ class ContainerCopyWriteTest {
         }
       }
     };
+  }
+
+  /** A list whose every read throws, as a provider's lazy collection does outside its session. */
+  private static final class Unreadable extends AbstractList<String> {
+
+    @Override
+    public String get(final int index) {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public int size() {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public Iterator<String> iterator() {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public Object[] toArray() {
+      throw new IllegalStateException("cannot be read");
+    }
+  }
+
+  @Nested
+  @DisplayName("A refill reads what it is given before it clears what is held")
+  class RefillReadsFirst {
+
+    private static boolean refill(final Object held, final Object incoming) {
+      return ContainerCopy.refill("S", "T", new Owner(), "tags", held, incoming, true);
+    }
+
+    @Test
+    @DisplayName("keeps the elements of an unmodifiable view of the held list or map, and of a sub-list of it")
+    void readsAViewOfTheHeldContainerBeforeClearingIt() {
+      final var held = new ArrayList<>(List.of("a", "b"));
+      assertTrue(refill(held, Collections.unmodifiableList(held)));
+      assertEquals(List.of("a", "b"), held);
+      final var counts = new HashMap<>(Map.of("k", 1));
+      assertTrue(refill(counts, Collections.unmodifiableMap(counts)));
+      assertEquals(Map.of("k", 1), counts);
+      final var lines = new ArrayList<>(List.of("a", "b", "c"));
+      assertTrue(refill(lines, lines.subList(1, 3)));
+      assertEquals(List.of("b", "c"), lines);
+    }
+
+    @Test
+    @DisplayName("answers false, for the setter to write instead, where the held container cannot even be read")
+    void passesOverAHeldContainerThatCannotBeRead() {
+      assertFalse(refill(new Unreadable(), List.of("x")));
+    }
   }
 
   @Nested
@@ -498,6 +569,31 @@ class ContainerCopyWriteTest {
     }
 
     @Test
+    @DisplayName("is passed over when it is not active, so another active one is the only one and is asked")
+    @SuppressWarnings("unchecked")
+    void anInactivePolicyIsPassedOver() throws Exception {
+      try (final var loader = registering(InactivePolicy.class.getName(), RecordingPolicy.class.getName())) {
+        final var copy = loader.loadClass(ContainerCopy.class.getName());
+        final var calls = (List<String>) loader.loadClass(RecordingPolicy.class.getName()).getField("CALLS").get(null);
+        final var source = new ArrayList<>(List.of("a"));
+        assertEquals(source, copy.getMethod("of", Object.class, Class.class).invoke(null, source, List.class));
+        assertEquals(List.of("copy List"), calls);
+      }
+    }
+
+    @Test
+    @DisplayName("is the standard one when the only one registered is not active")
+    void onlyAnInactivePolicyLeavesTheStandardOne() throws Exception {
+      try (final var loader = registering(InactivePolicy.class.getName())) {
+        final var copy = loader.loadClass(ContainerCopy.class.getName());
+        final var source = new ArrayList<>(List.of("a"));
+        final var copied = copy.getMethod("of", Object.class, Class.class).invoke(null, source, List.class);
+        assertEquals(source, copied);
+        assertNotSame(source, copied);
+      }
+    }
+
+    @Test
     @DisplayName("is the only one: two registered refuse the first container written, naming both")
     void twoRegisteredAreRefused() throws Exception {
       try (final var loader = registering(RecordingPolicy.class.getName(), SecondPolicy.class.getName())) {
@@ -509,11 +605,11 @@ class ContainerCopyWriteTest {
         );
         final var refusal = thrown.getCause();
         assertEquals(
-          "ContainerCopy: more than one ContainerCopy.Policy is registered ([" +
+          "ContainerCopy: more than one active ContainerCopy.Policy is registered ([" +
             RecordingPolicy.class.getName() +
             ", " +
             SecondPolicy.class.getName() +
-            "]); register at most one.",
+            "]); register at most one that is active.",
           refusal.getMessage()
         );
       }

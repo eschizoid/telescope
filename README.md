@@ -55,7 +55,7 @@ same field runs the same rows at run time instead, with the same result.
 | ------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md)     |
 | Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                 | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md) |
-| Service and entity        | `into` updates a managed entity in place, and `ADDERS` fills a collection through its adder             | [docs/pojos.md](docs/pojos.md)                                                         |
+| Service and entity        | `into` updates a managed entity in place, and `ADDERS` fills a collection through its adder             | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                         |
 
 At the REST endpoint, a mapped handler can return a single value, a `List`, `Set`, `Optional`, `Page` or
 `ResponseEntity`, and with springdoc on the classpath the API documentation shows the response type. `toFormatted` and
@@ -69,15 +69,15 @@ interface converts itself, as in `order.toOrderDto()`.
 
 At the entity, `into` clears and refills a collection the entity already holds instead of replacing it, so a managed
 `@OneToMany` keeps its identity. Under `ADDERS`, each element goes through the entity's adder, which is where a
-bidirectional association sets its back-reference. With Hibernate on the classpath, the runtime mapper reads a lazy
-proxy as the entity class it stands for, except inside a native image.
+bidirectional association sets its back-reference. With [`telescope-jpa`](jpa/README.md) on the classpath, which the
+Spring Boot starter and the Quarkus extension bring, a lazy collection the persistence provider has not loaded is shared
+rather than copied, so mapping an entity never loads it and never throws `LazyInitializationException` for it, and a
+lazy Hibernate proxy is read as the entity class it stands for.
 [`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate whose PATCH
 runs `into` on the managed entity and refills its lines through `ADDERS`.
 
-Two modules are planned and not built yet. `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
-register mappers with Jackson and bind JSON straight to a type. `telescope-jpa`
-([ADR-0017](docs/adr/0017-jpa-integration.md)) would leave a collection the persistence provider has not loaded
-untouched during a copy or an `into`. Typed `before` and `after` edit rows are proposed in
+One module is planned and not built yet: `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
+register mappers with Jackson and bind JSON straight to a type. Typed `before` and `after` edit rows are proposed in
 [ADR-0024](docs/adr/0024-typed-before-and-after-edit-rows.md).
 
 Telescope can also replace MapStruct. The cheat sheet below pairs MapStruct's annotations with telescope's rows, and on
@@ -327,6 +327,9 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
   [starter guide](spring-boot-starter/README.md).
 - **Quarkus.** `telescope-quarkus` adds the same registry as a CDI bean, and `@TelescopeMapper` interfaces become CDI
   beans there too. See the [Quarkus guide](quarkus/README.md).
+- **JPA.** `telescope-jpa` shares a lazy collection the provider has not loaded instead of copying it, so mapping an
+  entity never loads it, and reads a lazy Hibernate proxy as its entity class. It is written against the Jakarta
+  Persistence API alone and comes with both starters. See the [JPA guide](jpa/README.md).
 - **Lombok.** `telescope-lombok` generates typed navigators for `@Data`, `@Value` and `@Builder` classes. See the
   [Lombok guide](lombok/README.md).
 - **GraalVM native image.** Runtime mappers, typed paths and generated code all run in a native image. Generated
@@ -388,7 +391,8 @@ The guides are grouped by the hop they cover, then by the MapStruct comparison a
 | Guide                                                                | Covers                                                                      |
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | [docs/pojos.md](docs/pojos.md)                                       | beans, write strategies, `into` and `ADDERS`, and mixing beans with records |
-| [docs/adr/0017-jpa-integration.md](docs/adr/0017-jpa-integration.md) | the planned `telescope-jpa` module                                          |
+| [jpa/README.md](jpa/README.md)                                       | `telescope-jpa`: lazy collections and proxies on JPA entities               |
+| [docs/adr/0017-jpa-integration.md](docs/adr/0017-jpa-integration.md) | the decision behind `telescope-jpa`                                         |
 
 ### MapStruct and performance
 

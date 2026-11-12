@@ -26,7 +26,7 @@ import java.util.function.Supplier;
  * invokeExact} enforces. The target member must be registered for reflection in the image's
  * reachability metadata (the app supplies that for its own types).
  */
-final class MhAccessors {
+public final class MhAccessors {
 
   private MhAccessors() {}
 
@@ -45,7 +45,7 @@ final class MhAccessors {
   /**
    * {@code (P) -> R} (a reader / getter / {@code build()}) as a {@code Function<Object, Object>}.
    */
-  static Function<Object, Object> function(final MethodHandle handle) {
+  public static Function<Object, Object> function(final MethodHandle handle) {
     final var adapted = fixed(handle, MethodType.methodType(Object.class, Object.class));
     return obj -> {
       try {

@@ -82,6 +82,7 @@ jobs:
           ./gradlew --no-daemon --stacktrace --rerun-tasks \
             :internal:javadoc \
             :core:javadoc \
+            :jpa:javadoc \
             :codegen:javadoc \
             :lombok:javadoc \
             :quarkus:javadoc \
@@ -91,6 +92,7 @@ jobs:
         run: |
           ./gradlew :internal:jacocoTestReport \
             :core:jacocoTestReport \
+            :jpa:jacocoTestReport \
             :codegen:jacocoTestReport \
             :lombok:jacocoTestReport \
             :spring-boot-starter:jacocoTestReport \
@@ -104,6 +106,7 @@ jobs:
           files: |
             ./internal/build/reports/jacoco/test/jacocoTestReport.xml
             ./core/build/reports/jacoco/test/jacocoTestReport.xml
+            ./jpa/build/reports/jacoco/test/jacocoTestReport.xml
             ./codegen/build/reports/jacoco/test/jacocoTestReport.xml
             ./lombok/build/reports/jacoco/test/jacocoTestReport.xml
             ./spring-boot-starter/build/reports/jacoco/test/jacocoTestReport.xml

@@ -135,6 +135,9 @@ val quarkusVersion = "3.40.1.1"
 dependencies {
     api(project(":core"))
     api(platform("io.quarkus.platform:quarkus-bom:$quarkusVersion"))
+    // telescope-jpa registers itself through core's ServiceLoader SPIs and stays inactive unless
+    // jakarta.persistence is on the class path, so an application with JPA gets it with no setup.
+    runtimeOnly(project(":jpa"))
     api("io.quarkus:quarkus-arc")
 
     testImplementation(platform(libs.junitBom))

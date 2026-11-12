@@ -1,6 +1,6 @@
 # ADR-0017: `telescope-jpa` — persistence-aware container copies and proxy handling
 
-**Status:** Accepted · **Date:** 2026-10-08 · **Accepted:** 2026-11-11
+**Status:** Accepted, amended · **Date:** 2026-10-08 · **Accepted:** 2026-11-11 · **Amended:** 2026-11-12
 
 ## Context
 
@@ -43,15 +43,16 @@ rather than a provider, so it serves Hibernate and EclipseLink alike.
 3. **Proxy unwrapping moves out of core.** The `HibernateProxy` accessor pair leaves `Beans` and becomes a provider of
    the same SPI family, resolving a proxy to its entity class. Core is left with no provider-specific code, and the
    native-image exception goes with it.
-4. **Starter wiring.** The Spring Boot starter and the Quarkus extension register the module when `jakarta.persistence`
-   is on the classpath, as they already register mappers.
+4. **Starter wiring.** The Spring Boot starter and the Quarkus extension carry the module as a dependency. Its providers
+   register themselves with core through `ServiceLoader` and are active only where `jakarta.persistence` is on the class
+   path, so an application with JPA gets them with no setup and one without it pays nothing.
 
 The collection write stays in core, through that hook: `into` writing a `Collection` or `Map` property into a target
 that already holds one clears and refills that instance instead of replacing it, through the owner's adder under the
 `ADDERS` write strategy, replaces through the setter a held container that cannot be changed, and refuses by name only a
-property no setter or modifiable container can take. At most one policy is registered, and it replaces the standard one
-as a whole. Whether `patch` refills a container the same way is checked before this module is built, and fixed in core
-if it does not.
+property no setter or modifiable container can take. At most one active policy is registered, and it replaces the
+standard one as a whole. Whether `patch` refills a container the same way is checked before this module is built, and
+fixed in core if it does not.
 
 A `share(src, tgt)` row in core remains the explicit per-field opt-out for cases the policy does not cover, such as a
 live concurrent view or a very large container on a hot path.
@@ -85,3 +86,19 @@ not settled by this record.
 
 - Whether `PersistenceUtil.isLoaded` is cheap enough per call on the hot path, measured with the `Benchmarks` workflow
   against a control before the policy is enabled by default.
+
+## Amendment (2026-11-12)
+
+Decisions 1, 3 and 4 shipped as written. Two parts of the record are changed.
+
+- **Decision 2 is dropped.** Leaving a held collection the provider has not loaded alone on `into` would discard the
+  converted elements in the common case, a DTO written into a managed entity whose lazy collection nothing has read: the
+  held collection is that unloaded one, the elements are the DTO's, and leaving it alone writes none of them. It also
+  cannot take effect through the hook as built: a refill reads the held collection, to put its elements back if the
+  refill fails, before the policy is asked, and that read loads it. The module keeps the standard `refill`. A held
+  collection that cannot be read at all, a lazy one outside its session, is written through the setter instead, or
+  refused by the property's name where there is none.
+- **`patch` stays pure.** In-place updates are `into`'s alone. The object `patch` returns is a new one, never the
+  managed instance, so keeping a collection's identity there protects nothing the provider tracks, and refilling the
+  base's collections would change the base `patch` documents it leaves as it was. The check this record asked for found
+  that `patch` does not refill, and that is kept.

@@ -75,8 +75,8 @@ public final class ContainerCopy {
    * behavior: {@link ContainerCopy#standardCopy} for a copy, {@link Refill#standard} for a refill.
    *
    * <p>An implementation is registered through {@link ServiceLoader}: a {@code provides} clause in
-   * a module, or a {@code META-INF/services} entry on the class path. At most one may be
-   * registered; it needs a public no-argument constructor, and is loaded once, the first time a
+   * a module, or a {@code META-INF/services} entry on the class path. At most one active policy may
+   * be registered; it needs a public no-argument constructor, and is loaded once, the first time a
    * container is copied or refilled.
    */
   public interface Policy {
@@ -100,6 +100,17 @@ public final class ContainerCopy {
      */
     default void refill(final Refill refill) {
       refill.standard();
+    }
+
+    /**
+     * Whether this policy applies in this runtime, such as whether the persistence API it consults
+     * is on the class path. A policy that answers false is passed over as if it were not
+     * registered, so a module carrying one costs nothing where what it knows about is absent.
+     *
+     * @return whether this policy replaces the standard one
+     */
+    default boolean active() {
+      return true;
     }
   }
 
@@ -190,15 +201,17 @@ public final class ContainerCopy {
   private static Policy registeredPolicy() {
     final var registered = new ArrayList<Policy>();
     for (final var policy : ServiceLoader.load(Policy.class, ContainerCopy.class.getClassLoader())) {
-      registered.add(policy);
+      if (policy.active()) {
+        registered.add(policy);
+      }
     }
     if (registered.size() > 1) throw new IllegalStateException(
-      "ContainerCopy: more than one ContainerCopy.Policy is registered (" +
+      "ContainerCopy: more than one active ContainerCopy.Policy is registered (" +
         registered
           .stream()
           .map(policy -> policy.getClass().getName())
           .toList() +
-        "); register at most one."
+        "); register at most one that is active."
     );
     return registered.isEmpty() ? STANDARD : registered.getFirst();
   }
@@ -361,10 +374,11 @@ public final class ContainerCopy {
     final boolean setter
   ) {
     if (held == incoming && adder == null) return true;
-    // The elements are taken before the held collection is cleared, so a source that hands the
-    // target's own collection across still fills it.
-    final Object elements = incoming != null && incoming == held ? new ArrayList<>((Collection<?>) incoming) : incoming;
-    final Object kept = snapshot(held);
+    // A held container that cannot even be read, such as a provider's lazy collection outside its
+    // session, fails in the snapshot before anything is changed, and is treated as one that cannot
+    // change.
+    Object kept = null;
+    Object elements = null;
     // What the adder throws is told apart from what the container throws.
     final BiConsumer<Object, Object> adds =
       adder == null
@@ -377,6 +391,11 @@ public final class ContainerCopy {
             }
           };
     try {
+      kept = snapshot(held);
+      // The elements are taken before the held container is cleared, so an incoming container that
+      // reads through to the held one, such as the held list itself or an unmodifiable view of it,
+      // still fills it.
+      elements = detached(held, incoming);
       if (POLICY == STANDARD) {
         standardRefill(owner, held, elements, adds);
       } else {
@@ -403,6 +422,21 @@ public final class ContainerCopy {
     AdderRejected(final RuntimeException rejected) {
       super(null, rejected, false, false);
     }
+  }
+
+  /**
+   * {@code incoming} where it is a container with storage of its own, one of the JDK classes a copy
+   * constructor builds that is not {@code held} itself; otherwise a copy of its elements or
+   * entries. Anything else may read through to {@code held}: the held container itself, an
+   * unmodifiable or synchronized view of it, a sub-list of it, or a container a library wraps
+   * around it, and clearing {@code held} would empty it before its elements were read.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Object detached(final Object held, final Object incoming) {
+    if (incoming == null || (incoming != held && COPY_CONSTRUCTORS.containsKey(incoming.getClass()))) {
+      return incoming;
+    }
+    return incoming instanceof Map map ? new LinkedHashMap<>(map) : new ArrayList<>((Collection) incoming);
   }
 
   /** A copy of what {@code held} holds, to put back if a refill fails; null for no container. */

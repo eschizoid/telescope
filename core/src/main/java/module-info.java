@@ -82,4 +82,12 @@ module io.github.eschizoid.telescope {
   // A module that knows more about a container than core does, such as whether a persistence
   // provider has loaded it, replaces how every mapper and bridge copies and refills one.
   uses io.github.eschizoid.telescope.conversion.ContainerCopy.Policy;
+
+  // A module that knows a persistence provider's proxies resolves one to the entity class it stands
+  // for; without one, a proxy is read as its own class.
+  uses io.github.eschizoid.telescope.conversion.ProxyResolver;
+
+  // The substrate keys its caches on what the registered proxy resolvers answer.
+  provides io.github.eschizoid.telescope.internal.ProxyClasses
+    with io.github.eschizoid.telescope.runtime.RegisteredProxyResolvers;
 }
