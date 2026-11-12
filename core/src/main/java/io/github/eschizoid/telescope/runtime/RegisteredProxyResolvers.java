@@ -26,7 +26,9 @@ public final class RegisteredProxyResolvers implements ProxyClasses {
   RegisteredProxyResolvers(final Iterable<ProxyResolver> registered) {
     final List<ProxyResolver> active = new ArrayList<>();
     for (final var resolver : registered) {
-      if (resolver.active()) active.add(resolver);
+      if (resolver.active()) {
+        active.add(resolver);
+      }
     }
     this.resolvers = active.toArray(ProxyResolver[]::new);
   }
@@ -35,7 +37,9 @@ public final class RegisteredProxyResolvers implements ProxyClasses {
   public Class<?> resolve(final Object value) {
     for (final var resolver : resolvers) {
       final var resolved = resolver.classOf(value);
-      if (resolved != null) return resolved;
+      if (resolved != null) {
+        return resolved;
+      }
     }
     return null;
   }

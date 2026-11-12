@@ -31,11 +31,13 @@ final class LoadStates {
    * @return whether copying {@code container} reads only what is already loaded
    */
   static boolean loaded(final Object container) {
-    if (container.getClass().getModule() == JDK) return true;
+    if (container.getClass().getModule() == JDK) {
+      return true;
+    }
     return Api.UTIL.isLoaded(container);
   }
 
-  private static boolean present(final String name) {
+  static boolean present(final String name) {
     try {
       Class.forName(name, false, LoadStates.class.getClassLoader());
       return true;

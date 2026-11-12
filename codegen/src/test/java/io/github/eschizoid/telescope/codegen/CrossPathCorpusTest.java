@@ -17151,7 +17151,9 @@ class CrossPathCorpusTest {
         Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
       )) {
         final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
-        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+        if (!gave.equals(owed)) {
+          failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+        }
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));

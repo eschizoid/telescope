@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,7 @@ import io.github.eschizoid.telescope.jpa.fixtures.Author;
 import io.github.eschizoid.telescope.jpa.fixtures.Library;
 import org.hibernate.Hibernate;
 import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.proxy.LazyInitializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -58,6 +60,42 @@ class HibernateProxiesTest {
   void answersNullForAnEntity() {
     assertNull(new HibernateProxies().classOf(new Author("a")));
     assertNull(new HibernateProxies().classOf("not an entity"));
+  }
+
+  /**
+   * A proxy whose initializer is {@code initializer}, or whose initializer throws when it is null.
+   */
+  private static HibernateProxy proxyWith(final LazyInitializer initializer) {
+    return new HibernateProxy() {
+      @Override
+      public Object writeReplace() {
+        return this;
+      }
+
+      @Override
+      public LazyInitializer getHibernateLazyInitializer() {
+        if (initializer == null) {
+          throw new IllegalStateException("no initializer");
+        }
+        return initializer;
+      }
+    };
+  }
+
+  @Test
+  @DisplayName("reads a proxy whose initializer cannot answer as its own class, rather than failing the read")
+  void readsAnUnanswerableProxyAsItsOwnClass() {
+    final var throwing = proxyWith(null);
+    assertNull(new HibernateProxies().classOf(throwing));
+    assertEquals(throwing.getClass(), Beans.persistentClassOf(throwing));
+  }
+
+  @Test
+  @DisplayName("binds no function for an absent type or method, so the resolver goes inactive rather than failing")
+  void bindsNothingForAnAbsentTypeOrMethod() {
+    assertNull(HibernateProxies.bind(null, "getHibernateLazyInitializer"));
+    assertNull(HibernateProxies.bind(HibernateProxy.class, "noSuchMethod"));
+    assertNotNull(HibernateProxies.bind(HibernateProxy.class, "getHibernateLazyInitializer"));
   }
 
   @Test

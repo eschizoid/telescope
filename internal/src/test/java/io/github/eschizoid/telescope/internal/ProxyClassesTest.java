@@ -40,7 +40,9 @@ class ProxyClassesTest {
       @Override
       public ProxyClasses next() {
         final var entry = queue.removeFirst();
-        if (entry == null) throw new ServiceConfigurationError("not a subtype");
+        if (entry == null) {
+          throw new ServiceConfigurationError("not a subtype");
+        }
         return entry;
       }
     };

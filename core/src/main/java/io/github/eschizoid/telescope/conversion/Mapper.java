@@ -702,7 +702,9 @@ public class Mapper<A, B> {
    */
   private Set<String> patchRefilled() {
     final var known = patchRefilled;
-    if (known != null) return known;
+    if (known != null) {
+      return known;
+    }
     final var refilled = new HashSet<String>();
     if (!sourceClass.isRecord()) {
       final var writer = sourceRefl.writerFor(sourceClass);
@@ -712,8 +714,12 @@ public class Mapper<A, B> {
           : Set.of();
       for (final var entry : patchByTargetField.values()) {
         final var name = entry.sourceField();
-        if (name == null || throughAdders.contains(name)) continue;
-        if (Beans.refilledInPlace(sourceClass, name)) refilled.add(name);
+        if (name == null || throughAdders.contains(name)) {
+          continue;
+        }
+        if (Beans.refilledInPlace(sourceClass, name)) {
+          refilled.add(name);
+        }
       }
     }
     final var computed = Set.copyOf(refilled);

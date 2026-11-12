@@ -10542,13 +10542,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * applies.
    */
   private Set<String> patchRefilled(final TypeElement source, final List<Field> sourceFields, final Rebuild rebuild) {
-    if (rebuild.kind() == Rebuild.Kind.RECORD || rebuild.kind() == Rebuild.Kind.NONE) return Set.of();
+    if (rebuild.kind() == Rebuild.Kind.RECORD || rebuild.kind() == Rebuild.Kind.NONE) {
+      return Set.of();
+    }
     final var throughAdders = rebuild.adders() ? addersOf(source, sourceFields).bound().keySet() : Set.<String>of();
     final var writes = new CollectionWrites<>(mirrorProps());
     final var refilled = new HashSet<String>();
     for (final var field : sourceFields) {
-      if (throughAdders.contains(field.name())) continue;
-      if (writes.refilledInPlace(field.type())) refilled.add(field.name());
+      if (throughAdders.contains(field.name())) {
+        continue;
+      }
+      if (writes.refilledInPlace(field.type())) {
+        refilled.add(field.name());
+      }
     }
     return refilled;
   }

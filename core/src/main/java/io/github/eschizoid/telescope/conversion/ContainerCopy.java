@@ -202,7 +202,9 @@ public final class ContainerCopy {
   private static Policy registeredPolicy() {
     final var registered = new ArrayList<Policy>();
     for (final var policy : ServiceLoader.load(Policy.class, ContainerCopy.class.getClassLoader())) {
-      if (policy.active()) registered.add(policy);
+      if (policy.active()) {
+        registered.add(policy);
+      }
     }
     if (registered.size() > 1) throw new IllegalStateException(
       "ContainerCopy: more than one active ContainerCopy.Policy is registered (" +
@@ -314,8 +316,12 @@ public final class ContainerCopy {
    * @return the container the rebuilt bean holds for {@code property}
    */
   public static <C> C patched(final Object owner, final String property, final C held, final C incoming) {
-    if (held == null || incoming == null || held == incoming || !changeable(held)) return incoming;
-    if (!(held instanceof Collection<?> || held instanceof Map<?, ?>)) return incoming;
+    if (held == null || incoming == null || held == incoming || !changeable(held)) {
+      return incoming;
+    }
+    if (!(held instanceof Collection<?> || held instanceof Map<?, ?>)) {
+      return incoming;
+    }
     // With a setter to fall back on, a refill that fails answers false rather than refusing, so the
     // class names a refusal would carry are never read.
     return refillHeld(null, null, owner, property, held, incoming, null, true) ? held : incoming;

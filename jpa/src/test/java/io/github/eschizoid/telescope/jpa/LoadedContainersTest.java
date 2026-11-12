@@ -166,6 +166,14 @@ class LoadedContainersTest {
     }
 
     @Test
+    @DisplayName("finds the persistence API on this class path, and tells an absent class apart")
+    void findsThePersistenceApi() {
+      assertTrue(LoadStates.AVAILABLE);
+      assertTrue(LoadStates.present("jakarta.persistence.PersistenceUtil"));
+      assertFalse(LoadStates.present("jakarta.persistence.NoSuchType"));
+    }
+
+    @Test
     @DisplayName("hands a JDK container to the standard copy")
     void aJdkContainerIsCopied() {
       final var source = new HashSet<>(Set.of("a"));
