@@ -1366,7 +1366,7 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("persistentClassOf — the class a registered proxy resolver resolves a value to")
+  @DisplayName("persistentClassOf — with no proxy resolver registered, every value is its own class")
   class PersistentClass {
 
     static class PlainBean {
@@ -1407,17 +1407,11 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("a value the registered resolver knows as a proxy is the class it resolves it to")
-    void aValueTheResolverKnowsIsTheClassItResolvesTo() {
-      assertEquals(PlainBean.class, Beans.persistentClassOf(new TestProxyClasses.Proxy()));
-    }
-
-    @Test
-    @DisplayName("readProperty reads a resolved proxy through its persistent class's getters")
-    void readPropertyReadsAResolvedProxy() {
-      final var proxy = new TestProxyClasses.Proxy();
-      proxy.setName("alice");
-      assertEquals("alice", Beans.readProperty(proxy, "name"));
+    @DisplayName("readProperty reads a subclass no resolver knows through its own class's getters")
+    void readPropertyReadsAnUnresolvedSubclass() {
+      final var subclass = new SubclassNoResolverKnows();
+      subclass.setName("alice");
+      assertEquals("alice", Beans.readProperty(subclass, "name"));
     }
   }
 
