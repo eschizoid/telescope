@@ -78,4 +78,8 @@ module io.github.eschizoid.telescope {
   // A generated @FromMap binder registers itself through this SPI, so fromMap can tell a type with
   // a binder from one without, whichever compilation produced it and in a native image.
   uses io.github.eschizoid.telescope.conversion.FromMapProvider;
+
+  // A module that knows more about a container than core does, such as whether a persistence
+  // provider has loaded it, replaces how every mapper and bridge copies and refills one.
+  uses io.github.eschizoid.telescope.conversion.ContainerCopy.Policy;
 }

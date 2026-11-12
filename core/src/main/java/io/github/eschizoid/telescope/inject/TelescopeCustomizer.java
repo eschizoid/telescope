@@ -5,8 +5,9 @@ import io.github.eschizoid.telescope.annotations.TelescopeMapper;
 /**
  * Configures a generated {@link TelescopeProjection} bean while the container constructs it. The
  * type argument names the projection interface, so the wiring follows a rename instead of depending
- * on a bean name. Every matching customizer runs once, in {@code @Order} order, after the
- * transformers declared on {@link TelescopeMapper}. Once construction ends, the projection's
+ * on a bean name. Every matching customizer runs once, after the transformers declared on {@link
+ * TelescopeMapper}: on Spring in {@code @Order} order, and on Quarkus in {@code @Priority} order,
+ * highest first, as ArC sorts an {@code @All} list. Once construction ends, the projection's
  * transformers are fixed.
  *
  * <pre>{@code

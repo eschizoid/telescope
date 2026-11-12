@@ -15,6 +15,7 @@ import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.annotation.processing.SupportedOptions;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
@@ -33,7 +34,17 @@ import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
 
 /**
- * Generates Spring components for structural mappers and reusable record paths.
+ * Generates Spring components or CDI beans for structural mappers and reusable record paths.
+ *
+ * <p>The bean model follows the classpath of the module that declares the interface, a Spring
+ * component or an {@code @ApplicationScoped} CDI bean. The telescope starter on that classpath
+ * decides first: {@code telescope-spring-boot-starter} gives Spring and {@code telescope-quarkus}
+ * gives CDI. Both starters refuse the interface, since either guess writes a bean the other
+ * container never sees. With neither starter, the container annotation decides: {@code
+ * org.springframework.stereotype.Component} gives Spring, also when {@code
+ * jakarta.enterprise.context.ApplicationScoped} is beside it, and that CDI annotation alone gives
+ * CDI. The compiler option {@code -Atelescope.beans=spring} or {@code -Atelescope.beans=cdi}
+ * overrides all of this, and is refused when it names a model whose annotation is not there.
  *
  * <p>It also reads {@code @Bridge} and {@code @Bridges}, to know the bridge a carrier class or a
  * {@code @Bridge} field declares, and claims no annotation, so the bridge processor still sees
@@ -50,6 +61,7 @@ import javax.tools.Diagnostic;
     "io.github.eschizoid.telescope.annotations.Bridges",
   }
 )
+@SupportedOptions(TelescopeMapperProcessor.BEANS_OPTION)
 public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private static final String MAPPER = "io.github.eschizoid.telescope.annotations.TelescopeMapper";
@@ -65,6 +77,17 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   private static final String MAPPER_BUILDER = "io.github.eschizoid.telescope.conversion.MapperBuilder";
   private static final String TRANSFORMATION = "io.github.eschizoid.telescope.inject.Transformation";
   private static final String OBJECT_PROVIDER = "org.springframework.beans.factory.ObjectProvider";
+  private static final String CDI_SCOPE = "jakarta.enterprise.context.ApplicationScoped";
+  private static final String CDI_INJECT = "jakarta.inject.Inject";
+  private static final String CDI_NAMED = "jakarta.inject.Named";
+  private static final String POST_CONSTRUCT = "jakarta.annotation.PostConstruct";
+  private static final String ARC_ALL = "io.quarkus.arc.All";
+  private static final String SPRING_STARTER = "io.github.eschizoid.telescope.spring.TelescopeAutoConfiguration";
+  private static final String QUARKUS_STARTER = "io.github.eschizoid.telescope.quarkus.TelescopeProducer";
+
+  /** The compiler option that chooses the bean model when the classpath holds both. */
+  static final String BEANS_OPTION = "telescope.beans";
+
   private static final String LIST = "java.util.List";
   private static final String ARRAY_LIST = "java.util.ArrayList";
   private static final String OBJECTS = "java.util.Objects";
@@ -87,8 +110,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment round) {
     final var elements = processingEnv.getElementUtils();
-    // A mapper is generated only where Spring is, and only a mapper looks a bridge up.
-    if (elements.getTypeElement(SPRING_COMPONENT) != null) recordCarried(round);
+    // A mapper is generated only where a container is, and only a mapper looks a bridge up.
+    if (elements.getTypeElement(SPRING_COMPONENT) != null || elements.getTypeElement(CDI_SCOPE) != null) {
+      recordCarried(round);
+    }
     final var mapper = elements.getTypeElement(MAPPER);
     if (mapper != null) for (final var element : round.getElementsAnnotatedWith(mapper)) generateMapper(element);
     final var transform = elements.getTypeElement(TRANSFORM);
@@ -127,7 +152,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generateMapper(final Element element) {
-    if (!springPresent(element, "@TelescopeMapper")) return;
+    final var container = container(element, "@TelescopeMapper");
+    if (container == null) {
+      return;
+    }
     final var blueprint = interfaceType(element, "@TelescopeMapper");
     if (blueprint == null) return;
     final var config = annotation(blueprint, MAPPER);
@@ -162,6 +190,19 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       }
       from = explicitFrom;
       to = explicitTo;
+    }
+    if (
+      container == Container.CDI &&
+      projection != null &&
+      processingEnv.getElementUtils().getTypeElement(ARC_ALL) == null
+    ) {
+      error(
+        blueprint,
+        "@TelescopeMapper on a TelescopeProjection generates a CDI bean that collects its TelescopeCustomizer beans" +
+          " through Quarkus ArC's @All; add telescope-quarkus to the classpath of the module that declares this" +
+          " interface"
+      );
+      return;
     }
     // The generated class names each model in .class literals, where Java allows no type arguments.
     for (final var model : List.of(from, to)) {
@@ -268,24 +309,39 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     if (projection != null) {
       refs.add(PROJECTION);
       refs.add(CUSTOMIZER);
-      refs.add(OBJECT_PROVIDER);
+      refs.add(container == Container.SPRING ? OBJECT_PROVIDER : ARC_ALL);
       refs.add(ARRAY_LIST);
       refs.add(OBJECTS);
+    }
+    // The container builds the bean through this constructor, so CDI needs it marked.
+    final var injects = projection != null || !declaredTransformers.isEmpty();
+    if (container == Container.CDI && injects) {
+      refs.add(CDI_INJECT);
     }
     final var allTypes = new ArrayList<TypeMirror>(List.of(from, to));
     allTypes.addAll(declaredTransformers);
     final var taken = new HashSet<String>();
     if (bridgeName != null && bridgeName.indexOf('.') < 0) taken.add(bridgeName);
-    emit(blueprint, config, allTypes, refs, taken, (out, names) -> {
+    emit(blueprint, config, container, allTypes, refs, taken, (out, names) -> {
       final var self = blueprint.getSimpleName().toString();
       final var model = names.of(from);
       final var target = names.of(to);
       final var list = names.ref(LIST);
       final var focus = names.ref(PATH) + "<" + model + ", ?>";
       final var pair = "<" + model + ", " + target + ">";
+      // A CDI client proxy is built through the no-argument constructor, which runs every field
+      // initializer once more for the proxy. A CDI bean therefore builds its state in the
+      // injecting constructor only.
+      final var buildsInConstructor = container == Container.CDI;
       if (!useBridge) {
         if (projection != null) {
-          out.println("  private final " + names.ref(CORE_MAPPER) + pair + " mapping = createMapping();");
+          out.println(
+            "  private final " +
+              names.ref(CORE_MAPPER) +
+              pair +
+              " mapping" +
+              (buildsInConstructor ? ";" : " = createMapping();")
+          );
         } else {
           out.println(
             "  private final " +
@@ -307,13 +363,35 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       if (projection != null) {
         // Open while the constructor runs customizers; null afterwards, which fixes the list.
         out.println("  private " + names.ref(ARRAY_LIST) + "<" + focus + "> pending;");
+      }
+      if (buildsInConstructor && injects) {
+        out.println("  protected " + self + "Impl() {");
+        if (projection != null && !useBridge) {
+          out.println("    this.mapping = null;");
+        }
+        out.println("    this.transformers = null;");
+        out.println("  }");
+        out.println("  @" + names.ref(CDI_INJECT));
+        if (projection != null) {
+          // Customizers receive the bean from its constructor, and the class is open for the
+          // proxy.
+          out.println("  @SuppressWarnings(\"this-escape\")");
+        }
+      }
+      if (projection != null) {
         out.print("  public " + self + "Impl(");
         for (var i = 0; i < declaredTransformers.size(); i++) {
           out.print("final " + names.of(declaredTransformers.get(i)) + " transformer" + i + ", ");
         }
+        final var customizer = names.ref(CUSTOMIZER) + "<" + self + ">";
         out.println(
-          "final " + names.ref(OBJECT_PROVIDER) + "<" + names.ref(CUSTOMIZER) + "<" + self + ">> customizers) {"
+          container == Container.SPRING
+            ? "final " + names.ref(OBJECT_PROVIDER) + "<" + customizer + "> customizers) {"
+            : "@" + names.ref(ARC_ALL) + " final " + list + "<" + customizer + "> customizers) {"
         );
+        if (buildsInConstructor && !useBridge) {
+          out.println("    this.mapping = createMapping();");
+        }
         out.print("    pending = new " + names.ref(ARRAY_LIST) + "<>(");
         if (!declaredTransformers.isEmpty()) {
           out.print(list + ".of(");
@@ -324,7 +402,13 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
           out.print(")");
         }
         out.println(");");
-        out.println("    customizers.orderedStream().forEach(customizer -> customizer.customize(this));");
+        // Spring streams the customizers in @Order order; ArC's @All list is already sorted by
+        // priority, highest first.
+        out.println(
+          "    customizers" +
+            (container == Container.SPRING ? ".orderedStream()" : "") +
+            ".forEach(customizer -> customizer.customize(this));"
+        );
         out.println("    this.transformers = " + list + ".copyOf(pending);");
         out.println("    pending = null;");
         out.println("  }");
@@ -596,7 +680,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generatePath(final Element element) {
-    if (!springPresent(element, "@TelescopeTransformer")) return;
+    final var container = container(element, "@TelescopeTransformer");
+    if (container == null) {
+      return;
+    }
     final var blueprint = interfaceType(element, "@TelescopeTransformer");
     if (blueprint == null) return;
     final var config = annotation(blueprint, TRANSFORM);
@@ -649,20 +736,44 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       error(blueprint, "@TelescopeTransformer requires no other abstract methods");
       return;
     }
-    emit(blueprint, config, List.of(from, to), List.of(TELESCOPE, TRANSFORMATION, OBJECTS), Set.of(), (out, names) -> {
+    final var refs = new ArrayList<>(List.of(TELESCOPE, TRANSFORMATION, OBJECTS));
+    // A CDI client proxy is built through the no-argument constructor, the only one a bean with
+    // nothing to inject has, so field initializers would build the path once more for the proxy.
+    // The container calls the @PostConstruct callback on the bean instance only. The callback's
+    // name starts with '$', which the JLS keeps for mechanically generated code, so a default
+    // method the interface declares does not take it; it is package-private because ArC reaches a
+    // private callback only through reflection.
+    final var cachesAfterConstruction = container == Container.CDI;
+    if (cachesAfterConstruction) {
+      refs.add(POST_CONSTRUCT);
+    }
+    emit(blueprint, config, container, List.of(from, to), refs, Set.of(), (out, names) -> {
       final var self = blueprint.getSimpleName().toString();
       final var objects = names.ref(OBJECTS);
       final var pathType = names.ref(TELESCOPE) + "<" + names.of(from) + ", " + names.of(to) + ">";
-      out.println("  private final " + pathType + " path =");
-      out.println("    " + objects + ".requireNonNull(" + self + ".super.path(), \"path() must not return null\");");
+      final var transformationType = names.ref(TRANSFORMATION) + "<" + names.of(to) + ">";
+      final var buildPath = objects + ".requireNonNull(" + self + ".super.path(), \"path() must not return null\");";
+      final var buildTransform =
+        objects + ".requireNonNull(" + self + ".super.transform(), \"transform() must not return null\");";
+      if (cachesAfterConstruction) {
+        out.println("  private " + pathType + " path;");
+        out.println("  private " + transformationType + " transformation;");
+        out.println("  @" + names.ref(POST_CONSTRUCT));
+        out.println("  void $telescopeCachePathAndTransform() {");
+        out.println("    path = " + buildPath);
+        out.println("    transformation = " + buildTransform);
+        out.println("  }");
+      } else {
+        out.println("  private final " + pathType + " path =");
+        out.println("    " + buildPath);
+      }
       out.println("  @Override public " + pathType + " path() {");
       out.println("    return path;");
       out.println("  }");
-      final var transformationType = names.ref(TRANSFORMATION) + "<" + names.of(to) + ">";
-      out.println("  private final " + transformationType + " transformation =");
-      out.println(
-        "    " + objects + ".requireNonNull(" + self + ".super.transform(), \"transform() must not return null\");"
-      );
+      if (!cachesAfterConstruction) {
+        out.println("  private final " + transformationType + " transformation =");
+        out.println("    " + buildTransform);
+      }
       out.println("  @Override public " + transformationType + " transform() {");
       out.println("    return transformation;");
       out.println("  }");
@@ -686,19 +797,102 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     return (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) owner.asType(), method);
   }
 
+  /** The container whose bean a generated class is. */
+  private enum Container {
+    SPRING,
+    CDI,
+  }
+
   /**
-   * The annotations live in core, but what they generate is a Spring component. Without Spring on
-   * the classpath, say so on the user's interface rather than emit a class that cannot compile.
+   * The container {@code element}'s generated class is a bean of, or null after reporting why there
+   * is none. The annotations live in core, so the classpath of the declaring module decides: its
+   * telescope starter, else its container annotation, unless {@link #BEANS_OPTION} names the model.
+   * Each refusal lands on the user's interface rather than on a generated class that cannot
+   * compile.
    */
-  private boolean springPresent(final Element element, final String annotation) {
-    if (processingEnv.getElementUtils().getTypeElement(SPRING_COMPONENT) != null) return true;
+  private Container container(final Element element, final String annotation) {
+    final var elements = processingEnv.getElementUtils();
+    final var spring = elements.getTypeElement(SPRING_COMPONENT) != null;
+    final var cdi = elements.getTypeElement(CDI_SCOPE) != null;
+    final var chosen = processingEnv.getOptions().get(BEANS_OPTION);
+    if ("spring".equals(chosen)) {
+      if (spring) {
+        return Container.SPRING;
+      }
+      error(
+        element,
+        "-A" +
+          BEANS_OPTION +
+          "=spring asks " +
+          annotation +
+          " for a Spring component, but " +
+          SPRING_COMPONENT +
+          " is not on the classpath; add telescope-spring-boot-starter to the module that declares this interface"
+      );
+      return null;
+    }
+    if ("cdi".equals(chosen)) {
+      if (cdi) {
+        return Container.CDI;
+      }
+      error(
+        element,
+        "-A" +
+          BEANS_OPTION +
+          "=cdi asks " +
+          annotation +
+          " for a CDI bean, but " +
+          CDI_SCOPE +
+          " is not on the classpath; add telescope-quarkus to the module that declares this interface"
+      );
+      return null;
+    }
+    if (chosen != null) {
+      error(
+        element,
+        "-A" + BEANS_OPTION + "=" + chosen + " names no bean model " + annotation + " generates; use spring or cdi"
+      );
+      return null;
+    }
+    // A telescope starter names the container the module runs in, which a bare annotation does
+    // not: an annotation can arrive through a transitive dependency of an application that never
+    // runs that container. Each starter brings its own container's annotation with it.
+    final var springStarter = elements.getTypeElement(SPRING_STARTER) != null;
+    final var quarkusStarter = elements.getTypeElement(QUARKUS_STARTER) != null;
+    if (springStarter && quarkusStarter) {
+      error(
+        element,
+        annotation +
+          " finds both telescope-spring-boot-starter and telescope-quarkus on the classpath of the module that" +
+          " declares this interface; pass -A" +
+          BEANS_OPTION +
+          "=spring or -A" +
+          BEANS_OPTION +
+          "=cdi to the compiler to choose the bean it generates"
+      );
+      return null;
+    }
+    if (quarkusStarter) {
+      return Container.CDI;
+    }
+    // Otherwise Spring wins over CDI: a module that has Spring generates a Spring component
+    // whatever
+    // else is on its classpath, and CDI needs its annotation alone or the option. The Spring
+    // starter
+    // needs no branch of its own, since it brings Spring's annotation and so lands here.
+    if (spring) {
+      return Container.SPRING;
+    }
+    if (cdi) {
+      return Container.CDI;
+    }
     error(
       element,
       annotation +
-        " generates a Spring component; add telescope-spring-boot-starter to the classpath of the module" +
-        " that declares this interface"
+        " generates a Spring component or a CDI bean; add telescope-spring-boot-starter or telescope-quarkus to the" +
+        " classpath of the module that declares this interface"
     );
-    return false;
+    return null;
   }
 
   private TypeElement interfaceType(final Element element, final String annotation) {
@@ -833,13 +1027,14 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Writes {@code <Blueprint>Impl}, a Spring component implementing {@code blueprint}, beside it.
-   * The class names {@code types} and the qualified names in {@code references}; {@code taken}
-   * holds the simple names the body writes for something else, which no import may take.
+   * Writes {@code <Blueprint>Impl}, a bean of {@code container} implementing {@code blueprint},
+   * beside it. The class names {@code types} and the qualified names in {@code references}; {@code
+   * taken} holds the simple names the body writes for something else, which no import may take.
    */
   private void emit(
     final TypeElement blueprint,
     final AnnotationMirror config,
+    final Container container,
     final List<? extends TypeMirror> types,
     final List<String> references,
     final Set<String> taken,
@@ -848,8 +1043,28 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var pkg = processingEnv.getElementUtils().getPackageOf(blueprint).getQualifiedName().toString();
     final var name = blueprint.getSimpleName() + "Impl";
     final var qualified = pkg.isEmpty() ? name : pkg + "." + name;
+    // The bean name, as the annotation's value literal; a CDI bean with none carries no @Named.
+    // Both annotations declare value() with a default, so the defaults always hold it.
+    final var value = processingEnv
+      .getElementUtils()
+      .getElementValuesWithDefaults(config)
+      .entrySet()
+      .stream()
+      .filter(entry -> entry.getKey().getSimpleName().contentEquals("value"))
+      .map(Map.Entry::getValue)
+      .findFirst()
+      .orElseThrow();
+    final var beanName = value.toString();
+    final var cdiNamed = !value.getValue().toString().isEmpty();
     final var named = new HashSet<String>();
-    named.add(SPRING_COMPONENT);
+    if (container == Container.SPRING) {
+      named.add(SPRING_COMPONENT);
+    } else {
+      named.add(CDI_SCOPE);
+      if (cdiNamed) {
+        named.add(CDI_NAMED);
+      }
+    }
     named.addAll(references);
     for (final var type : types) collectImports(type, named);
     final var reserved = new HashSet<>(taken);
@@ -862,17 +1077,17 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       try (final var out = new PrintWriter(file.openWriter())) {
         if (!pkg.isEmpty()) out.println("package " + pkg + ";");
         for (final var imported : names.imports()) out.println("import " + imported + ";");
-        final var beanName = processingEnv
-          .getElementUtils()
-          .getElementValuesWithDefaults(config)
-          .entrySet()
-          .stream()
-          .filter(entry -> entry.getKey().getSimpleName().contentEquals("value"))
-          .map(entry -> entry.getValue().toString())
-          .findFirst()
-          .orElse("\"\"");
-        out.println("@" + names.ref(SPRING_COMPONENT) + "(" + beanName + ")");
-        out.println("public final class " + name + " implements " + blueprint.getSimpleName() + " {");
+        if (container == Container.SPRING) {
+          out.println("@" + names.ref(SPRING_COMPONENT) + "(" + beanName + ")");
+          out.println("public final class " + name + " implements " + blueprint.getSimpleName() + " {");
+        } else {
+          out.println("@" + names.ref(CDI_SCOPE));
+          if (cdiNamed) {
+            out.println("@" + names.ref(CDI_NAMED) + "(" + beanName + ")");
+          }
+          // Not final: the client proxy of a normal-scoped bean is a subclass of it.
+          out.println("public class " + name + " implements " + blueprint.getSimpleName() + " {");
+        }
         body.accept(out, names);
         out.println("}");
       }

@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import javax.annotation.processing.Processor;
@@ -58,9 +59,22 @@ class VerifierSilenceAgreementTest {
    * construction refused the mapper with, or null when it built.
    */
   private static Outcome outcome(final List<Processor> processors, final String prefix, final String code) {
+    return outcome(processors, List.of(), prefix, code);
+  }
+
+  /** {@link #outcome(List, String, String)}, compiled with {@code options} as well. */
+  private static Outcome outcome(
+    final List<Processor> processors,
+    final List<String> options,
+    final String prefix,
+    final String code
+  ) {
+    final var arguments = new ArrayList<String>();
+    arguments.add("-Atelescope.verify=warn");
+    arguments.addAll(options);
     final var compilation = compileFully(
       processors,
-      List.of("-Atelescope.verify=warn"),
+      arguments,
       source(PACKAGE + "." + prefix + "Holder", (HEADER + code).replace("@@", prefix))
     );
     assertTrue(compilation.success(), compilation::errorMessages);
@@ -1646,6 +1660,192 @@ class VerifierSilenceAgreementTest {
       assertEquals(
         PairingMessages.noSameNameTarget("VgEBuilt", "VgERec", "property", "field", "extra"),
         outcome.construction()
+      );
+    }
+  }
+
+  /**
+   * A model with a navigator for each of its records, one of them bridged to another, beside
+   * records with none.
+   */
+  private static final String NAVIGATED = """
+    @Focus record @@Inner(String city, int zip) {}
+    @Focus record @@Outer(@@Inner address, String label) {}
+    @Focus record @@Order(@@Outer customer, int qty) {}
+    @Focus record @@Other(@@Outer customer, String note) {}
+    @Focus record @@Cart(List<@@Inner> items) {}
+    @Focus @Bridge(@@Place.class) record @@Spot(String city, int zip) {}
+    @Focus record @@Place(String city, int zip) {}
+    @Focus record @@Trip(@@Spot stop, int qty) {}
+    record @@Tag(String label, int qty) {}
+    record @@Town(String city) {}
+    record @@Moved(@@Inner address, String label, int qty) {}
+    """;
+
+  /**
+   * {@code code} compiled with the navigators and bridges it asks for. Every generated navigator
+   * names the model's records from another file, which javac warns of once per name, so those
+   * warnings are turned off: javac reports at most a hundred warnings, and the verifier's would be
+   * lost behind them.
+   */
+  private static Outcome navigated(final String prefix, final String code) {
+    return outcome(
+      List.of(new FocusProcessor(), new BridgeProcessor(), new MapperVerifierProcessor()),
+      List.of("-Xlint:-auxiliaryclass"),
+      prefix,
+      NAVIGATED + code
+    );
+  }
+
+  @Nested
+  @DisplayName("A row written as a generated navigator's chain")
+  class NavigatorRows {
+
+    @Test
+    @DisplayName("is refused by both when the source chain starts at a class the source is not")
+    void aSourceChainOfAnotherClassIsRefusedByBoth() {
+      final var outcome = navigated(
+        "VnA",
+        holder(
+          "Telescope.mapper(@@Order.class, @@Tag.class, to(@@OtherTelescope.of().customer().label(), @@Tag::label))"
+        )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.sourceRowOffSource("VnAOrder", "VnATag", "to", "VnAOther", "customer"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("is refused by both when the target chain starts at a class the target is not")
+    void aTargetChainOfAnotherClassIsRefusedByBoth() {
+      final var outcome = navigated(
+        "VnB",
+        holder(
+          "Telescope.mapperForward(@@Tag.class, @@Order.class, to(@@Tag::label, @@OtherTelescope.of().customer().label()))"
+        )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.targetRowOffTarget("VnBTag", "VnBOrder", "to", "VnBOther", "customer"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("is refused by both when a chain of another class goes on past get() as field(...) steps")
+    void aChainOfAnotherClassPastGetIsRefusedByBoth() {
+      final var outcome = navigated(
+        "VnC",
+        holder(
+          "Telescope.mapper(@@Order.class, @@Tag.class," +
+            " to(@@OtherTelescope.of().get().field(@@Other::customer).field(@@Outer::label), @@Tag::label))"
+        )
+      );
+      assertBothRefuse(outcome);
+      assertEquals(
+        PairingMessages.sourceRowOffSource("VnCOrder", "VnCTag", "to", "VnCOther", "customer"),
+        outcome.construction()
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when each call reads a property of the source")
+    void aChainOfPropertiesIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnD",
+          holder(
+            "Telescope.mapper(@@Order.class, @@Tag.class, to(@@OrderTelescope.of().customer().label(), @@Tag::label))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when the chain ends in get()")
+    void aChainEndedByGetIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnE",
+          holder(
+            "Telescope.mapper(@@Order.class, @@Moved.class," +
+              " to(@@OrderTelescope.of().customer().address().get(), @@Moved::address)," +
+              " to(@@OrderTelescope.of().customer().label(), @@Moved::label))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when it steps into a container's elements")
+    void aContainerStepIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnF",
+          holder(
+            "Telescope.mapper(@@Cart.class, @@Town.class, to(@@CartTelescope.of().items().each().city(), @@Town::city))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when it hops through a generated bridge")
+    void aBridgeHopIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnG",
+          holder(
+            "Telescope.mapperForward(@@Trip.class, @@Town.class, to(@@TripTelescope.of().stop().as@@Place().city(), @@Town::city))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when it filters its focus")
+    void aFilterIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnH",
+          holder(
+            "Telescope.mapper(@@Order.class, @@Tag.class," +
+              " to(@@OrderTelescope.of().customer().label().filter(l -> !l.isEmpty()), @@Tag::label))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both when field(...) steps go on past get()")
+    void fieldStepsPastGetAreAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnI",
+          holder(
+            "Telescope.mapper(@@Order.class, @@Tag.class," +
+              " to(@@OrderTelescope.of().customer().get().field(@@Outer::label), @@Tag::label))"
+          )
+        )
+      );
+    }
+
+    @Test
+    @DisplayName("is accepted by both on a @Bridge field, which compiles it into the bridge")
+    void aBridgeFieldRowIsAcceptedByBoth() {
+      assertBothAccept(
+        navigated(
+          "VnJ",
+          """
+          class @@Holder {
+            @Bridge static final Mapper<@@Order, @@Tag> MAPPER =
+              Telescope.mapper(@@Order.class, @@Tag.class, to(@@OrderTelescope.of().customer().label(), @@Tag::label));
+            static Object build() { return MAPPER; }
+          }
+          """
+        )
       );
     }
   }

@@ -27,6 +27,43 @@ import org.junit.jupiter.api.Test;
 class TelescopeSpringProcessorTest {
 
   @Test
+  @DisplayName(
+    "with telescope-spring-boot-starter on the classpath, the CDI API beside it still gives a Spring component"
+  )
+  void springStarterGeneratesSpringBesideTheCdiApi() {
+    // The CDI scope annotation, as a transitive dependency of a Spring application brings it. This
+    // module's own TelescopeAutoConfiguration puts the starter on the processor's classpath.
+    final var cdiScope = source(
+      "jakarta.enterprise.context.ApplicationScoped",
+      "package jakarta.enterprise.context; public @interface ApplicationScoped {}"
+    );
+    final var result = ProcessorHarness.compile(
+      List.of(new TelescopeMapperProcessor()),
+      cdiScope,
+      source("demo.Person", "package demo; public record Person(String name) {}"),
+      source(
+        "demo.NameTransformer",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
+        @TelescopeTransformer("name")
+        public interface NameTransformer extends TelescopeTransformation<Person, String> {
+          default Telescope<Person, String> path() { return Telescope.of(Person.class).field(Person::name); }
+          default Transformation<String> transform() { return new Transformation<>(null, String::strip); }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.NameTransformerImpl"))
+      .contains("@Component(\"name\")\npublic final class NameTransformerImpl")
+      .doesNotContain("ApplicationScoped");
+  }
+
+  @Test
   void missingDefaultPathFailsAtCompileTime() {
     final var result = ProcessorHarness.compile(
       new TelescopeMapperProcessor(),

@@ -20,7 +20,7 @@ The benchmark runs collection cardinalities 0, 1, 16, 256, and 4096 for `List`, 
 For a change that claims an improvement, save matching JMH JSON before and after, then run:
 
 ```bash
-python3 scripts/compare-runtime-benchmarks.py before.json after.json --check
+python3 benchmarks/compare-runtime-benchmarks.py before.json after.json --check
 ```
 
 The comparator rejects differing JMH settings, material timing regressions with non-overlapping 99.9% confidence

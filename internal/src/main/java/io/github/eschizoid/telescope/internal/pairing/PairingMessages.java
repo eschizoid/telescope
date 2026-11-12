@@ -990,6 +990,111 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * The refusal of the merge {@code from(...)} row at {@code index} whose reader {@code reference}
+   * is not an accessor of a source class, which names no source the merge could look up. Both paths
+   * and the verifier refuse with these words.
+   */
+  public static String mergeReaderNotAnAccessor(final int index, final String reference) {
+    return (
+      "Telescope.merge: step at index " +
+      index +
+      " reads through " +
+      reference +
+      ", which is not an accessor of a source: a from(...) row reads its source through an instance method" +
+      " of the source's class taking no argument, the class the merge looks the source up by, and a static" +
+      " method or a method of another object names no source. Read it through an accessor of a source" +
+      " class, as from(Customer::name, Profile::name); a value computed from a source belongs in an accessor" +
+      " of that source, or of a holder record given as one more source."
+    );
+  }
+
+  /**
+   * A mapper's {@code into} handed a {@code bean} whose container {@code property} nothing can
+   * write: the bean holds no container for it, or one of class {@code container} that cannot be
+   * changed, and has no setter to give it a new one. {@code container} is null where it holds none.
+   */
+  public static String intoUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property,
+    final String container
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into writes '" +
+      property +
+      "' of the " +
+      bean +
+      " it is given, which holds " +
+      (container == null ? "no container for it" : "a " + container + " that cannot be changed") +
+      ", and " +
+      bean +
+      " has no setter for '" +
+      property +
+      "' to give it a new one, so into cannot update it. Give " +
+      bean +
+      " a setter for '" +
+      property +
+      "' or a modifiable container, or call forward(source) for a new " +
+      bean +
+      "."
+    );
+  }
+
+  /**
+   * A bean written through its adders whose collection {@code property} has no adder: no public
+   * instance method under any of {@code names} takes a value of {@code element}, which is null
+   * where the collection names no element class.
+   */
+  public static String adderMissing(
+    final String bean,
+    final String property,
+    final String element,
+    final List<String> names
+  ) {
+    final var listed =
+      names.size() == 1
+        ? names.getFirst()
+        : String.join(", ", names.subList(0, names.size() - 1)) + " or " + names.getLast();
+    return (
+      "writeStrategy = ADDERS on " +
+      bean +
+      " fills its collection '" +
+      property +
+      "' through an adder, one element at a time, and " +
+      bean +
+      " has no public method " +
+      listed +
+      " taking " +
+      (element == null ? "an element" : "a " + element) +
+      ". Give " +
+      bean +
+      " an adder " +
+      names.getFirst() +
+      "(" +
+      (element == null ? "Object" : element) +
+      "), or name another write strategy for it."
+    );
+  }
+
+  /** A bean written through its adders with no no-argument constructor to start from. */
+  public static String addersNeedNoArgConstructor(final String bean) {
+    return (
+      "writeStrategy = ADDERS on " +
+      bean +
+      " builds it through a no-argument constructor before its setters and adders write it, and " +
+      bean +
+      " has none that can be called. Give " +
+      bean +
+      " a no-argument constructor, or name another write strategy for it."
+    );
+  }
+
   /** Duplicate override row claiming an already-claimed target field. */
   public static String duplicateTargetRow(final String source, final String target, final String tgtField) {
     return (

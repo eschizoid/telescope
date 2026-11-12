@@ -60,12 +60,21 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    *       constructor only some of whose known names are properties is refused when the mapper is
    *       built. Inside a native image the names {@code -g} keeps cannot be read, so compile with
    *       {@code -parameters} to get this check there
+   *   <li>{@link #ADDERS} — as {@link #SETTERS}, except that each collection property a field of
+   *       its name stores is filled one element at a time through its adder: {@code addLine} for
+   *       {@code lines}, {@code addCategory} for {@code categories}, {@code addAddress} for {@code
+   *       addresses}. The adder is a public instance method taking the collection's element, which
+   *       is how an entity wires the back-reference of a bidirectional association, and the
+   *       collection needs no setter. A target with such a collection and no adder for it is
+   *       refused by name when the mapper is built. {@code Mapper.into} fills the collection the
+   *       target holds through the adder too, after clearing it
    * </ul>
    */
   enum WriteStrategy {
     BUILDER,
     SETTERS,
     CONSTRUCTOR,
+    ADDERS,
   }
 
   /**

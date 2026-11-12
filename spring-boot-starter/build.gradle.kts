@@ -37,9 +37,9 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.jacocoTestReport {
-    // TelescopeMapperProcessor lives in :codegen but only runs under this module's in-process compiler
-    // tests, where the Spring annotations exist. The :codegen report excludes it; report it here so the
-    // lines these tests execute are attributed to it instead of reading as untested.
+    // TelescopeMapperProcessor lives in :codegen, and only this module's tests compile and run the
+    // Spring components it writes. A report covers only the classes it lists, so it is listed here
+    // too, and the lines these tests execute count toward it beside the :codegen report's.
     val codegen = project(":codegen")
     dependsOn(":codegen:classes")
     classDirectories.from(

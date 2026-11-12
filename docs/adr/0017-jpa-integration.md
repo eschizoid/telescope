@@ -29,20 +29,29 @@ writing into any existing mutable container rather than of JPA.
 Add a `telescope-jpa` module written against the Jakarta Persistence API (`jakarta.persistence:jakarta.persistence-api`)
 rather than a provider, so it serves Hibernate and EclipseLink alike.
 
-1. **Copy only what is loaded.** The module registers a container-copy policy through a `ServiceLoader` SPI consulted by
-   `ContainerCopy`, the one function both the runtime mapper and generated bridges call to copy a same-typed container.
-   For a source collection `PersistenceUtil.isLoaded` reports as not loaded, the policy returns the instance unchanged;
-   a loaded collection is copied as usual. Because both paths call the same function, the runtime and codegen paths
-   cannot disagree about it.
-2. **Proxy unwrapping moves out of core.** The `HibernateProxy` accessor pair leaves `Beans` and becomes a provider of
+1. **Copy only what is loaded.** The module registers an implementation of `ContainerCopy.Policy`, the `ServiceLoader`
+   SPI that `ContainerCopy` consults, the class both the runtime mapper and generated bridges call to copy a same-typed
+   container. For a source collection `PersistenceUtil.isLoaded` reports as not loaded, the policy's `copy` returns the
+   instance unchanged; a loaded collection is handed back to `ContainerCopy.standardCopy`. Because both paths call the
+   same function, the runtime and codegen paths cannot disagree about it.
+2. **Leave an unloaded collection alone on `into`.** The same policy's `refill` replaces the clear-and-refill core makes
+   when `into` writes a collection into an entity that already holds one. It is handed a `ContainerCopy.Refill`: the
+   owner, the property, the collection the owner holds, the converted collection, and whether elements go through the
+   owner's adder, with `Refill.add` to add one element as the write adds it. A held collection the provider has not
+   loaded is left as it is; anything else is handed back to `Refill.standard`. A merge by `@Id`, which is not decided
+   here, plugs into the same method.
+3. **Proxy unwrapping moves out of core.** The `HibernateProxy` accessor pair leaves `Beans` and becomes a provider of
    the same SPI family, resolving a proxy to its entity class. Core is left with no provider-specific code, and the
    native-image exception goes with it.
-3. **Starter wiring.** The Spring Boot starter and the Quarkus extension register the module when `jakarta.persistence`
+4. **Starter wiring.** The Spring Boot starter and the Quarkus extension register the module when `jakarta.persistence`
    is on the classpath, as they already register mappers.
 
-The patch behavior stays in core: writing a same-typed container into a target that already holds a mutable instance
-clears and refills that instance instead of replacing it. Whether `patch` does this today is checked before this module
-is built, and fixed in core if it does not.
+The collection write stays in core, through that hook: `into` writing a `Collection` or `Map` property into a target
+that already holds one clears and refills that instance instead of replacing it, through the owner's adder under the
+`ADDERS` write strategy, replaces through the setter a held container that cannot be changed, and refuses by name only a
+property no setter or modifiable container can take. At most one policy is registered, and it replaces the standard one
+as a whole. Whether `patch` refills a container the same way is checked before this module is built, and fixed in core
+if it does not.
 
 A `share(src, tgt)` row in core remains the explicit per-field opt-out for cases the policy does not cover, such as a
 live concurrent view or a very large container on a hot path.
@@ -74,6 +83,5 @@ not settled by this record.
 
 ## Open questions
 
-- The exact SPI shape in `ContainerCopy`, settled once the same-typed copy behavior is on main.
 - Whether `PersistenceUtil.isLoaded` is cheap enough per call on the hot path, measured with the `Benchmarks` workflow
   against a control before the policy is enabled by default.

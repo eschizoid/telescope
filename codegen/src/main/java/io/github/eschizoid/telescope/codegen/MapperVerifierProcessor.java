@@ -24,6 +24,7 @@ import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.KeptNames;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.OwnBridgeRule;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairWalk;
@@ -124,6 +125,8 @@ import javax.tools.StandardLocation;
 public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
+
+  private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final String OBJECT_FQN = "java.lang.Object";
   // The telescope navigation calls that read a component of the path's current focus through an
@@ -602,6 +605,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
+    // Reads a row written as a generated navigator's chain as the bridge processor reads it.
+    private final FieldRows navigators = new FieldRows(processingEnv, trees);
+
     // The target properties the rows of the call being verified claim, by the nested pair they are
     // keyed to; a nested pair with no entry has no row keyed to it. Read through claimsAt, which
     // adds the rows keyed to two sealed interfaces a pair's classes implement.
@@ -653,12 +659,44 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       switch (name) {
         case "map", "mapper" -> strict = true;
         case "mapperForward" -> strict = false;
+        case "merge" -> {
+          if (!suppressed()) verifyMergeCall(node);
+          return;
+        }
         default -> {
           return;
         }
       }
       if (suppressed()) return;
       verifyPairCall(node, strict);
+    }
+
+    /**
+     * Reports each {@code from(...)} row of a {@code Telescope.merge} call whose reader is not an
+     * accessor of a source class, which the merge refuses when it is built, in its words.
+     */
+    private void verifyMergeCall(final MethodInvocationTree node) {
+      final var args = node.getArguments();
+      for (var i = 1; i < args.size(); i++) {
+        if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
+        if (!(elementAt(row.getMethodSelect()) instanceof ExecutableElement step)) continue;
+        final var owner = (TypeElement) step.getEnclosingElement();
+        if (!owner.getQualifiedName().contentEquals(MERGE_STEP_FQN) || !step.getSimpleName().contentEquals("from")) {
+          continue;
+        }
+        if (!(row.getArguments().getFirst() instanceof MemberReferenceTree reference)) continue;
+        if (!(elementAt(reference) instanceof ExecutableElement reader)) continue;
+        // An unbound reference to an instance method reads the value it is handed as the method's
+        // receiver, so as an accessor it takes no argument.
+        final var refusal = MergeReaders.refusal(
+          i - 1,
+          reader.getEnclosingElement().getSimpleName().toString(),
+          reader.getSimpleName().toString(),
+          elementAt(reference.getQualifierExpression()) instanceof TypeElement &&
+            !reader.getModifiers().contains(Modifier.STATIC)
+        );
+        if (refusal != null) report(reference, refusal);
+      }
     }
 
     private boolean suppressed() {
@@ -1485,7 +1523,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var path = inlinePath(arg);
       if (path == null || path.steps().size() != 1) return false;
       final var step = path.steps().getFirst();
-      return path.startsAtClass() && "field".equals(step.name()) && step.args().size() == 1;
+      return path.startsAtClass() && "field".equals(step.name()) && step.readsOne();
     }
 
     /**
@@ -2156,8 +2194,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (final var step : path.steps()) {
         final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name)) continue;
-        if (!"field".equals(name) || step.args().size() != 1) return null;
-        final var hop = accessorProp(step.args().getFirst());
+        if (!"field".equals(name) || !step.readsOne()) return null;
+        final var hop = hop(step);
         if (hop == null) return null;
         names.add(hop.name());
       }
@@ -2180,8 +2218,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (final var step : path.steps()) {
         final var name = step.name();
         if ("filter".equals(name) || "observe".equals(name) || "as".equals(name)) continue;
-        if (!ROOT_HOPS.contains(name) || step.args().size() != 1) return null;
-        final var hop = accessorProp(step.args().getFirst());
+        if (!ROOT_HOPS.contains(name) || !step.readsOne()) return null;
+        final var hop = hop(step);
         return hop == null ? null : hop.method();
       }
       return null;
@@ -2529,6 +2567,34 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!hintTargets.add(binaryName)) {
         report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
       }
+      if (
+        row.getArguments().size() == 2 &&
+        elementAt(row.getArguments().get(1)) instanceof VariableElement constant &&
+        constant.getKind() == ElementKind.ENUM_CONSTANT &&
+        constant.getSimpleName().contentEquals("ADDERS")
+      ) {
+        final var refusal = addersRefusal(targetEl);
+        if (refusal != null) report(row, refusal);
+      }
+    }
+
+    /**
+     * Why the adders strategy cannot build {@code bean}, as the runtime writer refuses it when the
+     * mapper is built, or null when it can: no no-argument constructor, or a collection a field of
+     * its name stores with no adder.
+     */
+    private String addersRefusal(final TypeElement bean) {
+      final var simple = bean.getSimpleName().toString();
+      if (
+        ElementFilter.constructorsIn(bean.getEnclosedElements())
+          .stream()
+          .noneMatch(c -> c.getParameters().isEmpty())
+      ) {
+        return PairingMessages.addersNeedNoArgConstructor(simple);
+      }
+      final var properties = new LinkedHashMap<String, TypeMirror>();
+      for (final var property : props.properties(bean.asType())) properties.put(property.name(), property.member());
+      return MirrorAdders.of(elements, types, props, bean, properties).refusal();
     }
 
     /**
@@ -3034,8 +3100,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           continue;
         }
-        if (ROOT_HOPS.contains(name) && callArgs.size() == 1) {
-          verifyWrittenOnTarget(row, rowName, accessorProp(callArgs.getFirst()), tgtType, srcSimple, tgtSimple);
+        if (ROOT_HOPS.contains(name) && step.readsOne()) {
+          verifyWrittenOnTarget(row, rowName, hop(step), tgtType, srcSimple, tgtSimple);
         }
         return;
       }
@@ -3099,16 +3165,34 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
     }
 
-    /** One call after a path's factory: the method it names and its arguments. */
-    private record Step(String name, List<? extends ExpressionTree> args) {}
+    /**
+     * One call after a path's factory: the method it names and its arguments, and, for a call of a
+     * generated navigator, {@code read}, the property it reads, as the {@code field(...)} step it
+     * stands for; null for any other call.
+     */
+    private record Step(String name, List<? extends ExpressionTree> args, Prop read) {
+      Step(final String name, final List<? extends ExpressionTree> args) {
+        this(name, args, null);
+      }
+
+      /** Whether the step reads one property: through one accessor, or as a navigator's call. */
+      boolean readsOne() {
+        return read != null || args.size() == 1;
+      }
+    }
+
+    /** The property {@code step}, a step that {@link Step#readsOne() reads one}, reads. */
+    private Prop hop(final Step step) {
+      return step.read() != null ? step.read() : accessorProp(step.args().getFirst());
+    }
 
     /**
-     * {@code arg} read as an inline path, or null for any expression {@link #telescopeCalls} does
-     * not read as one.
+     * {@code arg} read as an inline path, a generated navigator's chain read as the path it stands
+     * for ({@link #navigatorPath}), or null for any other expression.
      */
     private InlinePath inlinePath(final ExpressionTree arg) {
-      final var calls = arg == null ? null : telescopeCalls(arg);
-      if (calls == null) return null;
+      final var calls = telescopeCalls(arg);
+      if (calls == null) return navigatorPath(arg);
       final var first = calls.getFirst();
       final var steps = new ArrayList<Step>();
       final var factory = factoryName(first);
@@ -3130,6 +3214,26 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         steps.add(new Step(name, call.getArguments()));
       }
       return new InlinePath(factory, first.getArguments(), root, List.copyOf(steps));
+    }
+
+    /**
+     * {@code arg}, a chain started at a generated navigator's {@code of()}, read as the path {@code
+     * Telescope.of(Root.class)} it stands for, as the bridge processor reads it: each call naming a
+     * property is the {@code field(...)} step reading it, a {@code get()} adds no step, and every
+     * other call is the step it is; or null when {@code arg} is no such chain.
+     */
+    private InlinePath navigatorPath(final ExpressionTree arg) {
+      final var chain = navigators.navigatorChain(getCurrentPath().getCompilationUnit(), arg);
+      if (chain == null) return null;
+      final var steps = new ArrayList<Step>();
+      for (final var step : navigators.navigatorSteps(chain, chain.root().asType())) {
+        if (step.accessor() != null) {
+          steps.add(new Step("field", List.of(), new Prop(step.name(), step.read(), step.owner(), step.accessor())));
+        } else if (!step.name().equals("get")) {
+          steps.add(new Step(step.name(), step.call().getArguments()));
+        }
+      }
+      return new InlinePath("of", List.of(), chain.root().asType(), List.copyOf(steps));
     }
 
     /** The name of the method a call invokes, read from its resolved element. */
@@ -3195,10 +3299,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           }
           return;
         }
-        if (ROOT_HOPS.contains(name)) verifySourceComponent(
+        if (ROOT_HOPS.contains(name) && step.readsOne()) verifySourceComponent(
           row,
           rowName,
-          accessorProp(callArgs.getFirst()),
+          hop(step),
           srcErased,
           srcSimple,
           tgtSimple

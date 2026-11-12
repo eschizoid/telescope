@@ -1,9 +1,11 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.internal.AdderCalls;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
@@ -12,6 +14,7 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -70,6 +73,9 @@ public class Mapper<A, B> {
   private final Iso<A, B> iso;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
+  // The reflective that carries the call's write hints for beans, or null where it has none; the
+  // two sides below are it for a bean and the record reflective for a record.
+  private final Reflective beanRefl;
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private volatile IntoPlan intoPlan;
@@ -184,15 +190,16 @@ public class Mapper<A, B> {
     final List<OpticNode> explainTrail,
     final List<CaseEntry> cases,
     final BiFunction<A, B, A> patcher,
-    final Reflective sourceRefl
+    final Reflective beanRefl
   ) {
     this.iso = iso;
     this.cases = cases == null ? null : List.copyOf(cases);
     this.patcher = patcher;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
-    this.sourceRefl = sourceRefl != null ? sourceRefl : Reflective.of(sourceClass);
-    this.targetRefl = Reflective.of(targetClass);
+    this.beanRefl = beanRefl;
+    this.sourceRefl = beanRefl == null || sourceClass.isRecord() ? Reflective.of(sourceClass) : beanRefl;
+    this.targetRefl = beanRefl == null || targetClass.isRecord() ? Reflective.of(targetClass) : beanRefl;
     // Defensive copy — patch behavior must not mutate after construction. The copy keeps the
     // table's order, which is the order patch converts the partial's fields in; Map.copyOf would
     // iterate in an order that changes from one JVM run to the next. null = patch unsupported (see
@@ -246,6 +253,7 @@ public class Mapper<A, B> {
     this.iso = built.iso;
     this.sourceClass = built.sourceClass;
     this.targetClass = built.targetClass;
+    this.beanRefl = built.beanRefl;
     this.sourceRefl = built.sourceRefl;
     this.targetRefl = built.targetRefl;
     this.patchByTargetField = built.patchByTargetField;
@@ -317,8 +325,9 @@ public class Mapper<A, B> {
    * Function, Class, Class, Map, List)} performs. {@code DeepMap#resolveMapper} holds the leaf Iso
    * the deep-mapping engine built; passing it straight through removes one virtual {@code Iso.to}
    * hop from every {@code forward}/{@code backward} call. Same lattice value, one fewer wrapper.
-   * {@code sourceRefl} is what {@link #patch} rebuilds the source with, which carries the call's
-   * write hints so a patch builds a bean the way backward does; null rebuilds it as {@link
+   * {@code beanRefl} carries the call's write hints for beans: {@link #patch} rebuilds a bean
+   * source with it, so a patch builds the bean the way backward does, and {@link #into} reads from
+   * it whether the target is filled through its adders. Null rebuilds either side as {@link
    * Reflective#of} does.
    *
    * <p>The {@code exports} warning is suppressed because the signature names internal types ({@link
@@ -335,7 +344,7 @@ public class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField,
     final List<OpticNode> explainTrail,
-    final Reflective sourceRefl
+    final Reflective beanRefl
   ) {
     return new Mapper<>(
       iso,
@@ -349,7 +358,7 @@ public class Mapper<A, B> {
       explainTrail,
       null,
       null,
-      sourceRefl
+      beanRefl
     );
   }
 
@@ -736,14 +745,41 @@ public class Mapper<A, B> {
    * {@link #forward(Object)} and discard / replace the receiver, or have the target type be a bean
    * with setters.
    *
-   * <p><b>Setter requirement.</b> Each property it updates is written through a public setter of
-   * {@code target.getClass()} that takes a value of the property's type, whatever strategy {@code
-   * forward} builds a new instance with. A bean built by a builder or a constructor may have no
-   * such setter for a property the mapper writes; {@code into} then cannot update that property in
-   * place and refuses the call by the property's name, before writing anything. The refusal comes
-   * from the first {@code into} call for a target of that class, not when the mapper is built,
-   * because a mapper used only through {@code forward} needs no setters and a subclass handed to
-   * {@code into} may declare the setter its declared class lacks.
+   * <p><b>Setter requirement.</b> Each property it updates other than a {@code Collection} or
+   * {@code Map} is written through a public setter of {@code target.getClass()} that takes a value
+   * of the property's type, whatever strategy {@code forward} builds a new instance with. A bean
+   * built by a builder or a constructor may have no such setter for a property the mapper writes;
+   * {@code into} then cannot update that property in place and refuses the call by the property's
+   * name, before writing anything. The refusal comes from the first {@code into} call for a target
+   * of that class, not when the mapper is built, because a mapper used only through {@code forward}
+   * needs no setters and a subclass handed to {@code into} may declare the setter its declared
+   * class lacks.
+   *
+   * <p><b>Collections and maps are merged where they can be.</b> A {@code Collection} or {@code
+   * Map} the target's getter returns that can be changed is cleared and refilled with the elements
+   * {@code forward(source)} gives the property, so it keeps its identity, which an ORM-managed
+   * collection with orphan removal needs. One that cannot be changed is replaced through the
+   * setter, as is the converted value where the getter returns null: an unmodifiable JDK container
+   * ({@code List.of}, {@code Collections.unmodifiable*} and their kin) is known in advance, and any
+   * other container whose refill throws, an {@link UnsupportedOperationException} from {@code
+   * Arrays.asList} or a {@link NullPointerException} from a sorted set handed a null, has its
+   * elements put back, so whoever else holds it sees it as it was, and is then replaced. A null
+   * value from the source is written through the setter as null, as {@code forward} gives it. Only
+   * a container property nothing can write, one with no setter whose target holds no container or
+   * one that cannot be changed, is refused by the property's name, with what the refill threw as
+   * the cause. Container properties are written before every other property, those with no setter
+   * first, and an unmodifiable JDK container with no setter is refused before anything is written,
+   * so a refused call leaves the target's other properties as they were. The refill goes through
+   * {@link ContainerCopy}, whose {@link ContainerCopy.Policy} a module can replace.
+   *
+   * <p><b>Adders.</b> Where the mapper builds the target class through {@code writeBean(...,
+   * ADDERS)} or {@code writeBeans(ADDERS)}, each collection a field of its name stores is cleared
+   * and then filled one element at a time through its adder ({@code addLine} for {@code lines}),
+   * which needs no setter for it. The value {@code forward} builds for {@code into} to read from
+   * runs none of its adders, so each adder runs exactly once per element, on {@code target}, and an
+   * adder that changes or drops an element leaves {@code target} as {@code forward} would build it.
+   * An adder that rejects an element by throwing has its exception thrown on, once the collection
+   * the target holds has its elements back; the setter never writes the collection past it.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
@@ -754,10 +790,11 @@ public class Mapper<A, B> {
    * <p><b>A {@code @Bridge} field's mapper.</b> Where the bridge generated for the field can update
    * its target in place, the field's mapper hands a target of exactly the class the bridge writes
    * to the bridge's {@code into}, which writes the same properties through the same setters with no
-   * reflection; {@link #explain()} says so. A subclass of that class is written here instead, since
+   * reflection, and merges collections and maps the same way through the same {@link ContainerCopy}
+   * methods; {@link #explain()} says so. A subclass of that class is written here instead, since
    * its own setters, which the bridge cannot know, decide how it takes a value. The bridge has such
    * an {@code into} only when the target is a bean with a setter for every property the bridge
-   * writes.
+   * writes other than a container.
    *
    * @param target the existing instance to mutate; must not be null and must not be a record
    * @param source the source value to map from
@@ -765,14 +802,36 @@ public class Mapper<A, B> {
    * @throws NullPointerException if {@code target} or {@code source} is null
    * @throws UnsupportedOperationException if {@code target}'s class is a record
    * @throws IllegalArgumentException if {@code target}'s class has no setter for a property the
-   *     mapper writes, or, between two sealed interfaces, if {@code source} converts to a case
-   *     other than {@code target}'s
+   *     mapper writes other than a container, if nothing can write a container property, or,
+   *     between two sealed interfaces, if {@code source} converts to a case other than {@code
+   *     target}'s
    */
   public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
     if (cases == null) refuseRecordTarget(targetClass);
-    return writeInto(target, forward(source));
+    // A target filled through its adders is converted with no adder run on the value forward
+    // builds, so each adder runs once per element, on the target. Between two sealed interfaces
+    // the mapper that writes the target is its case's.
+    final var writer = writerOf(target);
+    if (writer != null && !writer.intoAdders(Beans.persistentClassOf(target)).isEmpty()) {
+      final var deferred = AdderCalls.deferring(writer.targetClass, () -> forward(source));
+      return writeInto(target, deferred.value(), deferred.elements());
+    }
+    return writeInto(target, forward(source), null);
+  }
+
+  /**
+   * The mapper that writes {@code target} in place: this one, or between two sealed interfaces the
+   * mapper of the case {@code target} is; null where that mapper has no table to write through,
+   * which {@link #writeInto} refuses.
+   */
+  private Mapper<?, ?> writerOf(final Object target) {
+    if (cases == null) return patchByTargetField == null ? null : this;
+    for (final var entry : cases) {
+      if (entry.targetCase().isInstance(target)) return entry.mapper().writerOf(target);
+    }
+    return null;
   }
 
   private void refuseRecordTarget(final Class<?> written) {
@@ -785,9 +844,14 @@ public class Mapper<A, B> {
     );
   }
 
-  /** Write {@code produced}, which this mapper's forward made, onto {@code target} in place. */
+  /**
+   * Write {@code produced}, which this mapper's forward made, onto {@code target} in place. {@code
+   * deferred} holds, by property, the collection each adder of {@code produced} was to be handed,
+   * where {@code produced} was built with its adders deferred, and is null where it was not, in
+   * which case an adder-filled collection is read from {@code produced} itself.
+   */
   @SuppressWarnings("unchecked")
-  private B writeInto(final B target, final B produced) {
+  private B writeInto(final B target, final B produced, final Map<String, Object> deferred) {
     if (cases != null) {
       final var entry = caseOfTarget(target);
       if (produced != null && !entry.targetCase().isInstance(produced)) throw new IllegalArgumentException(
@@ -799,7 +863,7 @@ public class Mapper<A, B> {
           " change the case."
       );
       refuseRecordTarget(entry.targetCase());
-      return (B) ((Mapper<Object, Object>) entry.mapper()).writeInto(target, produced);
+      return (B) ((Mapper<Object, Object>) entry.mapper()).writeInto(target, produced, deferred);
     }
     // Two-phase apply for atomicity AND scoping.
     //
@@ -827,16 +891,109 @@ public class Mapper<A, B> {
       // every mapped property rather than failing. Readers are never bound here: there is nothing
       // to read from.
       final var names = intoNames();
-      final var writers = new ArrayList<BiConsumer<Object, Object>>(names.size());
-      for (final var name : names) writers.add(intoWriter(writeClass, name));
-      for (final var writer : writers) writer.accept(target, null);
-      return target;
+      final var adders = intoAdders(writeClass);
+      final var slots = new IntoSlot[names.size()];
+      var i = 0;
+      for (final var name : names) slots[i++] = intoSlot(null, writeClass, name, adders);
+      return writeSlots(target, writeClass, slots, new Object[slots.length]);
     }
     final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
     final var staged = new Object[slots.length];
-    for (var i = 0; i < slots.length; i++) staged[i] = slots[i].read().apply(produced);
-    for (var i = 0; i < slots.length; i++) slots[i].write().accept(target, staged[i]);
+    for (var i = 0; i < slots.length; i++) {
+      final var slot = slots[i];
+      staged[i] = slot.adder() != null && deferred != null ? deferred.get(slot.name()) : slot.read().apply(produced);
+    }
+    return writeSlots(target, writeClass, slots, staged);
+  }
+
+  /**
+   * Write each of {@code staged}, the values {@code forward} gave the properties {@code slots}
+   * name, into {@code target}, a container property as {@link ContainerCopy} decides for both
+   * paths: refilled in the container the target holds where that can be changed, so it keeps its
+   * identity, through the adder under the adders strategy, and otherwise written through the
+   * setter. Every container the target holds is read, and one nothing can write refused by name,
+   * before the first write. Container properties are written before every other property, those
+   * with no setter first, so a container found unchangeable only when it is written leaves every
+   * other property as it was.
+   */
+  @SuppressWarnings("unchecked")
+  private B writeSlots(final B target, final Class<?> writeClass, final IntoSlot[] slots, final Object[] staged) {
+    final var source = sourceClass.getSimpleName();
+    final var targetName = targetClass.getSimpleName();
+    final var held = new Object[slots.length];
+    for (var i = 0; i < slots.length; i++) {
+      final var slot = slots[i];
+      if (slot.held() == null) continue;
+      held[i] = slot.held().apply(target);
+      ContainerCopy.refuseUnwritable(
+        held[i],
+        staged[i],
+        slot.write() != null,
+        slot.adder() != null,
+        source,
+        targetName,
+        PairingMessages.className(writeClass),
+        slot.name()
+      );
+    }
+    for (var pass = 0; pass < 3; pass++) {
+      for (var i = 0; i < slots.length; i++) {
+        final var slot = slots[i];
+        final var order = slot.held() == null ? 2 : slot.write() == null ? 0 : 1;
+        if (order != pass) continue;
+        if (order == 2) {
+          slot.write().accept(target, staged[i]);
+          continue;
+        }
+        final var written =
+          slot.adder() != null
+            ? ContainerCopy.fill(
+                source,
+                targetName,
+                target,
+                slot.name(),
+                held[i],
+                (Collection<Object>) staged[i],
+                slot.adder(),
+                slot.write() != null
+              )
+            : ContainerCopy.refill(source, targetName, target, slot.name(), held[i], staged[i], slot.write() != null);
+        if (!written) slot.write().accept(target, staged[i]);
+      }
+    }
     return target;
+  }
+
+  /**
+   * The adder each collection property of a {@code writeClass} target is filled through, where the
+   * mapper builds its target class through the adders strategy, and none otherwise.
+   */
+  private Map<String, BiConsumer<Object, Object>> intoAdders(final Class<?> writeClass) {
+    final var writer = targetRefl.writerFor(targetClass);
+    if (writer == null || Beans.strategyOf(writer) != BeanWriteStrategy.ADDERS) return Map.of();
+    return Beans.adders(writeClass);
+  }
+
+  /**
+   * The accessors {@link #into} writes property {@code name} of a {@code writeClass} target with:
+   * for a container it refills in place, its getter, its adder where {@code adders} has one, and
+   * its setter where the class has one; for any other property its setter, which it has to have.
+   */
+  private IntoSlot intoSlot(
+    final Function<Object, Object> read,
+    final Class<?> writeClass,
+    final String name,
+    final Map<String, BiConsumer<Object, Object>> adders
+  ) {
+    final var adder = adders.get(name);
+    if (adder != null || Beans.refilledInPlace(writeClass, name)) return new IntoSlot(
+      name,
+      read,
+      Beans.capturedWriter(writeClass, name),
+      Beans.capturedReader(writeClass, name),
+      adder
+    );
+    return new IntoSlot(name, read, intoWriter(writeClass, name), null, null);
   }
 
   /** The case entry {@code value}, a value of the sealed source, belongs to. */
@@ -855,8 +1012,19 @@ public class Mapper<A, B> {
     );
   }
 
-  /** One target property's bound accessor pair, resolved once per mapper. */
-  private record IntoSlot(Function<Object, Object> read, BiConsumer<Object, Object> write) {}
+  /**
+   * One target property's bound accessors, resolved once per mapper: the reader of {@code
+   * forward}'s result, the setter, and for a container {@code into} refills in place the reader of
+   * the container the target holds. A container may have no setter, and under the adders strategy a
+   * collection has its adder.
+   */
+  private record IntoSlot(
+    String name,
+    Function<Object, Object> read,
+    BiConsumer<Object, Object> write,
+    Function<Object, Object> held,
+    BiConsumer<Object, Object> adder
+  ) {}
 
   /** The class pair a bound slot array is valid for, alongside the array. */
   private record IntoPlan(Class<?> readClass, Class<?> writeClass, IntoSlot[] slots) {}
@@ -897,10 +1065,11 @@ public class Mapper<A, B> {
     final var cached = intoPlan;
     if (cached != null && cached.readClass() == readClass && cached.writeClass() == writeClass) return cached.slots();
     final var names = intoNames();
+    final var adders = intoAdders(writeClass);
     final var built = new IntoSlot[names.size()];
     var i = 0;
     for (final var name : names) {
-      built[i++] = new IntoSlot(Beans.capturedReader(readClass, name), intoWriter(writeClass, name));
+      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, adders);
     }
     intoPlan = new IntoPlan(readClass, writeClass, built);
     return built;
@@ -970,7 +1139,7 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      sourceRefl
+      beanRefl
     );
   }
 
@@ -1027,7 +1196,7 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      sourceRefl
+      beanRefl
     );
   }
 
@@ -1060,7 +1229,7 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      sourceRefl
+      beanRefl
     );
   }
 
@@ -1107,7 +1276,7 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      sourceRefl
+      beanRefl
     );
   }
 

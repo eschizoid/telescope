@@ -18,6 +18,7 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
+import io.github.eschizoid.telescope.internal.pairing.MergeReaders;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
@@ -120,9 +121,18 @@ final class FieldRows {
    * One merge row, at {@code index} among the rows: {@code from(Source::read, Target::written)},
    * naming its source class, the method it reads and the target property it writes, or {@code
    * auto(Source.class)}, naming its source class alone, with a null {@code read} and {@code
-   * written}. {@code at} is the tree a refusal of the row is reported on.
+   * written}. {@code sourceType} is the source class as the row gives it: with the type arguments a
+   * {@code from} row's reference carries, as {@code Box<String>} for {@code Box<String>::value},
+   * and erased for an {@code auto} row. {@code at} is the tree a refusal of the row is reported on.
    */
-  record MergeRow(int index, TypeElement source, ExecutableElement read, String written, Tree at) {}
+  record MergeRow(
+    int index,
+    TypeElement source,
+    TypeMirror sourceType,
+    ExecutableElement read,
+    String written,
+    Tree at
+  ) {}
 
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
@@ -345,7 +355,15 @@ final class FieldRows {
     final TypeElement enclosing
   ) {
     if (!(arg instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("class")) return null;
-    final var name = select.getExpression().toString();
+    return typeNamed(unit, select.getExpression().toString(), enclosing);
+  }
+
+  /**
+   * The class {@code name} resolves to as the compilation unit's package, imports and enclosing
+   * classes resolve it, read by name for a tree nothing has attributed yet; or null when it
+   * resolves to no class the compilation has.
+   */
+  private TypeElement typeNamed(final CompilationUnitTree unit, final String name, final TypeElement enclosing) {
     final var elements = env.getElementUtils();
     final var candidates = new ArrayList<String>();
     for (Element at = enclosing; at instanceof TypeElement type; at = type.getEnclosingElement()) {
@@ -369,6 +387,34 @@ final class FieldRows {
       if (type != null) return type;
     }
     return null;
+  }
+
+  /**
+   * Whether {@code initializer}, the call initialising {@code field}, names as the start of a call
+   * chain a class whose simple name ends in {@code Telescope} that the compilation does not have
+   * yet: a navigator a processor writes in this round. Read by name, so nothing is attributed
+   * before the class exists, which would leave the initializer typed against a class that is
+   * missing. A field with no such call names none.
+   */
+  boolean namesUnwrittenNavigator(final VariableElement field, final MethodInvocationTree initializer) {
+    final var unit = trees.getPath(field).getCompilationUnit();
+    final var enclosing = (TypeElement) field.getEnclosingElement();
+    final var missing = new boolean[1];
+    new TreeScanner<Void, Void>() {
+      @Override
+      public Void visitMemberSelect(final MemberSelectTree node, final Void unused) {
+        if (node.getExpression() instanceof IdentifierTree named) unwritten(named.getName().toString());
+        return super.visitMemberSelect(node, unused);
+      }
+
+      private void unwritten(final String name) {
+        if (name.endsWith("Telescope") && !name.equals("Telescope") && typeNamed(unit, name, enclosing) == null) {
+          missing[0] = true;
+        }
+      }
+    }
+      .scan(initializer, null);
+    return missing[0];
   }
 
   /**
@@ -653,7 +699,7 @@ final class FieldRows {
           );
         }
         sources.add(source);
-        rows.add(new MergeRow(index, source, null, null, row));
+        rows.add(new MergeRow(index, source, env.getTypeUtils().erasure(source.asType()), null, null, row));
         kinds.add("AutoSameName");
         accessors.add(env.getElementUtils().getBinaryName(source) + ">");
         continue;
@@ -672,15 +718,132 @@ final class FieldRows {
       if (!(read instanceof ExecutableElement reader) || !(written instanceof ExecutableElement writer)) {
         return Refused.javacReports(row);
       }
-      // An accessor takes the object it reads as its argument, so its reference is unbound and
-      // names the class it is applied to.
-      final var source = (TypeElement) elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      // The reader names the source the row reads only when it is an accessor of it: an unbound
+      // reference to an instance method, which reads the value it is handed as the method's
+      // receiver and so takes no argument.
+      final var qualifier = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
+      final var notAnAccessor = MergeReaders.refusal(
+        index,
+        reader.getEnclosingElement().getSimpleName().toString(),
+        reader.getSimpleName().toString(),
+        qualifier instanceof TypeElement && !reader.getModifiers().contains(Modifier.STATIC)
+      );
+      if (notAnAccessor != null) return new Refused(rowArgs.get(0), notAnAccessor);
+      final var source = (TypeElement) qualifier;
       sources.add(source);
-      rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
+      // The reference is typed as an Accessor<S, X>, whose S is the source with the type arguments
+      // the reference gives it.
+      final var typed = trees.getTypeMirror(TreePath.getPath(unit, rowArgs.get(0)));
+      final var sourceType =
+        typed instanceof DeclaredType accessor &&
+        accessor.getTypeArguments().size() == 2 &&
+        accessor.getTypeArguments().getFirst() instanceof DeclaredType given
+          ? given
+          : source.asType();
+      rows.add(new MergeRow(index, source, sourceType, reader, writer.getSimpleName().toString(), row));
       kinds.add("FromInferred");
       accessors.add(reader.getSimpleName() + ">" + writer.getSimpleName());
     }
     return new Merged(target, List.copyOf(rows), List.copyOf(sources), List.copyOf(kinds), List.copyOf(accessors));
+  }
+
+  /**
+   * A chain of calls started at a generated navigator's {@code of()}: the class the navigator
+   * starts at, the {@code of()} call, and each call after it, in order.
+   */
+  record NavigatorChain(TypeElement root, MethodInvocationTree start, List<MethodInvocationTree> calls) {}
+
+  /**
+   * One call of a navigator chain: {@code name}, the method it calls, and, when it reads a property
+   * of the class the chain has reached, {@code accessor}, the method reading it, a member of {@code
+   * owner} giving {@code read}. A call that reads no property has a null accessor, owner and read,
+   * as has every call after it, since what it reaches is not known.
+   */
+  record NavigatorStep(MethodInvocationTree call, String name, TypeElement owner, String accessor, TypeMirror read) {}
+
+  /**
+   * {@code arg} read as a chain started at a generated navigator's {@code of()}, or null when it is
+   * not one. Such an {@code of()} is static, takes nothing, and belongs to a class with a {@code
+   * get()} giving the {@code Telescope} it navigates; it returns that class given the class it
+   * starts at.
+   */
+  NavigatorChain navigatorChain(final CompilationUnitTree unit, final ExpressionTree arg) {
+    final var calls = new ArrayList<MethodInvocationTree>();
+    ExpressionTree at = arg;
+    while (at instanceof MethodInvocationTree call) {
+      calls.addFirst(call);
+      at = call.getMethodSelect() instanceof MemberSelectTree select ? select.getExpression() : null;
+    }
+    if (calls.isEmpty() || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement of)) {
+      return null;
+    }
+    if (
+      !of.getSimpleName().contentEquals("of") ||
+      !of.getParameters().isEmpty() ||
+      !of.getModifiers().contains(Modifier.STATIC) ||
+      !navigator((TypeElement) of.getEnclosingElement())
+    ) {
+      return null;
+    }
+    if (
+      !(trees.getTypeMirror(TreePath.getPath(unit, calls.getFirst())) instanceof DeclaredType given) ||
+      given.getTypeArguments().size() != 1 ||
+      !(env.getTypeUtils().asElement(given.getTypeArguments().getFirst()) instanceof TypeElement root)
+    ) {
+      return null;
+    }
+    return new NavigatorChain(root, calls.getFirst(), List.copyOf(calls.subList(1, calls.size())));
+  }
+
+  /**
+   * Whether {@code type} declares a {@code get()} giving a {@code Telescope}, as a navigator does.
+   * A class declares at most one {@code get()} taking nothing, so the first decides.
+   */
+  private boolean navigator(final TypeElement type) {
+    final var types = env.getTypeUtils();
+    for (final var method : ElementFilter.methodsIn(type.getEnclosedElements())) {
+      if (method.getSimpleName().contentEquals("get") && method.getParameters().isEmpty()) {
+        return types.erasure(method.getReturnType()).toString().equals(TELESCOPE_FQN);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Each call of {@code chain} read from {@code from}: a call taking nothing that names a property
+   * of the class reached so far reads it, and the property's class is reached next.
+   */
+  List<NavigatorStep> navigatorSteps(final NavigatorChain chain, final TypeMirror from) {
+    final var types = env.getTypeUtils();
+    final var steps = new ArrayList<NavigatorStep>();
+    var on = from;
+    for (final var call : chain.calls()) {
+      final var name = selectedName(call);
+      final var accessor =
+        call.getArguments().isEmpty() && on instanceof DeclaredType declared ? propertyNamed(declared, name) : null;
+      if (accessor == null) {
+        steps.add(new NavigatorStep(call, name, null, null, null));
+        on = null;
+        continue;
+      }
+      final var declared = (DeclaredType) on;
+      final var read = ((ExecutableType) types.asMemberOf(declared, accessor)).getReturnType();
+      steps.add(
+        new NavigatorStep(call, name, (TypeElement) declared.asElement(), accessor.getSimpleName().toString(), read)
+      );
+      on = read;
+    }
+    return List.copyOf(steps);
+  }
+
+  /** The accessor of the property {@code name} of {@code on}, or null when it has none. */
+  private ExecutableElement propertyNamed(final DeclaredType on, final String name) {
+    final var side = (TypeElement) on.asElement();
+    for (final var method : ElementFilter.methodsIn(env.getElementUtils().getAllMembers(side))) {
+      if (!propertyAccessor(method, (TypeElement) method.getEnclosingElement())) continue;
+      if (property(method.getSimpleName().toString(), side).equals(name)) return method;
+    }
+    return null;
   }
 
   /** The rows of one call, accumulated into the pair's configuration. */
@@ -1197,11 +1360,14 @@ final class FieldRows {
       }
       final var written =
         "a @Bridge mapper compiles a path written in place as Telescope.of(Type.class) or" +
-        " Telescope.ofBean(Type.class) followed by field(...) steps, or as Telescope.path(...) of" +
-        " method references, each through a property";
+        " Telescope.ofBean(Type.class) followed by field(...) steps, as Telescope.path(...) of" +
+        " method references, or as a generated navigator's of() followed by a call per property," +
+        " each through a property";
       if (calls.isEmpty() || !(elementAt(unit, calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) {
         return new Refused(arg, written + "; this argument is not such a path");
       }
+      final var navigated = navigatorChain(unit, arg);
+      if (navigated != null) return navigatorHops(navigated, side, written);
       final var rootOwner = (TypeElement) root.getEnclosingElement();
       final var rootName = root.getSimpleName().toString();
       final var shorthand = rootOwner.getQualifiedName().contentEquals(TELESCOPE_FQN) && rootName.equals("path");
@@ -1227,18 +1393,8 @@ final class FieldRows {
         references.addAll(calls.getFirst().getArguments());
         stepsAt.addAll(calls.getFirst().getArguments());
       }
-      final var types = env.getTypeUtils();
-      if (!types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) {
-        return new Refused(
-          calls.getFirst(),
-          "this path starts at " +
-            rooted.getSimpleName() +
-            ", which is not " +
-            side.getSimpleName() +
-            " or a class it extends; start it at " +
-            side.getSimpleName()
-        );
-      }
+      final var elsewhere = startedElsewhere(calls.getFirst(), rooted, side);
+      if (elsewhere != null) return elsewhere;
       for (final var step : calls.subList(1, calls.size())) {
         final var name = selectedName(step);
         if (!name.equals("field") || step.getArguments().size() != 1) {
@@ -1281,6 +1437,62 @@ final class FieldRows {
         reached = read.type();
         on = !read.primitive() && read.type() instanceof DeclaredType declared ? declared : null;
       }
+      return hops;
+    }
+
+    /**
+     * The refusal, at {@code first}, of a path started at {@code rooted} where it is read from
+     * {@code side}, a class that is not {@code rooted} and does not extend it; or null when it is
+     * or does.
+     */
+    private Refused startedElsewhere(
+      final MethodInvocationTree first,
+      final TypeElement rooted,
+      final TypeElement side
+    ) {
+      final var types = env.getTypeUtils();
+      if (types.isSubtype(types.erasure(side.asType()), types.erasure(rooted.asType()))) return null;
+      return new Refused(
+        first,
+        "this path starts at " +
+          rooted.getSimpleName() +
+          ", which is not " +
+          side.getSimpleName() +
+          " or a class it extends; start it at " +
+          side.getSimpleName()
+      );
+    }
+
+    /**
+     * The properties {@code chain}, a generated navigator's chain, steps through from {@code side},
+     * read as the {@code field(...)} steps it stands for, and a {@code get()} may end the chain.
+     * The refusal of a chain started at a class {@code side} is not, of any call that reads no
+     * property, and of a chain that reads none.
+     */
+    private Object navigatorHops(final NavigatorChain chain, final TypeElement side, final String written) {
+      final var elsewhere = startedElsewhere(chain.start(), chain.root(), side);
+      if (elsewhere != null) return elsewhere;
+      final var types = env.getTypeUtils();
+      final var hops = new ArrayList<Accessor>();
+      final var steps = navigatorSteps(chain, side.asType());
+      for (var i = 0; i < steps.size(); i++) {
+        final var step = steps.get(i);
+        if (i == steps.size() - 1 && step.name().equals("get")) break;
+        if (step.accessor() == null) {
+          return new Refused(
+            step.call(),
+            step.name() +
+              "(...) in a path has no generated form; " +
+              written +
+              ", so build this mapper without @Bridge to run it on the runtime path"
+          );
+        }
+        final var read = step.read();
+        final var primitive = read.getKind().isPrimitive();
+        final var type = primitive ? types.boxedClass((PrimitiveType) read).asType() : read;
+        hops.add(new Accessor(step.name(), type, primitive, step.accessor(), step.call()));
+      }
+      if (hops.isEmpty()) return new Refused(chain.start(), written + "; this navigator steps through no property");
       return hops;
     }
 

@@ -194,10 +194,13 @@ the existing emitter without a second one.
 > `Telescope.of(Source.class)` or `Telescope.ofBean(Source.class)` through `field` steps alone, each a method reference
 > to a property of the class the step before it reads, and so does a `to(accessor, path)` row whose path is written the
 > same way from the target. `Telescope.path(A::b, B::c, ...)` is read as the `field` chain it stands for, starting at
-> the class javac gives its first accessor, and generates the same code. Any other path is refused on the row by name:
-> one held in a variable or built by a navigator, a step other than `field`, a lambda step, and a path rooted at a class
-> its side neither is nor extends. A row with a path on both sides compiles when each of its paths is written that way
-> and both end at a property of one type, as set out below.
+> the class javac gives its first accessor, and generates the same code, as does a `@Focus` or `@BeanFocus` navigator's
+> chain, `OrderTelescope.of().customer().city()`, each call read as the `field` step through the property it names and a
+> final `get()` as the end of the path. A field naming a navigator is read once the navigator has been written, so its
+> row is never typed against a class still missing. Any other path is refused on the row by name: one held in a
+> variable, a step other than `field` or a navigator's property call, a lambda step, and a path rooted at a class its
+> side neither is nor extends. A row with a path on both sides compiles when each of its paths is written that way and
+> both end at a property of one type, as set out below.
 >
 > Both paths give such a row one meaning, decided in the shared spec. Each object a path steps through is read as the
 > class its property declares, with every type variable read as the type argument the path gives it, through nested

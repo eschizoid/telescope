@@ -525,6 +525,8 @@ class BridgeFieldTest {
       sources(
         "fb.MergedCustomer",
         "package fb; public record MergedCustomer(String id, String name) {}",
+        "fb.MergedBox",
+        "package fb; public record MergedBox<T>(T value) {}",
         "fb.MergedTarget",
         "package fb; " + target,
         "fb.MergeMappers",
@@ -611,6 +613,13 @@ class BridgeFieldTest {
         record,
         "MergedTarget.class, from(MergedCustomer::id, (MergedTarget t) -> t.id())",
         "a @Bridge merge compiles from(...) of two method references",
+      },
+      new String[] {
+        "public record MergedTarget(String id, Integer n) {}",
+        "MergedTarget.class, from(MergedBox<String>::value, MergedTarget::id)," +
+        " from(MergedBox<Integer>::value, MergedTarget::n)",
+        "the merge row at index 1 reads MergedBox as fb.MergedBox<java.lang.Integer>, and a row before it as" +
+        " fb.MergedBox<java.lang.String>; the bag holds one MergedBox, so read it as one type",
       },
       new String[] {
         record,

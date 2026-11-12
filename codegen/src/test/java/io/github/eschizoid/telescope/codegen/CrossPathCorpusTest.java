@@ -15,6 +15,7 @@ import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
@@ -66,6 +67,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.AfterAll;
@@ -453,6 +455,19 @@ class CrossPathCorpusTest {
   private static final int RUN_BOTH_WAYS_FLOOR = 52;
 
   private static final int FIELD_TWIN_CORPUS = 600;
+
+  /** As {@link #bridged}, with {@code generators} run before the bridge processor. */
+  private static ProcessorHarness.Compilation bridgedWith(
+    final List<Processor> generators,
+    final JavaFileObject... sources
+  ) {
+    final var processors = new ArrayList<>(generators);
+    processors.add(new BridgeProcessor());
+    final var processed = ProcessorHarness.compileFully(processors, List.of(), sources);
+    final var warnings = warningsInGenerated(processed);
+    assertTrue(warnings.isEmpty(), () -> "the generated code warns:\n  " + String.join("\n  ", warnings));
+    return processed;
+  }
 
   /**
    * {@code sources} compiled with the bridge processor, failing the calling test on any warning
@@ -13466,6 +13481,22 @@ class CrossPathCorpusTest {
       null
     ),
     new MergeCase(
+      "a from row over a generic source, read as the type its reference gives it",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          "public record %1$sBox<T>(T value) {}\n",
+          "public record %1$sTgt(String id, String name) {}\n"
+        ),
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "from(%1$sBox<String>::value, %1$sTgt::name)",
+        "from(%1$sCustomer::id, %1$sTgt::id)"
+      ),
+      "#0(id=\"c-1\", name=\"bx\")",
+      null
+    ),
+    new MergeCase(
       "a nested record, handed across as it is",
       merging(
         List.of(
@@ -13552,6 +13583,43 @@ class CrossPathCorpusTest {
         "interface java.lang.Runnable",
         "class java.lang.Object"
       )
+    ),
+    new MergeCase(
+      "a row reading through a static method taking the source, which names no source, refused in the same words",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          MERGE_AUDIT,
+          MERGE_TGT,
+          "public class %1$sH {\n  public static String idOf(final %1$sCustomer c) { return c.id(); }\n}\n"
+        ),
+        "",
+        "",
+        "from(%1$sH::idOf, %1$sTgt::id)",
+        "auto(%1$sCustomer.class)",
+        "auto(%1$sAudit.class)"
+      ),
+      null,
+      PairingMessages.mergeReaderNotAnAccessor(0, "%1$sH::idOf")
+    ),
+    new MergeCase(
+      "a row reading through a method of another object taking the source, refused in the same words",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          MERGE_AUDIT,
+          MERGE_TGT,
+          "public class %1$sH {\n  public static final %1$sH INSTANCE = new %1$sH();\n" +
+            "  public String idOf(final %1$sCustomer c) { return c.id(); }\n}\n"
+        ),
+        "",
+        "",
+        "auto(%1$sAudit.class)",
+        "from(%1$sH.INSTANCE::idOf, %1$sTgt::id)",
+        "auto(%1$sCustomer.class)"
+      ),
+      null,
+      PairingMessages.mergeReaderNotAnAccessor(1, "%1$sH::idOf")
     ),
     new MergeCase(
       "a row writing a component an earlier row writes, refused in the same words",
@@ -13658,9 +13726,151 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  private static final String FOCUS = "@io.github.eschizoid.telescope.annotations.Focus\n";
+  private static final String BEAN_FOCUS = "@io.github.eschizoid.telescope.annotations.BeanFocus\n";
+
+  private static final List<NestedPath> NAVIGATOR_PATHS = List.of(
+    new NestedPath(
+      "a source navigator of three steps into flat target properties",
+      false,
+      List.of(
+        FOCUS +
+          sampled(
+            "%1$sSrc",
+            "%1$sOuter customer, int qty",
+            "new %1$sSrc(new %1$sOuter(new %1$sInner(\"P\", 75), \"L\"), 3)"
+          ),
+        FOCUS + OUTER_INNER,
+        FOCUS + INNER,
+        typedField(
+          false,
+          "to(%1$sSrcTelescope.of().customer().address().city(), %1$sTgt::city)",
+          "to(%1$sSrcTelescope.of().customer().address().zip(), %1$sTgt::zip)"
+        ),
+        sampled("%1$sTgt", "String city, int zip, int qty", "new %1$sTgt(\"R\", 5, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrcTelescope.of().customer().address().city(), %1$sTgt::city)",
+          "to(%1$sSrcTelescope.of().customer().address().zip(), %1$sTgt::zip)"
+        )
+      ),
+      "#0(city=\"P\", zip=75, qty=3)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=null), qty=1)",
+      "#0(customer=#1(address=#2(city=\"R\", zip=5), label=\"L\"), qty=1)"
+    ),
+    new NestedPath(
+      "a target navigator of three steps written from flat source properties, a null object on the way",
+      false,
+      List.of(
+        sampled("%1$sSrc", "String city, int zip, int qty", "new %1$sSrc(\"P\", 75, 3)"),
+        FOCUS + OUTER_INNER,
+        FOCUS + INNER,
+        typedField(
+          false,
+          "to(%1$sSrc::city, %1$sTgtTelescope.of().customer().address().city())",
+          "to(%1$sSrc::zip, %1$sTgtTelescope.of().customer().address().zip())"
+        ),
+        FOCUS + sampled("%1$sTgt", "%1$sOuter customer, int qty", "new %1$sTgt(null, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrc::city, %1$sTgtTelescope.of().customer().address().city())",
+          "to(%1$sSrc::zip, %1$sTgtTelescope.of().customer().address().zip())"
+        )
+      ),
+      "#0(customer=#1(address=#2(city=\"P\", zip=75), label=null), qty=3)",
+      "#0(city=null, zip=0, qty=1)",
+      "#0(city=\"P\", zip=75, qty=1)"
+    ),
+    new NestedPath(
+      "a navigator on each side of a row",
+      false,
+      List.of(
+        FOCUS + sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        FOCUS + MID,
+        typedField(false, "to(%1$sSrcTelescope.of().customer().name(), %1$sTgtTelescope.of().ship().label())"),
+        FOCUS + sampled("%1$sTgt", "%1$sDock ship, int qty", "new %1$sTgt(new %1$sDock(\"m\", 7), 1)"),
+        FOCUS + DOCK,
+        runtimeMapper(false, "", "to(%1$sSrcTelescope.of().customer().name(), %1$sTgtTelescope.of().ship().label())")
+      ),
+      "#0(ship=#1(label=\"n\", n=0), qty=3)",
+      "#0(customer=#1(name=\"m\", age=0), qty=1)",
+      "#0(customer=#1(name=\"n\", age=4), qty=1)"
+    ),
+    new NestedPath(
+      "a navigator ended by get() at a navigable property",
+      false,
+      List.of(
+        FOCUS + sampled("%1$sSrc", "%1$sMid customer, int qty", "new %1$sSrc(new %1$sMid(\"n\", 4), 3)"),
+        FOCUS + MID,
+        typedField(false, "to(%1$sSrcTelescope.of().customer().get(), %1$sTgt::buyer)"),
+        sampled("%1$sTgt", "%1$sMid buyer, int qty", "new %1$sTgt(new %1$sMid(\"m\", 7), 1)"),
+        runtimeMapper(false, "", "to(%1$sSrcTelescope.of().customer().get(), %1$sTgt::buyer)")
+      ),
+      "#0(buyer=#1(name=\"n\", age=4), qty=3)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)",
+      "#0(customer=#1(name=\"m\", age=7), qty=1)"
+    ),
+    new NestedPath(
+      "a bean navigator through getters into flat target properties",
+      false,
+      List.of(
+        BEAN_FOCUS +
+          sampledBean(
+            "%1$sSrc",
+            "final var l = new %1$sLine(); l.setSku(\"a\"); l.setCount(3); final var s = new %1$sSrc();" +
+              " s.setLine(l); s.setTotal(2); return s;",
+            "%1$sLine line",
+            "int total"
+          ),
+        BEAN_FOCUS + sampledBean("%1$sLine", "return new %1$sLine();", "String sku", "int count"),
+        typedField(
+          false,
+          "to(%1$sSrcTelescope.of().line().sku(), %1$sTgt::sku)",
+          "to(%1$sSrcTelescope.of().line().count(), %1$sTgt::count)"
+        ),
+        sampled("%1$sTgt", "String sku, int count, int total", "new %1$sTgt(\"s\", 5, 1)"),
+        runtimeMapper(
+          false,
+          "",
+          "to(%1$sSrcTelescope.of().line().sku(), %1$sTgt::sku)",
+          "to(%1$sSrcTelescope.of().line().count(), %1$sTgt::count)"
+        )
+      ),
+      "#0(sku=\"a\", count=3, total=2)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)",
+      "#0(line=#1(count=5, sku=\"s\"), total=1)"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "a row whose path is a generated navigator converts the same way on both paths as the path it stands for"
+  )
+  void aNavigatorPathConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = nestedPathFailures(NAVIGATOR_PATHS, "Nv", () ->
+      List.of(new FocusProcessor(), new BeanFocusProcessor())
+    );
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /** What each of {@code rows}, prefixed by {@code head} and its index, gave other than it owes. */
   private static List<String> nestedPathFailures(final List<NestedPath> rows, final String head)
     throws ReflectiveOperationException {
+    return nestedPathFailures(rows, head, List::of);
+  }
+
+  /**
+   * As {@link #nestedPathFailures(List, String)}, with the processors {@code generators} makes,
+   * fresh for each compile, run on both compiles, as the navigator processors are where the rows
+   * name a navigator they write.
+   */
+  private static List<String> nestedPathFailures(
+    final List<NestedPath> rows,
+    final String head,
+    final Supplier<List<Processor>> generators
+  ) throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : rows) {
@@ -13674,16 +13884,24 @@ class CrossPathCorpusTest {
         .toList();
       // The runtime matches a constructor's parameters to properties by the names -parameters
       // keeps.
+      // A navigator processor gives the field's source a hop through the bridge the field declares,
+      // which only the bridge processor writes, so the runtime's compile leaves the field out.
+      final var navigators = generators.get();
       final var plain = ProcessorHarness.compileFully(
-        List.of(),
+        navigators,
         List.of("-parameters"),
-        all.toArray(JavaFileObject[]::new)
+        all
+          .stream()
+          .filter(file -> navigators.isEmpty() || !file.getName().endsWith("Carrier.java"))
+          .toArray(JavaFileObject[]::new)
       );
       assertTrue(
         plain.success(),
         () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
       );
-      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var processed = navigators.isEmpty()
+        ? bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new))
+        : bridgedWith(generators.get(), all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
       if (!processed.success()) {
         failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
         continue;
@@ -16290,6 +16508,690 @@ class CrossPathCorpusTest {
     } catch (final RuntimeException e) {
       return REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>());
     }
+  }
+
+  /**
+   * A container property a mapper writes into an existing target, or a collection the adders
+   * strategy fills: the declarations, each taking {@code %1$s} as the row's prefix and the last of
+   * them the runtime row, the property, the call the row makes, and what both paths owe, as {@link
+   * #containerOutcome} gives it. An owed text starting with {@link #NOT_BUILT} is a refusal both
+   * paths make before anything converts: the processor as a compile error, the runtime when the
+   * mapper is built.
+   */
+  private record ContainerRow(String name, List<String> declarations, String property, Call call, String owed) {}
+
+  /** The call a {@link ContainerRow} makes. */
+  private enum Call {
+    /** {@code forward(Src.sample())}. */
+    FORWARD,
+    /** {@code into(Tgt.sample(), Src.sample())}. */
+    INTO,
+    /**
+     * {@code into(forward(Src.sample()), Src.sample())}: a second write into what forward built.
+     */
+    FORWARD_THEN_INTO,
+  }
+
+  /** What follows an into that left the property holding the container the target held. */
+  private static final String KEPT = ", the held container kept";
+
+  /** What follows an into that left the property holding another container than it held. */
+  private static final String REPLACED = ", the held container replaced";
+
+  /** What follows an into that wrote a container into a property that held none. */
+  private static final String SET = ", a container set where none was held";
+
+  /** What starts the owed text of a row both paths refuse before anything converts. */
+  private static final String NOT_BUILT = "not built: ";
+
+  private static final String ADDERS_FOR_TGT =
+    "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sTgt.class," +
+    " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS)";
+
+  /** A record {@code %1$sSrc} with a name and a list of tags. */
+  private static String taggedSource(final String tags) {
+    return sampled("%1$sSrc", "String name, java.util.List<String> tags", "new %1$sSrc(\"n\", " + tags + ")");
+  }
+
+  /** A bean {@code %1$sTgt} with a name and a list of tags, whose sample holds {@code tags}. */
+  private static String taggedTarget(final String tags) {
+    return sampledBean(
+      "%1$sTgt",
+      "final var t = new %1$sTgt(); t.setName(\"old\"); t.setTags(" + tags + "); return t;",
+      "String name",
+      "java.util.List<String> tags"
+    );
+  }
+
+  /**
+   * A list {@code %1$sFixed} built on {@code AbstractList} with neither {@code add} nor {@code
+   * remove}, so it cannot be cleared or grown, and is no class the JDK names unmodifiable.
+   */
+  private static final String FIXED_LIST =
+    "public class %1$sFixed<E> extends java.util.AbstractList<E> {\n  private final java.util.List<E> items;\n" +
+    "  public %1$sFixed(final java.util.List<E> items) { this.items = new java.util.ArrayList<>(items); }\n" +
+    "  public E get(final int i) { return items.get(i); }\n  public int size() { return items.size(); }\n}\n";
+
+  /** A record {@code %1$sSrc} with an id and a list of {@code %1$sSrcLine}, and that record. */
+  private static final List<String> LINED_SOURCE = List.of(
+    sampled(
+      "%1$sSrc",
+      "String id, java.util.List<%1$sSrcLine> lines",
+      "new %1$sSrc(\"o\", java.util.List.of(new %1$sSrcLine(\"a\"), new %1$sSrcLine(\"b\")))"
+    ),
+    "public record %1$sSrcLine(String sku) {}\n"
+  );
+
+  /**
+   * A bean {@code %1$sTgtLine} with a sku and a getter alone for the order it belongs to, which
+   * only {@code attach} sets: the back-reference an adder wires.
+   */
+  private static final String TARGET_LINE =
+    "public class %1$sTgtLine {\n  private String sku;\n  private Object order;\n  public %1$sTgtLine() {}\n" +
+    "  public String getSku() { return sku; }\n  public void setSku(final String v) { sku = v; }\n" +
+    "  public Object getOrder() { return order; }\n  public void attach(final Object o) { order = o; }\n}\n";
+
+  /** An adder that wires each line's order. */
+  private static final String WIRING_ADDER = "line.attach(this); lines.add(line);";
+
+  /** An adder that marks each line's sku as well, so an adder run twice on a line shows. */
+  private static final String MARKING_ADDER = "line.setSku(line.getSku() + \"!\"); line.attach(this); lines.add(line);";
+
+  /** The start of an adder that rejects the line whose sku is {@code b}, before adding anything. */
+  private static final String REJECTING_ADDER =
+    "if (\"b\".equals(line.getSku())) { throw new IllegalArgumentException(\"rejected b\"); } ";
+
+  /**
+   * A bean {@code %1$sTgt} with an id and a {@code java.util.<collection>} of {@code %1$sTgtLine}
+   * held in a final field initialised to {@code held}, with a getter and an adder whose body is
+   * {@code adds} and no setter for it, whose sample holds {@code stale} lines, each a line with
+   * that sku.
+   */
+  private static String adderTarget(
+    final String collection,
+    final String held,
+    final String adds,
+    final String... stale
+  ) {
+    final var sample = new StringBuilder();
+    for (var i = 0; i < stale.length; i++) {
+      final var line = "s" + i;
+      sample.append("final var ").append(line).append(" = new %1$sTgtLine(); ").append(line);
+      sample.append(".setSku(\"").append(stale[i]).append("\"); t.addLine(").append(line).append("); ");
+    }
+    return (
+      "public class %1$sTgt {\n  private String id;\n" +
+      "  private final java.util." +
+      collection +
+      "<%1$sTgtLine> lines = " +
+      held +
+      ";\n  public %1$sTgt() {}\n" +
+      "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+      "  public java.util." +
+      collection +
+      "<%1$sTgtLine> getLines() { return lines; }\n" +
+      "  public void addLine(final %1$sTgtLine line) { " +
+      adds +
+      " }\n" +
+      "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n    " +
+      sample +
+      "return t;\n  }\n}\n"
+    );
+  }
+
+  /** The declarations of a lined pair whose target is {@code target}, built through its adders. */
+  private static List<String> addersPair(final String target, final String... more) {
+    final var all = new ArrayList<>(List.of(LINED_SOURCE.get(0), LINED_SOURCE.get(1), TARGET_LINE, target));
+    all.addAll(List.of(more));
+    all.add(plainField(false, ADDERS_FOR_TGT));
+    all.add(plainRuntime(false, ADDERS_FOR_TGT));
+    return all;
+  }
+
+  private static final String WIRED = "#0(id=\"o\", lines=[#1(order=@0, sku=\"a\"), #2(order=@0, sku=\"b\")])";
+
+  private static final List<ContainerRow> CONTAINER_ROWS = List.of(
+    new ContainerRow(
+      "a list the target holds",
+      intoPair(
+        taggedSource("java.util.List.of(\"x\", \"y\")"),
+        taggedTarget("new java.util.ArrayList<>(java.util.List.of(\"stale\"))")
+      ),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"x\", \"y\"])" + KEPT
+    ),
+    new ContainerRow(
+      "a set the target holds",
+      intoPair(
+        sampled("%1$sSrc", "java.util.Set<String> codes", "new %1$sSrc(java.util.Set.of(\"c\"))"),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setCodes(new java.util.LinkedHashSet<>(java.util.List.of(\"stale\")));" +
+            " return t;",
+          "java.util.Set<String> codes"
+        )
+      ),
+      "codes",
+      Call.INTO,
+      "#0(codes=[\"c\"])" + KEPT
+    ),
+    new ContainerRow(
+      "a map the target holds",
+      intoPair(
+        sampled("%1$sSrc", "java.util.Map<String,String> labels", "new %1$sSrc(java.util.Map.of(\"k\", \"v\"))"),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setLabels(new java.util.HashMap<>(java.util.Map.of(\"stale\", \"s\")));" +
+            " return t;",
+          "java.util.Map<String,String> labels"
+        )
+      ),
+      "labels",
+      Call.INTO,
+      "#0(labels={k=\"v\"})" + KEPT
+    ),
+    new ContainerRow(
+      "a list the target holds, of elements the mapper converts",
+      List.of(
+        LINED_SOURCE.get(0),
+        LINED_SOURCE.get(1),
+        TARGET_LINE,
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setId(\"old\"); t.setLines(new java.util.ArrayList<>()); return t;",
+          "String id",
+          "java.util.List<%1$sTgtLine> lines"
+        ),
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "lines",
+      Call.INTO,
+      "#0(id=\"o\", lines=[#1(order=null, sku=\"a\"), #2(order=null, sku=\"b\")])" + KEPT
+    ),
+    new ContainerRow(
+      "a list the target holds none of",
+      intoPair(taggedSource("java.util.List.of(\"x\")"), taggedTarget("null")),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"x\"])" + SET
+    ),
+    new ContainerRow(
+      "a null list from the source",
+      intoPair(taggedSource("null"), taggedTarget("new java.util.ArrayList<>(java.util.List.of(\"stale\"))")),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=null)" + REPLACED
+    ),
+    new ContainerRow(
+      "an unmodifiable JDK list the target holds, replaced through the setter",
+      intoPair(taggedSource("java.util.List.of(\"x\")"), taggedTarget("java.util.List.of(\"stale\")")),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"x\"])" + REPLACED
+    ),
+    new ContainerRow(
+      "a fixed-size list from Arrays.asList the target holds, replaced through the setter",
+      intoPair(taggedSource("java.util.List.of(\"x\")"), taggedTarget("java.util.Arrays.asList(\"stale\")")),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"x\"])" + REPLACED
+    ),
+    new ContainerRow(
+      "a list of a class with no add the target holds, replaced through the setter",
+      List.of(
+        taggedSource("java.util.List.of(\"x\")"),
+        taggedTarget("new %1$sFixed<>(java.util.List.of(\"stale\"))"),
+        FIXED_LIST,
+        plainField(false),
+        plainRuntime(false)
+      ),
+      "tags",
+      Call.INTO,
+      "#0(name=\"n\", tags=[\"x\"])" + REPLACED
+    ),
+    new ContainerRow(
+      "a natural-order TreeSet the target holds, handed a null, replaced through the setter",
+      intoPair(
+        sampled(
+          "%1$sSrc",
+          "java.util.Set<String> codes",
+          "new %1$sSrc(new java.util.HashSet<>(java.util.Arrays.asList(\"x\", null)))"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); t.setCodes(new java.util.TreeSet<>(java.util.List.of(\"keep\"))); return t;",
+          "java.util.Set<String> codes"
+        )
+      ),
+      "codes",
+      Call.INTO,
+      "#0(codes=[null, \"x\"])" + REPLACED
+    ),
+    new ContainerRow(
+      "a ConcurrentHashMap the target holds, handed a null value, replaced through the setter",
+      intoPair(
+        sampled(
+          "%1$sSrc",
+          "java.util.Map<String,String> labels",
+          "new %1$sSrc(new java.util.HashMap<>(java.util.Collections.singletonMap(\"k\", null)))"
+        ),
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt();" +
+            " t.setLabels(new java.util.concurrent.ConcurrentHashMap<>(java.util.Map.of(\"keep\", \"v\"))); return t;",
+          "java.util.Map<String,String> labels"
+        )
+      ),
+      "labels",
+      Call.INTO,
+      "#0(labels={k=null})" + REPLACED
+    ),
+    new ContainerRow(
+      "a held set the setter replaces keeps its elements for another holder of it",
+      intoPair(
+        sampled(
+          "%1$sSrc",
+          "java.util.Set<String> codes",
+          "new %1$sSrc(new java.util.HashSet<>(java.util.Arrays.asList(\"x\", null)))"
+        ),
+        // The target keeps a second reference to the set it held, read through a getter
+        // no write
+        // member backs.
+        "public class %1$sTgt {\n  private java.util.Set<String> codes;\n  private java.util.Set<String> old;\n" +
+          "  public %1$sTgt() {}\n  public java.util.Set<String> getCodes() { return codes; }\n" +
+          "  public void setCodes(final java.util.Set<String> v) { codes = v; }\n" +
+          "  public java.util.Set<String> getOld() { return old; }\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var t = new %1$sTgt(); t.codes = new java.util.TreeSet<>(java.util.List.of(\"keep\"));" +
+          " t.old = t.codes; return t;\n  }\n}\n"
+      ),
+      "codes",
+      Call.INTO,
+      "#0(codes=[null, \"x\"], old=[\"keep\"])" + REPLACED
+    ),
+    new ContainerRow(
+      "a second into into what forward built from an unmodifiable source list",
+      intoPair(taggedSource("java.util.List.of(\"x\", \"y\")"), taggedTarget("null")),
+      "tags",
+      Call.FORWARD_THEN_INTO,
+      "#0(name=\"n\", tags=[\"x\", \"y\"])" + KEPT
+    ),
+    new ContainerRow(
+      "a list filled through its adder by forward",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", WIRING_ADDER, "stale")),
+      "lines",
+      Call.FORWARD,
+      WIRED
+    ),
+    new ContainerRow(
+      "a list filled through its adder by into",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", WIRING_ADDER, "stale")),
+      "lines",
+      Call.INTO,
+      WIRED + KEPT
+    ),
+    new ContainerRow(
+      "a set filled through its adder by into",
+      addersPair(adderTarget("Set", "new java.util.LinkedHashSet<>()", WIRING_ADDER, "stale")),
+      "lines",
+      Call.INTO,
+      WIRED + KEPT
+    ),
+    new ContainerRow(
+      "an adder that changes each line, by forward",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", MARKING_ADDER)),
+      "lines",
+      Call.FORWARD,
+      "#0(id=\"o\", lines=[#1(order=@0, sku=\"a!\"), #2(order=@0, sku=\"b!\")])"
+    ),
+    new ContainerRow(
+      "an adder that changes each line, by into, which runs it once per line as forward does",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", MARKING_ADDER)),
+      "lines",
+      Call.INTO,
+      "#0(id=\"o\", lines=[#1(order=@0, sku=\"a!\"), #2(order=@0, sku=\"b!\")])" + KEPT
+    ),
+    new ContainerRow(
+      "an unmodifiable JDK list with no setter, refused before anything is written",
+      addersPair(adderTarget("List", "java.util.List.of()", WIRING_ADDER)),
+      "lines",
+      Call.INTO,
+      REFUSED +
+        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", List.of().getClass().getName()) +
+        LEFT +
+        "#0(id=\"old\", lines=[])"
+    ),
+    new ContainerRow(
+      "a list of a class that cannot clear, with no setter, refused before any other property is written",
+      addersPair(
+        adderTarget("List", "new %1$sFixed<>(java.util.List.of(new %1$sTgtLine()))", WIRING_ADDER),
+        FIXED_LIST
+      ),
+      "lines",
+      Call.INTO,
+      REFUSED +
+        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", PACKAGE + ".%1$sFixed") +
+        LEFT +
+        "#0(id=\"old\", lines=[#1(order=null, sku=null)])"
+    ),
+    new ContainerRow(
+      "a second collection nothing can write, refused before the first is refilled",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "String id, java.util.List<%1$sSrcLine> lines, java.util.List<String> notes",
+          "new %1$sSrc(\"o\", java.util.List.of(new %1$sSrcLine(\"a\")), java.util.List.of(\"n\"))"
+        ),
+        LINED_SOURCE.get(1),
+        TARGET_LINE,
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+          "  private final java.util.List<String> notes = java.util.List.of();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { line.attach(this); lines.add(line); }\n" +
+          "  public java.util.List<String> getNotes() { return notes; }\n" +
+          "  public void addNote(final String note) { notes.add(note); }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
+          "    final var s = new %1$sTgtLine(); s.setSku(\"stale\"); t.addLine(s); return t;\n  }\n}\n",
+        plainField(false, ADDERS_FOR_TGT),
+        plainRuntime(false, ADDERS_FOR_TGT)
+      ),
+      "lines",
+      Call.INTO,
+      REFUSED +
+        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "notes", List.of().getClass().getName()) +
+        LEFT +
+        "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")], notes=[])"
+    ),
+    new ContainerRow(
+      "an adder that rejects an element, on a list with no setter, thrown on with the lines put back",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", REJECTING_ADDER + WIRING_ADDER, "stale")),
+      "lines",
+      Call.INTO,
+      REFUSED + "rejected b" + LEFT + "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
+    ),
+    new ContainerRow(
+      "an adder that rejects an element, on a list with a setter, thrown on with the lines put back",
+      addersPair(
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void setLines(final java.util.List<%1$sTgtLine> v) { lines = v; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { " +
+          REJECTING_ADDER +
+          WIRING_ADDER +
+          " }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
+          "    final var s = new %1$sTgtLine(); s.setSku(\"stale\"); t.addLine(s); return t;\n  }\n}\n"
+      ),
+      "lines",
+      Call.INTO,
+      REFUSED + "rejected b" + LEFT + "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
+    ),
+    new ContainerRow(
+      "a collection with no adder under the adders strategy",
+      addersPair(sampledBean("%1$sTgt", "return new %1$sTgt();", "String id", "java.util.List<%1$sTgtLine> lines")),
+      "lines",
+      Call.FORWARD,
+      NOT_BUILT + PairingMessages.adderMissing("%1$sTgt", "lines", "%1$sTgtLine", CollectionWrites.adderNames("lines"))
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "into refills a container the target holds where it can change, replaces one it cannot through the setter and" +
+      " refuses one nothing can write, and the adders strategy fills a collection through its adder once per" +
+      " element or refuses a class with none, on both paths"
+  )
+  void containerWritesAgreeOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : CONTAINER_ROWS) {
+      final var prefix = "Cw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      final var owed = row.owed().formatted(prefix);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var mapperOf = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper");
+      if (owed.startsWith(NOT_BUILT)) {
+        final var refusal = owed.substring(NOT_BUILT.length());
+        if (processed.success() || !processed.errorMessages().contains(refusal)) {
+          failures.add(
+            row.name() + ": the processor should refuse with " + refusal + ", and gave " + processed.errorMessages()
+          );
+        }
+        try {
+          mapperOf.invoke(null);
+          failures.add(row.name() + ": the runtime mapper was built");
+        } catch (final InvocationTargetException e) {
+          if (!refusal.equals(e.getCause().getMessage())) {
+            failures.add(row.name() + ": the runtime refused with " + e.getCause().getMessage() + ", owed " + refusal);
+          }
+        }
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var runtime = mapperOf.invoke(null);
+      final var generatedClasses = new ServicesLoader(processed);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      // Every row's bridge has an into of its own, so the generated path is the generated code.
+      final var bridge = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcTo" + prefix + "TgtBridge");
+      if (Arrays.stream(bridge.getMethods()).noneMatch(m -> m.getName().equals("into"))) {
+        failures.add(row.name() + ": the bridge has no into");
+      }
+      for (final var side : List.of(
+        Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
+        Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
+      )) {
+        final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
+        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A pair whose {@code into} runs adders where {@code forward} runs them too: the declarations,
+   * each taking {@code %1$s} as the row's prefix and the last of them the runtime row, and what
+   * both paths owe from {@code forward(Src.sample())} and from {@code into(Tgt.blank(),
+   * Src.sample())}, each the result's {@link #shape}.
+   */
+  private record AddersOnceRow(String name, List<String> declarations, String owed) {}
+
+  private static final String WRITE_BEAN = "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(";
+
+  private static final String ADDERS_HINT = ", io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS)";
+
+  private static final List<AddersOnceRow> ADDERS_ONCE_ROWS = List.of(
+    new AddersOnceRow(
+      "a sealed pair whose case is filled through its adder",
+      List.of(
+        "public sealed interface %1$sSrc permits %1$sSrcA {\n" +
+          "  static %1$sSrc sample() { return new %1$sSrcA(java.util.List.of(\"a\")); }\n}\n",
+        "public record %1$sSrcA(java.util.List<String> lines) implements %1$sSrc {}\n",
+        fieldBridge("%1$sSrcA", "%1$sTgtA", WRITE_BEAN + "%1$sTgtA.class" + ADDERS_HINT),
+        "public sealed interface %1$sTgt permits %1$sTgtA {\n" +
+          "  static %1$sTgt blank() { return new %1$sTgtA(); }\n}\n",
+        "final public class %1$sTgtA implements %1$sTgt {\n" +
+          "  private final java.util.List<String> lines = new java.util.ArrayList<>();\n  public %1$sTgtA() {}\n" +
+          "  public java.util.List<String> getLines() { return lines; }\n" +
+          "  public void addLine(final String line) { lines.add(\"added:\" + line); }\n}\n",
+        plainField(false),
+        plainRuntime(
+          false,
+          "io.github.eschizoid.telescope.mapping.Cases.cases(%1$sSrcA.class, %1$sTgtA.class)",
+          WRITE_BEAN + "%1$sTgtA.class" + ADDERS_HINT
+        )
+      ),
+      "#0(lines=[\"added:a\"])"
+    ),
+    new AddersOnceRow(
+      "a forward to the target class run by another class's adder while into builds",
+      List.of(
+        "public record %1$sSrc(java.util.List<%1$sSrcBox> boxes, java.util.List<String> lines) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(java.util.List.of(new %1$sSrcBox(java.util.List.of(\"i\"))), java.util.List.of(\"o\"));\n" +
+          "  }\n}\n",
+        "public record %1$sSrcBox(java.util.List<String> items) {}\n",
+        fieldBridge("%1$sSrcBox", "%1$sTgtBox", WRITE_BEAN + "%1$sTgtBox.class" + ADDERS_HINT),
+        "public class %1$sTgt {\n" +
+          "  private final java.util.List<%1$sTgtBox> boxes = new java.util.ArrayList<>();\n" +
+          "  private final java.util.List<String> lines = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public java.util.List<%1$sTgtBox> getBoxes() { return boxes; }\n" +
+          "  public void addBox(final %1$sTgtBox box) { boxes.add(box); }\n" +
+          "  public java.util.List<String> getLines() { return lines; }\n" +
+          "  public void addLine(final String line) { lines.add(line); }\n" +
+          "  public static %1$sTgt blank() { return new %1$sTgt(); }\n}\n",
+        // The adder converts a source of its own to the target class and records what
+        // that value
+        // holds the moment it comes back.
+        "public class %1$sTgtBox {\n" +
+          "  private final java.util.List<String> items = new java.util.ArrayList<>();\n" +
+          "  private String seen;\n  public %1$sTgtBox() {}\n" +
+          "  public java.util.List<String> getItems() { return items; }\n" +
+          "  public void addItem(final String item) {\n    items.add(item);\n" +
+          "    seen = %1$sInner.MAPPER.forward(new %1$sSrc(java.util.List.of(), java.util.List.of(\"inner\")))" +
+          ".getLines().toString();\n  }\n" +
+          "  public String getSeen() { return seen; }\n}\n",
+        "public class %1$sInner {\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sTgt> MAPPER =\n" +
+          "    io.github.eschizoid.telescope.Telescope.mapper(%1$sSrc.class, %1$sTgt.class,\n" +
+          "      " +
+          WRITE_BEAN +
+          "%1$sTgt.class" +
+          ADDERS_HINT +
+          ",\n      " +
+          WRITE_BEAN +
+          "%1$sTgtBox.class" +
+          ADDERS_HINT +
+          ");\n}\n",
+        plainField(false, WRITE_BEAN + "%1$sTgt.class" + ADDERS_HINT),
+        plainRuntime(false, WRITE_BEAN + "%1$sTgt.class" + ADDERS_HINT, WRITE_BEAN + "%1$sTgtBox.class" + ADDERS_HINT)
+      ),
+      "#0(boxes=[#1(items=[\"i\"], seen=\"[inner]\")], lines=[\"o\"])"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "into runs each adder once per element as forward does, between two sealed interfaces and under a forward" +
+      " another class's adder starts, on both paths"
+  )
+  @SuppressWarnings("unchecked")
+  void intoRunsEachAdderOnceAsForwardDoes() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : ADDERS_ONCE_ROWS) {
+      final var prefix = "Aw" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridges should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), () -> row.name() + ": the runtime row should compile: " + plain.errorMessages());
+      final var classes = plain.define(MethodHandles.lookup());
+      final var generated = new ServicesLoader(processed);
+      final var owed = row.owed().formatted(prefix);
+      for (final var side : List.of(
+        Map.entry(
+          "generated",
+          Map.entry(
+            generated.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null),
+            (ClassLoader) generated
+          )
+        ),
+        Map.entry(
+          "reflective",
+          Map.entry(
+            classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null),
+            classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()
+          )
+        )
+      )) {
+        final var mapper = (Mapper<Object, Object>) side.getValue().getKey();
+        final var loader = side.getValue().getValue();
+        final var source = Class.forName(PACKAGE + "." + prefix + "Src", true, loader).getMethod("sample").invoke(null);
+        final var blank = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader).getMethod("blank");
+        final var forward = shape(mapper.forward(source), new IdentityHashMap<>());
+        final var target = blank.invoke(null);
+        final var into = shape(mapper.into(target, source), new IdentityHashMap<>());
+        if (!forward.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " forward gave " + forward);
+        if (!into.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " into gave " + into);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * What {@code mapper} gives {@code row}, whose classes {@code loader} holds: the {@link #shape}
+   * of {@code forward(Src.sample())}, or of the target after {@code into} and whether the row's
+   * property then holds the container it held before, or {@link #REFUSED}, the message the call
+   * refused with and the target's shape after the refusal.
+   */
+  @SuppressWarnings("unchecked")
+  private static String containerOutcome(
+    final Object mapper,
+    final ClassLoader loader,
+    final String prefix,
+    final ContainerRow row
+  ) throws ReflectiveOperationException {
+    final var converts = (Mapper<Object, Object>) mapper;
+    final var source = Class.forName(PACKAGE + "." + prefix + "Src", true, loader).getMethod("sample").invoke(null);
+    if (row.call() == Call.FORWARD) {
+      try {
+        return shape(converts.forward(source), new IdentityHashMap<>());
+      } catch (final RuntimeException e) {
+        return REFUSED + e.getMessage();
+      }
+    }
+    final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader);
+    final var target = row.call() == Call.INTO ? tgt.getMethod("sample").invoke(null) : converts.forward(source);
+    final var getter = tgt.getMethod(
+      "get" + Character.toUpperCase(row.property().charAt(0)) + row.property().substring(1)
+    );
+    final var held = getter.invoke(target);
+    try {
+      converts.into(target, source);
+    } catch (final RuntimeException e) {
+      return REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>());
+    }
+    final var after = getter.invoke(target);
+    final var kept = held == null ? SET : after == held ? KEPT : REPLACED;
+    return shape(target, new IdentityHashMap<>()) + kept;
   }
 
   /**

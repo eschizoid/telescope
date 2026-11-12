@@ -8,6 +8,7 @@ import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
@@ -1032,6 +1033,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
       }
     }
+    // A row naming a navigator a processor has yet to write is read once the navigator exists:
+    // typing the row before then would type it against a class that is missing.
+    if (!roundEnv.processingOver() && rows.namesUnwrittenNavigator(field, initializer)) {
+      fieldRetries.add(key);
+      return;
+    }
     final var read = rows.read(field);
     if (read instanceof FieldRows.Merged merged) {
       fieldCarriers.add(carrier.getQualifiedName().toString());
@@ -1574,7 +1581,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         final var holds = fieldByName(components, row.written()).type();
         final var gives = (
-          (ExecutableType) types.asMemberOf((DeclaredType) row.source().asType(), row.read())
+          (ExecutableType) types.asMemberOf((DeclaredType) row.sourceType(), row.read())
         ).getReturnType();
         if (!types.isAssignable(gives, holds)) {
           errorAt(
@@ -1656,6 +1663,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return;
     }
     final var targetFq = target.getQualifiedName().toString();
+    // Each source is held as the type its first row gives it; a class the rows give two type
+    // arguments would be read as two different types from the one instance the bag holds.
+    final var sourceTypes = new LinkedHashMap<TypeElement, TypeMirror>();
+    for (final var row : merged.rows()) {
+      final var held = sourceTypes.putIfAbsent(row.source(), row.sourceType());
+      if (held != null && !types.isSameType(held, row.sourceType())) {
+        errorAt(
+          trees,
+          field,
+          row.at(),
+          "the merge row at index " +
+            row.index() +
+            " reads " +
+            row.source().getSimpleName() +
+            " as " +
+            row.sourceType() +
+            ", and a row before it as " +
+            held +
+            "; the bag holds one " +
+            row.source().getSimpleName() +
+            ", so read it as one type"
+        );
+        return;
+      }
+    }
+    final var generic = merged
+      .sources()
+      .stream()
+      .anyMatch(source -> !source.getTypeParameters().isEmpty());
     final var parameters = new ArrayList<String>();
     final var parameterOf = new LinkedHashMap<TypeElement, String>();
     for (final var source : merged.sources()) {
@@ -1664,7 +1700,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (SourceVersion.isKeyword(name) || name.equals("sources")) name = name + "Source";
       while (parameterOf.containsValue(name)) name = name + parameterOf.size();
       parameterOf.put(source, name);
-      parameters.add("final " + source.getQualifiedName() + " " + name);
+      parameters.add("final " + declarable(sourceTypes.get(source)) + " " + name);
     }
     writeClass(
       qualifiedBridge,
@@ -1699,15 +1735,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             "> BRIDGE = io.github.eschizoid.telescope.Telescope.bridge(BRIDGE_FN);"
         );
         out.println();
+        // A generic source is held as the type its rows give it, which the bag's lookup by class
+        // gives only unchecked, and as its raw class where only an auto row names it.
+        final var suppression = generic ? "  @SuppressWarnings({ \"rawtypes\", \"unchecked\" })" : null;
         out.println("  /** Builds the target from each source, given in the order the rows first name them. */");
+        if (suppression != null) out.println(suppression);
         out.println("  public static " + targetFq + " forward(" + String.join(", ", parameters) + ") {");
-        emitMergeBody(out, target, components, bound, source -> parameterOf.get(source), parameterOf);
+        emitMergeBody(out, target, components, bound, source -> parameterOf.get(source), parameterOf, sourceTypes);
         out.println("  }");
         out.println();
         out.println("  /** Builds the target from the sources the bag holds, each looked up by its class. */");
+        if (suppression != null) out.println(suppression);
         out.println("  public static " + targetFq + " forward(final io.github.eschizoid.telescope.Sources sources) {");
         out.println("    if (sources == null) return null;");
-        emitMergeBody(out, target, components, bound, null, parameterOf);
+        emitMergeBody(out, target, components, bound, null, parameterOf, sourceTypes);
         out.println("  }");
         out.println();
         out.println("  /** A merge has no inverse, as on the runtime path. */");
@@ -1736,7 +1777,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> components,
     final Map<String, MergeSlot> bound,
     final Function<TypeElement, String> given,
-    final Map<TypeElement, String> parameterOf
+    final Map<TypeElement, String> parameterOf,
+    final Map<TypeElement, TypeMirror> sourceTypes
   ) {
     final var fetched = new HashSet<TypeElement>();
     final var reads = new LinkedHashMap<String, String>();
@@ -1750,13 +1792,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var local = "__src_" + parameterOf.get(slot.source());
       final var sourceFq = slot.source().getQualifiedName().toString();
+      final var held = declarable(sourceTypes.get(slot.source()));
       if (fetched.add(slot.source())) {
         final String present;
         if (given == null) {
-          out.println("    final " + sourceFq + " " + local + " = sources.byClass(" + sourceFq + ".class);");
+          out.println("    final " + held + " " + local + " = sources.byClass(" + sourceFq + ".class);");
           present = "sources.classes()";
         } else {
-          out.println("    final " + sourceFq + " " + local + " = " + given.apply(slot.source()) + ";");
+          out.println("    final " + held + " " + local + " = " + given.apply(slot.source()) + ";");
           present =
             "java.util.stream.Stream.of(" +
             String.join(", ", parameterOf.values()) +
@@ -3585,7 +3628,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // nothing fills. A strict bridge updates a target in place itself where generated code can.
     final var intoNames = new ArrayList<String>();
     for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
-    final var intoStatements = lenient ? null : intoStatements(target, targetFields, intoNames);
+    final var intoStatements = lenient
+      ? null
+      : intoStatements(source, target, targetFields, intoNames, targetRebuild.adders());
 
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
@@ -9766,7 +9811,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     out.println("  /**");
     out.println("   * Writes into {@code target} the value {@code forward(source)} gives each property this bridge");
-    out.println("   * writes, through the setter the property's type chooses, and returns {@code target}.");
+    out.println("   * writes, through the setter the property's type chooses, and returns {@code target}. A");
+    out.println("   * container the target holds is refilled in place where it can be changed, and replaced");
+    out.println("   * through the setter where it cannot.");
     out.println("   */");
     out.print(suppression);
     out.println(
@@ -9845,11 +9892,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * member the emission never writes through, which either refuses a row that would have compiled
    * or accepts one that will not.
    */
-  private record Rebuild(Kind kind, ExecutableElement constructor, TypeElement builderType) {
+  private record Rebuild(Kind kind, ExecutableElement constructor, TypeElement builderType, boolean adders) {
+    private Rebuild(final Kind kind, final ExecutableElement constructor, final TypeElement builderType) {
+      this(kind, constructor, builderType, false);
+    }
+
     private enum Kind {
       RECORD,
       CONSTRUCTOR,
       BUILDER,
+      // A no-arg constructor and setters; with adders, a collection a field of its name stores is
+      // filled through its adder instead of its setter.
       SETTERS,
       NONE,
     }
@@ -9889,6 +9942,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case "CONSTRUCTOR" -> constructor != null ? BeanWriteStrategy.CONSTRUCTOR : null;
       case "BUILDER" -> builderType != null ? BeanWriteStrategy.BUILDER : null;
       case "SETTERS" -> hasNoArgConstructor ? BeanWriteStrategy.SETTERS : null;
+      case "ADDERS" -> hasNoArgConstructor ? BeanWriteStrategy.ADDERS : null;
       default -> autoBeanStrategy(
         to,
         names,
@@ -9901,6 +9955,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case BUILDER -> new Rebuild(Rebuild.Kind.BUILDER, null, builderType);
       case CONSTRUCTOR -> new Rebuild(Rebuild.Kind.CONSTRUCTOR, constructor, null);
       case SETTERS -> new Rebuild(Rebuild.Kind.SETTERS, null, null);
+      case ADDERS -> new Rebuild(Rebuild.Kind.SETTERS, null, null, true);
     };
   }
 
@@ -10050,7 +10105,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // for a property it writes would drop the value. That is refused as the runtime refuses it,
     // before whether the bridge's package can call the no-argument constructor.
     final var heldToSetters =
-      pairTarget != null && "SETTERS".equals(writeStrategy) && to.getKind() != ElementKind.RECORD;
+      pairTarget != null &&
+      ("SETTERS".equals(writeStrategy) || "ADDERS".equals(writeStrategy)) &&
+      to.getKind() != ElementKind.RECORD;
     if (
       heldToSetters &&
       rebuild.kind() == Rebuild.Kind.NONE &&
@@ -10060,7 +10117,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) {
       for (final var f : toFields) {
         if (!written.contains(f.name()) || setterName(to, f.name()) != null) continue;
-        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name(), "SETTERS"));
+        error(annotationSite, settersDropMessage(annotationSite, pairTarget, to, f.name(), writeStrategy));
         return null;
       }
     }
@@ -10127,8 +10184,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return sb.append(".build()").toString();
       }
       case SETTERS -> {
+        // Under the adders strategy each collection a field of its name stores is filled through
+        // its adder, and a class with such a collection and no adder for it is refused by name,
+        // as the runtime writer refuses it.
+        final var adders = rebuild.adders() ? addersOf(to, toFields) : null;
+        if (adders != null && adders.refusal() != null) {
+          error(annotationSite, adders.refusal());
+          return null;
+        }
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
+          final var adder = adders == null ? null : adders.bound().get(f.name());
+          if (adder != null) {
+            if (!written.contains(f.name())) continue;
+            // Through ContainerCopy.add, which into defers while it builds the value it reads from,
+            // so each adder runs once per element, on the target.
+            sb
+              .append(CONTAINER_COPY)
+              .append(".add(out, ")
+              .append(literal(f.name()))
+              .append(", ")
+              .append(read.apply(f.name()))
+              .append(", ")
+              .append(toFq)
+              .append("::")
+              .append(adder.getSimpleName())
+              .append("); ");
+            continue;
+          }
           // A value of the field's own type is written through the setter, which has to take it;
           // a transformed value only has to fit the member, which the transform check decided.
           final var refusal = setterRefusal(to, f.name(), transformed.contains(f.name()));
@@ -10146,7 +10229,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             error(
               annotationSite,
               pairTarget != null
-                ? settersDropMessage(annotationSite, pairTarget, to, f.name(), heldToSetters ? "SETTERS" : null)
+                ? settersDropMessage(annotationSite, pairTarget, to, f.name(), heldToSetters ? writeStrategy : null)
                 : "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
             );
             return null;
@@ -10306,47 +10389,159 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
    * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
-   * names} has no setter that the runtime writer chooses from the property's type and that takes a
-   * value of that type without a cast. A record has no setter at all, so it never has an {@code
-   * into}. A variable-arity setter is passed the one value, which javac spreads into an array as
-   * the runtime writer does.
+   * names} other than a container has no setter that the runtime writer chooses from the property's
+   * type and that takes a value of that type without a cast. A record has no setter at all, so it
+   * never has an {@code into}. A variable-arity setter is passed the one value, which javac spreads
+   * into an array as the runtime writer does.
    *
    * <p>Each property in {@code names}, the ones the bridge writes, takes the value {@code
    * forward(source)} gives it, read back through its getter. Every value is read before the first
-   * setter runs, so a getter that throws leaves {@code target} as it was. Each is written through
-   * the setter the property's type chooses, the rule the runtime writer applies; where the name has
-   * overloads the value is first assigned to a local of that setter's parameter type, which binds
-   * that method whatever javac would bind for the value's own type. A value of a wrapper class
-   * bound for a primitive parameter is skipped when null, as the runtime writer skips it.
+   * write, and so is every container the target holds for a container property, so a getter that
+   * throws leaves {@code target} as it was; a container property nothing can write is refused by
+   * name before the first write too, by {@code ContainerCopy.refuseUnwritable}. A container
+   * property is written by {@code ContainerCopy.refill}, which refills the container the target
+   * holds where that can be changed and otherwise answers that the setter writes it, the rule
+   * {@code CollectionWrites.intoWrite} decides for both paths. Where {@code adders} is true, the
+   * target is built through its adders: the value is built by {@code ContainerCopy.deferAdders},
+   * which runs no adder on it and hands back what each adder was to be handed, and each collection
+   * a field of its name stores is filled through its adder by {@code ContainerCopy.fill}. Container
+   * properties are written first, those with no setter before those with one, and every other
+   * property after them.
+   *
+   * <p>Every other property is written through the setter the property's type chooses, the rule the
+   * runtime writer applies; where the name has overloads the value is first assigned to a local of
+   * that setter's parameter type, which binds that method whatever javac would bind for the value's
+   * own type. A value of a wrapper class bound for a primitive parameter is skipped when null, as
+   * the runtime writer skips it.
    */
   private List<String> intoStatements(
+    final TypeElement source,
     final TypeElement target,
     final List<Field> targetFields,
-    final List<String> names
+    final List<String> names,
+    final boolean adders
   ) {
+    final var bound = adders ? addersOf(target, targetFields) : null;
+    if (bound != null && bound.refusal() != null) return null;
     final var reads = new ArrayList<String>();
-    final var writes = new ArrayList<String>();
-    reads.add("final var __produced = forward(source);");
+    final var checks = new ArrayList<String>();
+    final var unset = new ArrayList<String>();
+    final var set = new ArrayList<String>();
+    final var others = new ArrayList<String>();
+    final var named = String.join(
+      ", ",
+      literal(source.getSimpleName().toString()),
+      literal(target.getSimpleName().toString())
+    );
+    final var targetFq = processingEnv.getTypeUtils().erasure(target.asType()).toString();
+    final var defers = bound != null && names.stream().anyMatch(bound.bound()::containsKey);
+    if (defers) {
+      reads.add(
+        "final var __deferred = " + CONTAINER_COPY + ".deferAdders(" + targetFq + ".class, () -> forward(source));"
+      );
+      reads.add("final var __produced = __deferred.value();");
+    } else {
+      reads.add("final var __produced = forward(source);");
+    }
+    final var writes = new CollectionWrites<>(mirrorProps());
     var index = 0;
     for (final var name : names) {
       final var field = fieldByName(targetFields, name);
+      final var adder = bound == null ? null : bound.bound().get(name);
+      final var local = "__in" + index;
+      final var held = "__held" + index++;
+      final var container = adder != null || writes.refilledInPlace(field.type());
+      reads.add(
+        adder != null
+          ? "final " + field.type() + " " + local + " = __deferred.elements(" + literal(name) + ");"
+          : "final var " + local + " = " + readExpr(target, "__produced", field) + ";"
+      );
       final var choice = setterChoice(target, name);
-      if (choice.member() == null) return null;
-      if (setterRefusal(target, name, false) != null) return null;
-      final var local = "__in" + index++;
-      reads.add("final var " + local + " = " + readExpr(target, "__produced", field) + ";");
-      final var setter = choice.member().getSimpleName();
-      final var write =
-        choice.argumentType() == null
-          ? "target." + setter + "(" + local + ");"
-          : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
-      final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
-      writes.add(guarded ? "if (" + local + " != null) " + write : write);
+      if (choice.member() == null && !container) return null;
+      if (choice.member() != null && setterRefusal(target, name, false) != null) return null;
+      final var setterWrite = choice.member() == null ? null : setterWrite(choice, field, local);
+      if (!container) {
+        others.add(setterWrite);
+        continue;
+      }
+      final var hasSetter = setterWrite != null ? "true" : "false";
+      reads.add("final var " + held + " = " + readExpr(target, "target", field) + ";");
+      checks.add(
+        CONTAINER_COPY +
+          ".refuseUnwritable(" +
+          held +
+          ", " +
+          local +
+          ", " +
+          hasSetter +
+          ", " +
+          (adder != null) +
+          ", " +
+          named +
+          ", " +
+          literal(target.getSimpleName().toString()) +
+          ", " +
+          literal(name) +
+          ");"
+      );
+      final var call =
+        CONTAINER_COPY +
+        (adder != null ? ".fill(" : ".refill(") +
+        named +
+        ", target, " +
+        literal(name) +
+        ", " +
+        held +
+        ", " +
+        local +
+        (adder != null ? ", " + targetFq + "::" + adder.getSimpleName() : "") +
+        ", " +
+        hasSetter +
+        ")";
+      if (setterWrite == null) {
+        unset.add(call + ";");
+      } else {
+        set.add("if (!" + call + ") { " + setterWrite + " }");
+      }
     }
     final var statements = new ArrayList<>(reads);
-    statements.addAll(writes);
+    statements.addAll(checks);
+    statements.addAll(unset);
+    statements.addAll(set);
+    statements.addAll(others);
     statements.add("return target;");
     return statements;
+  }
+
+  /**
+   * The statement writing {@code local}, the value of {@code field}, through the setter {@code
+   * choice} names: through a local of the setter's parameter type where the name has overloads, and
+   * skipped when null where a wrapper value is bound for a primitive parameter.
+   */
+  private static String setterWrite(final MirrorSetters.SetterChoice choice, final Field field, final String local) {
+    final var setter = choice.member().getSimpleName();
+    final var write =
+      choice.argumentType() == null
+        ? "target." + setter + "(" + local + ");"
+        : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
+    final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
+    return guarded ? "if (" + local + " != null) " + write : write;
+  }
+
+  /**
+   * The adders of bean {@code to}, whose properties are {@code toFields}, as the runtime writer
+   * finds them on the loaded class.
+   */
+  private MirrorAdders.Adders addersOf(final TypeElement to, final List<Field> toFields) {
+    final var properties = new LinkedHashMap<String, TypeMirror>();
+    for (final var f : toFields) properties.put(f.name(), f.type());
+    return MirrorAdders.of(
+      processingEnv.getElementUtils(),
+      processingEnv.getTypeUtils(),
+      mirrorProps(),
+      to,
+      properties
+    );
   }
 
   /**
@@ -10899,7 +11094,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The builder() the ladder takes is public, so no rung for BUILDER means no builder the runtime
     // takes either; a constructor can be there and out of the bridge's reach.
     final var present = switch (cfg.pathDefault()) {
-      case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
+      case "SETTERS", "ADDERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
       case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
       default -> false;
     };
@@ -10940,6 +11135,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       toFq +
       "): no no-arg constructor the bridge's package can call. Switch to AUTO," +
       " CONSTRUCTOR, or BUILDER, or add a public no-arg constructor.";
+      case "ADDERS" -> PairingMessages.addersNeedNoArgConstructor(toFq.substring(toFq.lastIndexOf('.') + 1));
       default -> "@Bridge: " +
       toFq +
       " has no usable construction strategy — needs a record canonical constructor, a" +
