@@ -769,11 +769,12 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     regression gate.
 16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
     converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.
-17. **0017 — `telescope-jpa`.** (Accepted; decisions 1, 3 and 4 shipped, with the `patch` refill in core.)
-    Persistence-aware container copies through a `ContainerCopy` SPI (an unloaded lazy collection is shared, not
-    loaded), proxy unwrapping moved out of core into a `ProxyResolver`, and starter wiring, all against the Jakarta
-    Persistence API. Not built: decision 2, leaving an unloaded held collection alone on `into`, and the
-    `share(src, tgt)` row.
+17. **0017 — `telescope-jpa`.** (Accepted, amended 2026-11-12; decisions 1, 3 and 4 shipped.) Persistence-aware
+    container copies through a `ContainerCopy` SPI (an unloaded lazy collection is shared, not loaded), proxy unwrapping
+    moved out of core into a `ProxyResolver`, and starters that carry the module, inactive without
+    `jakarta.persistence`, all against the Jakarta Persistence API. The amendment drops decision 2 (leaving an unloaded
+    held collection alone on `into`) and keeps `patch` pure: in-place updates are `into`'s alone. The `share(src, tgt)`
+    row is not built.
 18. **0018 — Generated mapper parity with MapStruct.** (Accepted, shipped.) Closes the gaps on the `@Bridge` path in
     order: cycle guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths,
     update in place. Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.

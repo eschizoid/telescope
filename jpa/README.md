@@ -36,10 +36,10 @@ it.
 ## A lazy collection is shared until something reads it
 
 A container whose declared type is the same on both sides of a conversion, such as an author's `List<Book>` mapped to a
-row that also holds a `List<Book>`, is copied rather than handed across, so that changing the row's list leaves the
-entity's alone. Copying iterates the source, and iterating a lazy `@OneToMany` or `@ElementCollection` loads it: one
-query per entity inside a session, and `LazyInitializationException` outside one. On a list endpoint that maps a page of
-entities, that is one query for the page and one more for every row.
+row that also holds a `List<Book>`, is copied rather than handed across. Copying iterates the source, and iterating a
+lazy `@OneToMany` or `@ElementCollection` loads it: one query per entity inside a session, and
+`LazyInitializationException` outside one. On a list endpoint that maps a page of entities, that is one query for the
+page and one more for every row.
 
 With this module, a container the provider reports as not loaded, through `PersistenceUtil.isLoaded`, is handed across
 as it is. A loaded one is copied as before.
@@ -56,9 +56,10 @@ The rule lives in `ContainerCopy`, the class both `Telescope.mapper(...)` and ev
 copy such a container, so the runtime and generated paths cannot disagree about it. The module's tests count the
 statements through Hibernate's statistics on both paths, with the module and without it.
 
-What a row then holds is the provider's collection. Reading it inside the session loads it, as reading the entity's
-property would; reading it after the session has closed throws, as reading the entity's property would. The module
-changes when a collection loads, not whether reading it can fail.
+What a row then holds is the entity's own collection, so changing the row's list changes the entity's, and the provider
+writes that change to the database at the next flush where the entity owns the association. Reading it inside the
+session loads it, as reading the entity's property would; reading it after the session has closed throws, as reading the
+entity's property would. The module changes when a collection loads, not whether reading it can fail.
 
 What it does not change:
 

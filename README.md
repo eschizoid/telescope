@@ -69,12 +69,12 @@ interface converts itself, as in `order.toOrderDto()`.
 
 At the entity, `into` clears and refills a collection the entity already holds instead of replacing it, so a managed
 `@OneToMany` keeps its identity. Under `ADDERS`, each element goes through the entity's adder, which is where a
-bidirectional association sets its back-reference. A `patch` of a bean refills the collections it holds the same way.
-With [`telescope-jpa`](jpa/README.md) on the classpath, which the Spring Boot starter and the Quarkus extension bring, a
-lazy collection the persistence provider has not loaded is shared rather than copied, so mapping an entity never loads
-it and never throws `LazyInitializationException` for it, and a lazy Hibernate proxy is read as the entity class it
-stands for. [`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate
-whose PATCH runs `into` on the managed entity and refills its lines through `ADDERS`.
+bidirectional association sets its back-reference. With [`telescope-jpa`](jpa/README.md) on the classpath, which the
+Spring Boot starter and the Quarkus extension bring, a lazy collection the persistence provider has not loaded is shared
+rather than copied, so mapping an entity never loads it and never throws `LazyInitializationException` for it, and a
+lazy Hibernate proxy is read as the entity class it stands for.
+[`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate whose PATCH
+runs `into` on the managed entity and refills its lines through `ADDERS`.
 
 One module is planned and not built yet: `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
 register mappers with Jackson and bind JSON straight to a type. Typed `before` and `after` edit rows are proposed in
