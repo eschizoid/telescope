@@ -301,9 +301,9 @@ public final class ContainerCopy {
    * held} itself, cleared and refilled with the elements or entries of {@code incoming} as the
    * registered {@link Policy} decides, so the rebuilt bean keeps the instance {@code owner} holds,
    * which a provider tracking a managed collection by instance needs. {@code incoming} where {@code
-   * held} is null, is {@code incoming} itself or cannot be changed: an unmodifiable JDK container is
-   * known in advance, and one whose refill throws, as one that cannot even be read throws, has its
-   * elements put back and is passed over the same way.
+   * held} is null, is {@code incoming} itself or cannot be changed: an unmodifiable JDK container
+   * is known in advance, and one whose refill throws, as one that cannot even be read throws, has
+   * its elements put back and is passed over the same way.
    *
    * @param owner the bean {@code patch} rebuilds
    * @param property the name of the property

@@ -19,7 +19,10 @@ class TelescopeJpaWiringTest {
   @DisplayName("telescope-jpa's providers come with the starter, and are inactive without jakarta.persistence")
   void theJpaProvidersComeWithTheStarterAndWaitForJpa() {
     assertThat(present("jakarta.persistence.Persistence")).as("no JPA on this module's test path").isFalse();
-    final var policies = ServiceLoader.load(ContainerCopy.Policy.class).stream().map(ServiceLoader.Provider::get).toList();
+    final var policies = ServiceLoader.load(ContainerCopy.Policy.class)
+      .stream()
+      .map(ServiceLoader.Provider::get)
+      .toList();
     assertThat(policies)
       .singleElement()
       .satisfies(policy -> {

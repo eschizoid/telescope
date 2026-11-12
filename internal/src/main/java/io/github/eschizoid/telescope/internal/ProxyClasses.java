@@ -19,8 +19,8 @@ public interface ProxyClasses {
   Class<?> resolve(Object value);
 
   /**
-   * Whether any resolver is registered. An implementation that answers false is not consulted, so
-   * a read with no resolver registered costs no call.
+   * Whether any resolver is registered. An implementation that answers false is not consulted, so a
+   * read with no resolver registered costs no call.
    *
    * @return whether {@link #resolve} can answer anything but null
    */
@@ -40,7 +40,9 @@ public interface ProxyClasses {
     return resolved != null ? resolved : value.getClass();
   }
 
-  /** The registered implementation, loaded on first use; null where none is registered or active. */
+  /**
+   * The registered implementation, loaded on first use; null where none is registered or active.
+   */
   final class Registered {
 
     static final ProxyClasses IMPLEMENTATION = load();

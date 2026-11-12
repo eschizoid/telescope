@@ -314,8 +314,9 @@ navigator class is itself a lambda-capturing type and goes in `serialization-con
 classes. A `Telescope.all` built only from navigator paths fuses inside an image without any reflection registration for
 the navigated records: each record level whose edits all came from a navigator rebuilds through the generated setters.
 No runtime path is JVM-only under AOT. The Hibernate-proxy accessors live in telescope-jpa and take the `IN_IMAGE`
-branch; the native binary here does not exercise them, since it has no persistence provider. The
-workflow re-checks the whole surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns the job red.
+branch; the native binary here does not exercise them, since it has no persistence provider. The workflow re-checks the
+whole surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns the
+job red.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 

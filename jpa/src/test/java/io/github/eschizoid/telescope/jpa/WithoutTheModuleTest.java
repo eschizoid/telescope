@@ -24,9 +24,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The same mappings with this module off the class path, run by the {@code testWithoutTheModule}
- * task alone: each author's lazy books are copied, which loads them one query per author inside
- * the session and throws outside it, and a proxy is read as its own class. Names none of the
- * module's classes, which this task does not have.
+ * task alone: each author's lazy books are copied, which loads them one query per author inside the
+ * session and throws outside it, and a proxy is read as its own class. Names none of the module's
+ * classes, which this task does not have.
  */
 class WithoutTheModuleTest {
 

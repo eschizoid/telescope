@@ -65,16 +65,16 @@ What it does not change:
 - **A collection whose elements convert is still read.** `List<OrderLine>` mapped to `List<OrderLineDto>` builds a new
   list of converted elements, which needs the elements. A mapper reads only the properties its target declares, so a
   collection the target has no property for is never read in the first place, with or without this module.
-- **`into` reads the collection the entity holds.** Writing a container into an entity that already holds one clears
-  and refills that instance, so a managed `orphanRemoval` collection keeps its identity, and the elements it held are
-  read first so that a refill that fails can put them back. A held collection that cannot be read, such as a lazy one
-  outside its session, is replaced through the setter instead.
+- **`into` reads the collection the entity holds.** Writing a container into an entity that already holds one clears and
+  refills that instance, so a managed `orphanRemoval` collection keeps its identity, and the elements it held are read
+  first so that a refill that fails can put them back. A held collection that cannot be read, such as a lazy one outside
+  its session, is replaced through the setter instead, and refused by the property's name where there is no setter.
 
 ## A lazy proxy is read as its entity
 
-A lazy `@ManyToOne` is a runtime subclass of the entity until something reads it. Reflection over that subclass sees
-the proxy: a `Telescope.merge` source would be filed under the proxy's class rather than the entity's, so a row reading
-the entity would not find it, and `into` would bind its setters to the proxy class. With this module, core resolves a
+A lazy `@ManyToOne` is a runtime subclass of the entity until something reads it. Reflection over that subclass sees the
+proxy: a `Telescope.merge` source would be filed under the proxy's class rather than the entity's, so a row reading the
+entity would not find it, and `into` would bind its setters to the proxy class. With this module, core resolves a
 Hibernate proxy to its entity class through `HibernateProxy.getHibernateLazyInitializer().getPersistentClass()`, which
 does not initialize it, so resolving a proxy never loads its row.
 
@@ -90,9 +90,9 @@ proxy's class.
 The module registers two providers through `ServiceLoader`, with a `provides` clause in its `module-info` and a
 `META-INF/services` entry for the class path:
 
-| Provider           | Core SPI                         | What it does                                                         |
-| ------------------ | -------------------------------- | -------------------------------------------------------------------- |
-| `LoadedContainers` | `ContainerCopy.Policy`           | shares a same-typed container the provider has not loaded            |
+| Provider           | Core SPI                          | What it does                                                           |
+| ------------------ | --------------------------------- | ---------------------------------------------------------------------- |
+| `LoadedContainers` | `ContainerCopy.Policy`            | shares a same-typed container the provider has not loaded              |
 | `HibernateProxies` | `ProxyResolver` (in `conversion`) | resolves a Hibernate proxy to its entity class without initializing it |
 
 At most one active `ContainerCopy.Policy` may be registered, so an application that registers a policy of its own

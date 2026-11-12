@@ -20,7 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class CountingProviders implements PersistenceProviderResolver, AutoCloseable {
 
-  private final PersistenceProviderResolver previous = PersistenceProviderResolverHolder.getPersistenceProviderResolver();
+  private final PersistenceProviderResolver previous =
+    PersistenceProviderResolverHolder.getPersistenceProviderResolver();
   private final AtomicInteger asked = new AtomicInteger();
   private final PersistenceProvider counting = new Counting();
 
@@ -92,7 +93,10 @@ final class CountingProviders implements PersistenceProviderResolver, AutoClosea
     }
 
     @Override
-    public EntityManagerFactory createContainerEntityManagerFactory(final PersistenceUnitInfo info, final Map<?, ?> map) {
+    public EntityManagerFactory createContainerEntityManagerFactory(
+      final PersistenceUnitInfo info,
+      final Map<?, ?> map
+    ) {
       return null;
     }
 

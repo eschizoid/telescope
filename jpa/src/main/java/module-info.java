@@ -21,7 +21,6 @@ module io.github.eschizoid.telescope.jpa {
 
   provides io.github.eschizoid.telescope.conversion.ContainerCopy.Policy
     with io.github.eschizoid.telescope.jpa.LoadedContainers;
-
   provides io.github.eschizoid.telescope.conversion.ProxyResolver
     with io.github.eschizoid.telescope.jpa.HibernateProxies;
 }

@@ -610,10 +610,10 @@ public class Mapper<A, B> {
    *
    * <p>The result is always a new object, never {@code base} itself, even when {@code partial} is
    * null or every field it holds is null: a caller that sets a property of the result leaves {@code
-   * base} as it was. A {@code @Bridge}'s generated {@code patch} makes the same guarantee. The rebuild is
-   * shallow: a component the partial leaves null is handed across from {@code base} as it is, so a
-   * nested object or a container it holds is the one {@code base} holds, and changing it changes
-   * {@code base}.
+   * base} as it was. A {@code @Bridge}'s generated {@code patch} makes the same guarantee. The
+   * rebuild is shallow: a component the partial leaves null is handed across from {@code base} as
+   * it is, so a nested object or a container it holds is the one {@code base} holds, and changing
+   * it changes {@code base}.
    *
    * <p><b>Collections and maps of a bean are refilled where they can be.</b> Where {@code A} is a
    * bean and the partial supplies a {@code Collection} or {@code Map} property, the container

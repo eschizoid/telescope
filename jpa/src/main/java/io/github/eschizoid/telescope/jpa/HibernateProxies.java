@@ -15,12 +15,12 @@ import java.util.function.Function;
  * Resolves a Hibernate proxy to the entity class it stands for, through {@code
  * HibernateProxy.getHibernateLazyInitializer().getPersistentClass()}, neither of which initializes
  * the proxy, so a proxy is resolved before its row is read. Hibernate is not a compile-time
- * dependency: its two types are looked up by name once, and the resolver is inactive where they
- * are absent.
+ * dependency: its two types are looked up by name once, and the resolver is inactive where they are
+ * absent.
  *
  * <p>The two calls are bound once, as {@code LambdaMetafactory} functions on a JVM and as {@code
- * MethodHandle} closures inside a native image, which defines no class at run time; the proxy
- * types are then reached through the image's own reflection metadata for them.
+ * MethodHandle} closures inside a native image, which defines no class at run time; the proxy types
+ * are then reached through the image's own reflection metadata for them.
  *
  * <p>Public only because {@link ServiceLoader} instantiates it; not called directly.
  */
@@ -36,7 +36,10 @@ public final class HibernateProxies implements ProxyResolver {
   private static final Function<Object, Object> INITIALIZER_OF = bind(PROXY_TYPE, "getHibernateLazyInitializer");
 
   /** {@code LazyInitializer#getPersistentClass()}, or null. */
-  private static final Function<Object, Object> PERSISTENT_CLASS_OF = bind(load(LAZY_INITIALIZER), "getPersistentClass");
+  private static final Function<Object, Object> PERSISTENT_CLASS_OF = bind(
+    load(LAZY_INITIALIZER),
+    "getPersistentClass"
+  );
 
   /** Called by {@link ServiceLoader}. */
   public HibernateProxies() {}
@@ -67,7 +70,9 @@ public final class HibernateProxies implements ProxyResolver {
     }
   }
 
-  /** The no-argument method {@code name} of {@code owner} as a function, or null where it is absent. */
+  /**
+   * The no-argument method {@code name} of {@code owner} as a function, or null where it is absent.
+   */
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> bind(final Class<?> owner, final String name) {
     if (owner == null) return null;

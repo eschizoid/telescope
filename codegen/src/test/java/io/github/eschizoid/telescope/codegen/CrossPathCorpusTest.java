@@ -17068,10 +17068,7 @@ class CrossPathCorpusTest {
     ),
     new ContainerRow(
       "a list a bean base holds, which the partial leaves null",
-      intoPair(
-        taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
-        taggedPartial("null")
-      ),
+      intoPair(taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"), taggedPartial("null")),
       "tags",
       Call.PATCH,
       "#0(name=\"old\", tags=[\"stale\"])" + KEPT + ", the base #0(name=\"old\", tags=[\"stale\"])"

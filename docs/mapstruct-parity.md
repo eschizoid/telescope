@@ -681,11 +681,11 @@ holds none or an unchangeable one is refused by name; (5) `patch(base, partial)`
 holds that the partial supplies the same way, so the result keeps that instance, except a collection the rebuild fills
 through its adders. The collection copy and write go through the `ContainerCopy.Policy` SPI, which
 [telescope-jpa](../jpa/README.md) replaces to share a lazy collection the provider has not loaded rather than copy it;
-merging by `@Id` is not decided yet. The remaining differences:
-ACCESSOR_ONLY on a collection with neither a setter nor an adder has no form, so such a class gains an adder, and
-TARGET_IMMUTABLE as an opt-out of the merge for a modifiable container has no form. into() also needs a public setter
-for every property other than a container that the mapper writes, refusing by name a property that has none (see
-[In-place update methods](#in-place-update-methods)), and rejects record targets.
+merging by `@Id` is not decided yet. The remaining differences: ACCESSOR_ONLY on a collection with neither a setter nor
+an adder has no form, so such a class gains an adder, and TARGET_IMMUTABLE as an opt-out of the merge for a modifiable
+container has no form. into() also needs a public setter for every property other than a container that the mapper
+writes, refusing by name a property that has none (see [In-place update methods](#in-place-update-methods)), and rejects
+record targets.
 
 **Generated path:** full, for the same reasons. Fresh allocation follows the same `ContainerAllocation`, and a strict
 bridge over a bean target gets an `into` of its own, which refills each container through the same `ContainerCopy`

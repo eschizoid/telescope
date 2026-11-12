@@ -1,7 +1,7 @@
 /**
  * Internal substrate of the telescope optics DSL — qualified-exported to {@code
- * io.github.eschizoid.telescope} (the public {@code telescope-core} module), its reflection
- * helpers also to {@code telescope-jpa} and its pairing spec also to {@code telescope-codegen}.
+ * io.github.eschizoid.telescope} (the public {@code telescope-core} module), its reflection helpers
+ * also to {@code telescope-jpa} and its pairing spec also to {@code telescope-codegen}.
  *
  * <p>External consumers of telescope add {@code telescope-core} to their build and get the public
  * surface. The {@code telescope-internal} artifact comes along transitively but its packages are
@@ -37,8 +37,8 @@
  * them.
  */
 module io.github.eschizoid.telescope.internal {
-  // telescope-jpa takes the native-image flag and the MethodHandle accessor closures from here, so
-  // its proxy accessors follow the same substrate rule as this module's own.
+// telescope-jpa takes the native-image flag and the MethodHandle accessor closures from here, so
+// its proxy accessors follow the same substrate rule as this module's own.
   exports io.github.eschizoid.telescope.internal to io.github.eschizoid.telescope, io.github.eschizoid.telescope.jpa;
   exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.internal.optics.collections to io.github.eschizoid.telescope;

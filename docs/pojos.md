@@ -202,8 +202,8 @@ exposing `forward` / `backward` / `read` / `patch` / `asTelescope` / `liftList` 
 form updates. It always returns a new object, even when `partial` changes nothing. Where `base` is a bean, a
 `Collection` or `Map` the partial supplies is refilled in the container `base` holds, as `into` refills one, so the
 result holds that same instance and `base` sees the new elements; a container that cannot be changed, and a collection
-the rebuild fills through its adders, take the converted one instead. `asTelescope()` returns the mapper as
-a `Telescope<A, B>` for `.then(...)` composition into a longer typed path (bridging record-side navigation into
+the rebuild fills through its adders, take the converted one instead. `asTelescope()` returns the mapper as a
+`Telescope<A, B>` for `.then(...)` composition into a longer typed path (bridging record-side navigation into
 entity-side leaves, or vice versa). The `lift*` methods promote an element-level mapper to a container-level mapper
 without going through a `via(...)` row — useful when the lifted mapper is the call-site root (e.g., a bulk handler that
 converts a `List<Order>` payload to `List<OrderEntity>`). A lifted mapper's root is a container with no fields to

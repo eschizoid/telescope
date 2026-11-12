@@ -183,7 +183,6 @@ public final class Beans {
     }
   };
 
-
   /**
    * Public, cached entry point for intermediate bean allocation during recursive default-tree
    * materialisation in {@code DeepMap.recursiveDefault}. Returns a {@link Supplier} that yields a
@@ -408,8 +407,8 @@ public final class Beans {
 
   /**
    * The class {@code pojo} stands for: the entity class a persistence provider's proxy stands for,
-   * as a registered {@link ProxyClasses} resolves it, and otherwise {@code pojo.getClass()}. Used as
-   * the cache key for {@link #GETTER_INVOKERS}, so a lazily fetched entity read through bean
+   * as a registered {@link ProxyClasses} resolves it, and otherwise {@code pojo.getClass()}. Used
+   * as the cache key for {@link #GETTER_INVOKERS}, so a lazily fetched entity read through bean
    * reflection shares its entity class's entry and its codegen holder instead of keying one of its
    * own on the proxy subclass. With no resolver registered, a proxy is its own class.
    *
@@ -1412,11 +1411,10 @@ public final class Beans {
    *
    * <p>Subclass / proxy polymorphism is preserved through a single-instanceof fast-path: when
    * {@code source.getClass() == pojoClass} the captured reader runs directly; otherwise the call
-   * falls through to {@link #readProperty(Object, String)}, which handles both a proxy a
-   * registered resolver knows (via {@link #persistentClassOf}) and ordinary subclass instances by
-   * looking up the
-   * reader for the runtime class. The common monomorphic case (the lens is applied to instances of
-   * exactly {@code pojoClass}) avoids both the ClassValue probe and the HashMap lookup the slow
+   * falls through to {@link #readProperty(Object, String)}, which handles both a proxy a registered
+   * resolver knows (via {@link #persistentClassOf}) and ordinary subclass instances by looking up
+   * the reader for the runtime class. The common monomorphic case (the lens is applied to instances
+   * of exactly {@code pojoClass}) avoids both the ClassValue probe and the HashMap lookup the slow
    * path pays. The reads-via-getter terminal in {@code set}/{@code modify} routes through the same
    * fast-path: each off-path carry-over read picks the cached reader straight from the captured
    * map.
