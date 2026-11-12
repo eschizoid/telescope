@@ -81,7 +81,7 @@ untouched during a copy or an `into`. Typed `before` and `after` edit rows are p
 [ADR-0024](docs/adr/0024-typed-before-and-after-edit-rows.md).
 
 Telescope can also replace MapStruct. The cheat sheet below pairs MapStruct's annotations with telescope's rows, and on
-the latest benchmark run a generated mapper took 0.88 to 1.02 times MapStruct's time.
+the latest benchmark run a generated mapper took 0.91 to 1.07 times MapStruct's time.
 
 ---
 
@@ -202,32 +202,40 @@ explains how the two are held together and the few shapes one refuses and the ot
 
 ## Measured performance
 
-<!-- metrics: from MapStructComparisonBenchmark, Actions run 41877328599 -->
+<!-- metrics: from MapStructComparisonBenchmark, Actions run 43205917517 -->
 
-On the latest run, a generated mapper took between 0.88 and 1.02 times MapStruct's time on every shape in the table, and
-allocated the same bytes per call or fewer. The runtime mapper, which needs no build step, took 1.15 to 3.0 times
-MapStruct's time. On the flat and nested shapes it adds 4.5 to 6.7 ns per call, which is most of a small call's time,
-and on the deeper and container shapes it adds more time in total but less as a share of the call.
+On the latest run, a generated mapper took between 0.91 and 1.07 times MapStruct's time on the shapes in the table. It
+was slower than MapStruct on two of them: flat forward, at 1.07 times, where one of its three forks ran at 4.56 ns and
+the other two at 4.00 against MapStruct's 3.90 to 3.94, and three levels forward, at 1.03 times, where one fork ran at
+70.5 ns and the other two at 64.7 and 66.8. It allocated the same bytes per call as MapStruct on every shape but the
+`Set` field, where each fork of either mapper allocated either 7,544 or 7,576 bytes: all three of telescope's forks
+allocated 7,576 and two of MapStruct's three allocated 7,544. The runtime mapper, which needs no build step, took 1.01
+to 2.6 times MapStruct's time. On the flat and nested shapes it adds 4.5 to 6.3 ns per call, which is most of a small
+call's time, and on the deeper and container shapes it adds more time in total but less as a share of the call.
 
 | Shape                             | MapStruct | telescope, generated | telescope, runtime | bytes per call, all three |
 | --------------------------------- | --------: | -------------------: | -----------------: | ------------------------- |
-| flat, 5 fields, forward           |   3.31 ns |      3.37 ns (1.02×) |     10.0 ns (3.0×) | 32                        |
-| flat, backward                    |   3.42 ns |      3.35 ns (0.98×) |     9.13 ns (2.7×) | 32                        |
-| one nested record, forward        |   4.76 ns |      4.77 ns (1.00×) |     11.4 ns (2.4×) | 48                        |
-| one nested record, backward       |   5.50 ns |      4.82 ns (0.88×) |     9.95 ns (1.8×) | 48                        |
-| three levels with lists, forward  |   61.8 ns |      62.3 ns (1.01×) |    81.3 ns (1.31×) | 376                       |
-| three levels with lists, backward |   67.7 ns |      62.5 ns (0.92×) |    78.0 ns (1.15×) | 376                       |
-| a 100-entry `Set` field, forward  |  1,557 ns |     1,542 ns (0.99×) |   1,800 ns (1.16×) | 7,560 to 7,576            |
-| a 100-entry `Map` field, forward  |  1,336 ns |     1,267 ns (0.95×) |   1,542 ns (1.15×) | 7,528 to 7,560            |
+| flat, 5 fields, forward           |   3.93 ns |      4.19 ns (1.07×) |     10.2 ns (2.6×) | 32                        |
+| flat, backward                    |   4.04 ns |      4.01 ns (0.99×) |     9.50 ns (2.4×) | 32                        |
+| one nested record, forward        |   6.77 ns |      6.65 ns (0.98×) |     11.7 ns (1.7×) | 48                        |
+| one nested record, backward       |   6.72 ns |      6.69 ns (1.00×) |     11.2 ns (1.7×) | 48                        |
+| three levels with lists, forward  |   65.1 ns |      67.3 ns (1.03×) |    80.2 ns (1.23×) | 376                       |
+| three levels with lists, backward |   68.4 ns |      65.1 ns (0.95×) |    77.9 ns (1.14×) | 376                       |
+| a 100-entry `Set` field, forward  |  1,720 ns |     1,560 ns (0.91×) |   1,737 ns (1.01×) | 7,544 to 7,576            |
+| a 100-entry `Map` field, forward  |  1,560 ns |     1,437 ns (0.92×) |   1,718 ns (1.10×) | 7,528 to 7,560            |
 
 The flat and nested rows run a `@Bridge` mapper field; the deeper rows run a class-level `@Bridge`, which generates the
-same kind of code. The run is GitHub Actions run 41877328599 on `main` at `75867893`, with MapStruct 1.6.3 on JDK 25, 4
-forks of 8 measured iterations and the allocation profiler. MapStruct's rows are the control, so each ratio is read
-within the one run. One of MapStruct's four forks on the Map row ran at about 1,550 ns and the other three at 1,256 to
-1,277 ns, so read that ratio as a near tie.
+same kind of code. The run is GitHub Actions run 43205917517 on `main` at `b79f2b3d`, with MapStruct 1.6.3 on JDK 25, 3
+forks of 10 measured iterations and the allocation profiler. MapStruct's rows are the control, so each ratio is read
+within the one run. One of MapStruct's three forks on the Map row ran at 1,689 ns and the other two at 1,478 and 1,514
+ns; telescope's three ran at 1,386 to 1,466 ns, so it stays below MapStruct with the slow fork left out. The run also
+times the flat conversion written by hand, the reads and the constructor call, as a control no change to telescope
+moves. It measured 5.13 ns forward and 5.16 ns backward, slower than both generated mappers, so it is a fixed point for
+comparing runs rather than a floor.
 
-[docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) has the method and the per-fork figures of
-earlier runs, and the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action reproduces any of it.
+[docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) has the method, the per-fork figures of this run
+and earlier ones, and how this run's control rows compare with the previous run's, and the
+[`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action reproduces any of it.
 
 ## Coming from MapStruct
 
