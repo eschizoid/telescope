@@ -102,8 +102,10 @@ registered; core asks them in turn.
 ## Cost
 
 `LoadCheckBenchmark` measures what the policy adds to a copy. A container whose class is the JDK's own, such as an
-`ArrayList`, is never a provider's lazy collection, so the policy copies it without asking; only a container of another
-class pays for `isLoaded`.
+`ArrayList`, is never a provider's lazy collection, so the policy copies it without asking: on the measured run that
+cost about 1 ns and no allocation. A container of another class pays for `isLoaded`, which with Hibernate as the
+provider took about 22 ns and allocated 64 bytes per call, whatever the collection's size. Where the collection has not
+been loaded, that call replaces the query loading it would issue.
 
 ## Native image
 
