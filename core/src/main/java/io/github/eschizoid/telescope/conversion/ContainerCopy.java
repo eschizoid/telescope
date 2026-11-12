@@ -284,6 +284,32 @@ public final class ContainerCopy {
   }
 
   /**
+   * The container {@code patch} gives {@code property} of the bean it rebuilds from {@code owner},
+   * where the partial supplies {@code incoming} for it and {@code owner} holds {@code held}: {@code
+   * held} itself, cleared and refilled with the elements or entries of {@code incoming} as the
+   * registered {@link Policy} decides, so the rebuilt bean keeps the instance {@code owner} holds,
+   * which a provider tracking a managed collection by instance needs. {@code incoming} where {@code
+   * held} is null, is {@code incoming} itself or cannot be changed: an unmodifiable JDK container is
+   * known in advance, and one whose refill throws, as one that cannot even be read throws, has its
+   * elements put back and is passed over the same way.
+   *
+   * @param owner the bean {@code patch} rebuilds
+   * @param property the name of the property
+   * @param held the {@code Collection} or {@code Map} {@code owner} holds for {@code property}, or
+   *     null
+   * @param incoming the container converted from the partial, or null
+   * @param <C> the property's declared type
+   * @return the container the rebuilt bean holds for {@code property}
+   */
+  public static <C> C patched(final Object owner, final String property, final C held, final C incoming) {
+    if (held == null || incoming == null || held == incoming || !changeable(held)) return incoming;
+    if (!(held instanceof Collection<?> || held instanceof Map<?, ?>)) return incoming;
+    // With a setter to fall back on, a refill that fails answers false rather than refusing, so the
+    // class names a refusal would carry are never read.
+    return refillHeld(null, null, owner, property, held, incoming, null, true) ? held : incoming;
+  }
+
+  /**
    * Fills collection {@code property} of {@code owner} through its {@code adder}, where {@link
    * CollectionWrites#intoWrite} refills it: {@code held}, the collection {@code owner} holds, is
    * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
@@ -364,7 +390,10 @@ public final class ContainerCopy {
     // The elements are taken before the held collection is cleared, so a source that hands the
     // target's own collection across still fills it.
     final Object elements = incoming != null && incoming == held ? new ArrayList<>((Collection<?>) incoming) : incoming;
-    final Object kept = snapshot(held);
+    // A held container that cannot even be read, such as a provider's lazy collection outside its
+    // session, fails in the snapshot before anything is changed, and is treated as one that cannot
+    // change.
+    Object kept = null;
     // What the adder throws is told apart from what the container throws.
     final BiConsumer<Object, Object> adds =
       adder == null
@@ -377,6 +406,7 @@ public final class ContainerCopy {
             }
           };
     try {
+      kept = snapshot(held);
       if (POLICY == STANDARD) {
         standardRefill(owner, held, elements, adds);
       } else {

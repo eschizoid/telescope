@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +80,8 @@ public class Mapper<A, B> {
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private volatile IntoPlan intoPlan;
+  // The source properties patch refills in the container base holds, computed on the first patch.
+  private volatile Set<String> patchRefilled;
   private final Map<String, PatchEntry> patchByTargetField;
   // Non-null for a mapper between two sealed interfaces, one entry per case of the source: patch
   // and into hand a value to the mapper of the case it belongs to.
@@ -606,11 +609,21 @@ public class Mapper<A, B> {
    * that's what the top-level component holds), not individual sub-component overlays.
    *
    * <p>The result is always a new object, never {@code base} itself, even when {@code partial} is
-   * null or every field it holds is null: a caller that mutates the result leaves {@code base} as
-   * it was. A {@code @Bridge}'s generated {@code patch} makes the same guarantee. The rebuild is
+   * null or every field it holds is null: a caller that sets a property of the result leaves {@code
+   * base} as it was. A {@code @Bridge}'s generated {@code patch} makes the same guarantee. The rebuild is
    * shallow: a component the partial leaves null is handed across from {@code base} as it is, so a
    * nested object or a container it holds is the one {@code base} holds, and changing it changes
    * {@code base}.
+   *
+   * <p><b>Collections and maps of a bean are refilled where they can be.</b> Where {@code A} is a
+   * bean and the partial supplies a {@code Collection} or {@code Map} property, the container
+   * {@code base} holds for it is cleared and refilled with the converted elements, as {@link #into}
+   * refills one, and the result holds that same instance, which a persistence provider tracking a
+   * managed collection by instance needs. {@code base} therefore sees the new elements. A container
+   * that cannot be changed, or cannot be read, is passed over and the converted one written
+   * instead, and so is a collection the rebuild fills through its adders, which goes into the new
+   * bean's own collection. A record's containers are never refilled. The refill goes through {@link
+   * ContainerCopy}, whose {@link ContainerCopy.Policy} a module can replace.
    *
    * <p>Between two sealed interfaces, {@code base} is patched by the mapper of its own case. A
    * {@code partial} of the case {@code base}'s case converts to overlays it there; a partial of any
@@ -659,7 +672,14 @@ public class Mapper<A, B> {
       }
       if (entry.getValue().sourceField() == null) continue;
       if (patched == null) patched = new HashMap<>();
-      patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
+      final var sourceField = entry.getValue().sourceField();
+      final var converted = entry.getValue().backward().apply(partialValue);
+      patched.put(
+        sourceField,
+        patchRefilled().contains(sourceField)
+          ? ContainerCopy.patched(base, sourceField, sourceRefl.read(base, sourceField), converted)
+          : converted
+      );
     }
     final var overlay = patched;
     Object rebuilt =
@@ -672,6 +692,33 @@ public class Mapper<A, B> {
       rebuilt = path.getKey().overlay().apply(rebuilt, path.getValue());
     }
     return (A) rebuilt;
+  }
+
+  /**
+   * The properties of a bean {@code A} that {@link #patch} writes into the container {@code base}
+   * holds: each {@code Collection} or {@code Map} property the patch table overlays, except a
+   * collection the rebuild fills through its adders, which goes into the new bean's own collection.
+   * None for a record, which is a value and keeps no container of {@code base}'s it could change.
+   */
+  private Set<String> patchRefilled() {
+    final var known = patchRefilled;
+    if (known != null) return known;
+    final var refilled = new HashSet<String>();
+    if (!sourceClass.isRecord()) {
+      final var writer = sourceRefl.writerFor(sourceClass);
+      final Set<String> throughAdders =
+        writer != null && Beans.strategyOf(writer) == BeanWriteStrategy.ADDERS
+          ? Beans.adders(sourceClass).keySet()
+          : Set.of();
+      for (final var entry : patchByTargetField.values()) {
+        final var name = entry.sourceField();
+        if (name == null || throughAdders.contains(name)) continue;
+        if (Beans.refilledInPlace(sourceClass, name)) refilled.add(name);
+      }
+    }
+    final var computed = Set.copyOf(refilled);
+    patchRefilled = computed;
+    return computed;
   }
 
   /**

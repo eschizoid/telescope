@@ -1366,7 +1366,7 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("persistentClassOf — HibernateProxy-aware cache key unwrap")
+  @DisplayName("persistentClassOf — the class a registered proxy resolver resolves a value to")
   class PersistentClass {
 
     static class PlainBean {
@@ -1384,42 +1384,38 @@ class BeansTest {
       }
     }
 
-    // Subclass that pretends to be a Hibernate-style proxy. Doesn't implement HibernateProxy
-    // (Hibernate isn't on the test classpath), so persistentClassOf takes the fall-through path
-    // and returns the runtime class. This pins the no-Hibernate-classpath behaviour: zero-cost
-    // when the framework isn't there.
-    static final class ProxyShape extends PlainBean {}
+    // A subclass shaped like a provider's proxy that no resolver knows: it is its own class.
+    static class SubclassNoResolverKnows extends PlainBean {}
 
     @Test
-    @DisplayName("falls through to getClass() when the value is null")
+    @DisplayName("a null value has no class")
     void nullSafe() {
       assertNull(Beans.persistentClassOf(null));
     }
 
     @Test
-    @DisplayName("plain POJO: returns getClass() unchanged")
+    @DisplayName("a plain bean is its own class")
     void plainPojoReturnsItsOwnClass() {
       final var bean = new PlainBean();
       assertEquals(PlainBean.class, Beans.persistentClassOf(bean));
     }
 
     @Test
-    @DisplayName("subclass without HibernateProxy interface: returns the subclass (fall-through)")
-    void noHibernateOnClasspath() {
-      // ProxyShape doesn't implement HibernateProxy — there's no Hibernate dep in :core's tests.
-      // The unwrap helper must return the runtime class, not crash, not call any Hibernate API.
-      final var proxy = new ProxyShape();
-      assertEquals(ProxyShape.class, Beans.persistentClassOf(proxy));
+    @DisplayName("a subclass no resolver knows is its own class, not its superclass")
+    void aSubclassNoResolverKnowsIsItsOwnClass() {
+      assertEquals(SubclassNoResolverKnows.class, Beans.persistentClassOf(new SubclassNoResolverKnows()));
     }
 
     @Test
-    @DisplayName("readProperty routes through persistentClassOf so a subclass shares the parent's cache" + " entry")
-    void readPropertyUnwrapsToParentCache() {
-      // Even without a real HibernateProxy, prove readProperty works on a subclass instance —
-      // the cache lookup uses the runtime class (or the unwrapped persistent class). This is the
-      // regression for the cache-key shape: a single instance should read correctly via either
-      // its own class or a parent class's cached getter.
-      final var proxy = new ProxyShape();
+    @DisplayName("a value the registered resolver knows as a proxy is the class it resolves it to")
+    void aValueTheResolverKnowsIsTheClassItResolvesTo() {
+      assertEquals(PlainBean.class, Beans.persistentClassOf(new TestProxyClasses.Proxy()));
+    }
+
+    @Test
+    @DisplayName("readProperty reads a resolved proxy through its persistent class's getters")
+    void readPropertyReadsAResolvedProxy() {
+      final var proxy = new TestProxyClasses.Proxy();
       proxy.setName("alice");
       assertEquals("alice", Beans.readProperty(proxy, "name"));
     }

@@ -183,35 +183,6 @@ public final class Beans {
     }
   };
 
-  /**
-   * The {@code org.hibernate.proxy.HibernateProxy} interface, or {@code null} when Hibernate isn't
-   * on the classpath. Resolved once via reflection so the {@code :core} module stays free of any
-   * Hibernate dependency.
-   */
-  private static final Class<?> HIBERNATE_PROXY = loadOptionalClass("org.hibernate.proxy.HibernateProxy");
-
-  /**
-   * LMF-bound dispatch for {@code HibernateProxy#getHibernateLazyInitializer()}. Built once at
-   * class init when Hibernate is on the classpath; null otherwise (the {@link #persistentClassOf}
-   * fast-path short-circuits before consulting it). Replaces the per-call {@code
-   * Method.getMethod("getHibernateLazyInitializer")} + {@code Method.invoke} pair that previously
-   * fired on every proxied bean read.
-   */
-  private static final Function<Object, Object> HIBERNATE_LAZY_INITIALIZER = buildHibernateLazyInitializerFn();
-
-  /**
-   * LMF-bound dispatch for {@code LazyInitializer#getPersistentClass()}. Same shape as {@link
-   * #HIBERNATE_LAZY_INITIALIZER} — built once, called per proxy read.
-   */
-  private static final Function<Object, Class<?>> HIBERNATE_PERSISTENT_CLASS = buildHibernatePersistentClassFn();
-
-  private static Class<?> loadOptionalClass(final String fqn) {
-    try {
-      return Class.forName(fqn, false, Beans.class.getClassLoader());
-    } catch (final ClassNotFoundException e) {
-      return null;
-    }
-  }
 
   /**
    * Public, cached entry point for intermediate bean allocation during recursive default-tree
@@ -435,88 +406,19 @@ public final class Beans {
     }
   }
 
-  @SuppressWarnings("unchecked")
-  private static Function<Object, Object> buildHibernateLazyInitializerFn() {
-    // In a native image, proxy unwrapping is off by contract (the one documented JVM/codegen-only
-    // accessor path). The guard also prevents a build-time-initialized LMF hidden class from being
-    // captured into the image heap when Hibernate is on the image classpath — these builders run at
-    // class init, which is build time under core's native-image.properties.
-    if (HIBERNATE_PROXY == null || NativeImage.IN_IMAGE) return null;
-    try {
-      final var method = HIBERNATE_PROXY.getMethod("getHibernateLazyInitializer");
-      final var lookup = MethodHandles.lookup();
-      final var handle = lookup.unreflect(method);
-      final var site = LambdaMetafactory.metafactory(
-        lookup,
-        "apply",
-        MethodType.methodType(Function.class),
-        MethodType.methodType(Object.class, Object.class),
-        handle,
-        MethodType.methodType(method.getReturnType(), HIBERNATE_PROXY)
-      );
-      return (Function<Object, Object>) site.getTarget().invokeExact();
-    } catch (final Throwable t) {
-      return null;
-    }
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Function<Object, Class<?>> buildHibernatePersistentClassFn() {
-    // Same native-image guard as buildHibernateLazyInitializerFn — see the comment there.
-    if (HIBERNATE_PROXY == null || NativeImage.IN_IMAGE) return null;
-    try {
-      final var lazyInitializer = Class.forName(
-        "org.hibernate.proxy.LazyInitializer",
-        false,
-        Beans.class.getClassLoader()
-      );
-      final var method = lazyInitializer.getMethod("getPersistentClass");
-      final var lookup = MethodHandles.lookup();
-      final var handle = lookup.unreflect(method);
-      final var site = LambdaMetafactory.metafactory(
-        lookup,
-        "apply",
-        MethodType.methodType(Function.class),
-        MethodType.methodType(Object.class, Object.class),
-        handle,
-        MethodType.methodType(Class.class, lazyInitializer)
-      );
-      return (Function<Object, Class<?>>) site.getTarget().invokeExact();
-    } catch (final Throwable t) {
-      return null;
-    }
-  }
-
   /**
-   * Return the persistent (declared-by-the-user) class of {@code pojo}, unwrapping a {@code
-   * HibernateProxy} when one is present. Used as the cache key for {@link #GETTER_INVOKERS} so a
-   * LAZY-fetched entity routed through telescope's bean reflection doesn't accumulate one cache
-   * entry per Hibernate-generated proxy subclass (and one corresponding {@link
-   * io.github.eschizoid.telescope.internal.MetadataHolderProbe} miss). Falls through to {@code
-   * pojo.getClass()} when Hibernate isn't on the classpath or the reflective unwrap fails.
+   * The class {@code pojo} stands for: the entity class a persistence provider's proxy stands for,
+   * as a registered {@link ProxyClasses} resolves it, and otherwise {@code pojo.getClass()}. Used as
+   * the cache key for {@link #GETTER_INVOKERS}, so a lazily fetched entity read through bean
+   * reflection shares its entity class's entry and its codegen holder instead of keying one of its
+   * own on the proxy subclass. With no resolver registered, a proxy is its own class.
    *
-   * <p>The unwrap calls {@code HibernateProxy#getHibernateLazyInitializer().getPersistentClass()},
-   * neither of which initializes the proxy — so this is safe to call before the entity is actually
-   * read, the same shape Hibernate's own {@code
-   * HibernateProxyHelper.getClassWithoutInitializingProxy} follows.
-   *
-   * <p>Dispatch is LMF-cached: the two {@code Method.invoke} pairs that previously fired on every
-   * call are now one {@link Function#apply} each, bound once at class init. Hot-path savings are
-   * material when LAZY-fetched entities flow through deep-mapping.
+   * <p>A resolver answers without initializing the proxy, so this is safe to call before the entity
+   * is read. Null for a null {@code pojo}.
    */
   public static Class<?> persistentClassOf(final Object pojo) {
     if (pojo == null) return null;
-    final var raw = pojo.getClass();
-    if (HIBERNATE_PROXY == null || !HIBERNATE_PROXY.isInstance(pojo)) return raw;
-    if (HIBERNATE_LAZY_INITIALIZER == null || HIBERNATE_PERSISTENT_CLASS == null) return raw;
-    try {
-      final var initializer = HIBERNATE_LAZY_INITIALIZER.apply(pojo);
-      if (initializer == null) return raw;
-      final var persistentClass = HIBERNATE_PERSISTENT_CLASS.apply(initializer);
-      return persistentClass != null ? persistentClass : raw;
-    } catch (final RuntimeException e) {
-      return raw;
-    }
+    return ProxyClasses.classOf(pojo);
   }
 
   /**
@@ -618,8 +520,8 @@ public final class Beans {
     // null-guard. Without this short-circuit, `persistentClassOf(null)` returns null and
     // `ClassValue.get(null)` NPEs.
     if (pojo == null) return null;
-    // Unwrap HibernateProxy (when present) so a LAZY-fetched entity routes through the
-    // persistent class's cache entry, not a per-proxy-subclass one. See persistentClassOf.
+    // A proxy a registered resolver knows reads through its entity class's cache entry, not one
+    // keyed on the proxy subclass. See persistentClassOf.
     final var beanClass = persistentClassOf(pojo);
     final var reader = GETTER_INVOKERS.get(beanClass).get(name);
     if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
@@ -1510,8 +1412,9 @@ public final class Beans {
    *
    * <p>Subclass / proxy polymorphism is preserved through a single-instanceof fast-path: when
    * {@code source.getClass() == pojoClass} the captured reader runs directly; otherwise the call
-   * falls through to {@link #readProperty(Object, String)}, which handles both Hibernate-proxy
-   * unwrap (via {@link #persistentClassOf}) and ordinary subclass instances by looking up the
+   * falls through to {@link #readProperty(Object, String)}, which handles both a proxy a
+   * registered resolver knows (via {@link #persistentClassOf}) and ordinary subclass instances by
+   * looking up the
    * reader for the runtime class. The common monomorphic case (the lens is applied to instances of
    * exactly {@code pojoClass}) avoids both the ClassValue probe and the HashMap lookup the slow
    * path pays. The reads-via-getter terminal in {@code set}/{@code modify} routes through the same
@@ -1563,8 +1466,8 @@ public final class Beans {
         // Telescope.ofBean(X.class).field(X::getY) usage) and skips the ClassValue + HashMap probe
         // readProperty would have done.
         if (source != null && source.getClass() == pojoClass) return (A) capturedReader.apply(source);
-        // Slow path: subclass instance, or a HibernateProxy whose persistent class differs from
-        // the runtime class. readProperty handles both correctly via persistentClassOf + the
+        // Slow path: subclass instance, or a proxy whose persistent class differs from the
+        // runtime class. readProperty handles both correctly via persistentClassOf + the
         // per-class GETTER_INVOKERS cache, so a Lens<User, X> applied to a SuperUser instance still
         // reads the right value (the SuperUser entry is computed once and cached on first miss).
         return (A) readProperty(source, property);
