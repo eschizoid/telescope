@@ -54,7 +54,11 @@ class MergeReaderTest {
   @Test
   @DisplayName("an accessor of the source builds the merge, which reads the source it names")
   void anAccessorReads() {
-    final var merge = Telescope.merge(Profile.class, from(Customer::id, Profile::id), from(Customer::name, Profile::name));
+    final var merge = Telescope.merge(
+      Profile.class,
+      from(Customer::id, Profile::id),
+      from(Customer::name, Profile::name)
+    );
     assertEquals(new Profile("c", "Ada"), merge.forward(Sources.of(new Customer("c", "Ada"))));
   }
 }

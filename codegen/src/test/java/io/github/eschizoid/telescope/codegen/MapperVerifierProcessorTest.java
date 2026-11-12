@@ -175,7 +175,10 @@ class MapperVerifierProcessorTest {
     );
     assertFalse(compilation.success());
     assertEquals(1, compilation.errorMessages().split("ERROR", -1).length - 1, compilation::errorMessages);
-    assertTrue(compilation.hasError(PairingMessages.mergeReaderNotAnAccessor(0, "H::nameOf")), compilation::errorMessages);
+    assertTrue(
+      compilation.hasError(PairingMessages.mergeReaderNotAnAccessor(0, "H::nameOf")),
+      compilation::errorMessages
+    );
   }
 
   @Test

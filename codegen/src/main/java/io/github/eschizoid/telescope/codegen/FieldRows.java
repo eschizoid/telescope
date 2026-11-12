@@ -121,9 +121,18 @@ final class FieldRows {
    * One merge row, at {@code index} among the rows: {@code from(Source::read, Target::written)},
    * naming its source class, the method it reads and the target property it writes, or {@code
    * auto(Source.class)}, naming its source class alone, with a null {@code read} and {@code
-   * written}. {@code at} is the tree a refusal of the row is reported on.
+   * written}. {@code sourceType} is the source class as the row gives it: with the type arguments a
+   * {@code from} row's reference carries, as {@code Box<String>} for {@code Box<String>::value},
+   * and erased for an {@code auto} row. {@code at} is the tree a refusal of the row is reported on.
    */
-  record MergeRow(int index, TypeElement source, ExecutableElement read, String written, Tree at) {}
+  record MergeRow(
+    int index,
+    TypeElement source,
+    TypeMirror sourceType,
+    ExecutableElement read,
+    String written,
+    Tree at
+  ) {}
 
   /**
    * The configuration a field's rows declare. {@code classes} are the converter and supplier
@@ -654,7 +663,7 @@ final class FieldRows {
           );
         }
         sources.add(source);
-        rows.add(new MergeRow(index, source, null, null, row));
+        rows.add(new MergeRow(index, source, env.getTypeUtils().erasure(source.asType()), null, null, row));
         kinds.add("AutoSameName");
         accessors.add(env.getElementUtils().getBinaryName(source) + ">");
         continue;
@@ -686,7 +695,16 @@ final class FieldRows {
       if (notAnAccessor != null) return new Refused(rowArgs.get(0), notAnAccessor);
       final var source = (TypeElement) qualifier;
       sources.add(source);
-      rows.add(new MergeRow(index, source, reader, writer.getSimpleName().toString(), row));
+      // The reference is typed as an Accessor<S, X>, whose S is the source with the type arguments
+      // the reference gives it.
+      final var typed = trees.getTypeMirror(TreePath.getPath(unit, rowArgs.get(0)));
+      final var sourceType =
+        typed instanceof DeclaredType accessor &&
+        accessor.getTypeArguments().size() == 2 &&
+        accessor.getTypeArguments().getFirst() instanceof DeclaredType given
+          ? given
+          : source.asType();
+      rows.add(new MergeRow(index, source, sourceType, reader, writer.getSimpleName().toString(), row));
       kinds.add("FromInferred");
       accessors.add(reader.getSimpleName() + ">" + writer.getSimpleName());
     }

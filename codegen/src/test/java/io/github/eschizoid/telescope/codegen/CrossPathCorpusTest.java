@@ -13466,6 +13466,22 @@ class CrossPathCorpusTest {
       null
     ),
     new MergeCase(
+      "a from row over a generic source, read as the type its reference gives it",
+      merging(
+        List.of(
+          MERGE_CUSTOMER,
+          "public record %1$sBox<T>(T value) {}\n",
+          "public record %1$sTgt(String id, String name) {}\n"
+        ),
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "new %1$sBox<>(\"bx\"), " + CUSTOMER,
+        "from(%1$sBox<String>::value, %1$sTgt::name)",
+        "from(%1$sCustomer::id, %1$sTgt::id)"
+      ),
+      "#0(id=\"c-1\", name=\"bx\")",
+      null
+    ),
+    new MergeCase(
       "a nested record, handed across as it is",
       merging(
         List.of(
