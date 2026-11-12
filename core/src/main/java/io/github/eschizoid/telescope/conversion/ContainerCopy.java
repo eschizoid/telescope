@@ -55,9 +55,8 @@ import java.util.function.Supplier;
  * a held container that can be changed is cleared and refilled with the converted elements, so it
  * keeps its identity, and one that cannot be changed is replaced through the setter. Under the
  * {@code ADDERS} write strategy each element goes through the target's adder instead, and the value
- * {@code into} reads from is built with no adder run on it. {@code patch} refills a container the
- * bean it rebuilds from holds the same way, through a {@link Patch}. Both paths call the same
- * methods here for it.
+ * {@code into} reads from is built with no adder run on it. Both paths call the same methods here
+ * for it.
  *
  * <p>Both decisions go through one {@link Policy}. The standard policy is the behavior described
  * above. A module that knows more about a container, such as whether a persistence provider has
@@ -298,83 +297,6 @@ public final class ContainerCopy {
   }
 
   /**
-   * A new record of the containers one {@code patch} call refills, for the call to {@link
-   * Patch#undo} should the rebuild fail.
-   *
-   * @return an empty patch
-   */
-  public static Patch patching() {
-    return new Patch();
-  }
-
-  /**
-   * The containers one {@code patch} call refills in the bean it rebuilds from, so that a rebuild
-   * that fails leaves that bean as it was. Both paths refill every container before the rebuild,
-   * and undo every refill when the rebuild throws.
-   */
-  public static final class Patch {
-
-    private final List<Object> held = new ArrayList<>(2);
-    private final List<Object> kept = new ArrayList<>(2);
-
-    private Patch() {}
-
-    /**
-     * The container {@code patch} gives {@code property} of the bean it rebuilds from {@code
-     * owner}, where the partial supplies {@code incoming} for it and {@code owner} holds {@code
-     * held}: {@code held} itself, cleared and refilled with the elements or entries of {@code
-     * incoming} as the registered {@link Policy} decides, so the rebuilt bean keeps the instance
-     * {@code owner} holds, which a provider tracking a managed collection by instance needs. {@code
-     * incoming} where {@code held} is null, is {@code incoming} itself or cannot be changed: an
-     * unmodifiable JDK container is known in advance, and one that cannot even be read, or whose
-     * refill throws, has its elements put back and is passed over the same way.
-     *
-     * @param owner the bean {@code patch} rebuilds
-     * @param property the name of the property
-     * @param held the {@code Collection} or {@code Map} {@code owner} holds for {@code property},
-     *     or null
-     * @param incoming the container converted from the partial, or null
-     * @param <C> the property's declared type
-     * @return the container the rebuilt bean holds for {@code property}
-     */
-    public <C> C refill(final Object owner, final String property, final C held, final C incoming) {
-      if (held == null || incoming == null || held == incoming || !changeable(held)) {
-        return incoming;
-      }
-      if (!(held instanceof Collection<?> || held instanceof Map<?, ?>)) {
-        return incoming;
-      }
-      final Object before;
-      try {
-        before = snapshot(held);
-      } catch (final RuntimeException unreadable) {
-        return incoming;
-      }
-      // With a setter to fall back on, a refill that fails answers false rather than refusing, so
-      // the class names a refusal would carry are never read.
-      if (!refillHeld(null, null, owner, property, held, incoming, null, true)) {
-        return incoming;
-      }
-      this.held.add(held);
-      this.kept.add(before);
-      return held;
-    }
-
-    /**
-     * Puts back what every container {@link #refill} refilled held before, last refilled first,
-     * for a {@code patch} whose rebuild failed. What a container that will not take its elements
-     * back throws is added to {@code failure}.
-     *
-     * @param failure what the rebuild threw
-     */
-    public void undo(final RuntimeException failure) {
-      for (var i = held.size() - 1; i >= 0; i--) {
-        restore(held.get(i), kept.get(i), failure);
-      }
-    }
-  }
-
-  /**
    * Fills collection {@code property} of {@code owner} through its {@code adder}, where {@link
    * CollectionWrites#intoWrite} refills it: {@code held}, the collection {@code owner} holds, is
    * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
@@ -504,10 +426,10 @@ public final class ContainerCopy {
 
   /**
    * {@code incoming} where it is a container with storage of its own, one of the JDK classes a copy
-   * constructor builds that is not {@code held} itself; otherwise a copy of its elements or entries.
-   * Anything else may read through to {@code held}: the held container itself, an unmodifiable or
-   * synchronized view of it, a sub-list of it, or a container a library wraps around it, and clearing
-   * {@code held} would empty it before its elements were read.
+   * constructor builds that is not {@code held} itself; otherwise a copy of its elements or
+   * entries. Anything else may read through to {@code held}: the held container itself, an
+   * unmodifiable or synchronized view of it, a sub-list of it, or a container a library wraps
+   * around it, and clearing {@code held} would empty it before its elements were read.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object detached(final Object held, final Object incoming) {

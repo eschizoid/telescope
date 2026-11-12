@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal;
 
+import java.lang.System.Logger.Level;
 import java.util.Iterator;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
@@ -60,8 +61,9 @@ public interface ProxyClasses {
     /**
      * The first active implementation the loader finds. A registration this copy of the module
      * cannot load, such as one a parent loader's {@code META-INF/services} names for another copy
-     * of this module, or for a core on a different loader, serves that copy and is passed over; the
-     * loader moves to the next registration after each one it fails on.
+     * of this module, or for a core on a different loader, serves that copy and is passed over and
+     * reported at {@code WARNING}; the loader moves to the next registration after each one it
+     * fails on.
      */
     private static ProxyClasses load() {
       return first(ServiceLoader.load(ProxyClasses.class, ProxyClasses.class.getClassLoader()).iterator());
@@ -82,7 +84,12 @@ public interface ProxyClasses {
             return implementation;
           }
         } catch (final ServiceConfigurationError unloadable) {
-          // Passed over; the iterator has already moved past the registration it failed on.
+          // Passed over and reported; the iterator has already moved past the registration it
+          // failed on.
+          System.getLogger(ProxyClasses.class.getName()).log(
+            Level.WARNING,
+            "telescope: a proxy-class registration this module cannot load is passed over: " + unloadable.getMessage()
+          );
         }
       }
       return null;

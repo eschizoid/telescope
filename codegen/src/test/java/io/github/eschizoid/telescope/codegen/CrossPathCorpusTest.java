@@ -4533,9 +4533,9 @@ class CrossPathCorpusTest {
     // Seen from a subclass that passes its own variable through, first and items are typed by that
     // variable, which no static method of the bridge can name. Both paths read them as the
     // superclass declares them: one V, so first passes through and items is copied into a fresh
-    // list, except on patch, which refills the list the bean base holds. Both sides pass their own
-    // variable through, so neither fixes a class a value must fit. The bridge names a generic class
-    // raw, so the key, which both fix to String, reads back as Object.
+    // list. Both sides pass their own variable through, so neither fixes a class a value must
+    // fit. The bridge names a generic class raw, so the key, which both fix to String, reads back
+    // as Object.
     final var pairs = List.of(
       List.of(
         "Ptv",
@@ -4546,7 +4546,7 @@ class CrossPathCorpusTest {
     final var owed = List.of(
       Map.entry("forward", "key=k, first=a, items=[b, c] in a fresh ArrayList"),
       Map.entry("backward", "key=q, first=x, items=[y] in a fresh ArrayList"),
-      Map.entry("patch", "key=q, first=x, items=[y] in an input's ArrayList")
+      Map.entry("patch", "key=q, first=x, items=[y] in a fresh ArrayList")
     );
     final var failures = new ArrayList<String>();
     for (final var pair : pairs) {
@@ -17081,7 +17081,7 @@ class CrossPathCorpusTest {
       "tags",
       Call.PATCH,
       "#0(counts={k=1}, name=\"renamed\", tags=[\"a\", \"b\"])" +
-        KEPT +
+        REPLACED +
         ", the base #0(counts={k=1}, name=\"old\", tags=[\"a\", \"b\"])"
     ),
     new ContainerRow(
@@ -17111,7 +17111,7 @@ class CrossPathCorpusTest {
       ),
       "tags",
       Call.PATCH,
-      "#0(name=\"old\", tags=[\"x\", \"y\"])" + KEPT + ", the base #0(name=\"old\", tags=[\"x\", \"y\"])"
+      "#0(name=\"old\", tags=[\"x\", \"y\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
     ),
     new ContainerRow(
       "a map a bean base holds, which the partial supplies",
@@ -17126,7 +17126,7 @@ class CrossPathCorpusTest {
       ),
       "labels",
       Call.PATCH,
-      "#0(labels={k=\"v\"})" + KEPT + ", the base #0(labels={k=\"v\"})"
+      "#0(labels={k=\"v\"})" + REPLACED + ", the base #0(labels={stale=\"s\"})"
     ),
     new ContainerRow(
       "a list a bean base holds, which the partial leaves null",
@@ -17174,10 +17174,10 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "patch refills a container a bean base holds where it can change, so the result keeps that instance, and" +
-      " writes the converted one where it cannot or the base is a record, on both paths"
+    "patch writes the converted container into the result and leaves every container the base holds as it was," +
+      " a view of the base's own and a rebuild that throws included, on both paths"
   )
-  void patchRefillsAHeldContainerOnBothPaths() throws ReflectiveOperationException {
+  void patchLeavesTheBaseAloneOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : PATCH_ROWS) {

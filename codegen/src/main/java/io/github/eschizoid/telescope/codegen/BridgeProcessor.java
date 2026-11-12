@@ -3422,13 +3422,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
-    // A bean source's Collection or Map property the partial supplies is refilled in the container
-    // base holds, through ContainerCopy.patched, as the runtime mapper's patch refills it; a
-    // collection the rebuild fills through its adders goes into the new bean's own instead.
-    final var patchRefilled = patchRefilled(source, sourceFields, sourceRebuild);
-    // Whether the patch body refills any container, and so records its refills to undo them should
-    // a later step throw, as the runtime mapper's patch does.
-    final var patchRefills = new boolean[1];
     final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
@@ -3481,16 +3474,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // identity: a slot null in both partial and base stays null rather than taking the
       // default
       // on a field the caller never wrote.
-      if (patchRefilled.contains(sourceName)) {
-        patchRefills[0] = true;
-      }
-      final var written = patchRefilled.contains(sourceName)
-        ? "__refills.refill(base, " + literal(sourceName) + ", " + baseRead + ", " + checkedPartial + ")"
-        : checkedPartial;
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
-        "(" + pLocal + " != null ? " + written + " : " + baseRead + ")"
+        "(" + pLocal + " != null ? " + checkedPartial + " : " + baseRead + ")"
       );
     };
     // Patch writes each non-null value of a path's target property back through the path, over the
@@ -3773,17 +3760,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Patch returns a new object whenever base exists, matching the runtime Mapper#patch: a
         // null partial reads as one whose every slot is null, so the body rebuilds base.
         out.println("    if (base == null) return null;");
-        if (patchRefills[0]) {
-          out.println("    final var __refills = " + CONTAINER_COPY + ".patching();");
-          out.println("    try {");
-          emitMethodBody(out, patchBody);
-          out.println("    } catch (final RuntimeException __failed) {");
-          out.println("      __refills.undo(__failed);");
-          out.println("      throw __failed;");
-          out.println("    }");
-        } else {
-          emitMethodBody(out, patchBody);
-        }
+        emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
         // A generic target is named raw, so each setter call is an unchecked call on a raw type.
@@ -10549,30 +10526,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
     final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
     return guarded ? "if (" + local + " != null) " + write : write;
-  }
-
-  /**
-   * The properties of {@code source} that {@code patch} refills in the container {@code base}
-   * holds: none for a record; for a bean, each {@code Collection} or {@code Map} property except a
-   * collection the rebuild fills through its adders. The rule the runtime mapper's {@code patch}
-   * applies.
-   */
-  private Set<String> patchRefilled(final TypeElement source, final List<Field> sourceFields, final Rebuild rebuild) {
-    if (rebuild.kind() == Rebuild.Kind.RECORD || rebuild.kind() == Rebuild.Kind.NONE) {
-      return Set.of();
-    }
-    final var throughAdders = rebuild.adders() ? addersOf(source, sourceFields).bound().keySet() : Set.<String>of();
-    final var writes = new CollectionWrites<>(mirrorProps());
-    final var refilled = new HashSet<String>();
-    for (final var field : sourceFields) {
-      if (throughAdders.contains(field.name())) {
-        continue;
-      }
-      if (writes.refilledInPlace(field.type())) {
-        refilled.add(field.name());
-      }
-    }
-    return refilled;
   }
 
   /**
