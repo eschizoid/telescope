@@ -3422,6 +3422,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
+    // A bean source's Collection or Map property the partial supplies is refilled in the container
+    // base holds, through ContainerCopy.patched, as the runtime mapper's patch refills it; a
+    // collection the rebuild fills through its adders goes into the new bean's own instead.
+    final var patchRefilled = patchRefilled(source, sourceFields, sourceRebuild);
     final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
@@ -3474,10 +3478,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // identity: a slot null in both partial and base stays null rather than taking the
       // default
       // on a field the caller never wrote.
+      final var written = patchRefilled.contains(sourceName)
+        ? CONTAINER_COPY + ".patched(base, " + literal(sourceName) + ", " + baseRead + ", " + checkedPartial + ")"
+        : checkedPartial;
       return paired.castInto(
         paired.backwardCasts(),
         sourceName,
-        "(" + pLocal + " != null ? " + checkedPartial + " : " + baseRead + ")"
+        "(" + pLocal + " != null ? " + written + " : " + baseRead + ")"
       );
     };
     // Patch writes each non-null value of a path's target property back through the path, over the
@@ -10526,6 +10533,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
     final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
     return guarded ? "if (" + local + " != null) " + write : write;
+  }
+
+  /**
+   * The properties of {@code source} that {@code patch} refills in the container {@code base}
+   * holds: none for a record; for a bean, each {@code Collection} or {@code Map} property except a
+   * collection the rebuild fills through its adders. The rule the runtime mapper's {@code patch}
+   * applies.
+   */
+  private Set<String> patchRefilled(final TypeElement source, final List<Field> sourceFields, final Rebuild rebuild) {
+    if (rebuild.kind() == Rebuild.Kind.RECORD || rebuild.kind() == Rebuild.Kind.NONE) return Set.of();
+    final var throughAdders = rebuild.adders() ? addersOf(source, sourceFields).bound().keySet() : Set.<String>of();
+    final var writes = new CollectionWrites<>(mirrorProps());
+    final var refilled = new HashSet<String>();
+    for (final var field : sourceFields) {
+      if (throughAdders.contains(field.name())) continue;
+      if (writes.refilledInPlace(field.type())) refilled.add(field.name());
+    }
+    return refilled;
   }
 
   /**

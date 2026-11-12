@@ -14,10 +14,12 @@ import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -401,6 +403,20 @@ class ContainerCopyWriteTest {
   /** A second policy, which may not be registered beside the first. */
   public static final class SecondPolicy implements ContainerCopy.Policy {}
 
+  /** A policy that does not apply in this runtime, so registering it registers nothing. */
+  public static final class InactivePolicy implements ContainerCopy.Policy {
+
+    @Override
+    public Object copy(final Object source, final Class<?> declared) {
+      throw new AssertionError("an inactive policy is never asked");
+    }
+
+    @Override
+    public boolean active() {
+      return false;
+    }
+  }
+
   /**
    * A loader that defines its own {@link ContainerCopy} and the test policies, and serves a {@code
    * META-INF/services} entry naming {@code policies}, so the class it defines loads them as the
@@ -418,7 +434,8 @@ class ContainerCopyWriteTest {
         final var own =
           name.startsWith(ContainerCopy.class.getName()) ||
           name.startsWith(ContainerCopyWriteTest.class.getName() + "$RecordingPolicy") ||
-          name.startsWith(ContainerCopyWriteTest.class.getName() + "$SecondPolicy");
+          name.startsWith(ContainerCopyWriteTest.class.getName() + "$SecondPolicy") ||
+          name.startsWith(ContainerCopyWriteTest.class.getName() + "$InactivePolicy");
         if (!own) return super.loadClass(name, resolve);
         synchronized (getClassLoadingLock(name)) {
           final var loaded = findLoadedClass(name);
@@ -438,6 +455,103 @@ class ContainerCopyWriteTest {
         }
       }
     };
+  }
+
+  /** A list whose every read throws, as a provider's lazy collection does outside its session. */
+  private static final class Unreadable extends AbstractList<String> {
+
+    @Override
+    public String get(final int index) {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public int size() {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public Iterator<String> iterator() {
+      throw new IllegalStateException("cannot be read");
+    }
+
+    @Override
+    public Object[] toArray() {
+      throw new IllegalStateException("cannot be read");
+    }
+  }
+
+  @Nested
+  @DisplayName("patched, the container patch gives a bean property the partial supplies")
+  class Patched {
+
+    @Test
+    @DisplayName("is the held list, cleared and refilled with the incoming elements")
+    void refillsTheHeldList() {
+      final var held = new ArrayList<>(List.of("stale"));
+      final var patched = ContainerCopy.patched(new Owner(), "tags", held, List.of("x", "y"));
+      assertSame(held, patched);
+      assertEquals(List.of("x", "y"), held);
+    }
+
+    @Test
+    @DisplayName("is the held map, cleared and refilled with the incoming entries")
+    void refillsTheHeldMap() {
+      final var held = new HashMap<>(Map.of("stale", 0));
+      final var patched = ContainerCopy.patched(new Owner(), "counts", held, Map.of("k", 1));
+      assertSame(held, patched);
+      assertEquals(Map.of("k", 1), held);
+    }
+
+    @Test
+    @DisplayName("is the incoming container where the owner holds none, or the incoming one is null")
+    void isTheIncomingOneWhereNothingIsHeld() {
+      final var incoming = List.of("x");
+      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", null, incoming));
+      final var held = new ArrayList<>(List.of("stale"));
+      assertNull(ContainerCopy.patched(new Owner(), "tags", held, null));
+      assertEquals(List.of("stale"), held);
+    }
+
+    @Test
+    @DisplayName("is the held container itself, untouched, where the incoming one is that same instance")
+    void leavesTheSameInstanceAlone() {
+      final var held = new ArrayList<>(List.of("a"));
+      assertSame(held, ContainerCopy.patched(new Owner(), "tags", held, held));
+      assertEquals(List.of("a"), held);
+    }
+
+    @Test
+    @DisplayName("is the incoming container where the held one is an unmodifiable JDK container")
+    void passesOverAnUnmodifiableHeldContainer() {
+      final var held = List.of("stale");
+      final var incoming = new ArrayList<>(List.of("x"));
+      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", held, incoming));
+    }
+
+    @Test
+    @DisplayName("is the incoming container where the held one refuses the change, and the held one keeps its elements")
+    void passesOverAHeldContainerThatRefuses() {
+      final var held = new TreeSet<>(Set.of("stale"));
+      final var incoming = new ArrayList<String>();
+      incoming.add(null);
+      assertSame(incoming, ContainerCopy.patched(new Owner(), "codes", held, incoming));
+      assertEquals(Set.of("stale"), held);
+    }
+
+    @Test
+    @DisplayName("is the incoming container where the held one cannot even be read")
+    void passesOverAHeldContainerThatCannotBeRead() {
+      final var incoming = List.of("x");
+      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", new Unreadable(), incoming));
+    }
+
+    @Test
+    @DisplayName("is the incoming value where the held value is no container")
+    void passesOverAHeldValueThatIsNoContainer() {
+      final Object incoming = List.of("x");
+      assertSame(incoming, ContainerCopy.patched(new Owner(), "tags", (Object) "not a container", incoming));
+    }
   }
 
   @Nested
@@ -498,6 +612,31 @@ class ContainerCopyWriteTest {
     }
 
     @Test
+    @DisplayName("is passed over when it is not active, so another active one is the only one and is asked")
+    @SuppressWarnings("unchecked")
+    void anInactivePolicyIsPassedOver() throws Exception {
+      try (final var loader = registering(InactivePolicy.class.getName(), RecordingPolicy.class.getName())) {
+        final var copy = loader.loadClass(ContainerCopy.class.getName());
+        final var calls = (List<String>) loader.loadClass(RecordingPolicy.class.getName()).getField("CALLS").get(null);
+        final var source = new ArrayList<>(List.of("a"));
+        assertEquals(source, copy.getMethod("of", Object.class, Class.class).invoke(null, source, List.class));
+        assertEquals(List.of("copy List"), calls);
+      }
+    }
+
+    @Test
+    @DisplayName("is the standard one when the only one registered is not active")
+    void onlyAnInactivePolicyLeavesTheStandardOne() throws Exception {
+      try (final var loader = registering(InactivePolicy.class.getName())) {
+        final var copy = loader.loadClass(ContainerCopy.class.getName());
+        final var source = new ArrayList<>(List.of("a"));
+        final var copied = copy.getMethod("of", Object.class, Class.class).invoke(null, source, List.class);
+        assertEquals(source, copied);
+        assertNotSame(source, copied);
+      }
+    }
+
+    @Test
     @DisplayName("is the only one: two registered refuse the first container written, naming both")
     void twoRegisteredAreRefused() throws Exception {
       try (final var loader = registering(RecordingPolicy.class.getName(), SecondPolicy.class.getName())) {
@@ -509,11 +648,11 @@ class ContainerCopyWriteTest {
         );
         final var refusal = thrown.getCause();
         assertEquals(
-          "ContainerCopy: more than one ContainerCopy.Policy is registered ([" +
+          "ContainerCopy: more than one active ContainerCopy.Policy is registered ([" +
             RecordingPolicy.class.getName() +
             ", " +
             SecondPolicy.class.getName() +
-            "]); register at most one.",
+            "]); register at most one that is active.",
           refusal.getMessage()
         );
       }

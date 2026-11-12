@@ -2,6 +2,7 @@ rootProject.name = "telescope"
 
 include("internal")
 include("core")
+include("jpa")
 include("codegen")
 include("lombok")
 include("spring-boot-starter")

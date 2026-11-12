@@ -75,8 +75,8 @@ public final class ContainerCopy {
    * behavior: {@link ContainerCopy#standardCopy} for a copy, {@link Refill#standard} for a refill.
    *
    * <p>An implementation is registered through {@link ServiceLoader}: a {@code provides} clause in
-   * a module, or a {@code META-INF/services} entry on the class path. At most one may be
-   * registered; it needs a public no-argument constructor, and is loaded once, the first time a
+   * a module, or a {@code META-INF/services} entry on the class path. At most one active policy may
+   * be registered; it needs a public no-argument constructor, and is loaded once, the first time a
    * container is copied or refilled.
    */
   public interface Policy {
@@ -100,6 +100,17 @@ public final class ContainerCopy {
      */
     default void refill(final Refill refill) {
       refill.standard();
+    }
+
+    /**
+     * Whether this policy applies in this runtime, such as whether the persistence API it consults
+     * is on the class path. A policy that answers false is passed over as if it were not
+     * registered, so a module carrying one costs nothing where what it knows about is absent.
+     *
+     * @return whether this policy replaces the standard one
+     */
+    default boolean active() {
+      return true;
     }
   }
 
@@ -190,15 +201,15 @@ public final class ContainerCopy {
   private static Policy registeredPolicy() {
     final var registered = new ArrayList<Policy>();
     for (final var policy : ServiceLoader.load(Policy.class, ContainerCopy.class.getClassLoader())) {
-      registered.add(policy);
+      if (policy.active()) registered.add(policy);
     }
     if (registered.size() > 1) throw new IllegalStateException(
-      "ContainerCopy: more than one ContainerCopy.Policy is registered (" +
+      "ContainerCopy: more than one active ContainerCopy.Policy is registered (" +
         registered
           .stream()
           .map(policy -> policy.getClass().getName())
           .toList() +
-        "); register at most one."
+        "); register at most one that is active."
     );
     return registered.isEmpty() ? STANDARD : registered.getFirst();
   }

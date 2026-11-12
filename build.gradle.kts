@@ -73,7 +73,7 @@ tasks.withType<VerifyReleaseTask>().configureEach {
 // The release workflow runs `./gradlew clean build publish -x test` which fans out to every
 // subproject's `publish` task via maven-publish, so step (1) wires up the workflow side for
 // free — the only manual touch left is this list.
-val mavenCentralProjects = listOf(":internal", ":core", ":codegen", ":lombok", ":spring-boot-starter", ":quarkus")
+val mavenCentralProjects = listOf(":internal", ":core", ":jpa", ":codegen", ":lombok", ":spring-boot-starter", ":quarkus")
 
 // Root owns markdown + the Gradle Kotlin DSL formatting (no Java source here).
 spotless {

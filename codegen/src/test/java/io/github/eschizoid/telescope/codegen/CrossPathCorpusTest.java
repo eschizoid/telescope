@@ -4533,9 +4533,9 @@ class CrossPathCorpusTest {
     // Seen from a subclass that passes its own variable through, first and items are typed by that
     // variable, which no static method of the bridge can name. Both paths read them as the
     // superclass declares them: one V, so first passes through and items is copied into a fresh
-    // list. Both sides pass their own variable through, so neither fixes a class a value must
-    // fit. The bridge names a generic class raw, so the key, which both fix to String, reads back
-    // as Object.
+    // list, except on patch, which refills the list the bean base holds. Both sides pass their own
+    // variable through, so neither fixes a class a value must fit. The bridge names a generic class
+    // raw, so the key, which both fix to String, reads back as Object.
     final var pairs = List.of(
       List.of(
         "Ptv",
@@ -4546,7 +4546,7 @@ class CrossPathCorpusTest {
     final var owed = List.of(
       Map.entry("forward", "key=k, first=a, items=[b, c] in a fresh ArrayList"),
       Map.entry("backward", "key=q, first=x, items=[y] in a fresh ArrayList"),
-      Map.entry("patch", "key=q, first=x, items=[y] in a fresh ArrayList")
+      Map.entry("patch", "key=q, first=x, items=[y] in an input's ArrayList")
     );
     final var failures = new ArrayList<String>();
     for (final var pair : pairs) {
@@ -16530,6 +16530,11 @@ class CrossPathCorpusTest {
      * {@code into(forward(Src.sample()), Src.sample())}: a second write into what forward built.
      */
     FORWARD_THEN_INTO,
+    /**
+     * {@code patch(Src.sample(), Tgt.sample())}: the property is the source's, and the result's
+     * container is compared with the one the base held.
+     */
+    PATCH,
   }
 
   /** What follows an into that left the property holding the container the target held. */
@@ -17012,6 +17017,135 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  /** The name of the method that reads {@code row}'s property of {@code value}. */
+  private static String accessorOf(final Object value, final ContainerRow row) {
+    final var property = row.property();
+    return value.getClass().isRecord()
+      ? property
+      : "get" + Character.toUpperCase(property.charAt(0)) + property.substring(1);
+  }
+
+  /** A bean {@code %1$sSrc} with a name and a list of tags, whose sample holds {@code tags}. */
+  private static String taggedBeanSource(final String tags) {
+    return sampledBean(
+      "%1$sSrc",
+      "final var s = new %1$sSrc(); s.setName(\"old\"); s.setTags(" + tags + "); return s;",
+      "String name",
+      "java.util.List<String> tags"
+    );
+  }
+
+  /** A record {@code %1$sTgt} with a name and a list of tags, whose sample holds {@code tags}. */
+  private static String taggedPartial(final String tags) {
+    return sampled("%1$sTgt", "String name, java.util.List<String> tags", "new %1$sTgt(null, " + tags + ")");
+  }
+
+  private static final List<ContainerRow> PATCH_ROWS = List.of(
+    new ContainerRow(
+      "a list a bean base holds, which the partial supplies",
+      intoPair(
+        taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
+        taggedPartial("java.util.List.of(\"x\", \"y\")")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\", \"y\"])" + KEPT + ", the base #0(name=\"old\", tags=[\"x\", \"y\"])"
+    ),
+    new ContainerRow(
+      "a map a bean base holds, which the partial supplies",
+      intoPair(
+        sampledBean(
+          "%1$sSrc",
+          "final var s = new %1$sSrc(); s.setLabels(new java.util.HashMap<>(java.util.Map.of(\"stale\", \"s\")));" +
+            " return s;",
+          "java.util.Map<String,String> labels"
+        ),
+        sampled("%1$sTgt", "java.util.Map<String,String> labels", "new %1$sTgt(java.util.Map.of(\"k\", \"v\"))")
+      ),
+      "labels",
+      Call.PATCH,
+      "#0(labels={k=\"v\"})" + KEPT + ", the base #0(labels={k=\"v\"})"
+    ),
+    new ContainerRow(
+      "a list a bean base holds, which the partial leaves null",
+      intoPair(
+        taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
+        taggedPartial("null")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"stale\"])" + KEPT + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "an unmodifiable list a bean base holds",
+      intoPair(taggedBeanSource("java.util.List.of(\"stale\")"), taggedPartial("java.util.List.of(\"x\")")),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    ),
+    new ContainerRow(
+      "a list a record base holds",
+      intoPair(
+        sampled(
+          "%1$sSrc",
+          "String name, java.util.List<String> tags",
+          "new %1$sSrc(\"old\", new java.util.ArrayList<>(java.util.List.of(\"stale\")))"
+        ),
+        taggedPartial("java.util.List.of(\"x\")")
+      ),
+      "tags",
+      Call.PATCH,
+      "#0(name=\"old\", tags=[\"x\"])" + REPLACED + ", the base #0(name=\"old\", tags=[\"stale\"])"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "patch refills a container a bean base holds where it can change, so the result keeps that instance, and" +
+      " writes the converted one where it cannot or the base is a record, on both paths"
+  )
+  void patchRefillsAHeldContainerOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : PATCH_ROWS) {
+      final var prefix = "Pr" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var owed = row.owed().formatted(prefix);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var generatedClasses = new ServicesLoader(processed);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      for (final var side : List.of(
+        Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
+        Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
+      )) {
+        final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
+        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
   /**
    * A pair whose {@code into} runs adders where {@code forward} runs them too: the declarations,
    * each taking {@code %1$s} as the row's prefix and the last of them the runtime row, and what
@@ -17179,6 +17313,19 @@ class CrossPathCorpusTest {
       }
     }
     final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader);
+    if (row.call() == Call.PATCH) {
+      final var getter = source.getClass().getMethod(accessorOf(source, row));
+      final var held = getter.invoke(source);
+      final Object patched;
+      try {
+        patched = converts.patch(source, tgt.getMethod("sample").invoke(null));
+      } catch (final RuntimeException e) {
+        return REFUSED + e.getMessage();
+      }
+      final var after = getter.invoke(patched);
+      final var kept = after == held ? KEPT : REPLACED;
+      return shape(patched, new IdentityHashMap<>()) + kept + ", the base " + shape(source, new IdentityHashMap<>());
+    }
     final var target = row.call() == Call.INTO ? tgt.getMethod("sample").invoke(null) : converts.forward(source);
     final var getter = tgt.getMethod(
       "get" + Character.toUpperCase(row.property().charAt(0)) + row.property().substring(1)
