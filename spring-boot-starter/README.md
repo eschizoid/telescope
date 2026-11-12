@@ -20,8 +20,8 @@ both artifacts.
 // Gradle
 dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.1"))
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:2.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+    implementation("io.github.eschizoid:telescope-spring-boot-starter:2.2.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0")
 }
 ```
 
@@ -33,7 +33,7 @@ applies the Spring Boot plugin or imports the same BOM.
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-spring-boot-starter</artifactId>
-  <version>2.1.0</version>
+  <version>2.2.0</version>
 </dependency>
 ```
 
@@ -51,7 +51,7 @@ In Maven, put the processor on the compiler plugin's processor path:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>2.1.0</version>
+            <version>2.2.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>

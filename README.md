@@ -225,8 +225,8 @@ than a sealed one. The [full comparison](docs/mapstruct-comparison.md) and the
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:2.1.0")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0") // optional: generated mappers and navigators
+  implementation("io.github.eschizoid:telescope-core:2.2.0")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0") // optional: generated mappers and navigators
 }
 ```
 
@@ -235,7 +235,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>2.1.0</version>
+  <version>2.2.0</version>
 </dependency>
 ```
 
