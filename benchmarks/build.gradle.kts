@@ -25,6 +25,8 @@ val jpaUnregistered = tasks.register<Jar>("jpaUnregistered") {
     archiveFileName = "telescope-jpa-unregistered.jar"
     destinationDirectory = layout.buildDirectory.dir("jpa-unregistered")
     val jars: FileCollection = jpaJar
+    // Read inside a closure the archive lists no producer, so the jar is built first by name.
+    dependsOn(jars)
     from({ jars.map { zipTree(it) } }) {
         exclude("META-INF/services/**")
     }
