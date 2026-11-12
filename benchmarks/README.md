@@ -165,6 +165,6 @@ An A/B comparison needs both sides to run the same benchmark. Follow these steps
    by the control's change, or run again.
 4. Compare allocation as well as time. Add `gc` to `profilers` for that.
 
-For `ContainerAllocationBenchmark`, `scripts/compare-runtime-benchmarks.py` compares two saved JMH JSON files, and with
-`--check` it fails on a timing or allocation regression. The command is in
+For `ContainerAllocationBenchmark`, `benchmarks/compare-runtime-benchmarks.py` compares two saved JMH JSON files, and
+with `--check` it fails on a timing or allocation regression. The command is in
 [`docs/perf-runtime-collections.md`](../docs/perf-runtime-collections.md#reproducing).
