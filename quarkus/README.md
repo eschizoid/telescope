@@ -3,6 +3,8 @@
 `telescope-quarkus` adds one CDI bean to a Quarkus 3 application, a registry of the [telescope](../README.md) mappers
 the application defines. The registry, `TelescopeMapperRegistry`, finds a `Mapper<A, B>` by its source class and target
 class. It is the Quarkus counterpart of the registry in the [Spring Boot starter](../spring-boot-starter/README.md).
+With `telescope-codegen` on the annotation processor path, `@TelescopeMapper` and `@TelescopeTransformer` interfaces
+also become CDI beans; see [Generated mapper and transformer beans](#generated-mapper-and-transformer-beans).
 
 The module is a small runtime library. It has no `deployment` module and no build steps, and it does not need an
 annotation to switch it on or any entry in `application.properties`.
@@ -137,11 +139,73 @@ any other `Mapper` bean exists, so a `@DefaultBean` mapper that is alone on its 
 ambiguous and Quarkus fails at build time. To supply your own registry, annotate your producer method with
 `@Alternative` and `@Priority`, which makes CDI choose it over the one in this module.
 
+## Generated mapper and transformer beans
+
+`@TelescopeMapper` and `@TelescopeTransformer` turn an interface into an injectable bean, the same way they do in the
+[Spring Boot starter](../spring-boot-starter/README.md#generated-mapper-and-transformer-beans), which describes the
+annotations, `TelescopeProjection`, `translate` and transformers in full. Add `telescope-codegen` as an annotation
+processor:
+
+```kotlin
+// Gradle
+dependencies {
+    implementation("io.github.eschizoid:telescope-quarkus:2.1.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.1.0")
+}
+```
+
+With CDI on the classpath and Spring absent, the processor writes `<Interface>Impl` next to each annotated interface as
+an `@ApplicationScoped` bean. You inject the interface:
+
+```java
+@TelescopeMapper("customers")
+public interface CustomerProjection extends TelescopeProjection<Customer, CustomerDto> {}
+
+@ApplicationScoped
+public class CustomerResource {
+
+  @Inject
+  CustomerProjection customers;
+}
+```
+
+The beans behave as the Spring ones do:
+
+- A mapper maps through the source's generated `@Bridge` when there is one and `translate` is not overridden, and
+  otherwise builds a core `Mapper` once, when the bean is created.
+- A transformer builds its `path()` and `transform()` once per bean, and never for the client proxy in front of it.
+- The annotation's value becomes a `@Named` qualifier. The bean still injects by its type alone.
+- A projection collects every `TelescopeCustomizer<P>` bean for its own interface through ArC's `@All`, after the
+  transformers declared on `@TelescopeMapper`. ArC sorts that list by priority, highest first, so `@Priority` orders the
+  customizers. Once the bean is created its transformers are fixed, and `addTransformer` throws.
+
+```java
+@Singleton
+public class CustomerCustomizers {
+
+  @Produces
+  @Priority(10)
+  TelescopeCustomizer<CustomerProjection> trimFirst(CustomerNameTransformer trim) {
+    return (projection) -> projection.addTransformer(trim);
+  }
+}
+```
+
+The generated beans are not `Mapper` beans, so `TelescopeMapperRegistry` does not hold them. Quarkus finds them through
+their `@ApplicationScoped` annotation when it indexes your application. The pre-built index in this module's jar covers
+only the module's own classes. An interface declared in a separate library jar needs that jar indexed, as any bean there
+does, for example with the Jandex Gradle or Maven plugin or `quarkus.index-dependency`.
+
+The processor picks the container by the telescope starter on the classpath, so with this module present it writes a CDI
+bean even when the Spring annotations are on the classpath as well, for example through Quarkus's Spring compatibility
+extensions. A module with both telescope starters is refused until you choose the bean model with
+`-Atelescope.beans=cdi` or `-Atelescope.beans=spring`, and that option overrides the starter in any build.
+
 ## What the module does not include
 
-The module has no counterpart to the Spring starter's `@TelescopeMapper` and `@TelescopeTransformer` generated beans,
-which are Spring only. It also has no `telescope.default-write-strategy` setting.
+The module has no `telescope.default-write-strategy` setting.
 
-The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency, and a
-`@QuarkusComponentTest` that runs `TelescopeProducer` in an ArC container. No `@QuarkusTest` in this repository starts
-Quarkus itself, so add one to your own application if you want to check the wiring end to end.
+The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency, and
+`@QuarkusComponentTest` classes that run `TelescopeProducer` and the generated beans in an ArC container. No
+`@QuarkusTest` in this repository starts Quarkus itself, so add one to your own application if you want to check the
+wiring end to end.

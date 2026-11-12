@@ -277,7 +277,8 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
   and target class. `@TelescopeMapper` turns an interface into an injectable mapper bean, and `@TelescopeGetMapping`
   lets a controller return a domain object while the client receives its DTO. See the
   [starter guide](spring-boot-starter/README.md).
-- **Quarkus.** `telescope-quarkus` adds the same registry as a CDI bean. See the [Quarkus guide](quarkus/README.md).
+- **Quarkus.** `telescope-quarkus` adds the same registry as a CDI bean, and `@TelescopeMapper` interfaces become CDI
+  beans there too. See the [Quarkus guide](quarkus/README.md).
 - **Lombok.** `telescope-lombok` generates typed navigators for `@Data`, `@Value` and `@Builder` classes. See the
   [Lombok guide](lombok/README.md).
 - **GraalVM native image.** Runtime mappers, typed paths and generated code all run in a native image. Generated
@@ -305,7 +306,7 @@ Everything is on Maven Central under `io.github.eschizoid`.
 | `telescope-codegen`             | the optional annotation processor for `@Bridge`, `@Focus`, `@BeanFocus` and `@FromMap`, plus the mapper verifier |
 | `telescope-lombok`              | the processor variant for Lombok `@Data`, `@Value` and `@Builder` classes                                        |
 | `telescope-spring-boot-starter` | Spring Boot auto-configuration, the mapper registry and generated mapper beans                                   |
-| `telescope-quarkus`             | the mapper registry as a Quarkus CDI bean                                                                        |
+| `telescope-quarkus`             | the mapper registry as a Quarkus CDI bean, and generated mapper beans                                            |
 | `telescope-internal`            | the engine underneath, which arrives with `telescope-core` and isn't meant to be used directly                   |
 
 ## Documentation

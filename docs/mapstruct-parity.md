@@ -1512,8 +1512,8 @@ null). Caveat: there is no dedicated plain-Jakarta-EE/jsr330 module — the Quar
 
 **Generated path:** a `@Bridge` field's mapper is a `Mapper` value too, so
 `@Bean Mapper<UserEntity, UserDto> userMapper() { return UserMappers.DTO; }` registers the generated mapper, in the
-registry included. On Spring, a `@TelescopeMapper` interface is implemented by a generated `@Component` that calls the
-source's generated bridge when one exists.
+registry included. A `@TelescopeMapper` interface is implemented by a generated Spring `@Component`, or by an
+`@ApplicationScoped` CDI bean under Quarkus, that calls the source's generated bridge when one exists.
 
 <sub>Evidence: spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeAutoConfiguration.java,
 `telescopeMapperRegistry` (@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; the class javadoc
