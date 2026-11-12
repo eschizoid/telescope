@@ -64,8 +64,9 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 
 ## What this library is
 
-A Java 25 deep-copy DSL for records and POJOs: build a path through an immutable graph, then read / write / update /
-traverse / convert / lift-through-an-effect using one type.
+A Java 25 mapping library for records and POJOs, used as the mapping layer between the REST, service and entity layers
+of a JVM service: build a path through an immutable graph, then read / write / update / traverse / convert /
+lift-through-an-effect using one type.
 
 Two layers, hard line between them:
 
