@@ -3422,6 +3422,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
+    // Each source property patch overlays, in the order patch reads them, and the expression that
+    // says whether the partial sent a value for it: what patchInto writes.
+    final var patchSent = new LinkedHashMap<String, String>();
     final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
@@ -3442,12 +3445,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // from a partial that exists. A null partial overlays nothing, so base supplies every
       // slot.
       if (tf.type().getKind().isPrimitive()) {
+        patchSent.putIfAbsent(sourceName, "true");
         final var converted = applyBackward(sourceName, plan, partialReadExpr);
         if (unboxed) return patchUnboxed(sourceName, "partial", converted, baseRead, gives, sf.type());
         return "(partial == null ? " + baseRead + " : " + converted + ")";
       }
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
+      patchSent.putIfAbsent(sourceName, pLocal + " != null");
       patchLocals.put(
         pLocal,
         declarable(tf.type()) + " " + pLocal + " = partial == null ? null : " + partialReadExpr + ";"
@@ -3600,6 +3605,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
+    // patchInto rebuilds the partial over the target as patch does, recording which properties the
+    // partial sent, and writes only those into the target. A row writing through a path names no
+    // property of the source, so a bridge with one has no patchInto, and its field's mapper
+    // refuses.
+    final var hasPathRows = !writtenPaths.isEmpty() || !readTargets.isEmpty();
+    final String overlaidBody;
+    {
+      final var sb = new StringBuilder("{ ");
+      for (final var decl : patchLocals.values()) sb.append("final ").append(decl).append(" ");
+      var k = 0;
+      for (final var guard : patchSent.values())
+        sb.append("__sent[").append(k++).append("] = ").append(guard).append("; ");
+      final var trimmedInner = patchInner.trim();
+      if (trimmedInner.startsWith("{") && trimmedInner.endsWith("}")) {
+        sb.append(trimmedInner, 1, trimmedInner.length() - 1).append(" }");
+      } else {
+        sb.append("return ").append(patchInner).append("; }");
+      }
+      overlaidBody = sb.toString().replaceAll("\\s+}$", " }");
+    }
+
     final var pathWriters = new ArrayList<String>();
     for (final var paths : writtenPaths.values()) {
       for (final var path : paths) {
@@ -3630,13 +3656,47 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
     final var intoStatements = lenient
       ? null
-      : intoStatements(source, target, targetFields, intoNames, targetRebuild.adders());
+      : intoStatements(
+          source,
+          target,
+          target,
+          targetFields,
+          intoNames,
+          targetRebuild.adders(),
+          "forward(source)",
+          null
+        );
+    final var sentFlags = new LinkedHashMap<String, String>();
+    var sentIndex = 0;
+    for (final var name : patchSent.keySet()) sentFlags.put(name, "__sent[" + sentIndex++ + "]");
+    final var patchIntoStatements =
+      lenient || hasPathRows || sourceRebuild.kind() == Rebuild.Kind.RECORD || sourceRebuild.kind() == Rebuild.Kind.NONE
+        ? null
+        : intoStatements(
+            source,
+            target,
+            source,
+            sourceFields,
+            new ArrayList<>(patchSent.keySet()),
+            sourceRebuild.adders(),
+            "__overlaid(target, partial, __sent)",
+            sentFlags
+          );
 
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
     // target).
     if (carrierEl != null) {
-      emitBridgeProvider(source, target, bridgeName, pkg, cfgForEmission, intoNames, intoStatements != null);
+      emitBridgeProvider(
+        source,
+        target,
+        bridgeName,
+        pkg,
+        cfgForEmission,
+        intoNames,
+        intoStatements != null,
+        patchIntoStatements != null
+      );
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
 
@@ -3763,6 +3823,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
+        if (patchIntoStatements != null) emitPatchInto(
+          out,
+          backwardSuppression,
+          sourceFq,
+          targetFq,
+          overlaidBody,
+          patchIntoStatements,
+          patchSent.size()
+        );
         // A generic target is named raw, so each setter call is an unchecked call on a raw type.
         if (intoStatements != null) emitInto(
           out,
@@ -3780,7 +3849,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           declares(thisPair),
           unwalkedSource,
           unwalkedTarget,
-          guarded
+          guarded,
+          patchIntoStatements != null
         );
         for (final var writer : pathWriters) out.print(writer);
         // Each when(...) predicate is tested through a Predicate, as the runtime tests it, and
@@ -4597,7 +4667,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form umbrella lives beside its carrier like any carrier-form bridge, so it is
     // registered for the same ServiceLoader lookup.
     if (configsByPair.getOrDefault(new TypePair(sourceFq, targetFq), BridgeConfig.EMPTY).carrierFq() != null) {
-      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of(), false);
+      emitBridgeProvider(source, target, bridgeName, bridge.pkg(), BridgeConfig.EMPTY, List.of(), false, false);
     }
 
     writeClass(
@@ -4758,6 +4828,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       declared,
       unwalkedSource,
       unwalkedTarget,
+      false,
       false
     );
   }
@@ -4765,7 +4836,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * As above; {@code takesPath} says the bridge has the path-carrying overloads {@link
    * #emitDirection} writes for a pair that can reach itself, which the {@code Fn} then exposes, so
-   * a runtime mapper converting the pair on a cycle hands the bridge its own path.
+   * a runtime mapper converting the pair on a cycle hands the bridge its own path. {@code
+   * patchInto} says the bridge has a {@code patchInto} of its own, which the {@code Fn} exposes.
    */
   private static void emitBridgeHandles(
     final PrintWriter out,
@@ -4776,7 +4848,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final boolean declared,
     final Set<String> unwalkedSource,
     final Set<String> unwalkedTarget,
-    final boolean takesPath
+    final boolean takesPath,
+    final boolean patchInto
   ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
@@ -4796,6 +4869,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".patch(base, partial);");
     out.println("    }");
     out.println();
+    if (patchInto) {
+      out.println("    @Override");
+      out.println(
+        "    public " + sourceFq + " patchInto(final " + sourceFq + " target, final " + targetFq + " partial) {"
+      );
+      out.println("      return " + bridgeName + ".patchInto(target, partial);");
+      out.println("    }");
+      out.println();
+    }
     if (takesPath) {
       out.println("    @Override");
       out.println("    public boolean takesActivePath() {");
@@ -9169,7 +9251,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String pkg,
     final BridgeConfig cfg,
     final List<String> intoNames,
-    final boolean writesInto
+    final boolean writesInto,
+    final boolean writesPatchInto
   ) {
     final var providerName = bridgeName + "Provider";
     final var carrier =
@@ -9235,7 +9318,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             out.println("  }");
             out.println();
           }
-          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto);
+          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto, writesPatchInto);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -9268,7 +9351,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement target,
     final String bridgeName,
     final BridgeConfig cfg,
-    final boolean writesInto
+    final boolean writesInto,
+    final boolean writesPatchInto
   ) {
     final var s = source.getQualifiedName().toString();
     final var t = target.getQualifiedName().toString();
@@ -9328,6 +9412,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
         }
         out.println("      return " + bridgeName + ".into(target, source);");
+        out.println("    }");
+      }
+      if (writesPatchInto) {
+        out.println();
+        out.println("    @Override");
+        out.println("    public " + s + " patchInto(final " + s + " target, final " + t + " partial) {");
+        out.println("      return " + bridgeName + ".patchInto(target, partial);");
         out.println("    }");
       }
     }
@@ -9794,6 +9885,51 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    } finally {");
     out.println("      __active.remove(" + in + ");");
     out.println("    }");
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * The bridge's {@code patchInto(target, partial)}, whose body is {@code statements}, and the
+   * overlay it reads from, {@code overlaidBody}: patch's own rebuild of {@code partial} over the
+   * target, which also records in {@code __sent} the {@code sent} properties the partial supplied.
+   * A null target is refused by name and a null partial leaves the target as it was, as {@code
+   * Mapper.patchInto} does.
+   */
+  private static void emitPatchInto(
+    final PrintWriter out,
+    final String suppression,
+    final String sourceFq,
+    final String targetFq,
+    final String overlaidBody,
+    final List<String> statements,
+    final int sent
+  ) {
+    out.print(suppression);
+    out.println(
+      "  private static " +
+        sourceFq +
+        " __overlaid(final " +
+        sourceFq +
+        " base, final " +
+        targetFq +
+        " partial, final boolean[] __sent) {"
+    );
+    emitMethodBody(out, overlaidBody);
+    out.println("  }");
+    out.println();
+    out.println("  /**");
+    out.println("   * Writes into {@code target} the properties {@code patch(target, partial)} overlays, and only");
+    out.println("   * those, as {@code into} writes them, and returns {@code target}.");
+    out.println("   */");
+    out.print(suppression);
+    out.println(
+      "  public static " + sourceFq + " patchInto(final " + sourceFq + " target, final " + targetFq + " partial) {"
+    );
+    out.println("    if (target == null) throw new NullPointerException(\"target\");");
+    out.println("    if (partial == null) return target;");
+    out.println("    final boolean[] __sent = new boolean[" + sent + "];");
+    for (final var statement : statements) out.println("    " + statement);
     out.println("  }");
     out.println();
   }
@@ -10416,10 +10552,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private List<String> intoStatements(
     final TypeElement source,
+    final TypeElement pairTarget,
     final TypeElement target,
     final List<Field> targetFields,
     final List<String> names,
-    final boolean adders
+    final boolean adders,
+    final String produce,
+    final Map<String, String> sentFlags
   ) {
     final var bound = adders ? addersOf(target, targetFields) : null;
     if (bound != null && bound.refusal() != null) return null;
@@ -10431,17 +10570,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var named = String.join(
       ", ",
       literal(source.getSimpleName().toString()),
-      literal(target.getSimpleName().toString())
+      literal(pairTarget.getSimpleName().toString())
     );
     final var targetFq = processingEnv.getTypeUtils().erasure(target.asType()).toString();
     final var defers = bound != null && names.stream().anyMatch(bound.bound()::containsKey);
     if (defers) {
       reads.add(
-        "final var __deferred = " + CONTAINER_COPY + ".deferAdders(" + targetFq + ".class, () -> forward(source));"
+        "final var __deferred = " + CONTAINER_COPY + ".deferAdders(" + targetFq + ".class, () -> " + produce + ");"
       );
       reads.add("final var __produced = __deferred.value();");
     } else {
-      reads.add("final var __produced = forward(source);");
+      reads.add("final var __produced = " + produce + ";");
     }
     final var writes = new CollectionWrites<>(mirrorProps());
     var index = 0;
@@ -10456,33 +10595,58 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           ? "final " + field.type() + " " + local + " = __deferred.elements(" + literal(name) + ");"
           : "final var " + local + " = " + readExpr(target, "__produced", field) + ";"
       );
+      // patchInto writes a property only where the partial sent it, and refuses by name, before
+      // anything is written, a sent one generated code cannot write, as the runtime refuses it.
+      final var sent = sentFlags == null ? null : sentFlags.get(name);
       final var choice = setterChoice(target, name);
-      if (choice.member() == null && !container) return null;
-      if (choice.member() != null && setterRefusal(target, name, false) != null) return null;
+      final var unwritable =
+        (choice.member() == null && !container) ||
+        (choice.member() != null && setterRefusal(target, name, false) != null);
+      if (unwritable) {
+        if (sent == null) return null;
+        checks.add(
+          "if (" +
+            sent +
+            ") { throw new IllegalArgumentException(" +
+            literal(
+              PairingMessages.patchIntoPropertyUnwritable(
+                source.getSimpleName().toString(),
+                pairTarget.getSimpleName().toString(),
+                target.getSimpleName().toString(),
+                name
+              )
+            ) +
+            "); }"
+        );
+        continue;
+      }
       final var setterWrite = choice.member() == null ? null : setterWrite(choice, field, local);
       if (!container) {
-        others.add(setterWrite);
+        others.add(guardedBy(sent, setterWrite));
         continue;
       }
       final var hasSetter = setterWrite != null ? "true" : "false";
       reads.add("final var " + held + " = " + readExpr(target, "target", field) + ";");
       checks.add(
-        CONTAINER_COPY +
-          ".refuseUnwritable(" +
-          held +
-          ", " +
-          local +
-          ", " +
-          hasSetter +
-          ", " +
-          (adder != null) +
-          ", " +
-          named +
-          ", " +
-          literal(target.getSimpleName().toString()) +
-          ", " +
-          literal(name) +
-          ");"
+        guardedBy(
+          sent,
+          CONTAINER_COPY +
+            ".refuseUnwritable(" +
+            held +
+            ", " +
+            local +
+            ", " +
+            hasSetter +
+            ", " +
+            (adder != null) +
+            ", " +
+            named +
+            ", " +
+            literal(target.getSimpleName().toString()) +
+            ", " +
+            literal(name) +
+            ");"
+        )
       );
       final var call =
         CONTAINER_COPY +
@@ -10499,9 +10663,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         hasSetter +
         ")";
       if (setterWrite == null) {
-        unset.add(call + ";");
+        unset.add(guardedBy(sent, call + ";"));
       } else {
-        set.add("if (!" + call + ") { " + setterWrite + " }");
+        set.add(guardedBy(sent, "if (!" + call + ") { " + setterWrite + " }"));
       }
     }
     final var statements = new ArrayList<>(reads);
@@ -10511,6 +10675,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     statements.addAll(others);
     statements.add("return target;");
     return statements;
+  }
+
+  /** {@code statement}, run only where {@code sent} holds, or always where it is null. */
+  private static String guardedBy(final String sent, final String statement) {
+    return sent == null ? statement : "if (" + sent + ") { " + statement + " }";
   }
 
   /**

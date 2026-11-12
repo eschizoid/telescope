@@ -51,11 +51,11 @@ same field runs the same rows at run time instead, with the same result.
 
 ## From the wire to the database
 
-| Hop                       | What telescope does there                                                                               | Guide                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md)     |
-| Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                 | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md) |
-| Service and entity        | `into` updates a managed entity in place, and `ADDERS` fills a collection through its adder             | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                         |
+| Hop                       | What telescope does there                                                                                  | Guide                                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body    | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md)     |
+| Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                    | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md) |
+| Service and entity        | `into` and `patchInto` update a managed entity in place, and `ADDERS` fills a collection through its adder | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                         |
 
 At the REST endpoint, a mapped handler can return a single value, a `List`, `Set`, `Optional`, `Page` or
 `ResponseEntity`, and with springdoc on the classpath the API documentation shows the response type. `toFormatted` and
@@ -69,12 +69,13 @@ interface converts itself, as in `order.toOrderDto()`.
 
 At the entity, `into` clears and refills a collection the entity already holds instead of replacing it, so a managed
 `@OneToMany` keeps its identity. Under `ADDERS`, each element goes through the entity's adder, which is where a
-bidirectional association sets its back-reference. With [`telescope-jpa`](jpa/README.md) on the classpath, which the
-Spring Boot starter and the Quarkus extension bring, a lazy collection the persistence provider has not loaded is shared
-rather than copied, so mapping an entity never loads it and never throws `LazyInitializationException` for it, and a
-lazy Hibernate proxy is read as the entity class it stands for.
+bidirectional association sets its back-reference. For a PATCH, `patchInto(entity, changes)` writes the same way only
+the fields the client sent, so a field left out keeps the entity's value. With [`telescope-jpa`](jpa/README.md) on the
+classpath, which the Spring Boot starter and the Quarkus extension bring, a lazy collection the persistence provider has
+not loaded is shared rather than copied, so mapping an entity never loads it and never throws
+`LazyInitializationException` for it, and a lazy Hibernate proxy is read as the entity class it stands for.
 [`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate whose PATCH
-runs `into` on the managed entity and refills its lines through `ADDERS`.
+runs `patchInto` on the managed entity and refills its lines through `ADDERS`.
 
 One module is planned and not built yet: `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
 register mappers with Jackson and bind JSON straight to a type. Typed `before` and `after` edit rows are proposed in

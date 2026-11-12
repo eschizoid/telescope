@@ -4,8 +4,7 @@ The same order API on Quarkus, with the orders kept in memory. The service, its 
 domain's, unchanged; what changes is the container. The partner import's SKU cleanup and mapping are interfaces that
 `telescope-codegen` writes as CDI beans here and as Spring beans in the Spring app.
 
-A request's path: `PATCH /orders/SO-1001` JSON → `OrderChanges` → `OrderState` → the `Order` entity, and back out as an
-`OrderDto`.
+A request's path: `PATCH /orders/SO-1001` JSON → `OrderChanges` → the `Order` entity, and back out as an `OrderDto`.
 
 ```bash
 ./gradlew :examples:demo:quarkus:quarkusDev
@@ -63,7 +62,7 @@ refused import is answered with a 400 whose `trace` says how each field of the p
 ### 3. Service ↔ entity
 
 The entities are the same classes the Spring app persists, kept here by `InMemoryOrders`, so there are no proxies and no
-lazy loading. A PATCH still writes into the entity in place with `STATE.into`, refilling the list of lines it holds
+lazy loading. A PATCH still writes into the entity in place with `EDITS.patchInto`, refilling the list of lines it holds
 through `addLine`, and the same test checks it.
 
 ## Try it

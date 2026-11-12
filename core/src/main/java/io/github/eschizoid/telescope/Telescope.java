@@ -3367,7 +3367,7 @@ public sealed class Telescope<
   static <A, B> BiFunction<A, B, A> bridgePatch(final Telescope<A, B> bridge) {
     if (bridge instanceof BridgeTelescope<?, ?> generated) {
       final var fn = (BridgeFn<A, B>) generated.fn;
-      return fn::patch;
+      return Mapper.bridgePatcher(fn);
     }
     return (base, partial) -> {
       throw new UnsupportedOperationException(

@@ -979,7 +979,10 @@ final OrderEntity managed = repository.findById(id).orElseThrow();
 mapper.into(managed, dto);        // writes dto's mapped fields onto `managed` via setters, same reference back
 repository.save(managed);
 // sparse sibling: only non-null fields of a partial target overlay the base
-final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partial B) -> A
+final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partial B) -> A, a new A
+// the same sparse overlay written in place, MapStruct's @MappingTarget with NullValuePropertyMappingStrategy.IGNORE:
+final Mapper<OrderEntity, OrderChanges> edits = Telescope.mapper(OrderEntity.class, OrderChanges.class);
+edits.patchInto(managed, changes); // only the fields the client sent, collections refilled in place
 
 // Codegen (@Bridge field) form — the same rows; into is generated with the bridge:
 public final class OrderMappers {
@@ -995,7 +998,12 @@ UnsupportedOperationException naming the record (MapStruct can't mutate records 
 writes that has no public setter is refused where MapStruct's @MappingTarget skips it: when the mapper is built, for a
 bean built through its setters, since forward would drop the value as well, and on the first into call, for a bean built
 by a builder or a constructor, which forward writes through and into cannot. Bonus over MapStruct: patch() gives
-null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config.
+null-skipping sparse update without NullValuePropertyMappingStrategy.IGNORE config, and `patchInto(target, partial)`
+writes that sparse update in place: exactly the properties `patch` would overlay, written as `into` writes them, so a
+field the partial leaves null keeps the target's value and a held collection is refilled with its identity kept. A
+property the partial sends that the target has no setter for is refused by name before anything is written; one it
+leaves out is never written. A mapper with a row that writes through a source path has no `patchInto`, since such a row
+names no property of the target.
 
 **Generated path:** a strict `@Bridge` whose target is a bean with a setter for every property it writes gets a static
 `into(target, source)`, and the mapper a `@Bridge` field declares calls it for a target of exactly that class; a
@@ -1008,6 +1016,10 @@ without such a setter, a setter that takes the value only after a check of its c
 has no `into`, so a direct call does not compile, and the field's mapper runs the runtime `into`, which refuses in the
 same words or writes the same result. A generated `into` builds the new object `forward` builds and copies it across;
 where `forward` inlines, as on a flat bean, the JIT can remove that object, and `IntoBenchmark` measures what is left.
+Where the source of a strict `@Bridge` is a bean, the bridge also gets a static `patchInto(target, partial)`, which the
+field's mapper calls for any target, and which writes what the runtime `patchInto` writes, refusing a sent property with
+no setter in the same words; a source that is a record, or a bridge with a row writing through a path, has none, and the
+field's mapper refuses.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
 says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a

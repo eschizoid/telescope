@@ -12,8 +12,7 @@ text; a partner's feed, where every value arrives as a string; a PATCH body that
 invoice that no one object holds. Hand-written, that is a page of getters and setters per shape, and each one drifts the
 day someone adds a field. This demo writes each shape's difference as a few typed rows and lets the build check them.
 
-A request's path: `PATCH /orders/SO-1001` JSON → `OrderChanges` → `OrderState` → the `Order` entity, and back out as an
-`OrderDto`.
+A request's path: `PATCH /orders/SO-1001` JSON → `OrderChanges` → the `Order` entity, and back out as an `OrderDto`.
 
 The service runs three ways over the same code:
 
@@ -159,18 +158,7 @@ public interface OrderImports {
 run time, which says for each field the key it read and the value it took. A quantity sent as `qty` shows up as a line
 with `quantity=null`, next to the refusal `line CAP-03 has a quantity of 0`.
 
-### 2. Service: domain records, patches, merges and computed values
-
-**A PATCH changes only what the client sent.** The service reads the order's state out of the entity as an `OrderState`
-record, lays the client's `OrderChanges` over it with `patch`, which keeps every field the client left null, and writes
-the result back. The fields a client may never change are dropped by name on the `CHANGES` mapper, so a field added to
-`OrderState` later fails the build until someone decides whether a PATCH may change it:
-
-```java
-final OrderState current = order.toOrderState();
-final OrderState wanted = OrderMappers.CHANGES.patch(current, changes);
-OrderMappers.STATE.into(order, wanted);
-```
+### 2. Service: domain rules, merges and computed values
 
 **An order goes through payment and shipping, and the rules hold at each step.** `POST /orders/{n}/pay` takes payment
 for a placed order, `ship` hands a paid order to the carrier, and `cancel` cancels any order that has not shipped. An
@@ -224,18 +212,33 @@ public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
 );
 ```
 
-**A PATCH must update the entity the persistence context manages, and keep its list of lines.**
-`STATE.into(order, state)` writes into the entity in place. It clears the list the entity already holds and refills it
-through `addLine`, so Hibernate's orphan removal deletes the old rows and the new lines get their foreign key:
+**A PATCH changes only what the client sent, on the entity the persistence context manages, and keeps its list of
+lines.** `EDITS.patchInto(order, changes)` writes into the entity in place each field the client sent and nothing else,
+so a field left out keeps its value. A list the client sends is cleared and refilled in the list the entity already
+holds, through `addLine`, so Hibernate's orphan removal deletes the old rows and the new lines get their foreign key.
+The fields a client may never change are dropped by name, so a field added to `Order` later fails the build until
+someone decides whether a PATCH may change it:
 
 ```java
 @Bridge
-public static final Mapper<OrderState, Order> STATE = mapper(
-  OrderState.class,
+public static final Mapper<Order, OrderChanges> EDITS = mapper(
   Order.class,
+  OrderChanges.class,
   writeBean(Order.class, ADDERS),
-  via(OrderState::lines, Order::getLines, CatalogLines.class)
+  via(Order::getLines, OrderChanges::lines, LineEdits.class),
+  drop(Order::getId),
+  drop(Order::getNumber),
+  drop(Order::getCustomer),
+  drop(Order::getStatus),
+  drop(Order::getPlacedOn),
+  drop(Order::getTrackingNumber),
+  drop(Order::getInternalNotes),
+  drop(Order::getPayment)
 );
+```
+
+```java
+OrderMappers.EDITS.patchInto(order, changes);
 ```
 
 **An order's customer is loaded only when something reads it.** On Spring the association is lazy, so the order holds a
@@ -250,9 +253,9 @@ collection Hibernate has not loaded as it is wherever a mapping only copies it. 
 
 `telescope-codegen` refuses a broken row at compile time, with the message the runtime would give.
 [`VerifierTest`](domain/src/test/java/io/github/eschizoid/telescope/demo/VerifierTest.java) compiles two of the demo's
-mappers with one row taken out. The PATCH mapper without `drop(OrderState::payment)` fails with
-`source field 'payment' has no same-name target field`, and the version 2 mapper without the `buyerEmail` rename fails
-naming `buyerEmail`.
+mappers with one row taken out. The PATCH mapper without `drop(Order::getPayment)` fails with
+`source property 'payment' has no same-name target field`, and the version 2 mapper without the `buyerEmail` rename
+fails naming `buyerEmail`.
 
 ## Where each feature is tested
 
@@ -263,7 +266,7 @@ naming `buyerEmail`.
 | `via` with methods and with a class, sealed cases                    | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | `merge`, with a lazy customer proxy among the sources                | `OrderDeskTest`, both apps' `OrderApiTest`             |
 | `OrderMappings` (`order.toOrderDto()`)                               | every test                                             |
-| `patch`, `into` with `ADDERS`                                        | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
+| `patchInto` with `ADDERS`                                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | the order lifecycle and its 409s                                     | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | `@FromMap`, `trace()` in the import's 400                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | `explain()`                                                          | `OrderDeskTest`, `OrderRun`                            |

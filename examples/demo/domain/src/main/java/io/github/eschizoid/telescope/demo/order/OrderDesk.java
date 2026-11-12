@@ -66,9 +66,7 @@ public final class OrderDesk {
     if (changes.lines() != null) {
       checkLines(changes.lines());
     }
-    final OrderState current = order.toOrderState();
-    final OrderState wanted = OrderMappers.CHANGES.patch(current, changes);
-    OrderMappers.STATE.into(order, wanted);
+    OrderMappers.EDITS.patchInto(order, changes);
     return orders.save(order);
   }
 

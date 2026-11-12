@@ -112,6 +112,24 @@ public interface BridgeFn<A, B> {
   }
 
   /**
+   * Write into {@code target} the properties {@link #patch} overlays from {@code partial}, in
+   * place, as {@code Mapper.patchInto} does, and answer {@code target}. A bridge {@code @Bridge}
+   * generates for a source bean answers with its own {@code patchInto}; a mapper between two sealed
+   * interfaces writes a case converted through its bridge with it.
+   *
+   * @throws UnsupportedOperationException by default: a pair written by hand, or a bridge whose
+   *     source generated code cannot write in place, has no in-place partial update
+   */
+  default A patchInto(final A target, final B partial) {
+    throw new UnsupportedOperationException(
+      getClass().getName() +
+        " has no patchInto: a conversion pair written by hand, or a generated bridge whose source is a record" +
+        " or has a row writing through a source path, cannot write a partial in place. If it is a generated" +
+        " bridge, re-run the @Bridge processor."
+    );
+  }
+
+  /**
    * Whether a {@code @Bridge} names this bridge's pair. A bridge {@code @Bridge} generates for the
    * pair it names does. One the processor derives for a nested pair with no {@code @Bridge} of its
    * own does not: it carries the configuration of whichever bridges reached that pair, not the
