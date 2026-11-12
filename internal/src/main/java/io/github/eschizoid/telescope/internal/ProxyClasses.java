@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal;
 
+import java.util.Iterator;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
@@ -35,10 +36,7 @@ public interface ProxyClasses {
    * @return the class {@code value} stands for
    */
   static Class<?> classOf(final Object value) {
-    final var registered = Registered.IMPLEMENTATION;
-    if (registered == null) return value.getClass();
-    final var resolved = registered.resolve(value);
-    return resolved != null ? resolved : value.getClass();
+    return Registered.classOf(value, Registered.IMPLEMENTATION);
   }
 
   /**
@@ -50,6 +48,13 @@ public interface ProxyClasses {
 
     private Registered() {}
 
+    /** The class {@code value} stands for under {@code registered}, which may be null. */
+    static Class<?> classOf(final Object value, final ProxyClasses registered) {
+      if (registered == null) return value.getClass();
+      final var resolved = registered.resolve(value);
+      return resolved != null ? resolved : value.getClass();
+    }
+
     /**
      * The first active implementation the loader finds. A registration this copy of the module
      * cannot load, such as one a parent loader's {@code META-INF/services} names for another copy
@@ -57,7 +62,11 @@ public interface ProxyClasses {
      * loader moves to the next registration after each one it fails on.
      */
     private static ProxyClasses load() {
-      final var registrations = ServiceLoader.load(ProxyClasses.class, ProxyClasses.class.getClassLoader()).iterator();
+      return first(ServiceLoader.load(ProxyClasses.class, ProxyClasses.class.getClassLoader()).iterator());
+    }
+
+    /** The first active implementation {@code registrations} yields, passing over one it fails on. */
+    static ProxyClasses first(final Iterator<ProxyClasses> registrations) {
       // Bounded, so a loader that failed on the same registration again could not spin forever.
       for (var attempts = 0; attempts < MAX_REGISTRATIONS; attempts++) {
         try {
