@@ -199,7 +199,10 @@ Telescope.of(Page.class)                  // Page is a record holding List<Legac
 **`Telescope.mapper(...)` — the `Mapper<A, B>` sibling.** Same deep recursion, but the return is a `Mapper<A, B>`
 exposing `forward` / `backward` / `read` / `patch` / `asTelescope` / `liftList` / `liftSet` / `liftOptional` /
 `liftMapValues`. `patch(base, partial)` overlays non-null fields of `partial` onto `base` — useful for sparse JSON /
-form updates. It always returns a new object, even when `partial` changes nothing. `asTelescope()` returns the mapper as
+form updates. It always returns a new object, even when `partial` changes nothing. Where `base` is a bean, a
+`Collection` or `Map` the partial supplies is refilled in the container `base` holds, as `into` refills one, so the
+result holds that same instance and `base` sees the new elements; a container that cannot be changed, and a collection
+the rebuild fills through its adders, take the converted one instead. `asTelescope()` returns the mapper as
 a `Telescope<A, B>` for `.then(...)` composition into a longer typed path (bridging record-side navigation into
 entity-side leaves, or vice versa). The `lift*` methods promote an element-level mapper to a container-level mapper
 without going through a `via(...)` row — useful when the lifted mapper is the call-site root (e.g., a bulk handler that

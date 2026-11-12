@@ -55,8 +55,9 @@ import java.util.function.Supplier;
  * a held container that can be changed is cleared and refilled with the converted elements, so it
  * keeps its identity, and one that cannot be changed is replaced through the setter. Under the
  * {@code ADDERS} write strategy each element goes through the target's adder instead, and the value
- * {@code into} reads from is built with no adder run on it. Both paths call the same methods here
- * for it.
+ * {@code into} reads from is built with no adder run on it. {@code patch} refills a container the
+ * bean it rebuilds from holds the same way, through {@link #patched}. Both paths call the same
+ * methods here for it.
  *
  * <p>Both decisions go through one {@link Policy}. The standard policy is the behavior described
  * above. A module that knows more about a container, such as whether a persistence provider has

@@ -677,8 +677,11 @@ or `Map` the target's getter returns that can be changed is cleared and refilled
 removal on a managed collection keeps working), through the adder under `ADDERS`, each adder running once per element; a
 null one, or one that cannot be changed (an unmodifiable JDK container, `Arrays.asList`, a library's immutable
 collection), is replaced through the setter, as TARGET_IMMUTABLE does; and only a container property with no setter that
-holds none or an unchangeable one is refused by name. The collection write goes through the `ContainerCopy.Policy` SPI,
-which a persistence module can replace (skip an unloaded collection, merge by `@Id`). The remaining differences:
+holds none or an unchangeable one is refused by name; (5) `patch(base, partial)` on a bean refills each container `base`
+holds that the partial supplies the same way, so the result keeps that instance, except a collection the rebuild fills
+through its adders. The collection copy and write go through the `ContainerCopy.Policy` SPI, which
+[telescope-jpa](../jpa/README.md) replaces to share a lazy collection the provider has not loaded rather than copy it;
+merging by `@Id` is not decided yet. The remaining differences:
 ACCESSOR_ONLY on a collection with neither a setter nor an adder has no form, so such a class gains an adder, and
 TARGET_IMMUTABLE as an opt-out of the merge for a modifiable container has no form. into() also needs a public setter
 for every property other than a container that the mapper writes, refusing by name a property that has none (see

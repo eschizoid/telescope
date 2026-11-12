@@ -21,6 +21,15 @@ dependencies {
     jmhAnnotationProcessor(project(":codegen"))
     jmhAnnotationProcessor("org.mapstruct:mapstruct-processor:1.6.3")
     jmhImplementation("org.mapstruct:mapstruct:1.6.3")
+    // LoadCheckBenchmark instantiates telescope-jpa's container policy itself. Its compiled classes
+    // come without the module's resources, so the policy's service registration stays off the class
+    // path and every other benchmark copies through the standard policy as before. Hibernate is
+    // there so the persistence utility the policy calls asks a real provider.
+    jmhRuntimeOnly(
+        files(rootProject.project(":jpa").layout.buildDirectory.dir("classes/java/main")).builtBy(":jpa:compileJava"),
+    )
+    jmhRuntimeOnly(libs.jakartaPersistenceApi)
+    jmhRuntimeOnly(libs.hibernateCore)
 }
 
 tasks.withType<JavaCompile>().configureEach {

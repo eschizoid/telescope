@@ -68,8 +68,9 @@ class-definition-free shape `Records.buildCtorFn` already used for the canonical
 no-arg-constructor + setter + getter paths, and the whole `BuilderWriter` path (`builder()` → fluent setters →
 `build()`), so mapping to an immutable `@Builder` target works too. The JVM keeps the `LambdaMetafactory` hot path
 unchanged; the branch is one folded `static final boolean`. This ships in `telescope-core`, so the runtime path is
-AOT-capable out of the box. (The one exception is the optional Hibernate-proxy accessor path, which stays
-JVM/codegen-only under AOT.)
+AOT-capable out of the box. Core holds no persistence-provider code: resolving a Hibernate proxy to its entity class is
+telescope-jpa's, whose two proxy accessors take the same branch to `MhAccessors` closures, and `:jpa:imageTest` runs
+that module's suite on them.
 
 **Wall A — `SerializedLambda` decode.** `.field(User::name)` recovers the field name by invoking the method reference's
 `writeReplace()` to read a `SerializedLambda`. native-image only synthesizes `writeReplace()` for a lambda whose
@@ -312,8 +313,9 @@ a generated `@Focus`/`@BeanFocus` navigator composes its lenses from method refe
 navigator class is itself a lambda-capturing type and goes in `serialization-config.json` alongside your own call-site
 classes. A `Telescope.all` built only from navigator paths fuses inside an image without any reflection registration for
 the navigated records: each record level whose edits all came from a navigator rebuilds through the generated setters.
-The one runtime path still JVM/codegen-only under AOT is the Hibernate-proxy accessor. The workflow re-checks the whole
-surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns the job red.
+No runtime path is JVM-only under AOT. The Hibernate-proxy accessors live in telescope-jpa and take the `IN_IMAGE`
+branch; the native binary here does not exercise them, since it has no persistence provider. The
+workflow re-checks the whole surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns the job red.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 
