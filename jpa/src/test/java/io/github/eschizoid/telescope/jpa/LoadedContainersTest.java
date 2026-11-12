@@ -140,21 +140,27 @@ class LoadedContainersTest {
   class TheLoadCheck {
 
     @Test
-    @DisplayName("counts a JDK container as loaded without asking the provider")
+    @DisplayName("counts a JDK container as loaded without asking a provider")
     void aJdkContainerIsLoaded() {
-      assertTrue(LoadStates.loaded(new ArrayList<>()));
-      assertTrue(LoadStates.loaded(new HashSet<>()));
+      try (final var providers = CountingProviders.install()) {
+        assertTrue(LoadStates.loaded(new ArrayList<>()));
+        assertTrue(LoadStates.loaded(new HashSet<>()));
+        assertEquals(0, providers.asked());
+      }
     }
 
     @Test
-    @DisplayName("asks the provider about one of its own collections, loaded or not")
+    @DisplayName("asks the providers about one of their own collections, loaded or not")
     void aProviderCollectionIsAsked() {
       library.inSession(session -> {
         final var books = Library.page(session).getFirst().getBooks();
         assertInstanceOf(PersistentBag.class, books);
-        assertFalse(LoadStates.loaded(books));
-        Hibernate.initialize(books);
-        assertTrue(LoadStates.loaded(books));
+        try (final var providers = CountingProviders.install()) {
+          assertFalse(LoadStates.loaded(books));
+          Hibernate.initialize(books);
+          assertTrue(LoadStates.loaded(books));
+          assertEquals(2, providers.asked());
+        }
         return null;
       });
     }
