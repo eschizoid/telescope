@@ -6,8 +6,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Exempts the annotated element's {@code Telescope.map} / {@code mapper} / {@code mapperForward}
- * call sites from compile-time mapping verification. The construction-time validation still runs —
+ * Exempts the annotated element's {@code Telescope.map} / {@code mapper} / {@code mapperForward} /
+ * {@code merge} call sites from compile-time mapping verification. The construction-time validation still runs —
  * this only silences the compile-time twin, for sites whose rows or classes are assembled
  * dynamically and can't be statically analyzed anyway.
  *

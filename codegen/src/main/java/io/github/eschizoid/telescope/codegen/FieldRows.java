@@ -674,15 +674,14 @@ final class FieldRows {
         return Refused.javacReports(row);
       }
       // The reader names the source the row reads only when it is an accessor of it: an unbound
-      // reference to an instance method taking no argument.
+      // reference to an instance method, which reads the value it is handed as the method's
+      // receiver and so takes no argument.
       final var qualifier = elementAt(unit, ((MemberReferenceTree) rowArgs.get(0)).getQualifierExpression());
       final var notAnAccessor = MergeReaders.refusal(
         index,
         reader.getEnclosingElement().getSimpleName().toString(),
         reader.getSimpleName().toString(),
-        qualifier instanceof TypeElement &&
-          !reader.getModifiers().contains(Modifier.STATIC) &&
-          reader.getParameters().isEmpty()
+        qualifier instanceof TypeElement && !reader.getModifiers().contains(Modifier.STATIC)
       );
       if (notAnAccessor != null) return new Refused(rowArgs.get(0), notAnAccessor);
       final var source = (TypeElement) qualifier;

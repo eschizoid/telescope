@@ -677,19 +677,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       for (var i = 1; i < args.size(); i++) {
         if (!(args.get(i) instanceof MethodInvocationTree row)) continue;
         if (!(elementAt(row.getMethodSelect()) instanceof ExecutableElement step)) continue;
-        if (!(step.getEnclosingElement() instanceof TypeElement owner)) continue;
+        final var owner = (TypeElement) step.getEnclosingElement();
         if (!owner.getQualifiedName().contentEquals(MERGE_STEP_FQN) || !step.getSimpleName().contentEquals("from")) {
           continue;
         }
         if (!(row.getArguments().getFirst() instanceof MemberReferenceTree reference)) continue;
         if (!(elementAt(reference) instanceof ExecutableElement reader)) continue;
+        // An unbound reference to an instance method reads the value it is handed as the method's
+        // receiver, so as an accessor it takes no argument.
         final var refusal = MergeReaders.refusal(
           i - 1,
           reader.getEnclosingElement().getSimpleName().toString(),
           reader.getSimpleName().toString(),
           elementAt(reference.getQualifierExpression()) instanceof TypeElement &&
-            !reader.getModifiers().contains(Modifier.STATIC) &&
-            reader.getParameters().isEmpty()
+            !reader.getModifiers().contains(Modifier.STATIC)
         );
         if (refusal != null) report(reference, refusal);
       }

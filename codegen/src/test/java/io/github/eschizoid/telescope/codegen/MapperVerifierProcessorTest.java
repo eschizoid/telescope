@@ -125,6 +125,74 @@ class MapperVerifierProcessorTest {
     );
   }
 
+  /** A merge's classes, a reader of each kind, and a helper building a row out of place. */
+  private static final String MERGE_MODEL = """
+    package demo;
+    import static io.github.eschizoid.telescope.mapping.MergeStep.*;
+    import io.github.eschizoid.telescope.Telescope;
+    import io.github.eschizoid.telescope.annotations.UncheckedMapping;
+    import io.github.eschizoid.telescope.mapping.MergeStep;
+    import java.util.List;
+    record Customer(String id, String name) {}
+    record Profile(String id, String name) {}
+    class H {
+      static final H INSTANCE = new H();
+      static String nameOf(Customer c) { return c.name(); }
+      String label(Customer c) { return c.name(); }
+      static MergeStep<Profile> step() { return from(H::nameOf, Profile::name); }
+    }
+    """;
+
+  @Test
+  @DisplayName("a merge row built out of place, or reading through a lambda, is left to the merge when it is built")
+  void aMergeRowTheVerifierCannotReadIsLeftToTheMerge() {
+    final var compilation = verify(
+      MERGE_MODEL +
+        """
+        class Holder {
+          static final MergeStep<Profile> HELD = from(H::nameOf, Profile::name);
+          static final Object FIELD = Telescope.merge(Profile.class, HELD);
+          static final Object HELPER = Telescope.merge(Profile.class, H.step());
+          static final Object LAMBDA = Telescope.merge(Profile.class, from((Customer c) -> c.name(), Profile::name));
+        }
+        """
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a merge nested in another call is read, and one under @UncheckedMapping is not")
+  void aNestedMergeIsReadAndAnUncheckedOneIsNot() {
+    final var compilation = verify(
+      MERGE_MODEL +
+        """
+        class Holder {
+          static final Object NESTED = List.of(Telescope.merge(Profile.class, from(H::nameOf, Profile::name)));
+          @UncheckedMapping("the rows are checked when the merge is built")
+          static final Object UNCHECKED = Telescope.merge(Profile.class, from(H::nameOf, Profile::name));
+        }
+        """
+    );
+    assertFalse(compilation.success());
+    assertEquals(1, compilation.errorMessages().split("ERROR", -1).length - 1, compilation::errorMessages);
+    assertTrue(compilation.hasError(PairingMessages.mergeReaderNotAnAccessor(0, "H::nameOf")), compilation::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a merge row javac cannot resolve is javac's to report, and the verifier adds nothing")
+  void anUnresolvedMergeRowIsJavacs() {
+    final var compilation = verify(
+      MERGE_MODEL +
+        """
+        class Holder {
+          static final Object M = Telescope.merge(Profile.class, from(Customer::nope, Profile::name));
+        }
+        """
+    );
+    assertFalse(compilation.success());
+    assertFalse(compilation.errorMessages().contains("Telescope.merge"), compilation::errorMessages);
+  }
+
   @Nested
   @DisplayName("Rows through a getter inherited from an abstract base")
   class InheritedAccessorRows {
