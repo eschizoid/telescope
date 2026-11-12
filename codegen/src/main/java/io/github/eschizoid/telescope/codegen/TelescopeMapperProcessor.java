@@ -739,7 +739,10 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var refs = new ArrayList<>(List.of(TELESCOPE, TRANSFORMATION, OBJECTS));
     // A CDI client proxy is built through the no-argument constructor, the only one a bean with
     // nothing to inject has, so field initializers would build the path once more for the proxy.
-    // The container calls the @PostConstruct callback on the bean instance only.
+    // The container calls the @PostConstruct callback on the bean instance only. The callback's
+    // name starts with '$', which the JLS keeps for mechanically generated code, so a default
+    // method the interface declares does not take it; it is package-private because ArC reaches a
+    // private callback only through reflection.
     final var cachesAfterConstruction = container == Container.CDI;
     if (cachesAfterConstruction) {
       refs.add(POST_CONSTRUCT);
@@ -756,7 +759,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
         out.println("  private " + pathType + " path;");
         out.println("  private " + transformationType + " transformation;");
         out.println("  @" + names.ref(POST_CONSTRUCT));
-        out.println("  void cachePathAndTransform() {");
+        out.println("  void $telescopeCachePathAndTransform() {");
         out.println("    path = " + buildPath);
         out.println("    transformation = " + buildTransform);
         out.println("  }");
@@ -853,7 +856,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     }
     // A telescope starter names the container the module runs in, which a bare annotation does
     // not: an annotation can arrive through a transitive dependency of an application that never
-    // runs that container.
+    // runs that container. Each starter brings its own container's annotation with it.
     final var springStarter = elements.getTypeElement(SPRING_STARTER) != null;
     final var quarkusStarter = elements.getTypeElement(QUARKUS_STARTER) != null;
     if (springStarter && quarkusStarter) {
@@ -869,14 +872,14 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       );
       return null;
     }
-    if (springStarter && spring) {
-      return Container.SPRING;
-    }
-    if (quarkusStarter && cdi) {
+    if (quarkusStarter) {
       return Container.CDI;
     }
-    // With no starter, Spring wins over CDI: a module that has Spring generates a Spring component
-    // whatever else is on its classpath, and CDI needs the annotation alone or the option.
+    // Otherwise Spring wins over CDI: a module that has Spring generates a Spring component
+    // whatever
+    // else is on its classpath, and CDI needs its annotation alone or the option. The Spring
+    // starter
+    // needs no branch of its own, since it brings Spring's annotation and so lands here.
     if (spring) {
       return Container.SPRING;
     }
@@ -1041,6 +1044,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var name = blueprint.getSimpleName() + "Impl";
     final var qualified = pkg.isEmpty() ? name : pkg + "." + name;
     // The bean name, as the annotation's value literal; a CDI bean with none carries no @Named.
+    // Both annotations declare value() with a default, so the defaults always hold it.
     final var value = processingEnv
       .getElementUtils()
       .getElementValuesWithDefaults(config)
@@ -1049,9 +1053,9 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       .filter(entry -> entry.getKey().getSimpleName().contentEquals("value"))
       .map(Map.Entry::getValue)
       .findFirst()
-      .orElse(null);
-    final var beanName = value == null ? "\"\"" : value.toString();
-    final var cdiNamed = value != null && !value.getValue().toString().isEmpty();
+      .orElseThrow();
+    final var beanName = value.toString();
+    final var cdiNamed = !value.getValue().toString().isEmpty();
     final var named = new HashSet<String>();
     if (container == Container.SPRING) {
       named.add(SPRING_COMPONENT);

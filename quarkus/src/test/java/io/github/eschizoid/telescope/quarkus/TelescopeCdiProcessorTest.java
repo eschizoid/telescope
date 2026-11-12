@@ -162,10 +162,34 @@ class TelescopeCdiProcessorTest {
       .contains("@ApplicationScoped\n@Named(\"city\")\npublic class CityTransformerImpl implements CityTransformer {")
       .contains("  private Telescope<User, String> path;\n  private Transformation<String> transformation;\n")
       .contains(
-        "  @PostConstruct\n  void cachePathAndTransform() {\n" +
+        "  @PostConstruct\n  void $telescopeCachePathAndTransform() {\n" +
           "    path = Objects.requireNonNull(CityTransformer.super.path(), \"path() must not return null\");"
       )
       .doesNotContain("private final");
+  }
+
+  @Test
+  @DisplayName("a transformer interface may declare any default method of its own beside the generated callback")
+  void transformerDefaultMethodDoesNotClashWithTheCallback() {
+    final var transformer = source(
+      "demo.CacheTransformer",
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
+      import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+      import io.github.eschizoid.telescope.inject.Transformation;
+      @TelescopeTransformer
+      public interface CacheTransformer extends TelescopeTransformation<User, String> {
+        @Override default Telescope<User, String> path() { return Telescope.of(User.class).field(User::city); }
+        @Override default Transformation<String> transform() { return new Transformation<>(null, String::strip); }
+        default void cachePathAndTransform() {}
+      }
+      """
+    );
+    final var result = compileAll(List.of(), USER, USER_DTO, transformer);
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.warningsInGenerated()).isEmpty();
   }
 
   @Test
