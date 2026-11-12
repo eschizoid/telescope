@@ -220,6 +220,12 @@ class PathShorthandBridgeTest {
     );
     sources.add(
       ProcessorHarness.source(
+        "ps.Other",
+        "package ps; " + focus + "public record Other(Outer customer, String note) {}"
+      )
+    );
+    sources.add(
+      ProcessorHarness.source(
         "ps.Flat",
         "package ps; public record Flat(String city, String label, int zip, int qty) {}"
       )
@@ -267,6 +273,18 @@ class PathShorthandBridgeTest {
       assertEquals(shorthand.generated().get(name), navigator.generated().get(name), name);
     }
     assertEquals(messages(shorthand), messages(navigator));
+  }
+
+  @Test
+  @DisplayName("a navigator of another class is refused on the row, though its steps name properties the source has")
+  void aNavigatorOfAnotherClassIsRefused() {
+    // Other and Order both have a customer of type Outer, so read by name alone the steps would
+    // read Order's own property; the runtime refuses the row, as a path rooted elsewhere.
+    final var refused = navigated("Order.class, Flat.class", "to(OtherTelescope.of().customer().label(), Flat::label)");
+    assertTrue(
+      refused.hasError("this path starts at Other, which is not Order or a class it extends; start it at Order"),
+      refused::errorMessages
+    );
   }
 
   @Test
