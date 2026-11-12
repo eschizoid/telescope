@@ -83,6 +83,14 @@ reads the order's customer back into a card through `backward`. The field has no
 support lookup does not need generated code, so it runs on the runtime path, which is where every mapper can start. That
 path reads the proxy through getters looked up on `Customer` itself and loads the row once.
 
+The starter brings [`telescope-jpa`](../../../jpa/README.md), and with JPA on the classpath it does two things here.
+It resolves the customer proxy to `Customer`, which is what lets the invoice's `merge` find it: a merge files each
+source under its class, and without the module the proxy is filed under its generated subclass, so
+`from(Customer::getName, InvoiceDto::billTo)` would find no customer. And wherever a mapping only copies a collection
+whose type is the same on both sides, it leaves one Hibernate has not loaded as it is instead of loading it to copy it.
+The order list does not need that: a mapper reads only the properties its target declares, so the summaries read the
+customer and the lines their total comes from, and never the tags.
+
 `spring.jpa.open-in-view` stays on in [`application.yml`](src/main/resources/application.yml) because a mapped response
 is converted after the handler returns, when the lazy customer, lines and tags are read.
 

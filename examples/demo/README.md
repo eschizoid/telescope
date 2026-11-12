@@ -241,7 +241,10 @@ public static final Mapper<OrderState, Order> STATE = mapper(
 **An order's customer is loaded only when something reads it.** On Spring the association is lazy, so the order holds a
 Hibernate proxy until then. The support team's `GET /orders/{n}/customer` reads that proxy into a `CustomerCard` through
 a mapper with no `@Bridge`, on the runtime path, which reads it as the `Customer` it stands for and loads the row once.
-The [Spring app's README](spring/README.md) has the details.
+The invoice's `merge` files the same proxy under `Customer` because [`telescope-jpa`](../../jpa/README.md), which the
+Spring starter brings, resolves a Hibernate proxy to the entity class it stands for. The same module leaves a lazy
+collection Hibernate has not loaded as it is wherever a mapping only copies it. The
+[Spring app's README](spring/README.md) has the details.
 
 ## The build checks the mappers
 
