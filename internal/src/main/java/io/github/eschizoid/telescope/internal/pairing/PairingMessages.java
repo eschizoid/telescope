@@ -401,7 +401,7 @@ public final class PairingMessages {
    * {@code name}, a class's simple name, which a declared type always has, after the indefinite
    * article its first letter takes in speech.
    */
-  private static String withArticle(final String name) {
+  public static String withArticle(final String name) {
     return ("aeiouAEIOU".indexOf(name.charAt(0)) >= 0 ? "an " : "a ") + name;
   }
 
@@ -1947,6 +1947,149 @@ public final class PairingMessages {
     return name + position + message.substring(name.length());
   }
 
+  /**
+   * A JSON value a binder cannot take into the property at {@code path}, in the words {@link
+   * #notAValue} refuses a text value with. {@code got} is the value as the document writes it,
+   * {@code 1.5} or {@code "12x"}, or the kind of a structure, {@code an object} or {@code an array};
+   * {@code what} is the property's type with its article, as {@link #scalarPhrase} writes a scalar.
+   * The message reads {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column 18}. A path
+   * names a nested property after its parent, joined by a dot, and an element by its position as
+   * {@link #elementPosition} writes it. An empty path is the document itself.
+   */
+  public static String jsonNotAValue(
+    final String path,
+    final String got,
+    final String what,
+    final int line,
+    final int column
+  ) {
+    return jsonSubject(path) + " got " + got + ", not " + what + jsonAt(line, column);
+  }
+
+  /**
+   * A JSON object with no value for keys its target requires. {@code missing} names each key and
+   * the property it fills, {@code "sku" (component 'sku')}, and {@code path} where the object is,
+   * empty for the document itself. A key holding {@code null} counts as missing, as it does for an
+   * untyped map.
+   */
+  public static String jsonMissingRequired(
+    final String path,
+    final List<String> missing,
+    final String target,
+    final int line,
+    final int column
+  ) {
+    return (
+      "TelescopeJson.fromJson: " +
+      (path.isEmpty() ? "the document" : "the object at '" + path + "'") +
+      " carries no value for required " +
+      (missing.size() == 1 ? "key " : "keys ") +
+      String.join(", ", missing) +
+      " of " +
+      target +
+      jsonAt(line, column)
+    );
+  }
+
+  /**
+   * A property of {@code target} no row names, whose declared type has no reading from JSON.
+   * {@code kind} is {@code component} for a record and {@code property} for a bean, and {@code
+   * reason} names the innermost type at fault and the remedy.
+   */
+  public static String jsonUnbindable(
+    final String kind,
+    final String name,
+    final String target,
+    final String declared,
+    final String reason
+  ) {
+    return (
+      "TelescopeJson.fromJson: " +
+      kind +
+      " '" +
+      name +
+      "' of " +
+      target +
+      " is declared " +
+      declared +
+      " and no row names it: " +
+      reason
+    );
+  }
+
+  /** A type the binder is asked to build that is neither a record nor a bean it can build. */
+  public static String jsonNotBindable(final String type) {
+    return (
+      "TelescopeJson.fromJson: " +
+      type +
+      " is neither a record nor a class with properties to bind, so no JSON object can build it"
+    );
+  }
+
+  /** A row naming a property its class does not have. */
+  public static String jsonRowOffTarget(final String name, final String target, final List<String> known) {
+    return (
+      "TelescopeJson.fromJson: a row names '" +
+      name +
+      "', which is not a component or property of " +
+      target +
+      ". Known fields: " +
+      known +
+      "."
+    );
+  }
+
+  /** Two rows naming one property. */
+  public static String jsonDuplicateRow(final String name, final String target) {
+    return "TelescopeJson.fromJson: two rows name '" + name + "' of " + target + "; keep one";
+  }
+
+  /** A row naming a property of a class the binder never builds. */
+  public static String jsonRowNeverReached(final String name, final String rowClass, final String target) {
+    return (
+      "TelescopeJson.fromJson: a row names '" +
+      name +
+      "' of " +
+      rowClass +
+      ", which " +
+      target +
+      " never holds, so the row would never be read"
+    );
+  }
+
+  /**
+   * Two properties of one object reading the same key. A streaming binder reads each value once,
+   * so the value cannot fill both.
+   */
+  public static String jsonKeyReadTwice(
+    final String key,
+    final String first,
+    final String second,
+    final String target
+  ) {
+    return (
+      "TelescopeJson.fromJson: '" +
+      first +
+      "' and '" +
+      second +
+      "' of " +
+      target +
+      " both read the key \"" +
+      key +
+      "\", and a JSON value is read once; give one of them a row reading another key"
+    );
+  }
+
+  /** The subject a JSON refusal opens with: the quoted path, or the document itself. */
+  private static String jsonSubject(final String path) {
+    return path.isEmpty() ? "the document" : "'" + path + "'";
+  }
+
+  /** Where in a JSON document a message points: {@code , at line 3, column 18}. */
+  private static String jsonAt(final int line, final int column) {
+    return ", at line " + line + ", column " + column;
+  }
+
   /** The text {@link #notAValue} puts after the value, which generated code writes as is. */
   public static String notAValueTail(final String what) {
     return "\", not " + what;
@@ -2158,7 +2301,7 @@ public final class PairingMessages {
     if (scalar == Scalar.ENUM) noun = "constant of " + enumName;
     else if (primitive) noun = scalar.primitive();
     else noun = scalar.className().substring(scalar.className().lastIndexOf('.') + 1);
-    return ("aeiouAEIOU".indexOf(noun.charAt(0)) >= 0 ? "an " : "a ") + noun;
+    return withArticle(noun);
   }
 
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
