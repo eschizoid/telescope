@@ -781,6 +781,52 @@ public final class PairingMessages {
   }
 
   /**
+   * A mapper's {@code patchInto} on a mapper with a row writing through a source path, which names
+   * no property of {@code source} for {@code patchInto} to write. The runtime and the generated
+   * bridge refuse it in these words.
+   */
+  public static String patchIntoThroughPath(final String source) {
+    return (
+      "patchInto() writes into " +
+      source +
+      " each property the partial supplies, and a row of this mapper writes through a source path, which" +
+      " names no property of it. Call patch(base, partial) and write the result."
+    );
+  }
+
+  /**
+   * A mapper's {@code patchInto} handed a {@code bean} with no setter that takes {@code property},
+   * a property the partial supplies. {@code patchInto} updates the object it is given through its
+   * setters, as {@code into} does, so it cannot update that property in place.
+   */
+  public static String patchIntoPropertyUnwritable(
+    final String source,
+    final String target,
+    final String bean,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": patchInto writes '" +
+      property +
+      "', which the partial supplies, into the " +
+      bean +
+      " it is given through a setter, and " +
+      bean +
+      " has no setter that takes it, so patchInto cannot update it in place. Give " +
+      bean +
+      " a setter for '" +
+      property +
+      "', or call patch(base, partial) for a new " +
+      bean +
+      "."
+    );
+  }
+
+  /**
    * A mapper's {@code into} handed a {@code bean} with no setter that takes {@code property}, a
    * property the mapper writes. {@code into} updates the object it is given through its setters, so
    * it cannot update that property in place.

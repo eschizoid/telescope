@@ -42,6 +42,15 @@ class BridgeProcessorTest {
     return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
   }
 
+  /** The text of the method of {@code source} whose declaration contains {@code signature}. */
+  private static String methodNamed(final String source, final String signature) {
+    final var start = source.indexOf(signature);
+    if (start < 0) {
+      throw new AssertionError("no method " + signature.trim() + " in\n" + source);
+    }
+    return source.substring(start, source.indexOf("\n  }\n", start));
+  }
+
   /**
    * Non-overlapping occurrence count of {@code needle} in {@code haystack}. Used to pin the
    * single-read guarantee: each source-field accessor appears exactly once in the generated method
@@ -203,7 +212,10 @@ class BridgeProcessorTest {
       assertNotNull(bridge, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
       assertEquals(1, occurrences(bridge, "s.getStatus()"), bridge);
       assertEquals(1, occurrences(bridge, "t.getStatus()"), bridge);
-      assertEquals(1, occurrences(bridge, "partial.getStatus()"), bridge);
+      // patch and the overlay patchInto reads from each read the partial once per call.
+      assertEquals(1, occurrences(methodNamed(bridge, " patch(final "), "partial.getStatus()"), bridge);
+      assertEquals(1, occurrences(methodNamed(bridge, " __overlaid(final "), "partial.getStatus()"), bridge);
+      assertEquals(2, occurrences(bridge, "partial.getStatus()"), bridge);
     }
 
     @Test

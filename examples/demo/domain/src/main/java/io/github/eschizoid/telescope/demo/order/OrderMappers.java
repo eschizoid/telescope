@@ -140,37 +140,27 @@ public final class OrderMappers {
   );
 
   /**
-   * An order and its state as a value, both ways. {@code order.toOrderState()} reads the state out
-   * of the entity; {@code STATE.into(order, state)} writes it back into the entity the persistence
-   * context manages, refilling the lists it already holds through {@link Order#addLine(OrderLine)}
-   * and {@link Order#addTag(String)} instead of replacing them.
+   * The body of a PATCH against the order. {@code EDITS.patchInto(order, changes)} writes into the
+   * entity the persistence context manages every field the client sent and nothing else, and
+   * refills the lists the entity already holds through {@link Order#addLine(OrderLine)} and {@link
+   * Order#addTag(String)} instead of replacing them. Each line the client names is priced from the
+   * catalog. The fields a client may never change are dropped by name, so a field added to the
+   * order later fails the build until someone decides whether a PATCH may change it.
    */
   @Bridge
-  public static final Mapper<OrderState, Order> STATE = mapper(
-    OrderState.class,
+  public static final Mapper<Order, OrderChanges> EDITS = mapper(
     Order.class,
-    writeBean(Order.class, ADDERS),
-    via(OrderState::lines, Order::getLines, CatalogLines.class)
-  );
-
-  /**
-   * The body of a PATCH against the order's state. {@code CHANGES.patch(state, changes)} keeps
-   * every field the client left null and takes every field it sent. The fields a client may never
-   * change are dropped by name, so a field added to the state later fails the build until someone
-   * decides whether a PATCH may change it.
-   */
-  @Bridge
-  public static final Mapper<OrderState, OrderChanges> CHANGES = mapper(
-    OrderState.class,
     OrderChanges.class,
-    drop(OrderState::id),
-    drop(OrderState::number),
-    drop(OrderState::customer),
-    drop(OrderState::status),
-    drop(OrderState::placedOn),
-    drop(OrderState::trackingNumber),
-    drop(OrderState::internalNotes),
-    drop(OrderState::payment)
+    writeBean(Order.class, ADDERS),
+    via(Order::getLines, OrderChanges::lines, LineEdits.class),
+    drop(Order::getId),
+    drop(Order::getNumber),
+    drop(Order::getCustomer),
+    drop(Order::getStatus),
+    drop(Order::getPlacedOn),
+    drop(Order::getTrackingNumber),
+    drop(Order::getInternalNotes),
+    drop(Order::getPayment)
   );
 
   /**

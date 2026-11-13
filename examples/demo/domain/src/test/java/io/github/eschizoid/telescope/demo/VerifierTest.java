@@ -24,26 +24,32 @@ class VerifierTest {
       """
       package demo.broken;
       import static io.github.eschizoid.telescope.mapping.Mapping.drop;
+      import static io.github.eschizoid.telescope.mapping.Mapping.via;
+      import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
+      import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
       import io.github.eschizoid.telescope.Telescope;
       import io.github.eschizoid.telescope.demo.api.OrderChanges;
-      import io.github.eschizoid.telescope.demo.order.OrderState;
+      import io.github.eschizoid.telescope.demo.order.LineEdits;
+      import io.github.eschizoid.telescope.demo.order.Order;
       class Holder {
-        static final Object CHANGES = Telescope.mapper(
-          OrderState.class,
+        static final Object EDITS = Telescope.mapper(
+          Order.class,
           OrderChanges.class,
-          drop(OrderState::id),
-          drop(OrderState::number),
-          drop(OrderState::customer),
-          drop(OrderState::status),
-          drop(OrderState::placedOn),
-          drop(OrderState::trackingNumber),
-          drop(OrderState::internalNotes));
+          writeBean(Order.class, ADDERS),
+          via(Order::getLines, OrderChanges::lines, LineEdits.class),
+          drop(Order::getId),
+          drop(Order::getNumber),
+          drop(Order::getCustomer),
+          drop(Order::getStatus),
+          drop(Order::getPlacedOn),
+          drop(Order::getTrackingNumber),
+          drop(Order::getInternalNotes));
       }
       """
     );
     assertThat(compilation.success()).isFalse();
     assertThat(compilation.errorMessages()).contains(
-      "Deep map OrderState → OrderChanges: source field 'payment' has no same-name target field"
+      "Deep map Order → OrderChanges: source property 'payment' has no same-name target field"
     );
   }
 

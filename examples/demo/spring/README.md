@@ -72,8 +72,9 @@ refused step into a 409 and an unknown order into a 404.
 ### 3. Service ↔ entity
 
 `Order` and its lines are JPA entities, the lines a `@OneToMany(mappedBy = "order", orphanRemoval = true)` that only
-`addLine` fills. A PATCH runs `STATE.into(order, state)` on the entity the persistence context manages, which refills
-the list Hibernate already holds through `addLine`, so the old rows are deleted and each new line gets its foreign key.
+`addLine` fills. A PATCH runs `EDITS.patchInto(order, changes)` on the entity the persistence context manages, which
+writes only the fields the client sent and refills the list Hibernate already holds through `addLine`, so the old rows
+are deleted and each new line gets its foreign key.
 
 The order's customer is `@ManyToOne(fetch = LAZY)`, so until something reads it the order holds a Hibernate proxy, a
 generated subclass of `Customer`.

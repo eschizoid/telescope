@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -109,6 +110,50 @@ public interface BridgeFn<A, B> {
         " has no patch: a conversion pair written by hand has no properties to overlay. If it is a" +
         " generated bridge, re-run the @Bridge processor."
     );
+  }
+
+  /**
+   * Write into {@code target} the properties {@link #patch} overlays from {@code partial}, in
+   * place, as {@code Mapper.patchInto} does, and answer {@code target}. A bridge {@code @Bridge}
+   * generates for a source bean answers with its own {@code patchInto}; a mapper between two sealed
+   * interfaces writes a case converted through its bridge with it.
+   *
+   * @throws UnsupportedOperationException by default: a pair written by hand, or a bridge whose
+   *     source generated code cannot write in place, has no in-place partial update
+   */
+  default A patchInto(final A target, final B partial) {
+    throw new UnsupportedOperationException(
+      getClass().getName() +
+        " has no patchInto: a conversion pair written by hand, or a generated bridge whose source is a record" +
+        " or has a row writing through a source path, cannot write a partial in place. If it is a generated" +
+        " bridge, re-run the @Bridge processor."
+    );
+  }
+
+  /**
+   * The source properties {@link #patchInto} writes, in the order {@link #overlaid} records them.
+   * Empty by default.
+   *
+   * @return the properties the overlay records
+   */
+  default List<String> patchIntoProperties() {
+    return List.of();
+  }
+
+  /**
+   * {@link #patch}'s rebuild of {@code base} with {@code partial} laid over it, recording in {@code
+   * sent}, by the index of each of {@link #patchIntoProperties}, whether the partial sent it. What
+   * {@code Mapper.patchInto} writes a subclass of the source from, through that subclass's own
+   * setters.
+   *
+   * @param base the object rebuilt, never null
+   * @param partial the partial, never null
+   * @param sent one flag per property of {@link #patchIntoProperties}
+   * @return the rebuilt object
+   * @throws UnsupportedOperationException by default, as {@link #patchInto} throws
+   */
+  default A overlaid(final A base, final B partial, final boolean[] sent) {
+    return patchInto(base, partial);
   }
 
   /**
