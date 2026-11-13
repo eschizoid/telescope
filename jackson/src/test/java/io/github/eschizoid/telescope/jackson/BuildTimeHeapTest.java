@@ -4,12 +4,15 @@ import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import io.github.eschizoid.telescope.jackson.Annotated.Feed;
+import io.github.eschizoid.telescope.jackson.Annotated.PartnerBean;
 import io.github.eschizoid.telescope.jackson.Fixtures.Address;
 import io.github.eschizoid.telescope.jackson.Fixtures.Booking;
 import io.github.eschizoid.telescope.jackson.Fixtures.Keyed;
 import io.github.eschizoid.telescope.jackson.Fixtures.Order;
 import io.github.eschizoid.telescope.jackson.Fixtures.Tree;
 import java.io.File;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -42,6 +45,7 @@ class BuildTimeHeapTest {
     "io.github.eschizoid.telescope.jackson.Plan",
     "io.github.eschizoid.telescope.jackson.Frame",
     "io.github.eschizoid.telescope.jackson.Refused",
+    "io.github.eschizoid.telescope.jackson.JacksonAnnotations",
     "io.github.eschizoid.telescope.jackson.TelescopeModule",
     "io.github.eschizoid.telescope.jackson.TelescopeModule$Builder"
   );
@@ -70,7 +74,11 @@ class BuildTimeHeapTest {
       TelescopeJson.fromJson(Order.class),
       TelescopeJson.fromJson(Tree.class),
       TelescopeJson.fromJson(Keyed.class),
-      TelescopeJson.fromJson(Booking.class, extract("postal_code", Address::zip, Object::toString))
+      TelescopeJson.fromJson(Booking.class, extract("postal_code", Address::zip, Object::toString)),
+      // Read through Jackson annotations, whose attribute values include Jackson enum
+      // constants.
+      TelescopeJson.fromJson(Feed.class),
+      TelescopeJson.fromJson(PartnerBean.class)
     );
     assertEquals("x", TelescopeJson.fromJson(Order.class).read("{\"number\":\"x\"}").number());
     for (final var binder : binders) assertNull(jacksonReachable(binder, binder.toString()));
@@ -96,6 +104,11 @@ class BuildTimeHeapTest {
       final var type = value.getClass();
       if (type.getName().startsWith("tools.jackson.") || type.getName().startsWith("com.fasterxml.jackson.")) {
         return path + " holds a " + type.getName();
+      }
+      // An annotation is a proxy of a JDK class, so its own type names the annotation it stands
+      // for.
+      if (value instanceof Annotation annotation && annotation.annotationType().getName().contains(".jackson.")) {
+        return path + " holds a @" + annotation.annotationType().getName();
       }
       if (type.isArray()) {
         if (!type.getComponentType().isPrimitive()) {

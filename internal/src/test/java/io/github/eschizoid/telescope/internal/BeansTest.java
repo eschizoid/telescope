@@ -747,6 +747,19 @@ class BeansTest {
     }
 
     @Test
+    @DisplayName("a property's getter and setters are the methods the scan and the writers use, or none")
+    void propertyGetterAndSetters() throws NoSuchMethodException {
+      assertEquals(WithGetters.class.getMethod("isActive"), Beans.propertyGetter(WithGetters.class, "active"));
+      assertEquals(WithGetters.class.getMethod("getURL"), Beans.propertyGetter(WithGetters.class, "URL"));
+      assertNull(Beans.propertyGetter(WithGetters.class, "ghost"));
+      assertEquals(
+        List.of(NoArgSetters.class.getMethod("setScore", int.class)),
+        Beans.propertySetters(NoArgSetters.class, "score")
+      );
+      assertEquals(List.of(), Beans.propertySetters(WithGetters.class, "id"));
+    }
+
+    @Test
     @DisplayName("hasProperty reflects scan results")
     void hasPropertyReflectsScan() {
       assertTrue(Beans.hasProperty(WithGetters.class, "id"));

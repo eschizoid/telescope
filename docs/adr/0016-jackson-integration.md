@@ -111,6 +111,21 @@ conversion). This is the model both `Map` tiers follow: the `@FromMap` codegen b
 reads every component no row names by its own name with the same conversion (ADR-0008, amended). A JSON binder that
 required one row per field would be unusable on real payloads.
 
+_Amended 2026-11-13:_ the binder reads Jackson's `@JsonProperty`, `@JsonAlias` and `@JsonIgnore` where databind reads
+them: on a record component's constructor parameter, field and accessor, and on a bean property's field, getter and
+setter. `@JsonProperty` sets a property's key, and its `access = READ_ONLY` and, on a record, `required = true` hold as
+in databind; `@JsonAlias` adds keys, the later one in a document winning; `@JsonIgnore` leaves the property its default.
+Whether a property is ignored is decided once for the whole property, by databind's rule: a member carrying
+`@JsonIgnore` is ignored whatever else it carries, an explicit `@JsonProperty` on another member keeps the property, and
+a bean property whose every setter is ignored is ignored. They are read once, when the binder is built, and found by
+class name, so the binder still needs no `jackson-annotations` at run time. Two properties on one key are refused when
+the binder is built. The annotations the binder does not read and that change how databind reads a type are refused by
+name rather than ignored: `@JsonNaming`, `@JsonFormat`, `@JsonView`, `@JsonUnwrapped`, `@JsonSetter`, `@JsonCreator`,
+`@JsonAnySetter`, `@JsonIgnoreProperties` naming properties, composite annotations marked `@JacksonAnnotationsInside`,
+and `@JsonAlias`, or `@JsonProperty` naming it other than its own name, on an enum constant. A row still decides its
+property's key over the annotations. A refusal names a property by its Java name, with the path by JSON keys after it
+where the two differ.
+
 The engine is a **recursive-descent token loop** over `jackson-core`'s `JsonParser` — no intermediate `JsonNode` or
 `Map`. One name→slot table per binder frame (so `id` at the root and `id` inside a nested object cannot collide);
 same-level duplicate JSON keys take last-wins (matching databind's tree behavior); unknown fields cost one

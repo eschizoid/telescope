@@ -1983,26 +1983,31 @@ public final class PairingMessages {
    * array}; {@code what} is the property's type with its article, as {@link #scalarPhrase} writes a
    * scalar. The message reads {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column
    * 18}. A path names a nested property after its parent, joined by a dot, and an element by its
-   * position as {@link #elementPosition} writes it. An empty path is the document itself.
+   * position as {@link #elementPosition} writes it. An empty path is the document itself. {@code
+   * path} names each property by its Java name and {@code jsonPath} by the key it reads; where the
+   * two differ, both are given: {@code 'partner.id' (JSON 'partner.partner_id')}.
    */
   public static String jsonNotAValue(
     final String path,
+    final String jsonPath,
     final String got,
     final String what,
     final int line,
     final int column
   ) {
-    return jsonSubject(path) + " got " + got + ", not " + what + jsonAt(line, column);
+    return jsonSubject(path, jsonPath) + " got " + got + ", not " + what + jsonAt(line, column);
   }
 
   /**
    * A JSON object with no value for keys its target requires. {@code missing} names each key and
    * the property it fills, {@code "sku" (component 'sku')}, and {@code path} where the object is,
-   * empty for the document itself. A key holding {@code null} counts as missing, as it does for an
+   * empty for the document itself, by Java names and {@code jsonPath} by keys, as {@link
+   * #jsonNotAValue} gives them. A key holding {@code null} counts as missing, as it does for an
    * untyped map.
    */
   public static String jsonMissingRequired(
     final String path,
+    final String jsonPath,
     final List<String> missing,
     final String target,
     final int line,
@@ -2010,7 +2015,7 @@ public final class PairingMessages {
   ) {
     return (
       "TelescopeJson.fromJson: " +
-      (path.isEmpty() ? "the document" : "the object at '" + path + "'") +
+      (path.isEmpty() ? "the document" : "the object at " + jsonSubject(path, jsonPath)) +
       " carries no value for required " +
       (missing.size() == 1 ? "key " : "keys ") +
       String.join(", ", missing) +
@@ -2087,8 +2092,8 @@ public final class PairingMessages {
   }
 
   /**
-   * Two properties of one object reading the same key. A streaming binder reads each value once, so
-   * the value cannot fill both.
+   * Two properties of one object reading the same key, by its own name, a row, {@code JsonProperty}
+   * or {@code JsonAlias}. A streaming binder reads each value once, so the value cannot fill both.
    */
   public static String jsonKeyReadTwice(
     final String key,
@@ -2105,13 +2110,84 @@ public final class PairingMessages {
       target +
       " both read the key \"" +
       key +
-      "\", and a JSON value is read once; give one of them a row reading another key"
+      "\", and a JSON value is read once; give one of them another key with @JsonProperty or a row," +
+      " or drop the @JsonAlias that names it"
     );
   }
 
-  /** The subject a JSON refusal opens with: the quoted path, or the document itself. */
-  private static String jsonSubject(final String path) {
-    return path.isEmpty() ? "the document" : "'" + path + "'";
+  /**
+   * A property whose members name it with different keys through {@code JsonProperty}: a record's
+   * constructor parameter and field, or a bean's setter and field. Databind refuses such a property
+   * too.
+   */
+  public static String jsonKeyNamedTwice(
+    final String kind,
+    final String name,
+    final String target,
+    final List<String> keys
+  ) {
+    return (
+      "TelescopeJson.fromJson: " +
+      kind +
+      " '" +
+      name +
+      "' of " +
+      target +
+      " is named " +
+      "\"" +
+      String.join("\" and \"", keys) +
+      "\"" +
+      " by @JsonProperty on the members it is written through, and a JSON value is read from one" +
+      " key; give them one name"
+    );
+  }
+
+  /**
+   * A Jackson annotation on a type the binder builds that the binder does not read. {@code where}
+   * names what carries it: {@code the class}, {@code constructor Partner(String)}, {@code property
+   * 'id'}.
+   */
+  public static String jsonAnnotationUnsupported(final String annotation, final String where, final String target) {
+    return (
+      "TelescopeJson.fromJson: " +
+      target +
+      " carries @" +
+      annotation +
+      " on " +
+      where +
+      ", which JsonBinder does not read; it reads @JsonProperty, @JsonAlias and @JsonIgnore only." +
+      " Read " +
+      target +
+      " with Jackson databind, through a TelescopeModule where a mapper converts it, or remove the" +
+      " annotation"
+    );
+  }
+
+  /**
+   * An enum constant {@code @JsonProperty} or {@code @JsonAlias} gives another name, which a JSON
+   * binder reading constants by their exact names would read differently from databind.
+   */
+  public static String jsonEnumConstantRenamed(final String type, final String constant, final String annotation) {
+    return (
+      "TelescopeJson.fromJson: constant " +
+      constant +
+      " of " +
+      type +
+      " carries @" +
+      annotation +
+      ", which JsonBinder does not read; it reads an enum constant by its exact name. Read the type" +
+      " holding it with Jackson databind, through a TelescopeModule where a mapper converts it, or" +
+      " remove the annotation"
+    );
+  }
+
+  /**
+   * The subject a JSON refusal opens with: the quoted path, with the path by keys after it where
+   * the two differ, or the document itself.
+   */
+  private static String jsonSubject(final String path, final String jsonPath) {
+    if (path.isEmpty()) return "the document";
+    return "'" + path + "'" + (path.equals(jsonPath) ? "" : " (JSON '" + jsonPath + "')");
   }
 
   /** Where in a JSON document a message points: {@code , at line 3, column 18}. */

@@ -1081,6 +1081,21 @@ public final class Beans {
   }
 
   /**
+   * The getter {@link #propertyNames} derives property {@code name} of {@code cls} from, or null.
+   */
+  public static Method propertyGetter(final Class<?> cls, final String name) {
+    return getters(cls).get(name);
+  }
+
+  /**
+   * Every public instance setter named for property {@code name} of {@code cls}: the candidates the
+   * writers choose the property's setter from. Empty when there is none.
+   */
+  public static List<Method> propertySetters(final Class<?> cls, final String name) {
+    return setterChoice(cls, name).candidates();
+  }
+
+  /**
    * Raw, primitive-typed getter handles for {@code beanClass}, one per property in {@link
    * #propertyNames} order — the read-side input the MethodHandle-combinator assembly path ({@code
    * MhIso}) needs. {@code handles[i]} has type {@code (beanClass) -> propertyType[i]}, unboxed,

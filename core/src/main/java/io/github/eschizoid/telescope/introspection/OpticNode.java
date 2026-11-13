@@ -25,7 +25,10 @@ package io.github.eschizoid.telescope.introspection;
 public sealed interface OpticNode {
   /** Why a field was left out of a clean mapping. See {@link Skipped} for which side each names. */
   enum Reason {
-    /** An explicit {@code Mapping.drop(src)} row removed a source field from the mapping. */
+    /**
+     * An explicit {@code Mapping.drop(src)} row removed a source field from the mapping, or, on a
+     * JSON binder, Jackson's {@code @JsonIgnore} leaves a property unbound.
+     */
     DROPPED,
     /**
      * A target field that nothing fills: on the lenient paths one with no same-name source and no
