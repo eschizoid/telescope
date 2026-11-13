@@ -8,7 +8,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.annotation.JsonView;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.annotation.JsonNaming;
@@ -255,8 +257,36 @@ public final class Annotated {
     public void other(final String key, final Object value) {}
   }
 
+  /** A bean that keeps the keys no property reads in a field. */
+  public static final class AnySetterField {
+
+    @JsonAnySetter
+    private final Map<String, Object> other = new HashMap<>();
+
+    private String id;
+
+    /** Creates an empty bean. */
+    public AnySetterField() {}
+
+    public String getId() {
+      return id;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+
+    public Map<String, Object> other() {
+      return other;
+    }
+  }
+
   /** A record with a component in a view. */
   public record Viewed(@JsonView(Annotated.class) String id) {}
+
+  /** A record whose every property is in a view. */
+  @JsonView(Annotated.class)
+  public record ViewedClass(String id) {}
 
   /** A record that ignores a property by name. */
   @JsonIgnoreProperties({ "internal" })

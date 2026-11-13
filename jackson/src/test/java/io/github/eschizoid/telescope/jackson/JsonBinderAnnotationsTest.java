@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.jackson.Annotated.AliasClash;
 import io.github.eschizoid.telescope.jackson.Annotated.AnySetter;
+import io.github.eschizoid.telescope.jackson.Annotated.AnySetterField;
 import io.github.eschizoid.telescope.jackson.Annotated.Created;
 import io.github.eschizoid.telescope.jackson.Annotated.CreatedByConstructor;
 import io.github.eschizoid.telescope.jackson.Annotated.Feed;
@@ -28,6 +29,7 @@ import io.github.eschizoid.telescope.jackson.Annotated.SplitBean;
 import io.github.eschizoid.telescope.jackson.Annotated.TwoNames;
 import io.github.eschizoid.telescope.jackson.Annotated.Unwrapped;
 import io.github.eschizoid.telescope.jackson.Annotated.Viewed;
+import io.github.eschizoid.telescope.jackson.Annotated.ViewedClass;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import java.io.File;
 import java.lang.reflect.Array;
@@ -247,7 +249,9 @@ class JsonBinderAnnotationsTest {
           "CreatedByConstructor carries @JsonCreator on constructor CreatedByConstructor(String)",
         },
         new Object[] { AnySetter.class, "AnySetter carries @JsonAnySetter on method other(String, Object)" },
+        new Object[] { AnySetterField.class, "AnySetterField carries @JsonAnySetter on field 'other'" },
         new Object[] { Viewed.class, "Viewed carries @JsonView on component 'id'" },
+        new Object[] { ViewedClass.class, "ViewedClass carries @JsonView on the class" },
         new Object[] { IgnoresByName.class, "IgnoresByName carries @JsonIgnoreProperties on the class" }
       );
       final var wrong = new ArrayList<String>();

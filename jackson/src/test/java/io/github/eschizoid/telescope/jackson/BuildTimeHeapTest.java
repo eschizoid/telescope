@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.jackson.Fixtures.Keyed;
 import io.github.eschizoid.telescope.jackson.Fixtures.Order;
 import io.github.eschizoid.telescope.jackson.Fixtures.Tree;
 import java.io.File;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -103,6 +104,11 @@ class BuildTimeHeapTest {
       final var type = value.getClass();
       if (type.getName().startsWith("tools.jackson.") || type.getName().startsWith("com.fasterxml.jackson.")) {
         return path + " holds a " + type.getName();
+      }
+      // An annotation is a proxy of a JDK class, so its own type names the annotation it stands
+      // for.
+      if (value instanceof Annotation annotation && annotation.annotationType().getName().contains(".jackson.")) {
+        return path + " holds a @" + annotation.annotationType().getName();
       }
       if (type.isArray()) {
         if (!type.getComponentType().isPrimitive()) {
