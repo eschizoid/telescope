@@ -23,9 +23,7 @@ public final class Catalog {
   /** The product with this SKU, or an {@link IllegalArgumentException} naming it. */
   public static Product product(final String sku) {
     final var product = PRODUCTS.get(sku);
-    if (product == null) {
-      throw new IllegalArgumentException("no product with SKU " + sku);
-    }
+    if (product == null) throw new IllegalArgumentException("no product with SKU " + sku);
     return product;
   }
 }

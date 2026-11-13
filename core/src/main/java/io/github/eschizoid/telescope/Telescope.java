@@ -649,9 +649,7 @@ public sealed class Telescope<
     }
     final var joined = Collections.unmodifiableList(trail);
     final var fused = Fusion.fuse(edits);
-    if (fused != null) {
-      return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused, null, joined, null);
-    }
+    if (fused != null) return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused, null, joined, null);
     Function<S, S> fold = Function.identity();
     for (final var e : edits) fold = fold.andThen(e::apply);
     return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fold, null, joined, null);
@@ -2343,9 +2341,7 @@ public sealed class Telescope<
       if (source == null) throw noValue();
       return lens.get(source);
     }
-    if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).orElseThrow(this::noValue);
-    }
+    if (optic instanceof final Affine<S, A> affine) return affine.getOption(source).orElseThrow(this::noValue);
     final var box = new Object[1];
     if (!firstFocus(source, box)) throw noValue();
     @SuppressWarnings("unchecked")
@@ -2401,9 +2397,7 @@ public sealed class Telescope<
       if (source == null) return Optional.empty();
       return Optional.ofNullable(lens.get(source));
     }
-    if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source);
-    }
+    if (optic instanceof final Affine<S, A> affine) return affine.getOption(source);
     final var box = new Object[1];
     if (!firstFocus(source, box)) return Optional.empty();
     @SuppressWarnings("unchecked")

@@ -1116,9 +1116,7 @@ final class MhIsoDifferentialParityTest {
       new L1(null, new L2(null, new L3(0))),
       new L1("r", new L2("m", null)) // null at the deepest boundary
     );
-    for (final var s : samples) {
-      diff("L1->L1b", L1.class, L1b.class, () -> Telescope.mapper(L1.class, L1b.class), s);
-    }
+    for (final var s : samples) diff("L1->L1b", L1.class, L1b.class, () -> Telescope.mapper(L1.class, L1b.class), s);
   }
 
   // ---- containers: List/Set/Map values/Optional of records, empty + null + multi ----

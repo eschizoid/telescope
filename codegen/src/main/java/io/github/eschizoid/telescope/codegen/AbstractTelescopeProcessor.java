@@ -1127,9 +1127,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
     if (anno == null) return null;
     for (final var am : element.getAnnotationMirrors()) {
-      if (am.getAnnotationType().asElement().equals(anno)) {
-        return ((TypeElement) element).getQualifiedName().toString();
-      }
+      if (am.getAnnotationType().asElement().equals(anno)) return ((TypeElement) element).getQualifiedName().toString();
     }
     return null;
   }
@@ -1352,9 +1350,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           out.println("package " + pkg + ";");
           out.println();
         }
-        for (final var imp : extraImports) {
-          out.println("import " + imp + ";");
-        }
+        for (final var imp : extraImports) out.println("import " + imp + ";");
         out.println("import io.github.eschizoid.telescope.Telescope;");
         out.println();
         out.println("/** " + javadoc + " */");
@@ -2209,9 +2205,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var dot = enclosingSimpleName.indexOf('.');
     final var outerSegment = dot < 0 ? enclosingSimpleName : enclosingSimpleName.substring(0, dot);
     final var navigatorName = enclosingSimpleName.replace(".", "") + "Telescope";
-    while (holder.equals(outerSegment) || holder.equals(navigatorName)) {
-      holder = holder + "_";
-    }
+    while (holder.equals(outerSegment) || holder.equals(navigatorName)) holder = holder + "_";
     final var componentTypeStr = shortenStdImports(boxedType(componentType));
     final var shape = traversalKind(componentType);
     final var subFq = navigableType(componentType, navigableAnnotations);

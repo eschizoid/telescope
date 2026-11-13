@@ -26,9 +26,7 @@ public final class InMemoryOrders implements Orders {
 
   @Override
   public synchronized Order save(final Order order) {
-    if (order.getId() == null) {
-      order.setId(ids.incrementAndGet());
-    }
+    if (order.getId() == null) order.setId(ids.incrementAndGet());
     orders.put(order.getNumber(), order);
     return order;
   }
@@ -40,9 +38,7 @@ public final class InMemoryOrders implements Orders {
 
   @Override
   public synchronized Customer saveCustomer(final Customer customer) {
-    if (customer.getId() == null) {
-      customer.setId(ids.incrementAndGet());
-    }
+    if (customer.getId() == null) customer.setId(ids.incrementAndGet());
     customers.put(customer.getEmail(), customer);
     return customer;
   }

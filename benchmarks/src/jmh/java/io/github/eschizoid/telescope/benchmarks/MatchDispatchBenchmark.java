@@ -58,9 +58,7 @@ public class MatchDispatchBenchmark {
 
   @Benchmark
   public void matchDispatch(final Blackhole bh) {
-    for (final var s : shapes) {
-      bh.consume(match.apply(s));
-    }
+    for (final var s : shapes) bh.consume(match.apply(s));
   }
 
   /** The free baseline: a pattern-matching switch over the same permits. */

@@ -696,9 +696,7 @@ class BridgeFieldTest {
           );
         }
         start.countDown();
-        for (final var call : calls) {
-          call.get();
-        }
+        for (final var call : calls) call.get();
       }
     }
   }

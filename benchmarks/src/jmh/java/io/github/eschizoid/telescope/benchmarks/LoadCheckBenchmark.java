@@ -53,16 +53,12 @@ public class LoadCheckBenchmark {
     policy = (ContainerCopy.Policy) Class.forName("io.github.eschizoid.telescope.jpa.LoadedContainers")
       .getConstructor()
       .newInstance();
-    if (!policy.active()) {
-      throw new IllegalStateException("the policy found no persistence API");
-    }
+    if (!policy.active()) throw new IllegalStateException("the policy found no persistence API");
     if (ServiceLoader.load(ContainerCopy.Policy.class).findFirst().isPresent()) {
       throw new IllegalStateException("a container policy is registered, so every other benchmark takes it");
     }
     arrayList = new ArrayList<>(size);
-    for (var i = 0; i < size; i++) {
-      arrayList.add("e" + i);
-    }
+    for (var i = 0; i < size; i++) arrayList.add("e" + i);
     // A bag Hibernate builds to load into holds nothing and reports itself unloaded. The loaded one
     // is given its elements and marked loaded as a load marks it, with no session behind either.
     final var bag = Class.forName("org.hibernate.collection.spi.PersistentBag");
@@ -78,12 +74,8 @@ public class LoadCheckBenchmark {
     final var loaded = bag.getSuperclass().getDeclaredMethod("setInitialized");
     loaded.setAccessible(true);
     loaded.invoke(loadedBag);
-    if (policy.copy(unloadedBag, List.class) != unloadedBag) {
-      throw new IllegalStateException("the bag was copied");
-    }
-    if (!policy.copy(loadedBag, List.class).equals(arrayList)) {
-      throw new IllegalStateException("the copy differs");
-    }
+    if (policy.copy(unloadedBag, List.class) != unloadedBag) throw new IllegalStateException("the bag was copied");
+    if (!policy.copy(loadedBag, List.class).equals(arrayList)) throw new IllegalStateException("the copy differs");
   }
 
   @Benchmark

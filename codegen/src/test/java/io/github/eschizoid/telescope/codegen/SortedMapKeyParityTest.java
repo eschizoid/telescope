@@ -284,9 +284,7 @@ class SortedMapKeyParityTest {
     final var cold = List.of(outcome(generatedPath), outcome(reflectivePath));
     final var first = castOf(mapper, source);
     var last = first;
-    for (var i = 0; i < WARMING_LIMIT && last != null && last.getMessage() != null; i++) {
-      last = castOf(mapper, source);
-    }
+    for (var i = 0; i < WARMING_LIMIT && last != null && last.getMessage() != null; i++) last = castOf(mapper, source);
     final var hottest = last;
     assertTrue(
       first instanceof ClassCastException && first.getMessage() != null,

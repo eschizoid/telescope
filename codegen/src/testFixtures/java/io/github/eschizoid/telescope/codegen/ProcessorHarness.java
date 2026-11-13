@@ -107,9 +107,7 @@ public final class ProcessorHarness {
     final JavaFileObject... sources
   ) {
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    if (compiler == null) {
-      throw new IllegalStateException("no system Java compiler available (need a JDK, not a JRE)");
-    }
+    if (compiler == null) throw new IllegalStateException("no system Java compiler available (need a JDK, not a JRE)");
 
     final var diagnostics = new DiagnosticCollector<JavaFileObject>();
     final var capturing = new CapturingFileManager(

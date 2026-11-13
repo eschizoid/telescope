@@ -173,9 +173,7 @@ class FormattedRowTest {
             })
           );
         }
-        for (final var call : calls) {
-          call.get();
-        }
+        for (final var call : calls) call.get();
       }
       assertEquals(160_000, seen.size());
     }

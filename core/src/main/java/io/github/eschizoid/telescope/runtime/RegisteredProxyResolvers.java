@@ -46,18 +46,14 @@ public final class RegisteredProxyResolvers implements ProxyClasses {
     for (var attempts = 0; attempts < MAX_REGISTRATIONS; attempts++) {
       final ProxyResolver resolver;
       try {
-        if (!registered.hasNext()) {
-          break;
-        }
+        if (!registered.hasNext()) break;
         resolver = registered.next();
       } catch (final ServiceConfigurationError unloadable) {
         refused.accept("telescope: a ProxyResolver could not be loaded and is left out: " + unloadable.getMessage());
         continue;
       }
       try {
-        if (resolver.active()) {
-          active.add(resolver);
-        }
+        if (resolver.active()) active.add(resolver);
       } catch (final RuntimeException failed) {
         refused.accept(
           "telescope: ProxyResolver " +
@@ -81,9 +77,7 @@ public final class RegisteredProxyResolvers implements ProxyClasses {
         // A resolver that cannot tell gives no answer, as one that does not know the value does.
         continue;
       }
-      if (resolved != null) {
-        return resolved;
-      }
+      if (resolved != null) return resolved;
     }
     return null;
   }

@@ -244,9 +244,7 @@ class FromMapBackfillParityTest {
       final var accessor = component.getAccessor();
       final Object want = read(accessor, generated);
       final Object got = read(accessor, runtime);
-      if (!Objects.equals(want, got)) {
-        differences.add(component.getName() + ": generated " + want + ", runtime " + got);
-      }
+      if (!Objects.equals(want, got)) differences.add(component.getName() + ": generated " + want + ", runtime " + got);
     }
     assertEquals(List.of(), differences, () -> "for " + source + "\n" + String.join("\n", differences));
   }

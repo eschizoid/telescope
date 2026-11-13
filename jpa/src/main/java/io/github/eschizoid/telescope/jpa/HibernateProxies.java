@@ -46,9 +46,7 @@ public final class HibernateProxies implements ProxyResolver {
 
   @Override
   public Class<?> classOf(final Object value) {
-    if (!PROXY_TYPE.isInstance(value)) {
-      return null;
-    }
+    if (!PROXY_TYPE.isInstance(value)) return null;
     try {
       final var initializer = INITIALIZER_OF.apply(value);
       return initializer == null ? null : (Class<?>) PERSISTENT_CLASS_OF.apply(initializer);
@@ -77,9 +75,7 @@ public final class HibernateProxies implements ProxyResolver {
    */
   @SuppressWarnings("unchecked")
   static Function<Object, Object> bind(final Class<?> owner, final String name) {
-    if (owner == null) {
-      return null;
-    }
+    if (owner == null) return null;
     try {
       final Method method = owner.getMethod(name);
       // On the module path this module reads Hibernate's only once it says so; on the class path
@@ -87,9 +83,7 @@ public final class HibernateProxies implements ProxyResolver {
       HibernateProxies.class.getModule().addReads(owner.getModule());
       final var lookup = MethodHandles.lookup();
       final MethodHandle handle = lookup.unreflect(method);
-      if (NativeImage.IN_IMAGE) {
-        return MhAccessors.function(handle);
-      }
+      if (NativeImage.IN_IMAGE) return MhAccessors.function(handle);
       final var site = LambdaMetafactory.metafactory(
         lookup,
         "apply",

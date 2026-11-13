@@ -85,11 +85,8 @@ final class Merge {
     if (declared != null) trail.add(declared);
     for (final var name : names) {
       final var r = planByTgt.get(name);
-      if (r != null) {
-        trail.add(new OpticNode.Mapped(r.sourceClass().getSimpleName() + "." + r.srcName(), r.tgtName()));
-      } else {
-        trail.add(new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE));
-      }
+      if (r != null) trail.add(new OpticNode.Mapped(r.sourceClass().getSimpleName() + "." + r.srcName(), r.tgtName()));
+      else trail.add(new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE));
     }
     // A null patch table signals "patch unsupported" — Mapper.patch/into then throw the same
     // UnsupportedOperationException shape backward does, instead of silently no-op-ing.

@@ -500,13 +500,9 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
       final var afterGet = PropertyNames.afterGet(rawName);
       final var afterIs = PropertyNames.afterIs(rawName);
       final String prop;
-      if (afterGet != null && method.getReturnType().getKind() != TypeKind.VOID) {
-        prop = afterGet;
-      } else if (afterIs != null && booleanReturn(method)) {
-        prop = afterIs;
-      } else {
-        continue;
-      }
+      if (afterGet != null && method.getReturnType().getKind() != TypeKind.VOID) prop = afterGet;
+      else if (afterIs != null && booleanReturn(method)) prop = afterIs;
+      else continue;
       if ("class".equals(prop) || result.containsKey(prop)) continue;
       final var memberType =
         declared == null

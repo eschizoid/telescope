@@ -47,9 +47,7 @@ public final class Library implements AutoCloseable {
         session.persist(author);
         session.persist(new Book("first by " + i, author));
         session.persist(new Book("second by " + i, author));
-        if (first == null) {
-          first = author.getId();
-        }
+        if (first == null) first = author.getId();
       }
       return first;
     });

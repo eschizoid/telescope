@@ -153,9 +153,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private void generateMapper(final Element element) {
     final var container = container(element, "@TelescopeMapper");
-    if (container == null) {
-      return;
-    }
+    if (container == null) return;
     final var blueprint = interfaceType(element, "@TelescopeMapper");
     if (blueprint == null) return;
     final var config = annotation(blueprint, MAPPER);
@@ -315,9 +313,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     }
     // The container builds the bean through this constructor, so CDI needs it marked.
     final var injects = projection != null || !declaredTransformers.isEmpty();
-    if (container == Container.CDI && injects) {
-      refs.add(CDI_INJECT);
-    }
+    if (container == Container.CDI && injects) refs.add(CDI_INJECT);
     final var allTypes = new ArrayList<TypeMirror>(List.of(from, to));
     allTypes.addAll(declaredTransformers);
     final var taken = new HashSet<String>();
@@ -366,9 +362,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       }
       if (buildsInConstructor && injects) {
         out.println("  protected " + self + "Impl() {");
-        if (projection != null && !useBridge) {
-          out.println("    this.mapping = null;");
-        }
+        if (projection != null && !useBridge) out.println("    this.mapping = null;");
         out.println("    this.transformers = null;");
         out.println("  }");
         out.println("  @" + names.ref(CDI_INJECT));
@@ -389,9 +383,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
             ? "final " + names.ref(OBJECT_PROVIDER) + "<" + customizer + "> customizers) {"
             : "@" + names.ref(ARC_ALL) + " final " + list + "<" + customizer + "> customizers) {"
         );
-        if (buildsInConstructor && !useBridge) {
-          out.println("    this.mapping = createMapping();");
-        }
+        if (buildsInConstructor && !useBridge) out.println("    this.mapping = createMapping();");
         out.print("    pending = new " + names.ref(ARRAY_LIST) + "<>(");
         if (!declaredTransformers.isEmpty()) {
           out.print(list + ".of(");
@@ -582,9 +574,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     if (single != null) result.add(single);
     if (value(annotation(element, BRIDGES), "value") instanceof List<?> repeated) {
       for (final var entry : repeated)
-        if (entry instanceof AnnotationValue av && av.getValue() instanceof AnnotationMirror m) {
-          result.add(m);
-        }
+        if (entry instanceof AnnotationValue av && av.getValue() instanceof AnnotationMirror m) result.add(m);
     }
     return result;
   }
@@ -681,9 +671,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private void generatePath(final Element element) {
     final var container = container(element, "@TelescopeTransformer");
-    if (container == null) {
-      return;
-    }
+    if (container == null) return;
     final var blueprint = interfaceType(element, "@TelescopeTransformer");
     if (blueprint == null) return;
     final var config = annotation(blueprint, TRANSFORM);
@@ -744,9 +732,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     // method the interface declares does not take it; it is package-private because ArC reaches a
     // private callback only through reflection.
     final var cachesAfterConstruction = container == Container.CDI;
-    if (cachesAfterConstruction) {
-      refs.add(POST_CONSTRUCT);
-    }
+    if (cachesAfterConstruction) refs.add(POST_CONSTRUCT);
     emit(blueprint, config, container, List.of(from, to), refs, Set.of(), (out, names) -> {
       final var self = blueprint.getSimpleName().toString();
       final var objects = names.ref(OBJECTS);
@@ -816,9 +802,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var cdi = elements.getTypeElement(CDI_SCOPE) != null;
     final var chosen = processingEnv.getOptions().get(BEANS_OPTION);
     if ("spring".equals(chosen)) {
-      if (spring) {
-        return Container.SPRING;
-      }
+      if (spring) return Container.SPRING;
       error(
         element,
         "-A" +
@@ -832,9 +816,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       return null;
     }
     if ("cdi".equals(chosen)) {
-      if (cdi) {
-        return Container.CDI;
-      }
+      if (cdi) return Container.CDI;
       error(
         element,
         "-A" +
@@ -872,20 +854,14 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       );
       return null;
     }
-    if (quarkusStarter) {
-      return Container.CDI;
-    }
+    if (quarkusStarter) return Container.CDI;
     // Otherwise Spring wins over CDI: a module that has Spring generates a Spring component
     // whatever
     // else is on its classpath, and CDI needs its annotation alone or the option. The Spring
     // starter
     // needs no branch of its own, since it brings Spring's annotation and so lands here.
-    if (spring) {
-      return Container.SPRING;
-    }
-    if (cdi) {
-      return Container.CDI;
-    }
+    if (spring) return Container.SPRING;
+    if (cdi) return Container.CDI;
     error(
       element,
       annotation +
@@ -1061,9 +1037,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       named.add(SPRING_COMPONENT);
     } else {
       named.add(CDI_SCOPE);
-      if (cdiNamed) {
-        named.add(CDI_NAMED);
-      }
+      if (cdiNamed) named.add(CDI_NAMED);
     }
     named.addAll(references);
     for (final var type : types) collectImports(type, named);
@@ -1082,9 +1056,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
           out.println("public final class " + name + " implements " + blueprint.getSimpleName() + " {");
         } else {
           out.println("@" + names.ref(CDI_SCOPE));
-          if (cdiNamed) {
-            out.println("@" + names.ref(CDI_NAMED) + "(" + beanName + ")");
-          }
+          if (cdiNamed) out.println("@" + names.ref(CDI_NAMED) + "(" + beanName + ")");
           // Not final: the client proxy of a normal-scoped bean is a subclass of it.
           out.println("public class " + name + " implements " + blueprint.getSimpleName() + " {");
         }

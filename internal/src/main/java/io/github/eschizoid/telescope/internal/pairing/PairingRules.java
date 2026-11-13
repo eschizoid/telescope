@@ -1279,20 +1279,12 @@ public final class PairingRules<T> {
   public boolean mayShareInstance(final T a, final T b) {
     final var x = props.boxed(props.erasure(a));
     final var y = props.boxed(props.erasure(b));
-    if (props.isAssignable(x, y) || props.isAssignable(y, x)) {
-      return true;
-    }
+    if (props.isAssignable(x, y) || props.isAssignable(y, x)) return true;
     final var xCases = props.permittedSubclasses(x);
-    if (!xCases.isEmpty()) {
-      return xCases.stream().anyMatch(c -> mayShareInstance(c, y));
-    }
+    if (!xCases.isEmpty()) return xCases.stream().anyMatch(c -> mayShareInstance(c, y));
     final var yCases = props.permittedSubclasses(y);
-    if (!yCases.isEmpty()) {
-      return yCases.stream().anyMatch(c -> mayShareInstance(x, c));
-    }
-    if (props.isInterfaceType(x)) {
-      return props.isExtendable(y);
-    }
+    if (!yCases.isEmpty()) return yCases.stream().anyMatch(c -> mayShareInstance(x, c));
+    if (props.isInterfaceType(x)) return props.isExtendable(y);
     return props.isInterfaceType(y) && props.isExtendable(x);
   }
 
@@ -1314,13 +1306,9 @@ public final class PairingRules<T> {
    * classes are asked of either way.
    */
   public T viaParameterNeverFitting(final T property, final List<T> parameters, final boolean called) {
-    if (parameters.isEmpty()) {
-      return null;
-    }
+    if (parameters.isEmpty()) return null;
     for (final var parameter : parameters) {
-      if (mayShareInstance(property, parameter) && !(called && argumentsNeverFit(property, parameter))) {
-        return null;
-      }
+      if (mayShareInstance(property, parameter) && !(called && argumentsNeverFit(property, parameter))) return null;
     }
     return parameters.getFirst();
   }
@@ -1345,9 +1333,7 @@ public final class PairingRules<T> {
     final Function<T, String> simpleName
   ) {
     final var unfit = viaParameterNeverFitting(propertyType, parameters, called);
-    if (unfit == null) {
-      return null;
-    }
+    if (unfit == null) return null;
     if (mayShareInstance(propertyType, unfit)) {
       return PairingMessages.viaMapperArgumentsNeverFit(
         source,
@@ -1377,27 +1363,19 @@ public final class PairingRules<T> {
       return false;
     }
     final var sending = props.boxed(property);
-    if (props.isPrimitive(sending) || props.isTypeVariable(sending) || props.isWildcard(sending)) {
-      return false;
-    }
+    if (props.isPrimitive(sending) || props.isTypeVariable(sending) || props.isWildcard(sending)) return false;
     final var sendingClass = props.rawType(sending);
     final var receivingClass = props.rawType(parameter);
-    if (!props.isAssignable(sendingClass, receivingClass)) {
-      return false;
-    }
+    if (!props.isAssignable(sendingClass, receivingClass)) return false;
     final var given = props.sameType(sendingClass, receivingClass)
       ? props.typeArguments(sending)
       : seenAs(sending, receivingClass);
-    if (given.isEmpty() || given.size() != wanted.size()) {
-      return false;
-    }
+    if (given.isEmpty() || given.size() != wanted.size()) return false;
     if (given.stream().anyMatch(argument -> props.isWildcard(argument) || props.mentionsTypeVariable(argument))) {
       return false;
     }
     for (int i = 0; i < wanted.size(); i++) {
-      if (!fitsArgument(given.get(i), wanted.get(i), false)) {
-        return true;
-      }
+      if (!fitsArgument(given.get(i), wanted.get(i), false)) return true;
     }
     return false;
   }

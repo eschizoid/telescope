@@ -48,9 +48,7 @@ public final class OrderDesk {
     order.setCustomer(customer);
     order.setStatus(OrderStatus.PLACED);
     order.setPlacedOn(LocalDate.now(clock));
-    if (order.getDelivery() == null) {
-      order.setDelivery(Delivery.STANDARD);
-    }
+    if (order.getDelivery() == null) order.setDelivery(Delivery.STANDARD);
     return orders.save(order);
   }
 
@@ -63,9 +61,7 @@ public final class OrderDesk {
     final var order = get(number);
     require(order, OrderStatus.PLACED, "change");
     checkDiscountCode(changes.discountCode());
-    if (changes.lines() != null) {
-      checkLines(changes.lines());
-    }
+    if (changes.lines() != null) checkLines(changes.lines());
     OrderMappers.EDITS.patchInto(order, changes);
     return orders.save(order);
   }
@@ -116,9 +112,7 @@ public final class OrderDesk {
   }
 
   private static void checkLines(final List<NewLine> lines) {
-    if (lines == null || lines.isEmpty()) {
-      throw new IllegalArgumentException("an order needs at least one line");
-    }
+    if (lines == null || lines.isEmpty()) throw new IllegalArgumentException("an order needs at least one line");
     for (final var line : lines) {
       if (line.quantity() < 1) {
         throw new IllegalArgumentException("line " + line.sku() + " has a quantity of " + line.quantity());
@@ -127,8 +121,6 @@ public final class OrderDesk {
   }
 
   private static void checkDiscountCode(final String code) {
-    if (code != null && !Pricing.knownCode(code)) {
-      throw new IllegalArgumentException("unknown discount code " + code);
-    }
+    if (code != null && !Pricing.knownCode(code)) throw new IllegalArgumentException("unknown discount code " + code);
   }
 }

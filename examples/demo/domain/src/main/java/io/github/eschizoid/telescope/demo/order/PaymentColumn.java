@@ -12,9 +12,7 @@ public class PaymentColumn implements AttributeConverter<Payment, String> {
 
   @Override
   public String convertToDatabaseColumn(final Payment payment) {
-    if (payment == null) {
-      return null;
-    }
+    if (payment == null) return null;
     return switch (payment) {
       case Card card -> String.join(":", "card", card.brand(), card.last4(), card.token());
       case BankTransfer bank -> "bank:" + bank.iban();
@@ -23,9 +21,7 @@ public class PaymentColumn implements AttributeConverter<Payment, String> {
 
   @Override
   public Payment convertToEntityAttribute(final String column) {
-    if (column == null) {
-      return null;
-    }
+    if (column == null) return null;
     final var parts = column.split(":", -1);
     return switch (parts[0]) {
       case "card" -> new Card(parts[1], parts[2], parts[3]);

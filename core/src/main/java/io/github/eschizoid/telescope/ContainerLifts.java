@@ -429,9 +429,7 @@ final class ContainerLifts {
     final String position
   ) {
     final var located = PairingMessages.notAValueAt(e.getMessage(), componentName, position);
-    if (located == null) {
-      return e;
-    }
+    if (located == null) return e;
     return new IllegalArgumentException(located, e.getCause());
   }
 

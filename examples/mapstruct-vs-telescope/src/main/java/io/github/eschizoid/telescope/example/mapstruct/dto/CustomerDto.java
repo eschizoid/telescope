@@ -34,12 +34,8 @@ public final class CustomerDto {
 
   @Override
   public boolean equals(final Object other) {
-    if (this == other) {
-      return true;
-    }
-    if (!(other instanceof CustomerDto that)) {
-      return false;
-    }
+    if (this == other) return true;
+    if (!(other instanceof CustomerDto that)) return false;
     return Objects.equals(name, that.name) && Objects.equals(contactEmail, that.contactEmail);
   }
 

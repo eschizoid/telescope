@@ -333,9 +333,7 @@ class ReflectiveSurfaceTest {
       final var builder = Reflective.BEANS.positionalBuilder(SimpleBean.class, null, null);
       // Build a values array matched to the bean's name order so the rebuild can reverse-lookup.
       final var arr = new Object[names.length];
-      for (var i = 0; i < names.length; i++) {
-        arr[i] = names[i].equals("name") ? "frank" : 17;
-      }
+      for (var i = 0; i < names.length; i++) arr[i] = names[i].equals("name") ? "frank" : 17;
       final SimpleBean built = builder.apply(arr);
       assertEquals("frank", built.getName());
       assertEquals(17, built.getAge());

@@ -42,12 +42,8 @@ public final class OrderDto {
 
   @Override
   public boolean equals(final Object other) {
-    if (this == other) {
-      return true;
-    }
-    if (!(other instanceof OrderDto that)) {
-      return false;
-    }
+    if (this == other) return true;
+    if (!(other instanceof OrderDto that)) return false;
     return Objects.equals(id, that.id) && Objects.equals(customer, that.customer) && Objects.equals(lines, that.lines);
   }
 
