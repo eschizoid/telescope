@@ -105,21 +105,22 @@ Refused when the binder is built, with an `IllegalArgumentException` naming the 
 The binder refuses, by name and when it is built, each Jackson annotation that changes how databind reads a type and
 that the binder does not read, rather than read the type differently from databind without a word:
 
-| Annotation                                                   | Where it is refused                                          |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `@JsonNaming`                                                | the class                                                    |
-| `@JsonFormat`, `@JsonView`                                   | the class, or any member of a property                       |
-| `@JsonIgnoreProperties` naming properties                    | the class, or any member of a property                       |
-| `@JsonUnwrapped`, `@JsonSetter`                              | any member of a property: a component, field, getter, setter |
-| `@JsonCreator`                                               | a constructor or a static factory                            |
-| `@JsonAnySetter`                                             | a method or a field of the class or a superclass             |
-| an annotation of your own marked `@JacksonAnnotationsInside` | the class, or any member of a property                       |
-| `@JsonProperty` or `@JsonAlias` on an enum constant          | the enum, read as a value or as a map key                    |
+| Annotation                                                                              | Where it is refused                                          |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `@JsonNaming`                                                                           | the class                                                    |
+| `@JsonFormat`, `@JsonView`                                                              | the class, or any member of a property                       |
+| `@JsonIgnoreProperties` naming properties                                               | the class, or any member of a property                       |
+| `@JsonUnwrapped`, `@JsonSetter`                                                         | any member of a property: a component, field, getter, setter |
+| `@JsonCreator`                                                                          | a constructor or a static factory                            |
+| `@JsonAnySetter`                                                                        | a method or a field of the class or a superclass             |
+| an annotation of your own marked `@JacksonAnnotationsInside`                            | the class, or any member of a property                       |
+| `@JsonAlias`, or `@JsonProperty` naming it other than its own name, on an enum constant | the enum, read as a value or as a map key                    |
 
-`@JsonIgnoreProperties(ignoreUnknown = true)` is accepted, since the binder skips unknown keys anyway. A naming strategy
-set on a `JsonMapper` with `PropertyNamingStrategies` is not seen at all: the binder has no mapper. `@JsonFormat` is the
-one most often met; a type that needs it, or any other databind behavior, reads through databind, with a
-`TelescopeModule` where a mapper converts it.
+`@JsonIgnoreProperties(ignoreUnknown = true)` is accepted, since the binder skips unknown keys anyway, and so is
+`@JsonProperty("RED")` on the constant `RED`. A bare `@JsonProperty` on an enum constant is refused: databind reads that
+constant by the name `""`. A naming strategy set on a `JsonMapper` with `PropertyNamingStrategies` is not seen at all:
+the binder has no mapper. `@JsonFormat` is the one most often met; a type that needs it, or any other databind behavior,
+reads through databind, with a `TelescopeModule` where a mapper converts it.
 
 Where the binder still reads differently from databind on an annotated type:
 

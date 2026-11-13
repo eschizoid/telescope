@@ -385,6 +385,26 @@ public final class Combinations {
     LARGE,
   }
 
+  /** A shape whose constant {@code @JsonProperty} names by its own name. */
+  public enum Shape {
+    @JsonProperty("ROUND")
+    ROUND,
+    SQUARE,
+  }
+
+  /** An enum named by its own names, as a value. */
+  public record Shaped(Shape shape) {}
+
+  /** A tone whose constant carries {@code @JsonProperty} with no value. */
+  public enum Tone {
+    @JsonProperty
+    WARM,
+    COOL,
+  }
+
+  /** An enum one of whose constants databind reads by the name {@code ""}, as a value. */
+  public record Toned(Tone tone) {}
+
   /** A renamed enum as a value. */
   public record Colored(Color color) {}
 

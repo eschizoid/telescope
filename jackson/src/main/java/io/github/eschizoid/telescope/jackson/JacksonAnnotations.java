@@ -195,19 +195,23 @@ final class JacksonAnnotations {
   /**
    * Refuses the enum {@code type} when {@code @JsonProperty} or {@code @JsonAlias} gives one of its
    * constants another name: databind reads such a constant by that name, and the binder reads a
-   * constant by its exact name only.
+   * constant by its exact name only. A {@code @JsonProperty} naming the constant by its own name
+   * changes nothing and is accepted. One with no value is refused: on an enum constant, databind
+   * reads it as the name {@code ""}, not as the constant's own name. An alias is always a second
+   * name.
    *
    * @throws IllegalArgumentException naming the constant and the annotation
    */
   static void refuseRenamedConstants(final Class<?> type) {
     for (final var field : type.getDeclaredFields()) {
       if (!field.isEnumConstant()) continue;
-      for (final var annotation : List.of(PROPERTY, ALIAS)) {
-        if (find(field, annotation) != null) {
-          throw new IllegalArgumentException(
-            PairingMessages.jsonEnumConstantRenamed(type.getSimpleName(), field.getName(), simpleName(annotation))
-          );
-        }
+      final var property = find(field, PROPERTY);
+      final var renamed = property != null && !attribute(property, "value").equals(field.getName());
+      final var annotation = renamed ? PROPERTY : find(field, ALIAS) != null ? ALIAS : null;
+      if (annotation != null) {
+        throw new IllegalArgumentException(
+          PairingMessages.jsonEnumConstantRenamed(type.getSimpleName(), field.getName(), simpleName(annotation))
+        );
       }
     }
   }

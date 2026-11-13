@@ -122,8 +122,9 @@ class name, so the binder still needs no `jackson-annotations` at run time. Two 
 the binder is built. The annotations the binder does not read and that change how databind reads a type are refused by
 name rather than ignored: `@JsonNaming`, `@JsonFormat`, `@JsonView`, `@JsonUnwrapped`, `@JsonSetter`, `@JsonCreator`,
 `@JsonAnySetter`, `@JsonIgnoreProperties` naming properties, composite annotations marked `@JacksonAnnotationsInside`,
-and `@JsonProperty` or `@JsonAlias` on an enum constant. A row still decides its property's key over the annotations. A
-refusal names a property by its Java name, with the path by JSON keys after it where the two differ.
+and `@JsonAlias`, or `@JsonProperty` naming it other than its own name, on an enum constant. A row still decides its
+property's key over the annotations. A refusal names a property by its Java name, with the path by JSON keys after it
+where the two differ.
 
 The engine is a **recursive-descent token loop** over `jackson-core`'s `JsonParser` — no intermediate `JsonNode` or
 `Map`. One name→slot table per binder frame (so `id` at the root and `id` inside a nested object cannot collide);

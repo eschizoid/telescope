@@ -328,6 +328,30 @@ class JsonBinderAnnotationsTest {
     }
 
     @Test
+    @DisplayName(
+      "an enum constant @JsonProperty names by its own name reads as databind reads it; one with no value is refused"
+    )
+    void constantsNamedByTheirOwnNames() {
+      assertEquals(
+        new Combinations.Shaped(Combinations.Shape.ROUND),
+        same(Combinations.Shaped.class, "{\"shape\":\"ROUND\"}")
+      );
+      assertEquals(
+        new Combinations.Shaped(Combinations.Shape.SQUARE),
+        same(Combinations.Shaped.class, "{\"shape\":\"SQUARE\"}")
+      );
+      // Databind reads a constant carrying @JsonProperty with no value by the name "", not its own.
+      assertThrows(MismatchedInputException.class, () ->
+        DATABIND.readValue("{\"tone\":\"WARM\"}", Combinations.Toned.class)
+      );
+      assertTrue(
+        refusal(() -> TelescopeJson.fromJson(Combinations.Toned.class))
+          .getMessage()
+          .startsWith("TelescopeJson.fromJson: constant WARM of Tone carries @JsonProperty")
+      );
+    }
+
+    @Test
     @DisplayName("@JsonIgnoreProperties on a component is accepted when it only ignores unknown keys")
     void ignoreUnknownOnComponent() {
       assertEquals(
