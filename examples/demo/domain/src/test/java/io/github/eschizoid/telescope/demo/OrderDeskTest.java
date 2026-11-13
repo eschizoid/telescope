@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.demo.api.NewLineV2;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
 import io.github.eschizoid.telescope.demo.api.OrderLineDto;
 import io.github.eschizoid.telescope.demo.api.OrderLineV2Dto;
+import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.PlaceOrderV2;
 import io.github.eschizoid.telescope.demo.api.RequestMappers;
 import io.github.eschizoid.telescope.demo.order.Card;
@@ -180,6 +181,33 @@ class OrderDeskTest {
     assertThat(command.lines()).containsExactly(new NewLine("CAP-03", 4));
     assertThat(command.tags()).isNull();
     assertThat(desk.place(command).toOrderDto().total()).isEqualByComparingTo("72.00");
+  }
+
+  @Test
+  @DisplayName("a partner's JSON text reads into the same record the map binder builds from the parsed map")
+  void thePartnerFeedReadsJsonText() {
+    final var json =
+      "{\"customerEmail\":\"" +
+      SampleData.ADA +
+      "\",\"delivery\":\"EXPRESS\",\"giftWrap\":\"true\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":\"4\"}]}";
+    final Map<String, Object> payload = Map.of(
+      "customerEmail",
+      SampleData.ADA,
+      "delivery",
+      "EXPRESS",
+      "giftWrap",
+      "true",
+      "lines",
+      List.of(Map.of("sku", "CAP-03", "quantity", "4"))
+    );
+    assertThat(PartnerFeed.read(json)).isEqualTo(ImportedOrderFromMap.fromMap(payload));
+    assertThatThrownBy(() -> PartnerFeed.read("{\"lines\":[]}"))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessageContaining("required key \"customerEmail\"");
+    assertThatThrownBy(() -> PartnerFeed.read("{\"customerEmail\":\"a\",\"lines\":[{\"quantity\":4}]}"))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessage("'lines[0].quantity' got 4, not a String, at line 1, column 43");
+    assertThat(ImportTrace.of(Map.of("customerEmail", 7))).startsWith("the payload could not be replayed: ");
   }
 
   @Test

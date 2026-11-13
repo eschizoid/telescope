@@ -1,7 +1,8 @@
 /**
  * Internal substrate of the telescope optics DSL — qualified-exported to {@code
  * io.github.eschizoid.telescope} (the public {@code telescope-core} module), its reflection helpers
- * also to {@code telescope-jpa} and its pairing spec also to {@code telescope-codegen}.
+ * also to {@code telescope-jpa} and {@code telescope-jackson}, and its pairing spec also to {@code
+ * telescope-codegen} and {@code telescope-jackson}.
  *
  * <p>External consumers of telescope add {@code telescope-core} to their build and get the public
  * surface. The {@code telescope-internal} artifact comes along transitively but its packages are
@@ -38,14 +39,16 @@
  */
 module io.github.eschizoid.telescope.internal {
 // telescope-jpa takes the native-image flag and the MethodHandle accessor closures from here, so
-// its proxy accessors follow the same substrate rule as this module's own.
-  exports io.github.eschizoid.telescope.internal to io.github.eschizoid.telescope, io.github.eschizoid.telescope.jpa;
+// its proxy accessors follow the same substrate rule as this module's own. telescope-jackson
+// builds records and beans through the same reflection helpers the runtime fromMap uses.
+  exports io.github.eschizoid.telescope.internal
+    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.jpa, io.github.eschizoid.telescope.jackson;
   exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.internal.optics.collections to io.github.eschizoid.telescope;
-  // The shared pairing decision spec: the runtime (:core) and the compile-time verifier (:codegen)
-  // consume one rule set so construction-time and compile-time diagnostics cannot drift.
+  // The shared pairing decision spec: the runtime (:core), the compile-time verifier (:codegen) and
+  // the JSON binder (telescope-jackson) consume one rule set, so their diagnostics cannot drift.
   exports io.github.eschizoid.telescope.internal.pairing
-    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.codegen;
+    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.codegen, io.github.eschizoid.telescope.jackson;
 
   // telescope-core provides the one implementation, which consults the proxy resolvers registered
   // through its public SPI; this module holds no provider-specific code.

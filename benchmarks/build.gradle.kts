@@ -38,6 +38,8 @@ dependencies {
         // The starter brings telescope-jpa with its registrations; the copy below is the one wanted.
         exclude(module = "jpa")
     }
+    jmhImplementation(project(":jackson"))
+    jmhImplementation(libs.jacksonDatabind)
     jmhAnnotationProcessor(project(":codegen"))
     jmhAnnotationProcessor("org.mapstruct:mapstruct-processor:1.6.3")
     jmhImplementation("org.mapstruct:mapstruct:1.6.3")

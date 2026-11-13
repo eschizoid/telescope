@@ -1,6 +1,7 @@
 # ADR-0016: `telescope-jackson` — Jackson integration via a mapper-backed module and a streaming `JsonBinder`
 
-**Status:** Accepted — grilled 2026-09-07 (two adversarial review passes; 28 findings folded in) · **Date:** 2026-09-07
+**Status:** Accepted — grilled 2026-09-07 (two adversarial review passes; 28 findings folded in); sections 1 and 2
+shipped, section 3 not built · **Date:** 2026-09-07
 
 ## Context
 
@@ -33,9 +34,10 @@ backport is a later, adopter-gated decision. Class names below use their 3.x for
 coordinates (the domain-annotation registration check targets those); `resolve()`/`createContextual()` are folded into
 `ValueDeserializer`/`ValueSerializer` (the separate `Resolvable*`/`Contextual*` interfaces are gone — the delegating
 pattern's lifecycle argument holds, through the merged methods); the whole exception hierarchy is unchecked
-(`JacksonException` root), which the error-taxonomy section below relies on. Still to verify against 3.x javadocs in PR
-1: the 3.x JPMS module names, the delegating serializer/deserializer class names, and the module type-id deduplication
-behavior.
+(`JacksonException` root), which the error-taxonomy section below relies on. Checked against the 3.1 jars: the JPMS
+module names are `tools.jackson.core` and `tools.jackson.databind`; the delegating pair is `StdConvertingDeserializer`
+and `StdConvertingSerializer` (`StdDelegatingSerializer` remains as a subclass of the latter); and a module is
+deduplicated by `JacksonModule.getRegistrationId()`, which `TelescopeModule` answers per instance.
 
 ### 1. `TelescopeModule` — mappers as Jackson converters
 
@@ -82,8 +84,12 @@ For each registered `Mapper<Wire, Domain>`:
   module does not provide; `@JsonUnwrapped` on a domain-typed property is unsupported (Jackson only unwraps bean
   shapes); `convertValue(obj, Domain.class)` routes through the module and therefore expects wire-shaped input.
 
-The Quarkus/Spring starters can later auto-build the module from their `TelescopeMapperRegistry` beans; that is a
-starter-side convenience, not part of this module's contract.
+**Starters (amended).** The module never collects mappers on its own, in a starter or anywhere else: a mapper between an
+entity and a DTO, registered as a converter, would change how every such entity is written and interfere with the mapped
+Spring MVC responses. The Spring Boot starter installs one `TelescopeModule` bean in Spring Boot's `JsonMapper` when
+telescope-jackson and databind 3 are on the classpath, carrying the mappers `TelescopeModuleCustomizer` beans add.
+Quarkus 3 manages Jackson 2 (`com.fasterxml.jackson`) and no Jackson 3 artifact, so the Quarkus extension does not
+install the module; the binder, which needs only Jackson 3's `jackson-core`, runs there unchanged.
 
 ### 2. `JsonBinder<T>` — streaming ingestion
 
@@ -124,6 +130,13 @@ Semantics, precisely:
   `InputCoercionException`; the loop catches it and rethrows as the same documented `IllegalArgumentException` (field,
   token text, location) — it is a coercion failure, not malformed JSON. Cross-kind coercions (string→number) are
   rejected; explicit `extract` converters exist for that.
+  - _Amended 2026-11-13:_ a number token binds to a `double` or `float` slot only when it is in the type's range. A
+    token past it, such as `1E400` for a `double` or `3.4028236e38` for a `float`, reads as infinity, which is not a
+    lossless read, so it is refused with the same `IllegalArgumentException` as integral overflow.
+- **One value per document (amended 2026-11-13):** the `String`, `byte[]` and `InputStream` entry points read the input
+  to its end and refuse anything after the value but whitespace with jackson-core's `StreamReadException`, as databind
+  does. jackson-core reads root values separated by whitespace as a sequence, so the binder checks for a second value
+  itself. `parse(JsonParser)` leaves the caller's parser on the value's last token and checks nothing after it.
 - **v1 taxonomy:** scalars, nested records (recursive sub-binder), `List<E>`/`Set<E>` from arrays, `Map<String, V>` from
   objects, `Optional<E>` (JSON null/missing → `Optional.empty()`), and the `StringFactory` types (UUID, Instant, …) —
   the `@FromMap` coercion taxonomy, reused verbatim by the codegen twin.

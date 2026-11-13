@@ -1,11 +1,14 @@
 package io.github.eschizoid.telescope.demo.quarkus;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.eschizoid.telescope.demo.api.ImportTrace;
-import io.github.eschizoid.telescope.demo.api.ImportedOrderFromMap;
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
 import io.github.eschizoid.telescope.demo.api.OrderDto;
 import io.github.eschizoid.telescope.demo.api.OrderSummary;
+import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.PlaceOrder;
 import io.github.eschizoid.telescope.demo.order.Order;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
@@ -22,6 +25,7 @@ import jakarta.ws.rs.core.Response;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import tools.jackson.core.JacksonException;
 
 /**
  * The order API, version 1. Every response is the entity converting itself through the generated
@@ -37,6 +41,9 @@ public class OrderResource {
 
   @Inject
   OrderImports imports;
+
+  @Inject
+  ObjectMapper json;
 
   @GET
   public List<OrderSummary> list() {
@@ -83,20 +90,32 @@ public class OrderResource {
   }
 
   /**
-   * Places an order from a partner's untyped payload. A payload the service refuses is answered
-   * with a 400 that carries the trace of how each field was read.
+   * Places an order from a partner's JSON, read as text by {@link PartnerFeed}. A payload the
+   * service refuses is answered with a 400 that carries the trace of how each field was read. Only
+   * a refused payload is parsed a second time, into the map the trace replays.
    */
   @POST
   @Path("/import")
-  public Response importOrder(final Map<String, Object> payload) {
+  public Response importOrder(final String body) {
     try {
-      return created(desk.place(imports.map(ImportedOrderFromMap.fromMap(payload))));
+      return created(desk.place(imports.map(PartnerFeed.read(body))));
     } catch (final IllegalArgumentException refused) {
-      return Response.status(Response.Status.BAD_REQUEST)
-        .type(MediaType.APPLICATION_JSON)
-        .entity(Map.of("detail", refused.getMessage(), "trace", ImportTrace.of(payload)))
-        .build();
+      return badRequest(Map.of("detail", refused.getMessage(), "trace", ImportTrace.of(payload(body))));
+    } catch (final JacksonException notJson) {
+      return badRequest(Map.of("detail", notJson.getOriginalMessage()));
     }
+  }
+
+  private Map<String, Object> payload(final String body) {
+    try {
+      return json.readValue(body, new TypeReference<>() {});
+    } catch (final JsonProcessingException notJson) {
+      return Map.of();
+    }
+  }
+
+  private static Response badRequest(final Map<String, String> problem) {
+    return Response.status(Response.Status.BAD_REQUEST).type(MediaType.APPLICATION_JSON).entity(problem).build();
   }
 
   @GET

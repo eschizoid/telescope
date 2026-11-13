@@ -177,6 +177,28 @@ class OrderApiTest {
   }
 
   @Test
+  @DisplayName(
+    "a partner who sends a number where the feed promises text is refused, naming the field and its position"
+  )
+  void aNumberWhereTheFeedPromisesTextIsRefused() {
+    final var json = given()
+      .contentType(ContentType.JSON)
+      .body("{\"customerEmail\":\"grace@example.com\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":2}]}")
+      .post("/orders/import")
+      .then()
+      .statusCode(400)
+      .extract()
+      .jsonPath();
+    assertThat(json.getString("detail")).isEqualTo("'lines[0].quantity' got 2, not a String, at line 1, column 74");
+  }
+
+  @Test
+  @DisplayName("a body that is not JSON is refused with a 400")
+  void aBodyThatIsNotJsonIsRefused() {
+    given().contentType(ContentType.JSON).body("{\"customerEmail\":").post("/orders/import").then().statusCode(400);
+  }
+
+  @Test
   @DisplayName("the invoice merges the order, the customer, the configured seller and the totals")
   void theInvoiceMergesFourSources() {
     final var json = given().get("/orders/SO-1001/invoice").then().statusCode(200).extract().jsonPath();

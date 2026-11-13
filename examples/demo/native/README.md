@@ -37,8 +37,8 @@ hop:
 
 1. **REST ↔ service.** The public, summary and version 2 views go through the generated `OrderMappings`; the mobile
    app's version 2 order maps to the service's request; the partner's map binds through the generated
-   `ImportedOrderFromMap`, and the import's trace builds the same binding at run time and finds each line's binder
-   through `ServiceLoader`.
+   `ImportedOrderFromMap`, the import's trace builds the same binding at run time and finds each line's binder through
+   `ServiceLoader`, and the partner's JSON text reads through telescope-jackson's streaming binder.
 2. **Service.** The PATCH lays the client's changes over the order's state with `patch`, an order is paid and shipped
    and only then shows its tracking number through the `when` row, a shipped order refuses a cancel, the invoice is
    merged from four sources and the total is computed.

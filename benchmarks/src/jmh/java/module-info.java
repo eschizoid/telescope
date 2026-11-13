@@ -12,6 +12,8 @@
 module io.github.eschizoid.telescope.benchmarks {
   requires transitive io.github.eschizoid.telescope;
   requires io.github.eschizoid.telescope.spring;
+  requires io.github.eschizoid.telescope.jackson;
+  requires tools.jackson.databind;
   requires jmh.core;
 
   exports io.github.eschizoid.telescope.benchmarks;

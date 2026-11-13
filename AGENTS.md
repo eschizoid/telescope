@@ -82,8 +82,9 @@ Two layers, hard line between them:
 
 ```
 core/                  public DSL (telescope-core)
-internal/              lattice + HKT emulation + reflection helpers (qualified-exported to :core, and narrowly to :jpa and :codegen)
+internal/              lattice + HKT emulation + reflection helpers (qualified-exported to :core, and narrowly to :jpa, :jackson and :codegen)
 jpa/                   telescope-jpa — container-copy policy and proxy resolver for JPA entities, through core's SPIs
+jackson/               telescope-jackson — streaming JsonBinder over jackson-core, and TelescopeModule (mappers as Jackson 3 converters)
 codegen/               @Focus / @BeanFocus / @Bridge processors
 lombok/                telescope-lombok — navigators for @Data/@Value/@Builder
 quarkus/               telescope-quarkus — Quarkus 3 CDI extension + TelescopeMapperRegistry
@@ -99,9 +100,9 @@ is `io.github.eschizoid`. **Don't reintroduce the unowned `org.telescope` packag
 under.
 
 Published artifacts (group `io.github.eschizoid`): `telescope-core` (main entry), `telescope-internal` (substrate;
-published for runtime bytecode, not for direct depend-on), `telescope-jpa`, `telescope-codegen`, `telescope-lombok`,
-`telescope-quarkus`, `telescope-spring-boot-starter`. JReleaser config in root `build.gradle.kts`; release pipeline is
-`.github/workflows/release.yaml` (`workflow_dispatch` with `releaseType` patch/minor/major).
+published for runtime bytecode, not for direct depend-on), `telescope-jpa`, `telescope-jackson`, `telescope-codegen`,
+`telescope-lombok`, `telescope-quarkus`, `telescope-spring-boot-starter`. JReleaser config in root `build.gradle.kts`;
+release pipeline is `.github/workflows/release.yaml` (`workflow_dispatch` with `releaseType` patch/minor/major).
 
 ---
 
@@ -210,8 +211,10 @@ result type; the lattice's resolution rules are in the composition table further
 public DSL composable without users seeing optic types.
 
 `:internal`'s `module-info.java` qualified-exports every `internal.*` package to `io.github.eschizoid.telescope`, the
-`internal` package also to telescope-jpa (for `NativeImage` and `MhAccessors`) and `pairing` also to the codegen module
-for the compile-time verifier — JPMS enforces the boundary; downstream modules cannot compile against lattice types.
+`internal` package also to telescope-jpa (for `NativeImage` and `MhAccessors`) and telescope-jackson (for `Records`,
+`Beans`, `LambdaIntrospection` and `NullDefaults`), and `pairing` also to the codegen module for the compile-time
+verifier and to telescope-jackson for `MapValueTypes` and `PairingMessages` — JPMS enforces the boundary; downstream
+modules cannot compile against lattice types.
 
 ---
 
@@ -436,6 +439,25 @@ runtime mapper and every generated bridge take the policy alike. Three test task
 (the `imagecode` property set, so the proxy accessors run as `MhAccessors` closures), and `testWithoutTheModule`, which
 runs `WithoutTheModuleTest` with the module's classes and resources off the class path, so the same Hibernate statistics
 count what a mapping costs with no policy registered.
+
+## Module: `:jackson` (telescope-jackson)
+
+JSON at the REST edge, on Jackson 3 (`tools.jackson`). `requires transitive tools.jackson.core`; databind is
+`requires static transitive`, so an application that only binds JSON leaves it off the module path. Two parts, one
+exported package:
+
+| Class                         | Role                                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TelescopeJson`, `JsonBinder` | `fromJson(Class, MapExtractStep...)` builds a reusable binder that reads a record or bean over `JsonParser`, no tree or map. Rows are core's `extract` / `required`, and may name a property of any type the target holds |
+| `Plan`, `Frame`, `Read`       | the build: each declared type classified by `MapValueTypes.classify` (any non-JDK record or bean is `NESTED`, read by its own `Frame`), one key table per object level, failures from `PairingMessages.json*`             |
+| `Refused`                     | a refusal carrying its path outwards without a stack trace, rendered once as the `IllegalArgumentException` a caller sees                                                                                                 |
+| `TelescopeModule`             | a `JacksonModule` over Jackson's `StdConvertingDeserializer` / `StdConvertingSerializer`, carrying only the mappers it is given, with a per-instance registration id and the fail-fast checks of ADR-0016                 |
+
+The JSON rules are stricter than the map conversions: a value is read only from the JSON kind its type is written as,
+integral slots refuse fractions and out-of-range integers (jackson-core's `getByteValue` accepts 128 to 255, so the
+binder checks the signed range itself), `BigDecimal` keeps every digit, and the last of a duplicated key wins. The token
+loop is boundary machinery like `FromMap`, not a lattice value — ADR-0016 records the carve-out. `imageTest` reruns the
+suite with the `imagecode` property set.
 
 ## Modules: `:quarkus` and `:spring-boot-starter` (integration starters)
 
@@ -767,8 +789,10 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own `native-image.properties`; no
     separate `telescope-graalvm` Feature module is needed. The `:examples:demo:native` `OrderRun` binary is the CI
     regression gate.
-16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
-    converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.
+16. **0016 — `telescope-jackson`.** (Accepted; parts 1 and 2 shipped, the codegen phase not built.) A Jackson 3.x
+    module: mappers registered as Jackson converters through a `TelescopeModule`, which carries only the mappers it is
+    given and which the Spring Boot starter installs; a streaming `JsonBinder` over `jackson-core`; and an `@FromJson`
+    codegen phase still to come. Quarkus 3 ships Jackson 2, so its extension does not install the module.
 17. **0017 — `telescope-jpa`.** (Accepted, amended 2026-11-12; decisions 1, 3 and 4 shipped.) Persistence-aware
     container copies through a `ContainerCopy` SPI (an unloaded lazy collection is shared, not loaded), proxy unwrapping
     moved out of core into a `ProxyResolver`, and starters that carry the module, inactive without
@@ -841,5 +865,9 @@ Each of these is a property of the platform or of this codebase that reads the o
   `FromMapProcessor`, `BeanFocusProcessor`).
 - **Every runtime `LambdaMetafactory` site needs the `NativeImage.IN_IMAGE` branch** to its `MhAccessors` equivalent, or
   the native-image workflow goes red.
+- **No Jackson object in a static field of a telescope class.** telescope-core's `native-image.properties` initializes
+  every `io.github.eschizoid.telescope` package at build time, telescope-jackson's included, and Jackson's classes are
+  initialized at run time, so a `JsonFactory` or `TypeFactory` held in a static field fails the native build. Create
+  them on first use. `BuildTimeHeapTest` walks the module's static fields and a built binder for one.
 - **Spotless for Java runs google-java-format first and prettier last.** Running only one of them leaves violations the
   other would have caught.

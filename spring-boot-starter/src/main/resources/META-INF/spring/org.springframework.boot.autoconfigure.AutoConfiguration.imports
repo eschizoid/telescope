@@ -1,2 +1,3 @@
 io.github.eschizoid.telescope.spring.TelescopeAutoConfiguration
 io.github.eschizoid.telescope.spring.web.TelescopeWebMvcAutoConfiguration
+io.github.eschizoid.telescope.spring.jackson.TelescopeJacksonAutoConfiguration

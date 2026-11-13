@@ -19,7 +19,10 @@ module io.github.eschizoid.telescope.spring {
   requires static org.springdoc.openapi.common;
   requires static io.swagger.v3.core;
   requires static io.swagger.v3.oas.models;
+  requires static io.github.eschizoid.telescope.jackson;
+  requires static tools.jackson.databind;
 
   exports io.github.eschizoid.telescope.spring;
   exports io.github.eschizoid.telescope.spring.web;
+  exports io.github.eschizoid.telescope.spring.jackson;
 }
