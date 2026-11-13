@@ -78,9 +78,7 @@ final class Frame<T> {
     this.indexByKey = indexByKey;
     this.construct = construct;
     var any = false;
-    for (final var flag : required) {
-      any |= flag;
-    }
+    for (final var flag : required) any |= flag;
     this.anyRequired = any;
   }
 
@@ -102,9 +100,7 @@ final class Frame<T> {
       final int i = index;
       if (token == JsonToken.VALUE_NULL) {
         args[i] = absents[i];
-        if (seen != null) {
-          seen[i] = false;
-        }
+        if (seen != null) seen[i] = false;
         continue;
       }
       final var read = reads[i];
@@ -117,13 +113,9 @@ final class Frame<T> {
           throw refused.under(keys[i]);
         }
       }
-      if (seen != null) {
-        seen[i] = true;
-      }
+      if (seen != null) seen[i] = true;
     }
-    if (seen != null) {
-      refuseMissing(parser, seen);
-    }
+    if (seen != null) refuseMissing(parser, seen);
     return construct.apply(args);
   }
 
@@ -150,17 +142,11 @@ final class Frame<T> {
   private void refuseMissing(final JsonParser parser, final boolean[] seen) {
     List<String> missing = null;
     for (var i = 0; i < seen.length; i++) {
-      if (!required[i] || seen[i]) {
-        continue;
-      }
-      if (missing == null) {
-        missing = new ArrayList<>();
-      }
+      if (!required[i] || seen[i]) continue;
+      if (missing == null) missing = new ArrayList<>();
       missing.add("\"" + keys[i] + "\" (" + kind + " '" + names[i] + "')");
     }
-    if (missing == null) {
-      return;
-    }
+    if (missing == null) return;
     final var at = parser.currentTokenLocation();
     final var line = at.getLineNr();
     final var column = at.getColumnNr();

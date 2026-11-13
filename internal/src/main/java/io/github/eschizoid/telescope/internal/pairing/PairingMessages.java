@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal.pairing;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * The single source of truth for every diagnostic the shared pairing decisions emit. The runtime
@@ -399,11 +400,41 @@ public final class PairingMessages {
 
   /**
    * {@code name}, a class's simple name, which a declared type always has, after the indefinite
-   * article its first letter takes in speech.
+   * article its first sound takes in speech: {@code an Order}, {@code a UUID}, {@code an SKU},
+   * {@code a Unit}. A name that opens with two capitals opens with an initialism, read letter by
+   * letter, so its first letter's name decides: {@code F}, {@code H}, {@code L}, {@code M}, {@code
+   * N}, {@code R}, {@code S} and {@code X} open with a vowel sound, and {@code U} with a consonant
+   * one. Any other name takes {@code an} before a vowel letter, except where a {@code U} or an
+   * {@code O} sounds as in {@code Unit}, {@code User} or {@code One}.
    */
   public static String withArticle(final String name) {
-    return ("aeiouAEIOU".indexOf(name.charAt(0)) >= 0 ? "an " : "a ") + name;
+    return (startsWithVowelSound(name) ? "an " : "a ") + name;
   }
+
+  private static boolean startsWithVowelSound(final String name) {
+    final var first = name.charAt(0);
+    if (name.length() > 1 && Character.isUpperCase(first) && Character.isUpperCase(name.charAt(1))) {
+      return "AEFHILMNORSX".indexOf(first) >= 0;
+    }
+    if ("aeiouAEIOU".indexOf(first) < 0) return false;
+    final var lower = name.toLowerCase(Locale.ROOT);
+    for (final var consonantSound : CONSONANT_SOUNDING_VOWELS) {
+      if (lower.startsWith(consonantSound)) return false;
+    }
+    return true;
+  }
+
+  /** Openings spelled with a vowel and spoken with a consonant: a Unit, a User, a Euro, a One. */
+  private static final List<String> CONSONANT_SOUNDING_VOWELS = List.of(
+    "uni",
+    "use",
+    "usu",
+    "uti",
+    "ura",
+    "eu",
+    "one",
+    "once"
+  );
 
   /**
    * Why a {@code via} row's method cannot convert: it returns {@code returned}, which the member

@@ -55,9 +55,7 @@ class BuildTimeHeapTest {
       for (final var name : MODULE_CLASSES) {
         final var type = Class.forName(name, true, fresh);
         for (final var field : type.getDeclaredFields()) {
-          if (!Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) {
-            continue;
-          }
+          if (!Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) continue;
           field.setAccessible(true);
           assertNull(jacksonReachable(field.get(null), name + "." + field.getName()));
         }
@@ -75,17 +73,13 @@ class BuildTimeHeapTest {
       TelescopeJson.fromJson(Booking.class, extract("postal_code", Address::zip, Object::toString))
     );
     assertEquals("x", TelescopeJson.fromJson(Order.class).read("{\"number\":\"x\"}").number());
-    for (final var binder : binders) {
-      assertNull(jacksonReachable(binder, binder.toString()));
-    }
+    for (final var binder : binders) assertNull(jacksonReachable(binder, binder.toString()));
   }
 
   private static URL[] classPath() throws MalformedURLException {
     final var entries = System.getProperty("java.class.path").split(File.pathSeparator);
     final var urls = new URL[entries.length];
-    for (var i = 0; i < entries.length; i++) {
-      urls[i] = new File(entries[i]).toURI().toURL();
-    }
+    for (var i = 0; i < entries.length; i++) urls[i] = new File(entries[i]).toURI().toURL();
     return urls;
   }
 
@@ -98,9 +92,7 @@ class BuildTimeHeapTest {
       final var next = pending.removeLast();
       final var value = next[0];
       final var path = (String) next[1];
-      if (value == null || value instanceof Class<?> || !seen.add(value)) {
-        continue;
-      }
+      if (value == null || value instanceof Class<?> || !seen.add(value)) continue;
       final var type = value.getClass();
       if (type.getName().startsWith("tools.jackson.") || type.getName().startsWith("com.fasterxml.jackson.")) {
         return path + " holds a " + type.getName();
@@ -114,9 +106,7 @@ class BuildTimeHeapTest {
         continue;
       }
       if (value instanceof Collection<?> collection) {
-        for (final var element : collection) {
-          pending.add(new Object[] { element, path + "[]" });
-        }
+        for (final var element : collection) pending.add(new Object[] { element, path + "[]" });
         continue;
       }
       if (value instanceof Map<?, ?> map) {
@@ -130,14 +120,10 @@ class BuildTimeHeapTest {
         pending.add(new Object[] { optional.orElse(null), path + ".get()" });
         continue;
       }
-      if (type.getName().startsWith("java.")) {
-        continue;
-      }
+      if (type.getName().startsWith("java.")) continue;
       for (var c = type; c != null && !c.getName().startsWith("java."); c = c.getSuperclass()) {
         for (final Field field : c.getDeclaredFields()) {
-          if (Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) {
-            continue;
-          }
+          if (Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) continue;
           field.setAccessible(true);
           pending.add(new Object[] { field.get(value), path + "." + field.getName() });
         }

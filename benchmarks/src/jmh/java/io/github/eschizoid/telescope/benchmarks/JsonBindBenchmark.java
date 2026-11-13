@@ -93,9 +93,7 @@ public class JsonBindBenchmark {
   @Benchmark
   public void tokensOnly(final Blackhole sink) {
     try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), JSON)) {
-      for (var token = parser.nextToken(); token != null; token = parser.nextToken()) {
-        sink.consume(token);
-      }
+      for (var token = parser.nextToken(); token != null; token = parser.nextToken()) sink.consume(token);
     }
   }
 
@@ -118,9 +116,7 @@ public class JsonBindBenchmark {
         case "total" -> total = parser.getDecimalValue();
         case "lines" -> {
           final var read = new ArrayList<JbLine>();
-          while (parser.nextToken() != JsonToken.END_ARRAY) {
-            read.add(line(parser));
-          }
+          while (parser.nextToken() != JsonToken.END_ARRAY) read.add(line(parser));
           lines = read;
         }
         default -> parser.skipChildren();

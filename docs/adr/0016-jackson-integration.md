@@ -130,6 +130,13 @@ Semantics, precisely:
   `InputCoercionException`; the loop catches it and rethrows as the same documented `IllegalArgumentException` (field,
   token text, location) — it is a coercion failure, not malformed JSON. Cross-kind coercions (string→number) are
   rejected; explicit `extract` converters exist for that.
+  - _Amended 2026-11-13:_ a number token binds to a `double` or `float` slot only when it is in the type's range. A
+    token past it, such as `1E400` for a `double` or `3.4028236e38` for a `float`, reads as infinity, which is not a
+    lossless read, so it is refused with the same `IllegalArgumentException` as integral overflow.
+- **One value per document (amended 2026-11-13):** the `String`, `byte[]` and `InputStream` entry points read the input
+  to its end and refuse anything after the value but whitespace with jackson-core's `StreamReadException`, as databind
+  does. jackson-core reads root values separated by whitespace as a sequence, so the binder checks for a second value
+  itself. `parse(JsonParser)` leaves the caller's parser on the value's last token and checks nothing after it.
 - **v1 taxonomy:** scalars, nested records (recursive sub-binder), `List<E>`/`Set<E>` from arrays, `Map<String, V>` from
   objects, `Optional<E>` (JSON null/missing → `Optional.empty()`), and the `StringFactory` types (UUID, Instant, …) —
   the `@FromMap` coercion taxonomy, reused verbatim by the codegen twin.

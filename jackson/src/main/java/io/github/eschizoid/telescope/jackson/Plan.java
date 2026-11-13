@@ -84,9 +84,7 @@ final class Plan {
         );
       }
     }
-    if (!bindable(target)) {
-      throw new IllegalArgumentException(PairingMessages.jsonNotBindable(target.getName()));
-    }
+    if (!bindable(target)) throw new IllegalArgumentException(PairingMessages.jsonNotBindable(target.getName()));
     final var plan = new Plan(List.of(rows));
     final var frame = plan.frame(target);
     for (final var row : rows) {
@@ -108,15 +106,9 @@ final class Plan {
    * properties, outside the JDK and not a container.
    */
   static boolean bindable(final Class<?> raw) {
-    if (raw == null || raw.isPrimitive() || raw.isArray() || raw.isEnum() || raw.isInterface()) {
-      return false;
-    }
-    if (Modifier.isAbstract(raw.getModifiers()) || MapValueTypes.isJdk(raw.getName())) {
-      return false;
-    }
-    if (Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw)) {
-      return false;
-    }
+    if (raw == null || raw.isPrimitive() || raw.isArray() || raw.isEnum() || raw.isInterface()) return false;
+    if (Modifier.isAbstract(raw.getModifiers()) || MapValueTypes.isJdk(raw.getName())) return false;
+    if (Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw)) return false;
     return raw.isRecord() || Beans.propertyNames(raw).length > 0;
   }
 
@@ -124,9 +116,7 @@ final class Plan {
   @SuppressWarnings("unchecked")
   private <T> Frame<T> frame(final Class<T> type) {
     final var existing = frames.get(type);
-    if (existing != null) {
-      return (Frame<T>) existing;
-    }
+    if (existing != null) return (Frame<T>) existing;
     final var frame = new Frame<>(type);
     frames.put(type, frame);
     fill(frame);
@@ -155,16 +145,12 @@ final class Plan {
       types = new Type[names.length];
       for (var i = 0; i < names.length; i++) {
         final var ambiguity = Beans.setterAmbiguity(writer, type, names[i]);
-        if (ambiguity != null) {
-          throw new IllegalArgumentException("TelescopeJson.fromJson: " + ambiguity);
-        }
+        if (ambiguity != null) throw new IllegalArgumentException("TelescopeJson.fromJson: " + ambiguity);
         types[i] = Beans.conversionType(writer, type, names[i]);
       }
     }
     final var byName = rowsFor(type, List.of(names));
-    if (writer != null) {
-      refuseUnwritableRows(type, writer, byName);
-    }
+    if (writer != null) refuseUnwritableRows(type, writer, byName);
     final var readsOwnName = Arrays.stream(names).anyMatch(
       name -> !byName.containsKey(name) || byName.get(name).key().equals(name)
     );
@@ -220,9 +206,7 @@ final class Plan {
   private Map<String, MapExtractStep> rowsFor(final Class<?> type, final List<String> known) {
     final var byName = new LinkedHashMap<String, MapExtractStep>();
     for (final var row : rows) {
-      if (!LambdaIntrospection.implClassOf(row.targetAccessor()).isAssignableFrom(type)) {
-        continue;
-      }
+      if (!LambdaIntrospection.implClassOf(row.targetAccessor()).isAssignableFrom(type)) continue;
       final var name = nameOf(row);
       if (!known.contains(name)) {
         throw new IllegalArgumentException(PairingMessages.jsonRowOffTarget(name, type.getSimpleName(), known));
@@ -262,9 +246,7 @@ final class Plan {
   ) {
     for (final var row : byName.entrySet()) {
       final var refusal = Beans.setterRefusal(writer, type, row.getKey());
-      if (refusal != null) {
-        throw new IllegalArgumentException("TelescopeJson.fromJson: " + refusal);
-      }
+      if (refusal != null) throw new IllegalArgumentException("TelescopeJson.fromJson: " + refusal);
       if (!writer.writes(row.getKey())) {
         throw new IllegalArgumentException(
           "TelescopeJson.fromJson: a row names property '" +
@@ -309,9 +291,7 @@ final class Plan {
         final var i = indexByName.get(name);
         return i == null ? null : args[i];
       });
-      for (var j = 0; j < afterBuild.size(); j++) {
-        convertedWriters.get(j).accept(bean, args[afterBuild.get(j)]);
-      }
+      for (var j = 0; j < afterBuild.size(); j++) convertedWriters.get(j).accept(bean, args[afterBuild.get(j)]);
       return bean;
     };
   }
@@ -326,16 +306,12 @@ final class Plan {
     while (true) {
       final FromMapProvider provider;
       try {
-        if (!providers.hasNext()) {
-          return List.of();
-        }
+        if (!providers.hasNext()) return List.of();
         provider = providers.next();
       } catch (final ServiceConfigurationError e) {
         continue;
       }
-      if (provider.targetType() != type) {
-        continue;
-      }
+      if (provider.targetType() != type) continue;
       try {
         return provider.required();
       } catch (final UnsupportedOperationException e) {
@@ -365,9 +341,7 @@ final class Plan {
     }
 
     Read orRefuse(final Function<String, RuntimeException> refusal) {
-      if (read == null) {
-        throw refusal.apply(reason);
-      }
+      if (read == null) throw refusal.apply(reason);
       return read;
     }
   }
@@ -452,25 +426,19 @@ final class Plan {
       // the signed range is enforced here.
       case "byte" -> integral(what, parser -> {
         final var value = parser.getIntValue();
-        if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
-          throw Refused.value(parser, what, null);
-        }
+        if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) throw Refused.value(parser, what, null);
         return (byte) value;
       });
       case "double" -> parser -> {
         requireNumber(parser, what);
         final var value = parser.getDoubleValue();
-        if (Double.isInfinite(value)) {
-          throw Refused.value(parser, what, null);
-        }
+        if (Double.isInfinite(value)) throw Refused.value(parser, what, null);
         return value;
       };
       case "float" -> parser -> {
         requireNumber(parser, what);
         final var value = parser.getFloatValue();
-        if (Float.isInfinite(value)) {
-          throw Refused.value(parser, what, null);
-        }
+        if (Float.isInfinite(value)) throw Refused.value(parser, what, null);
         return value;
       };
       case "boolean" -> parser ->
@@ -495,9 +463,7 @@ final class Plan {
    */
   private static Read integral(final String what, final Function<JsonParser, Object> value) {
     return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) {
-        throw Refused.value(parser, what, null);
-      }
+      if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) throw Refused.value(parser, what, null);
       try {
         return value.apply(parser);
       } catch (final InputCoercionException outOfRange) {
@@ -516,16 +482,12 @@ final class Plan {
   /** An enum constant, named by its exact name in a JSON string. */
   private static Read enumRead(final Class<?> type) {
     final var constants = new HashMap<String, Object>();
-    for (final var constant : type.getEnumConstants()) {
-      constants.put(((Enum<?>) constant).name(), constant);
-    }
+    for (final var constant : type.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
     final var what = PairingMessages.scalarPhrase(Scalar.ENUM, false, type.getSimpleName());
     return parser -> {
       if (parser.currentToken() == JsonToken.VALUE_STRING) {
         final var constant = constants.get(parser.getString());
-        if (constant != null) {
-          return constant;
-        }
+        if (constant != null) return constant;
       }
       throw Refused.value(parser, what, null);
     };
@@ -534,9 +496,7 @@ final class Plan {
   /** {@code String} or {@code CharSequence}: a JSON string, as it stands. */
   private static Read text(final String what) {
     return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_STRING) {
-        throw Refused.value(parser, what, null);
-      }
+      if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
       return parser.getString();
     };
   }
@@ -555,17 +515,13 @@ final class Plan {
     }
     if (type == BigInteger.class) {
       return parser -> {
-        if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) {
-          throw Refused.value(parser, what, null);
-        }
+        if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) throw Refused.value(parser, what, null);
         return parser.getBigIntegerValue();
       };
     }
     final var build = MapValueTypes.stringBuilt(type.getName()).orElseThrow().build();
     return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_STRING) {
-        throw Refused.value(parser, what, null);
-      }
+      if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
       try {
         return build.apply(parser.getString());
       } catch (final RuntimeException unparsable) {
@@ -578,9 +534,7 @@ final class Plan {
   private static Read nested(final Frame<?> frame) {
     final var what = PairingMessages.withArticle(frame.type().getSimpleName());
     return parser -> {
-      if (parser.currentToken() != JsonToken.START_OBJECT) {
-        throw Refused.value(parser, what, null);
-      }
+      if (parser.currentToken() != JsonToken.START_OBJECT) throw Refused.value(parser, what, null);
       return frame.read(parser);
     };
   }
@@ -588,9 +542,7 @@ final class Plan {
   /** A {@code List}, from a JSON array; a {@code null} element takes its type's absent value. */
   private static Read list(final Read element, final Object absent) {
     return parser -> {
-      if (parser.currentToken() != JsonToken.START_ARRAY) {
-        throw Refused.value(parser, "a List", null);
-      }
+      if (parser.currentToken() != JsonToken.START_ARRAY) throw Refused.value(parser, "a List", null);
       final var out = new ArrayList<>();
       addElements(parser, element, absent, out);
       return out;
@@ -600,9 +552,7 @@ final class Plan {
   /** A {@code Set}, from a JSON array, in the order the array holds its elements. */
   private static Read set(final Read element, final Object absent) {
     return parser -> {
-      if (parser.currentToken() != JsonToken.START_ARRAY) {
-        throw Refused.value(parser, "a Set", null);
-      }
+      if (parser.currentToken() != JsonToken.START_ARRAY) throw Refused.value(parser, "a Set", null);
       final var out = new LinkedHashSet<>();
       addElements(parser, element, absent, out);
       return out;
@@ -642,20 +592,14 @@ final class Plan {
    */
   private Resolution map(final Type keyType, final Type valueType) {
     final var key = keyRead(keyType);
-    if (key.read() == null) {
-      return key;
-    }
+    if (key.read() == null) return key;
     final var value = resolve(valueType);
-    if (value.read() == null) {
-      return value;
-    }
+    if (value.read() == null) return value;
     final var keyRead = key.read();
     final var valueRead = value.read();
     final var absent = absentOf(valueType);
     return Resolution.reads(parser -> {
-      if (parser.currentToken() != JsonToken.START_OBJECT) {
-        throw Refused.value(parser, "a Map", null);
-      }
+      if (parser.currentToken() != JsonToken.START_OBJECT) throw Refused.value(parser, "a Map", null);
       final var out = new LinkedHashMap<>();
       for (var name = parser.nextName(); name != null; name = parser.nextName()) {
         try {
@@ -682,15 +626,11 @@ final class Plan {
       }
       case ENUM -> {
         final var constants = new HashMap<String, Object>();
-        for (final var constant : raw.getEnumConstants()) {
-          constants.put(((Enum<?>) constant).name(), constant);
-        }
+        for (final var constant : raw.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
         what = PairingMessages.scalarPhrase(Scalar.ENUM, false, raw.getSimpleName());
         parse = name -> {
           final var constant = constants.get(name);
-          if (constant == null) {
-            throw new IllegalArgumentException(name);
-          }
+          if (constant == null) throw new IllegalArgumentException(name);
           return constant;
         };
       }
@@ -735,9 +675,7 @@ final class Plan {
           default -> throw new IllegalArgumentException(name);
         };
       case "char" -> name -> {
-        if (name.length() != 1) {
-          throw new IllegalArgumentException(name);
-        }
+        if (name.length() != 1) throw new IllegalArgumentException(name);
         return name.charAt(0);
       };
       default -> throw new IllegalStateException("not a primitive: " + primitive);
@@ -760,9 +698,7 @@ final class Plan {
       }
       case START_ARRAY -> {
         final var out = new ArrayList<>();
-        while (parser.nextToken() != JsonToken.END_ARRAY) {
-          out.add(natural(parser));
-        }
+        while (parser.nextToken() != JsonToken.END_ARRAY) out.add(natural(parser));
         yield out;
       }
       case VALUE_STRING -> parser.getString();
@@ -788,9 +724,7 @@ final class Plan {
   static Object absentOf(final Type type) {
     final var raw =
       type instanceof Class<?> c ? c : type instanceof ParameterizedType p ? (Class<?>) p.getRawType() : null;
-    if (raw != null && raw.isPrimitive()) {
-      return primitiveDefault(raw);
-    }
+    if (raw != null && raw.isPrimitive()) return primitiveDefault(raw);
     if (raw == List.class || raw == Set.class || raw == Map.class || raw == Optional.class) {
       return NullDefaults.defaultFor(raw);
     }
@@ -798,27 +732,13 @@ final class Plan {
   }
 
   private static Object primitiveDefault(final Class<?> primitive) {
-    if (primitive == boolean.class) {
-      return false;
-    }
-    if (primitive == char.class) {
-      return '\0';
-    }
-    if (primitive == long.class) {
-      return 0L;
-    }
-    if (primitive == double.class) {
-      return 0.0d;
-    }
-    if (primitive == float.class) {
-      return 0.0f;
-    }
-    if (primitive == short.class) {
-      return (short) 0;
-    }
-    if (primitive == byte.class) {
-      return (byte) 0;
-    }
+    if (primitive == boolean.class) return false;
+    if (primitive == char.class) return '\0';
+    if (primitive == long.class) return 0L;
+    if (primitive == double.class) return 0.0d;
+    if (primitive == float.class) return 0.0f;
+    if (primitive == short.class) return (short) 0;
+    if (primitive == byte.class) return (byte) 0;
     return 0;
   }
 
@@ -827,9 +747,7 @@ final class Plan {
    * wildcard. The reflection API reports the raw type of a parameterized type as a {@code Class}.
    */
   private static Class<?> rawOf(final Type type) {
-    if (type instanceof Class<?> c) {
-      return c.isPrimitive() || c.isArray() ? null : c;
-    }
+    if (type instanceof Class<?> c) return c.isPrimitive() || c.isArray() ? null : c;
     return type instanceof ParameterizedType p ? (Class<?>) p.getRawType() : null;
   }
 
@@ -839,9 +757,7 @@ final class Plan {
 
   /** A declared type as a message names it: {@code List<Line>}, {@code int}. */
   static String typeName(final Type type) {
-    if (type instanceof Class<?> c) {
-      return c.getSimpleName();
-    }
+    if (type instanceof Class<?> c) return c.getSimpleName();
     if (type instanceof ParameterizedType p) {
       return (
         typeName(p.getRawType()) +

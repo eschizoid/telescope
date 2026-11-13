@@ -322,7 +322,7 @@ class JsonBinderTest {
         refusal(() -> SCALARS.read("{\"chars\":[]}")).getMessage()
       );
       assertEquals(
-        "'id' got 7, not an UUID, at line 1, column 7",
+        "'id' got 7, not a UUID, at line 1, column 7",
         refusal(() -> SCALARS.read("{\"id\":7}")).getMessage()
       );
     }
@@ -408,6 +408,27 @@ class JsonBinderTest {
     @DisplayName("JSON that does not parse throws jackson-core's own exception")
     void malformedJson() {
       assertThrows(StreamReadException.class, () -> LINES.read("{\"sku\":"));
+    }
+
+    @Test
+    @DisplayName("a document holds one value: text or a second value after it is refused, by every entry point")
+    void trailingContentIsRefused() {
+      final var one = "{\"sku\":\"A\"}";
+      assertEquals(new Line("A", 0, null), LINES.read(one + " \n\t "));
+      assertThrows(StreamReadException.class, () -> LINES.read(one + " x"));
+      assertEquals(
+        "Trailing token (START_OBJECT) after the document's value: a JSON document holds one value",
+        assertThrows(StreamReadException.class, () -> LINES.read(one + " {\"sku\":\"B\"}")).getOriginalMessage()
+      );
+      assertThrows(StreamReadException.class, () -> LINES.read("null 1"));
+      assertThrows(StreamReadException.class, () -> LINES.read((one + " 1").getBytes(StandardCharsets.UTF_8)));
+      assertThrows(StreamReadException.class, () ->
+        LINES.read(new ByteArrayInputStream((one + " []").getBytes(StandardCharsets.UTF_8)))
+      );
+      assertThrows(StreamReadException.class, () -> LINES.readList("[" + one + "] []"));
+      assertThrows(StreamReadException.class, () ->
+        LINES.readList(new ByteArrayInputStream(("[" + one + "] x").getBytes(StandardCharsets.UTF_8)))
+      );
     }
   }
 

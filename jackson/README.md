@@ -30,26 +30,37 @@ share between threads, and reads from a `String`, a `byte[]` or an `InputStream`
 
 The rules, per value:
 
-| JSON                               | What the binder does                                                                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| a missing key, or a key set `null` | the declared type's default: `0`, `false`, an empty `List`, `Set`, `Map` or `Optional`, otherwise `null`      |
-| a key no property reads            | skipped, whatever it holds                                                                                    |
-| a key that appears twice           | the last value wins                                                                                           |
-| a number                           | read into a numeric property only; an integral property refuses a fraction and an integer past its range      |
-| a string                           | read into `String`, an enum constant by its exact name, `char`, or a JDK value type such as `UUID`, `Instant` |
-| `true`, `false`                    | read into `boolean` only                                                                                      |
-| an array                           | read into a `List` or a `Set`, each element by the same rules                                                 |
-| an object                          | read into a nested record or bean, or a `Map` whose key type is read from text                                |
+| JSON                               | What the binder does                                                                                                 |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| a missing key, or a key set `null` | the declared type's default: `0`, `false`, an empty `List`, `Set`, `Map` or `Optional`, otherwise `null`             |
+| a key no property reads            | skipped, whatever it holds                                                                                           |
+| a key that appears twice           | the last value wins                                                                                                  |
+| a number                           | read into a numeric property only; a property refuses a number past its type's range, and an integral one a fraction |
+| a string                           | read into `String`, an enum constant by its exact name, `char`, or a JDK value type such as `UUID`, `Instant`        |
+| `true`, `false`                    | read into `boolean` only                                                                                             |
+| an array                           | read into a `List` or a `Set`, each element by the same rules                                                        |
+| an object                          | read into a nested record or bean, or a `Map` whose key type is read from text                                       |
 
 A value is never read from another JSON kind: `"12"` does not become an `int`, and `12` does not become a `String`.
-`BigDecimal` and `BigInteger` are read from a number token with every digit kept. The binder refuses what it cannot read
-with an `IllegalArgumentException` that names the property, where it is and what it got:
+`BigDecimal` and `BigInteger` are read from a number token with every digit kept. A `double` or `float` refuses a number
+past its range, such as `1E400` for a `double`, rather than read it as infinity. A document holds one value: anything
+after it but whitespace is refused, as JSON that does not parse is. The binder refuses what it cannot read with an
+`IllegalArgumentException` that names the property, where it is and what it got:
 
 ```text
 'lines[1].quantity' got 1.5, not an int, at line 3, column 18
 ```
 
 JSON that does not parse throws `jackson-core`'s own `StreamReadException`, which carries the location.
+
+### Stricter than `fromMap`
+
+The binder accepts the same declared types as `Telescope.fromMap` and the `@FromMap` binder, and leaves the same value
+for a missing key, but it reads values strictly where they read leniently. Given a map, `fromMap` narrows a number as a
+Java cast does, so an integer past an `int`'s range wraps and `1.5` truncates to `1`; it reads text that is not `true`
+as `false`; and it answers a value of the wrong shape for a `List`, `Set` or `Map` with an empty one. The binder refuses
+each of these. Its messages use the wording of telescope's built-in conversions, naming the property and the value,
+where `fromMap` lets the underlying exception through, such as a `NumberFormatException` for text that is no number.
 
 ### Rows
 
@@ -98,6 +109,9 @@ without a word:
 - an enum or primitive domain type, which Jackson reads through a lookup the module takes no part in;
 - a domain type carrying `@JsonDeserialize`, `@JsonSerialize`, `@JsonFormat`, `@JsonCreator` or `@JsonValue`, which
   Jackson would settle against the module one way or the other without saying so.
+
+The same two checks hold across modules: when a `JsonMapper` is built with two `TelescopeModule`s, a domain type both
+carry, or a wire type one carries that is the other's domain type, is refused with an `IllegalStateException`.
 
 Not supported: a domain type as a `Map` key, and `@JsonUnwrapped` on a domain-typed property.
 `convertValue(value, Domain.class)` goes through the module too, so it expects the wire shape.

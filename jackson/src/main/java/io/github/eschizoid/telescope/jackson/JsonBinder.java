@@ -9,6 +9,7 @@ import java.util.Objects;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
 import tools.jackson.core.ObjectReadContext;
+import tools.jackson.core.exc.StreamReadException;
 import tools.jackson.core.json.JsonFactory;
 
 /**
@@ -61,7 +62,8 @@ public final class JsonBinder<T> {
   }
 
   /**
-   * The value the JSON text holds, or {@code null} for the document {@code null}.
+   * The value the JSON text holds, or {@code null} for the document {@code null}. Anything after
+   * the value but whitespace is refused, as JSON that does not parse is.
    *
    * @param json a JSON object
    * @return the value built
@@ -74,7 +76,8 @@ public final class JsonBinder<T> {
   }
 
   /**
-   * The value the JSON in {@code bytes} holds, in UTF-8 or any encoding JSON allows.
+   * The value the JSON in {@code bytes} holds, in UTF-8 or any encoding JSON allows. Anything after
+   * the value but whitespace is refused.
    *
    * @param bytes a JSON object
    * @return the value built
@@ -87,7 +90,8 @@ public final class JsonBinder<T> {
   }
 
   /**
-   * The value the JSON in {@code in} holds. The stream is read to the end of the value and closed.
+   * The value the JSON in {@code in} holds. The stream is read to its end, where anything after the
+   * value but whitespace is refused, and closed.
    *
    * @param in a JSON object
    * @return the value built
@@ -101,7 +105,8 @@ public final class JsonBinder<T> {
 
   /**
    * The values a JSON array of objects holds, in order, or {@code null} for the document {@code
-   * null}. A {@code null} element is {@code null} in the list.
+   * null}. A {@code null} element is {@code null} in the list. Anything after the array but
+   * whitespace is refused.
    *
    * @param json a JSON array
    * @return the values built
@@ -110,13 +115,13 @@ public final class JsonBinder<T> {
     Objects.requireNonNull(json, "json");
     try (final var parser = factory().createParser(ObjectReadContext.empty(), json)) {
       parser.nextToken();
-      return list(parser);
+      return requireEnd(parser, list(parser));
     }
   }
 
   /**
-   * The values the JSON array in {@code in} holds. The stream is read to the end of the array and
-   * closed.
+   * The values the JSON array in {@code in} holds. The stream is read to its end, where anything
+   * after the array but whitespace is refused, and closed.
    *
    * @param in a JSON array
    * @return the values built
@@ -125,7 +130,7 @@ public final class JsonBinder<T> {
     Objects.requireNonNull(in, "in");
     try (final var parser = factory().createParser(ObjectReadContext.empty(), in)) {
       parser.nextToken();
-      return list(parser);
+      return requireEnd(parser, list(parser));
     }
   }
 
@@ -139,9 +144,7 @@ public final class JsonBinder<T> {
    */
   public T parse(final JsonParser parser) {
     Objects.requireNonNull(parser, "parser");
-    if (parser.currentToken() == null) {
-      parser.nextToken();
-    }
+    if (parser.currentToken() == null) parser.nextToken();
     return value(parser);
   }
 
@@ -153,9 +156,7 @@ public final class JsonBinder<T> {
    */
   public List<T> parseList(final JsonParser parser) {
     Objects.requireNonNull(parser, "parser");
-    if (parser.currentToken() == null) {
-      parser.nextToken();
-    }
+    if (parser.currentToken() == null) parser.nextToken();
     return list(parser);
   }
 
@@ -186,18 +187,30 @@ public final class JsonBinder<T> {
 
   private T document(final JsonParser parser) {
     parser.nextToken();
-    return value(parser);
+    return requireEnd(parser, value(parser));
+  }
+
+  /**
+   * {@code read}, once nothing but whitespace follows the document's value. A document holds one
+   * value; jackson-core reads values separated by whitespace as a sequence, so a second value is
+   * refused here, and text that is no value at all is refused by the parser itself.
+   */
+  private static <R> R requireEnd(final JsonParser parser, final R read) {
+    final var trailing = parser.nextToken();
+    if (trailing != null) {
+      throw new StreamReadException(
+        parser,
+        "Trailing token (" + trailing + ") after the document's value: a JSON document holds one value"
+      );
+    }
+    return read;
   }
 
   private T value(final JsonParser parser) {
     final var token = parser.currentToken();
-    if (token == JsonToken.VALUE_NULL) {
-      return null;
-    }
+    if (token == JsonToken.VALUE_NULL) return null;
     try {
-      if (token != JsonToken.START_OBJECT) {
-        throw Refused.value(parser, what, null);
-      }
+      if (token != JsonToken.START_OBJECT) throw Refused.value(parser, what, null);
       return root.read(parser);
     } catch (final Refused refused) {
       throw refused.toException();
@@ -206,9 +219,7 @@ public final class JsonBinder<T> {
 
   private List<T> list(final JsonParser parser) {
     final var token = parser.currentToken();
-    if (token == JsonToken.VALUE_NULL) {
-      return null;
-    }
+    if (token == JsonToken.VALUE_NULL) return null;
     try {
       if (token != JsonToken.START_ARRAY) {
         throw Refused.value(parser, "an array of " + root.type().getSimpleName(), null);

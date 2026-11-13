@@ -29,6 +29,7 @@ import tools.jackson.databind.ValueDeserializer;
 import tools.jackson.databind.ValueSerializer;
 import tools.jackson.databind.annotation.JsonDeserialize;
 import tools.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.databind.cfg.MapperBuilder;
 import tools.jackson.databind.deser.Deserializers;
 import tools.jackson.databind.deser.std.StdConvertingDeserializer;
 import tools.jackson.databind.ser.Serializers;
@@ -130,8 +131,52 @@ public final class TelescopeModule extends JacksonModule {
 
   @Override
   public void setupModule(final SetupContext context) {
+    if (context.getOwner() instanceof MapperBuilder<?, ?> builder) builder.withModules(this::refuseOverlap);
     context.addDeserializers(new MappedReads());
     context.addSerializers(new MappedWrites());
+  }
+
+  /**
+   * Refuses another {@code TelescopeModule} on the same JSON mapper whose mappers this one's would
+   * misbehave beside: one with a mapper for a domain type this one maps too, which Jackson would
+   * settle by registration order without a word, or one whose wire type is, or extends, a domain
+   * type of the other, which would chain the two. Each module is checked on its own when it is
+   * built; this is the same check across the modules of one mapper.
+   */
+  private void refuseOverlap(final JacksonModule registered) {
+    if (registered == this || !(registered instanceof TelescopeModule other)) return;
+    for (final var domain : byDomain.keySet()) {
+      if (other.byDomain.containsKey(domain)) {
+        throw new IllegalStateException(
+          "TelescopeModule: two modules on one JSON mapper both carry a mapper for " +
+            domain.getSimpleName() +
+            ": " +
+            describe(byDomain.get(domain)) +
+            " and " +
+            describe(other.byDomain.get(domain)) +
+            ". One JSON mapper reads a type one way; carry the mapper in one module, or give each module" +
+            " its own JsonMapper."
+        );
+      }
+    }
+    for (final var pair : List.of(List.of(this, other), List.of(other, this))) {
+      for (final var mapper : pair.get(0).mappers) {
+        for (final var domain : pair.get(1).byDomain.keySet()) {
+          if (domain.isAssignableFrom(mapper.sourceClass())) {
+            throw new IllegalStateException(
+              "TelescopeModule: the wire type of " +
+                describe(mapper) +
+                " is " +
+                (domain == mapper.sourceClass()
+                  ? domain.getSimpleName()
+                  : PairingMessages.withArticle(domain.getSimpleName())) +
+                ", which another module on the same JSON mapper maps, so writing it would run that" +
+                " module's mapper too. Register the two in one module, or give each its own JsonMapper."
+            );
+          }
+        }
+      }
+    }
   }
 
   @Override
@@ -164,9 +209,7 @@ public final class TelescopeModule extends JacksonModule {
      * @return this builder
      */
     public Builder addAll(final Collection<? extends Mapper<?, ?>> mappers) {
-      for (final var mapper : Objects.requireNonNull(mappers, "mappers")) {
-        add(mapper);
-      }
+      for (final var mapper : Objects.requireNonNull(mappers, "mappers")) add(mapper);
       return this;
     }
 
@@ -299,18 +342,14 @@ public final class TelescopeModule extends JacksonModule {
    */
   private static String jacksonAnnotation(final Class<?> type) {
     for (final var annotation : CLASS_LEVEL) {
-      if (type.isAnnotationPresent(annotation)) {
-        return "@" + annotation.getSimpleName();
-      }
+      if (type.isAnnotationPresent(annotation)) return "@" + annotation.getSimpleName();
     }
     final var members = Stream.of(type.getDeclaredConstructors(), type.getDeclaredMethods(), type.getDeclaredFields())
       .flatMap(Stream::<AnnotatedElement>of)
       .toList();
     for (final var member : members) {
       for (final var annotation : MEMBER_LEVEL) {
-        if (member.isAnnotationPresent(annotation)) {
-          return "@" + annotation.getSimpleName() + " on " + member;
-        }
+        if (member.isAnnotationPresent(annotation)) return "@" + annotation.getSimpleName() + " on " + member;
       }
     }
     return null;
@@ -327,24 +366,16 @@ public final class TelescopeModule extends JacksonModule {
   private Mapper<?, ?> writtenThrough(final Class<?> type) {
     for (var c = type; c != null; c = c.getSuperclass()) {
       final var mapper = byDomain.get(c);
-      if (mapper != null) {
-        return mapper;
-      }
+      if (mapper != null) return mapper;
     }
     final var seen = new HashSet<Class<?>>();
     final var queue = new ArrayDeque<Class<?>>();
-    for (var c = type; c != null; c = c.getSuperclass()) {
-      queue.addAll(List.of(c.getInterfaces()));
-    }
+    for (var c = type; c != null; c = c.getSuperclass()) queue.addAll(List.of(c.getInterfaces()));
     while (!queue.isEmpty()) {
       final var next = queue.removeFirst();
-      if (!seen.add(next)) {
-        continue;
-      }
+      if (!seen.add(next)) continue;
       final var mapper = byDomain.get(next);
-      if (mapper != null) {
-        return mapper;
-      }
+      if (mapper != null) return mapper;
       queue.addAll(List.of(next.getInterfaces()));
     }
     return null;

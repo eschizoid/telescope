@@ -122,9 +122,7 @@ class TelescopeModuleTest {
 
   private static JsonMapper json(final TelescopeModule... modules) {
     final var builder = JsonMapper.builder();
-    for (final var module : modules) {
-      builder.addModule(module);
-    }
+    for (final var module : modules) builder.addModule(module);
     return builder.build();
   }
 
@@ -245,6 +243,33 @@ class TelescopeModuleTest {
         "TelescopeModule: the mapper ContactWire → Contact and the mapper String → Contact both have Contact for" +
           " their domain type, and one JSON mapper reads a type one way. Give each its own JsonMapper.",
         refusal(CONTACTS, plain(String.class, Contact.class))
+      );
+    }
+
+    @Test
+    @DisplayName("two modules on one JSON mapper with a mapper for the same domain type are refused when it is built")
+    void sharedDomainAcrossModules() {
+      final var builder = JsonMapper.builder()
+        .addModule(TelescopeModule.of(CONTACTS))
+        .addModule(TelescopeModule.of(plain(String.class, Contact.class)));
+      assertEquals(
+        "TelescopeModule: two modules on one JSON mapper both carry a mapper for Contact: the mapper" +
+          " ContactWire → Contact and the mapper String → Contact. One JSON mapper reads a type one way; carry" +
+          " the mapper in one module, or give each module its own JsonMapper.",
+        assertThrows(IllegalStateException.class, builder::build).getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a wire type another module on the same JSON mapper maps is refused when it is built")
+    void wireIsADomainAcrossModules() {
+      final var builder = JsonMapper.builder()
+        .addModule(TelescopeModule.of(plain(Contact.class, Team.class)))
+        .addModule(TelescopeModule.of(CONTACTS));
+      assertTrue(
+        assertThrows(IllegalStateException.class, builder::build)
+          .getMessage()
+          .startsWith("TelescopeModule: the wire type of the mapper Contact → Team is Contact, which another module")
       );
     }
 

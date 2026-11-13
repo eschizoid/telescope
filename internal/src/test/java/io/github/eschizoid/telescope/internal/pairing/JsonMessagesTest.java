@@ -72,9 +72,27 @@ class JsonMessagesTest {
   }
 
   @Test
-  @DisplayName("a noun takes the article its first letter takes")
+  @DisplayName("a name takes the article its first sound takes, an initialism by its first letter's name")
   void withArticle() {
-    assertEquals("an Order", PairingMessages.withArticle("Order"));
-    assertEquals("a List", PairingMessages.withArticle("List"));
+    for (final var expected : List.of(
+      "an Order",
+      "an int",
+      "an Instant",
+      "a List",
+      "a UUID",
+      "a URI",
+      "a URL",
+      "an SKU",
+      "an HTTPClient",
+      "an XMLNode",
+      "a BigDecimal",
+      "a Unit",
+      "a User",
+      "an Umbrella",
+      "a Euro",
+      "a OneOf"
+    )) {
+      assertEquals(expected, PairingMessages.withArticle(expected.substring(expected.indexOf(' ') + 1)));
+    }
   }
 }

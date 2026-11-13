@@ -70,9 +70,7 @@ final class Refused extends RuntimeException {
   private String path() {
     final var path = new StringBuilder();
     for (final var segment : segments) {
-      if (!segment.startsWith("[") && !path.isEmpty()) {
-        path.append('.');
-      }
+      if (!segment.startsWith("[") && !path.isEmpty()) path.append('.');
       path.append(segment);
     }
     return path.toString();
@@ -84,9 +82,7 @@ final class Refused extends RuntimeException {
    */
   private static String got(final JsonParser parser) {
     final var token = parser.currentToken();
-    if (token == null) {
-      return "no value";
-    }
+    if (token == null) return "no value";
     return switch (token) {
       case START_OBJECT -> "an object";
       case START_ARRAY -> "an array";
