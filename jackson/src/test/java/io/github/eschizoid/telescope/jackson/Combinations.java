@@ -176,6 +176,24 @@ public final class Combinations {
     }
   }
 
+  /** Renamed and ignored on the field, renamed on the setter: the setter's name alone is read. */
+  public static final class FieldNamedIgnoredSetterNamed extends Probe {
+
+    @JsonProperty("f")
+    @JsonIgnore
+    private String p;
+
+    public String getP() {
+      return p;
+    }
+
+    @JsonProperty("s")
+    public void setP(final String p) {
+      this.p = p;
+      value = p;
+    }
+  }
+
   /** {@code @JsonIgnore(false)} on the field. */
   public static final class FieldNotIgnored extends Probe {
 

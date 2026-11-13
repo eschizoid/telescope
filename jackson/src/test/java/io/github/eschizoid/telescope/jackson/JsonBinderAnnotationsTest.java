@@ -248,6 +248,7 @@ class JsonBinderAnnotationsTest {
         Combinations.FieldIgnoredSetterExplicit.class,
         Combinations.FieldIgnored.class,
         Combinations.FieldNamedAndIgnored.class,
+        Combinations.FieldNamedIgnoredSetterNamed.class,
         Combinations.FieldNotIgnored.class,
         Combinations.GetterIgnored.class,
         Combinations.SetterIgnored.class,
