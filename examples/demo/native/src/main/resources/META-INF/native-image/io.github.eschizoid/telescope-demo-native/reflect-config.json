@@ -30,6 +30,12 @@
     "allDeclaredFields": true
   },
   {
+    "name": "io.github.eschizoid.telescope.demo.api.OrderRow",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
     "name": "io.github.eschizoid.telescope.demo.api.OrderV2Dto",
     "allDeclaredConstructors": true,
     "allDeclaredMethods": true,

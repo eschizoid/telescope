@@ -52,6 +52,10 @@ writes them as `@ApplicationScoped` CDI beans, and
 [`OrderResource`](src/main/java/io/github/eschizoid/telescope/demo/quarkus/OrderResource.java) injects them with
 `@Inject`.
 
+The partner's JSON text is read by telescope-jackson's `JsonBinder`, as on Spring. The binder needs only `jackson-core`
+3, so it runs beside the Jackson 2 that Quarkus 3 brings. telescope-jackson's `TelescopeModule` is a Jackson 3 databind
+module, so this app does not install it, and the customer endpoints the Spring app serves through it are not here.
+
 ### 2. Service
 
 [`OrderBeans`](src/main/java/io/github/eschizoid/telescope/demo/quarkus/OrderBeans.java) produces the shared
@@ -68,7 +72,8 @@ through `addLine`, and the same test checks it.
 ## Try it
 
 The `curl` calls in the [Spring app's README](../spring/README.md#try-it) work here unchanged, the lifecycle calls
-included, except two that belong to the Spring app: `/customers` and `/orders/{n}/customer`.
+included, except three that belong to the Spring app: `/customers`, `/orders/{n}/customer` and `/orders/dashboard`,
+whose point is what it does not load from the database.
 
 ## Tests
 

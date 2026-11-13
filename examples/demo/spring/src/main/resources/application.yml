@@ -7,6 +7,11 @@ spring:
     # Mapped responses convert the entity after the handler returns, while Spring MVC writes the
     # body, so the lazy customer, lines and tags are read with the session the request opened.
     open-in-view: true
+  data:
+    web:
+      pageable:
+        # A page is written as its rows and a "page" object with its size, number and totals.
+        serialization-mode: via-dto
   jackson:
     deserialization:
       # A client may leave out a flag such as giftWrap, which then reads as false.

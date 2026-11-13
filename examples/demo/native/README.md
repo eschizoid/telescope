@@ -19,7 +19,7 @@ The output ends like this, one line per step:
 PASS  the public view hides what only the shop sees, through order.toOrderDto()
 PASS  a PATCH changes only what it sends, written into the entity in place
 ...
-ALL 21 STEPS PASSED
+ALL 23 STEPS PASSED
 ```
 
 This module compiles the [order-service demo](../README.md) to a GraalVM native image. It is a command, not a server, so
@@ -35,8 +35,8 @@ The run has two parts.
 The first part opens the shop with its two sample orders and runs the service over its own generated mappers, hop by
 hop:
 
-1. **REST ↔ service.** The public, summary and version 2 views go through the generated `OrderMappings`; the mobile
-   app's version 2 order maps to the service's request; the partner's map binds through the generated
+1. **REST ↔ service.** The public, summary, dashboard and version 2 views go through the generated `OrderMappings`; the
+   mobile app's version 2 order maps to the service's request; the partner's map binds through the generated
    `ImportedOrderFromMap`, the import's trace builds the same binding at run time and finds each line's binder through
    `ServiceLoader`, and the partner's JSON text reads through telescope-jackson's streaming binder.
 2. **Service.** The PATCH lays the client's changes over the order's state with `patch`, an order is paid and shipped

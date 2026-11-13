@@ -268,8 +268,8 @@ class OrderApiTest {
   }
 
   @Test
-  @DisplayName("a customer signs up through the runtime card mapper, and an order's customer reads back as a card")
-  void customersMapThroughTheRuntimeCardMapper() {
+  @DisplayName("Spring's JSON mapper reads a sign-up as a customer, and writes an order's lazy customer as a card")
+  void customersAreReadAndWrittenAsCards() {
     final var created = send(
       HttpMethod.POST,
       "/customers",
@@ -284,6 +284,23 @@ class OrderApiTest {
     final var card = send(HttpMethod.GET, "/orders/SO-1002/customer", null).getBody();
     assertThat(JsonPath.<String>read(card, "$.name")).isEqualTo("Grace Hopper");
     assertThat(JsonPath.<String>read(card, "$.email")).isEqualTo("grace@example.com");
+    assertThat(JsonPath.<Integer>read(card, "$.id")).isNotNull();
+    assertThat(card).as("the proxy is written as its card").doesNotContain("hibernateLazyInitializer");
+  }
+
+  @Test
+  @DisplayName("a sign-up that sends an id creates a new customer and leaves the one with that id as it was")
+  void aSignUpDoesNotChooseItsId() {
+    final var created = send(
+      HttpMethod.POST,
+      "/customers",
+      Map.of("id", 1, "name", "Barbara Liskov", "email", "barbara@example.com")
+    );
+    assertThat(created.getStatusCode().value()).isEqualTo(201);
+    assertThat(JsonPath.<Integer>read(created.getBody(), "$.id")).isNotEqualTo(1);
+    final var ada = send(HttpMethod.GET, "/orders/SO-1001/customer", null).getBody();
+    assertThat(JsonPath.<Integer>read(ada, "$.id")).isEqualTo(1);
+    assertThat(JsonPath.<String>read(ada, "$.name")).isEqualTo("Ada Lovelace");
   }
 
   @Test

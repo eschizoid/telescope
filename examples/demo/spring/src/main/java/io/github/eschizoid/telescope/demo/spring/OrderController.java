@@ -4,12 +4,14 @@ import io.github.eschizoid.telescope.demo.api.ImportTrace;
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
 import io.github.eschizoid.telescope.demo.api.OrderDto;
+import io.github.eschizoid.telescope.demo.api.OrderRow;
 import io.github.eschizoid.telescope.demo.api.OrderSummary;
 import io.github.eschizoid.telescope.demo.api.OrderV2Dto;
 import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.PlaceOrder;
 import io.github.eschizoid.telescope.demo.api.PlaceOrderV2;
 import io.github.eschizoid.telescope.demo.order.Order;
+import io.github.eschizoid.telescope.demo.order.OrderStatus;
 import io.github.eschizoid.telescope.spring.web.TelescopeGetMapping;
 import io.github.eschizoid.telescope.spring.web.TelescopePatchMapping;
 import io.github.eschizoid.telescope.spring.web.TelescopePostMapping;
@@ -17,10 +19,16 @@ import io.github.eschizoid.telescope.spring.web.TelescopeRequestBody;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
@@ -51,6 +59,20 @@ class OrderController {
   @TelescopeGetMapping(value = "/orders", to = OrderSummary.class)
   List<Order> list() {
     return orders.list();
+  }
+
+  /**
+   * The back office's dashboard: one page of the orders in a status, newest first, one {@link
+   * OrderRow} each. A row's tags are written only when the client asks for them with {@code
+   * expand=tags}, which loads them for the whole page in one more query.
+   */
+  @TelescopeGetMapping(value = "/orders/dashboard", to = OrderRow.class)
+  Page<Order> dashboard(
+    @RequestParam final OrderStatus status,
+    @PageableDefault(size = 20, sort = { "placedOn", "number" }, direction = Direction.DESC) final Pageable pageable,
+    @RequestParam(defaultValue = "") final Set<String> expand
+  ) {
+    return orders.dashboard(status, pageable, expand.contains("tags"));
   }
 
   /** One order. The entity converts itself through the generated {@code OrderMappings}. */
