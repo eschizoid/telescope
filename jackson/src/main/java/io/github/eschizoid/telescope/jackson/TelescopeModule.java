@@ -67,8 +67,6 @@ import tools.jackson.databind.util.Converter;
  */
 public final class TelescopeModule extends JacksonModule {
 
-  private static final TypeFactory TYPES = TypeFactory.createDefaultInstance();
-
   private final List<Mapper<?, ?>> mappers;
   private final Map<Class<?>, Mapper<?, ?>> byDomain;
 
@@ -192,18 +190,21 @@ public final class TelescopeModule extends JacksonModule {
    * check refuses a shape Jackson would otherwise get wrong without a word.
    */
   private static Map<Class<?>, Mapper<?, ?>> refuseMisfits(final List<Mapper<?, ?>> mappers) {
+    // Created per module rather than held in a static field: a native image initializes telescope's
+    // classes while it is built, and a type factory held then would be stored in the image heap.
+    final var types = TypeFactory.createDefaultInstance();
     final var byDomain = new LinkedHashMap<Class<?>, Mapper<?, ?>>();
     for (final var mapper : mappers) {
       final var wire = mapper.sourceClass();
       final var domain = mapper.targetClass();
       final var pair = describe(mapper);
-      if (isContainer(wire) || isContainer(domain)) {
+      if (isContainer(types, wire) || isContainer(types, domain)) {
         throw new IllegalStateException(
           "TelescopeModule: " +
             pair +
             " converts a container, which a lifted mapper (liftList() and its siblings) does. Installed, it" +
             " would read and write every " +
-            (isContainer(domain) ? domain : wire).getSimpleName() +
+            (isContainer(types, domain) ? domain : wire).getSimpleName() +
             " the JSON mapper meets. Register the element mapper instead; a List<Domain> property reads" +
             " its elements through it."
         );
@@ -216,7 +217,7 @@ public final class TelescopeModule extends JacksonModule {
             " return."
         );
       }
-      final var shape = TYPES.constructType(domain);
+      final var shape = types.constructType(domain);
       if (shape.isEnumType() || shape.isPrimitive()) {
         throw new IllegalStateException(
           "TelescopeModule: " +
@@ -274,8 +275,8 @@ public final class TelescopeModule extends JacksonModule {
     return byDomain;
   }
 
-  private static boolean isContainer(final Class<?> type) {
-    final var shape = TYPES.constructType(type);
+  private static boolean isContainer(final TypeFactory types, final Class<?> type) {
+    final var shape = types.constructType(type);
     return shape.isContainerType() || shape.isReferenceType();
   }
 

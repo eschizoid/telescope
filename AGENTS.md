@@ -865,5 +865,9 @@ Each of these is a property of the platform or of this codebase that reads the o
   `FromMapProcessor`, `BeanFocusProcessor`).
 - **Every runtime `LambdaMetafactory` site needs the `NativeImage.IN_IMAGE` branch** to its `MhAccessors` equivalent, or
   the native-image workflow goes red.
+- **No Jackson object in a static field of a telescope class.** telescope-core's `native-image.properties` initializes
+  every `io.github.eschizoid.telescope` package at build time, telescope-jackson's included, and Jackson's classes are
+  initialized at run time, so a `JsonFactory` or `TypeFactory` held in a static field fails the native build. Create
+  them on first use. `BuildTimeHeapTest` walks the module's static fields and a built binder for one.
 - **Spotless for Java runs google-java-format first and prettier last.** Running only one of them leaves violations the
   other would have caught.

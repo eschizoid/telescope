@@ -43,7 +43,14 @@ import tools.jackson.core.json.JsonFactory;
  */
 public final class JsonBinder<T> {
 
-  private static final JsonFactory FACTORY = new JsonFactory();
+  /**
+   * The parser factory, created by the first read rather than when the class initializes. A native
+   * image initializes telescope's classes while it is built, and a factory created then would be
+   * stored in the image heap, which Jackson's run-time-initialized types may not enter. Two threads
+   * that race here each create one, which costs a second factory and nothing else: a factory is
+   * thread-safe and no read depends on which one it gets.
+   */
+  private static volatile JsonFactory factory;
 
   private final Frame<T> root;
   private final String what;
@@ -61,7 +68,7 @@ public final class JsonBinder<T> {
    */
   public T read(final String json) {
     Objects.requireNonNull(json, "json");
-    try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), json)) {
+    try (final var parser = factory().createParser(ObjectReadContext.empty(), json)) {
       return document(parser);
     }
   }
@@ -74,7 +81,7 @@ public final class JsonBinder<T> {
    */
   public T read(final byte[] bytes) {
     Objects.requireNonNull(bytes, "bytes");
-    try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), bytes)) {
+    try (final var parser = factory().createParser(ObjectReadContext.empty(), bytes)) {
       return document(parser);
     }
   }
@@ -87,7 +94,7 @@ public final class JsonBinder<T> {
    */
   public T read(final InputStream in) {
     Objects.requireNonNull(in, "in");
-    try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), in)) {
+    try (final var parser = factory().createParser(ObjectReadContext.empty(), in)) {
       return document(parser);
     }
   }
@@ -101,7 +108,7 @@ public final class JsonBinder<T> {
    */
   public List<T> readList(final String json) {
     Objects.requireNonNull(json, "json");
-    try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), json)) {
+    try (final var parser = factory().createParser(ObjectReadContext.empty(), json)) {
       parser.nextToken();
       return list(parser);
     }
@@ -116,7 +123,7 @@ public final class JsonBinder<T> {
    */
   public List<T> readList(final InputStream in) {
     Objects.requireNonNull(in, "in");
-    try (final var parser = FACTORY.createParser(ObjectReadContext.empty(), in)) {
+    try (final var parser = factory().createParser(ObjectReadContext.empty(), in)) {
       parser.nextToken();
       return list(parser);
     }
@@ -166,6 +173,15 @@ public final class JsonBinder<T> {
   @Override
   public String toString() {
     return "JsonBinder[" + root.type().getName() + "]";
+  }
+
+  private static JsonFactory factory() {
+    var created = factory;
+    if (created == null) {
+      created = new JsonFactory();
+      factory = created;
+    }
+    return created;
   }
 
   private T document(final JsonParser parser) {

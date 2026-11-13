@@ -131,6 +131,8 @@ on Quarkus.
 
 The runtime binder builds records and beans through the same reflection the runtime `fromMap` uses, so in a native image
 the types it builds are registered as yours, and a row's method reference needs serialization configuration. See
-[docs/native-image.md](../docs/native-image.md). `jackson-core` itself needs no configuration.
+[docs/native-image.md](../docs/native-image.md). `jackson-core` itself needs no configuration. A binder reaches no
+Jackson object, so one kept in a static field is stored in the image heap safely; a `TelescopeModule` is a Jackson type,
+so create it at run time, as a bean is.
 
 The design is recorded in [ADR-0016](../docs/adr/0016-jackson-integration.md).

@@ -96,9 +96,12 @@ codegen navigators are the `SerializedLambda`-free alternatives that need no suc
 - **The runtime `JsonBinder` — your types, as for `fromMap`.** telescope-jackson's binder builds records and beans
   through the same reflection helpers the runtime `fromMap` uses, so the types it builds need the same
   `reflect-config.json` entries, and a row's method reference needs its call-site class in `serialization-config.json`.
-  `jackson-core` itself needs no configuration. `:jackson:imageTest` runs the module's suite with the `imagecode`
-  property set, and the demo's partner-JSON step reads through the binder in the image. The reflection-free form is the
-  planned `@FromJson` codegen.
+  `jackson-core` itself needs no configuration. telescope's classes are initialized at build time and Jackson's at run
+  time, so no telescope-jackson class holds a Jackson object in a static field, and a built binder reaches none: a
+  binder kept in a static field is stored in the image heap safely. A `TelescopeModule` is itself a Jackson type, so
+  create it at run time, as a bean is. `BuildTimeHeapTest` holds the module to this, `:jackson:imageTest` runs the
+  module's suite with the `imagecode` property set, and the demo's partner-JSON step reads through the binder in the
+  image. The reflection-free form is the planned `@FromJson` codegen.
 - **`--no-fallback`** — in the demo's native build: fail rather than silently emit a JVM-fallback image, so a
   reachability gap is a hard error, not a slow "native" binary that is really the JVM.
 - **App-level reachability metadata — the app's own types.** The runtime reflective mapper walks its source/target types
