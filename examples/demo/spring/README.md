@@ -68,8 +68,10 @@ installs a `TelescopeModule` in Spring's `JsonMapper`, and
 [`OrderServiceApplication`](src/main/java/io/github/eschizoid/telescope/demo/spring/OrderServiceApplication.java) gives
 it the card mapper through a `TelescopeModuleCustomizer` bean. Jackson then reads a sign-up's body as a card and
 `forward`s it to a `Customer`, and writes a `Customer`, or the lazy proxy an order holds, by `backward` to a card. The
-partner import stays on `JsonBinder`, which checks the partner's text before anything is mapped and names the position
-of each refusal.
+registration covers every `Customer` the app writes, not only these two endpoints: a response that held a `Customer`
+anywhere would carry a card in its place, which is why the starter adds no mapper to the module until a customizer names
+it. The partner import stays on `JsonBinder`, which checks the partner's text before anything is mapped and names the
+position of each refusal.
 
 ### 2. Service
 
@@ -100,15 +102,18 @@ under its class, and without the module the proxy is filed under its generated s
 `from(Customer::getName, InvoiceDto::billTo)` would find no customer. And wherever a mapping only copies a collection
 whose type is the same on both sides, it leaves one Hibernate has not loaded as it is instead of loading it to copy it.
 
-The back office's dashboard, `GET /orders/dashboard`, is where that counts. It returns a `Page<Order>` from a repository
-query that joins the customer in, and `@TelescopeGetMapping(to = OrderRow.class)` maps each order to a row as Spring MVC
-writes the page. A row has no lines or total, so no line is read, and it holds the order's tags as a `List<String>`.
-Copying them would load them one order at a time; with telescope-jpa each row keeps the order's own unloaded list, and
-the response leaves it out until the client asks for `expand=tags`, which loads the page's tags in one query. For a full
-page of 20 placed orders, [`DashboardTest`](src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardTest.java)
-counts 2 statements, the rows and their count, and 3 with `expand=tags`.
+The back office's dashboard, `GET /orders/dashboard`, is where that counts. `OrderService.dashboard` reads a page of
+orders with a query that joins the customer in, and maps each to an `OrderRow` through the generated `toOrderRow()`. A
+row has no lines or total, so no line is read, and the mapper passes the order's tags through as a `List<String>`.
+Copying them would load them one order at a time; with telescope-jpa each row keeps the order's own unloaded list. The
+request decides whether the tags are sent: with `expand=tags` the service loads the page's tags in one query and every
+row carries them, `[]` for an order with none, and without it the service sets them to null and the response has no
+`tags` field. For a full page of 20 placed orders,
+[`DashboardTest`](src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardTest.java) counts 2 statements, the
+rows and their count, and 3 with `expand=tags`.
 [`DashboardWithoutTelescopeJpaTest`](src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardWithoutTelescopeJpaTest.java)
-makes the same request with the module off the class path and counts 22: one more per row, to load its tags.
+makes the same request with the module off the class path and counts 22: one more per row, to load tags the response
+then leaves out.
 
 `spring.jpa.open-in-view` stays on in [`application.yml`](src/main/resources/application.yml) because a mapped response
 is converted after the handler returns, when the lazy customer, lines and tags are read.
@@ -120,8 +125,10 @@ curl -s localhost:8080/orders                       # summaries, mapped from the
 curl -s localhost:8080/v2/orders/SO-1001            # version 2: buyer, coupon, dates and money as text
 curl -s localhost:8080/orders/SO-1001/invoice       # merged from the order, customer, seller and totals
 curl -s localhost:8080/orders/SO-1002/customer      # the lazy customer, written as a card
-curl -s 'localhost:8080/orders/dashboard?status=PLACED'              # a page of rows, without tags
+curl -s 'localhost:8080/orders/dashboard?status=PLACED'              # a page of rows; tags not asked for
 curl -s 'localhost:8080/orders/dashboard?status=PLACED&expand=tags'  # the same page, with each row's tags
+curl -s 'localhost:8080/orders/dashboard?status=shipped&expand=tags' # any case; "tags": [] for an order with none
+curl -s 'localhost:8080/orders/dashboard?status=sent'                # 400, listing the statuses
 
 curl -s -X PATCH localhost:8080/orders/SO-1001 -H 'Content-Type: application/json' \
   -d '{"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}'
@@ -159,8 +166,9 @@ and where it is in the body.
   what the database holds.
 - [`DashboardTest`](src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardTest.java) fills a database of its
   own with a full page of placed orders and counts, through Hibernate's statistics, the statements each dashboard
-  request prepares. `DashboardWithoutTelescopeJpaTest` counts the same request with telescope-jpa off the class path;
-  the `testWithoutTelescopeJpa` task runs it, and `check` runs that task.
+  request prepares. It also checks when a row has a `tags` field, and the 400s for a missing or unknown status.
+  `DashboardWithoutTelescopeJpaTest` counts the same request with telescope-jpa off the class path; the
+  `testWithoutTelescopeJpa` task runs it, and `check` runs that task.
 - [`CustomerProxyTest`](src/test/java/io/github/eschizoid/telescope/demo/spring/CustomerProxyTest.java) checks that the
   order's customer is an uninitialised proxy, and that the card mapper's `backward` over it gives the customer's values
   and loads the row once.

@@ -312,21 +312,26 @@ Spring starter brings, resolves a Hibernate proxy to the entity class it stands 
 `GET /orders/dashboard?status=PAID` returns twenty orders at a time, newest first, each an
 [`OrderRow`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/OrderRow.java): the number, the customer, the
 status, the delivery, the gift wrap and the date. The repository joins the customer into the page's query, and the row
-has no lines and no total, so no line is read. The row does hold the order's tags, which the response writes only when
-the client asks with `expand=tags`; that loads the tags of the whole page in one more query.
+has no lines and no total, so no line is read. The status is named in any case, and a missing or unknown status is a 400
+that lists the statuses there are.
 
-The tags are a `List<String>` on both sides, and a mapper copies such a list, which loads a lazy one. `telescope-jpa`
-hands a list Hibernate has not loaded across as it is, so each row keeps the order's own unloaded list, and a Jackson
-filter on the field, [`Unloaded`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/Unloaded.java), leaves it
-out of the response. The Spring app's
+The request decides whether a row carries the order's tags. With `expand=tags` the service loads the tags of the whole
+page in one more query and every row has a `tags` field, `"tags": []` for an order with none. Without it the service
+sets each row's tags to null and the field is left out, so a row with no `tags` field means the tags were not asked for,
+not that the order has none.
+
+The row mapper passes the tags through as a `List<String>`, and a mapper copies such a list, which loads a lazy one.
+`telescope-jpa` hands a list Hibernate has not loaded across as it is, so a row whose tags were not asked for costs no
+query to map, and [`Unloaded`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/Unloaded.java), a Jackson
+filter on the field, leaves out a list that is null or unloaded rather than load it. The Spring app's
 [`DashboardTest`](spring/src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardTest.java) counts the
 statements Hibernate prepares for a full page of 20 placed orders:
 
-| Request                                  | Statements                                                  |
-| ---------------------------------------- | ----------------------------------------------------------- |
-| with telescope-jpa                       | 2: the rows with their customers, and the count of all rows |
-| with telescope-jpa, `expand=tags`        | 3: the same two, and the tags of all 20 rows                |
-| without telescope-jpa (tags always sent) | 22: the same two, and one per row to load its tags          |
+| Request                           | Statements                                                             |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| with telescope-jpa                | 2: the rows with their customers, and the count of all rows            |
+| with telescope-jpa, `expand=tags` | 3: the same two, and the tags of all 20 rows                           |
+| without telescope-jpa             | 22: the same two, and one per row to load tags the response leaves out |
 
 The last row comes from
 [`DashboardWithoutTelescopeJpaTest`](spring/src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardWithoutTelescopeJpaTest.java),
@@ -342,21 +347,21 @@ fails naming `buyerEmail`.
 
 ## Where each feature is tested
 
-| Feature                                                                  | Test                                                                    |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `to`, `path`, a navigator path, `compute`, `when`, `drop`                | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| `toOrElse`, `toFormatted`, `toFormattedNumber`, built-in conversions     | `OrderDeskTest`, both apps' `OrderApiTest`                              |
-| `via` with methods and with a class, sealed cases                        | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| `merge`, with a lazy customer proxy among the sources                    | `OrderDeskTest`, both apps' `OrderApiTest`                              |
-| `OrderMappings` (`order.toOrderDto()`)                                   | every test                                                              |
-| `patchInto` with `ADDERS`                                                | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| the order lifecycle and its 409s                                         | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| `@FromMap`, `trace()` in the import's 400                                | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| `telescope-jackson`'s `JsonBinder` reading the partner's JSON            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
-| `telescope-jackson`'s `TelescopeModule` reading and writing `Customer`   | the Spring app's `OrderApiTest`                                         |
-| `telescope-jpa` leaving the dashboard's unloaded tags unloaded           | the Spring app's `DashboardTest` and `DashboardWithoutTelescopeJpaTest` |
-| `explain()`                                                              | `OrderDeskTest`, `OrderRun`                                             |
-| `@TelescopeMapper`, `@TelescopeTransformer`                              | both apps' `OrderApiTest`                                               |
-| `@TelescopeGetMapping` over a list and a `Page`, `@TelescopeRequestBody` | the Spring app's `OrderApiTest` and `DashboardTest`                     |
-| a runtime mapper over a lazy Hibernate proxy                             | the Spring app's `CustomerProxyTest`                                    |
-| the compile-time verifier                                                | `VerifierTest`                                                          |
+| Feature                                                                | Test                                                                    |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `to`, `path`, a navigator path, `compute`, `when`, `drop`              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `toOrElse`, `toFormatted`, `toFormattedNumber`, built-in conversions   | `OrderDeskTest`, both apps' `OrderApiTest`                              |
+| `via` with methods and with a class, sealed cases                      | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `merge`, with a lazy customer proxy among the sources                  | `OrderDeskTest`, both apps' `OrderApiTest`                              |
+| `OrderMappings` (`order.toOrderDto()`)                                 | every test                                                              |
+| `patchInto` with `ADDERS`                                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| the order lifecycle and its 409s                                       | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `@FromMap`, `trace()` in the import's 400                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `telescope-jackson`'s `JsonBinder` reading the partner's JSON          | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `telescope-jackson`'s `TelescopeModule` reading and writing `Customer` | the Spring app's `OrderApiTest`                                         |
+| `telescope-jpa` leaving the dashboard's unloaded tags unloaded         | the Spring app's `DashboardTest` and `DashboardWithoutTelescopeJpaTest` |
+| `explain()`                                                            | `OrderDeskTest`, `OrderRun`                                             |
+| `@TelescopeMapper`, `@TelescopeTransformer`                            | both apps' `OrderApiTest`                                               |
+| `@TelescopeGetMapping`, `@TelescopeRequestBody`                        | the Spring app's `OrderApiTest`                                         |
+| a runtime mapper over a lazy Hibernate proxy                           | the Spring app's `CustomerProxyTest`                                    |
+| the compile-time verifier                                              | `VerifierTest`                                                          |

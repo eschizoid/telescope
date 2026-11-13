@@ -9,6 +9,7 @@ import jakarta.persistence.EntityManagerFactory;
 import java.util.List;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
@@ -48,7 +49,7 @@ final class DashboardPage {
     });
   }
 
-  /** The body of {@code path}, and the statements Hibernate prepared while serving it. */
+  /** The response to {@code path}, and the statements Hibernate prepared while serving it. */
   static Served get(final int port, final EntityManagerFactory factory, final String path) {
     final var statistics = statistics(factory);
     final var client = RestClient.builder()
@@ -56,8 +57,13 @@ final class DashboardPage {
       .baseUrl("http://localhost:" + port)
       .build();
     statistics.clear();
-    final var body = client.get().uri(path).retrieve().body(String.class);
-    return new Served(body, statistics.getPrepareStatementCount());
+    final var response = client
+      .get()
+      .uri(path)
+      .retrieve()
+      .onStatus(HttpStatusCode::isError, (request, ignored) -> {})
+      .toEntity(String.class);
+    return new Served(response.getStatusCode().value(), response.getBody(), statistics.getPrepareStatementCount());
   }
 
   private static Statistics statistics(final EntityManagerFactory factory) {
@@ -66,5 +72,5 @@ final class DashboardPage {
     return statistics;
   }
 
-  record Served(String body, long statements) {}
+  record Served(int status, String body, long statements) {}
 }

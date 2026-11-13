@@ -20,8 +20,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * The back office's dashboard over HTTP, with telescope-jpa on the class path as the starter brings
  * it. Hibernate's statistics count the statements each request prepares: a full page of rows maps
- * without loading any order's tags, and asking for the tags loads them for the page in one query.
- * {@code DashboardWithoutTelescopeJpaTest} makes the same request with the module taken off.
+ * without loading any order's tags, and asking for the tags loads them for the page in one query. A
+ * row carries tags only when the request asks for them. {@code DashboardWithoutTelescopeJpaTest}
+ * makes the same request with the module taken off.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT, properties = DashboardPage.DATABASE)
 class DashboardTest {
@@ -71,6 +72,46 @@ class DashboardTest {
     assertThat(JsonPath.<List<List<String>>>read(served.body(), "$.content[*].tags"))
       .hasSize(DashboardPage.PLACED)
       .allSatisfy(tags -> assertThat(tags).containsExactly("b2b"));
+  }
+
+  @Test
+  @DisplayName("with the tags asked for, an order that has none gets an empty list; without, the field is absent")
+  void anOrderWithNoTagsGetsAnEmptyListOnlyWhenAsked() {
+    final var asked = DashboardPage.get(port, factory, "/orders/dashboard?status=SHIPPED&expand=tags").body();
+    assertThat(JsonPath.<String>read(asked, "$.content[0].number")).isEqualTo("SO-1002");
+    assertThat(JsonPath.<List<String>>read(asked, "$.content[0].tags")).isEmpty();
+    final var notAsked = DashboardPage.get(port, factory, "/orders/dashboard?status=SHIPPED").body();
+    assertThat(JsonPath.<String>read(notAsked, "$.content[0].number")).isEqualTo("SO-1002");
+    assertThat(notAsked).doesNotContain("tags");
+  }
+
+  @Test
+  @DisplayName("the status is named in any case")
+  void theStatusIsNamedInAnyCase() {
+    final var served = DashboardPage.get(port, factory, "/orders/dashboard?status=shipped");
+    assertThat(served.status()).isEqualTo(200);
+    assertThat(JsonPath.<String>read(served.body(), "$.content[0].status")).isEqualTo("SHIPPED");
+  }
+
+  @Test
+  @DisplayName("a dashboard request without a status is a problem response that lists the statuses")
+  void aMissingStatusIsRefused() {
+    final var served = DashboardPage.get(port, factory, "/orders/dashboard");
+    assertThat(served.status()).isEqualTo(400);
+    assertThat(JsonPath.<String>read(served.body(), "$.title")).isEqualTo("Bad Request");
+    assertThat(JsonPath.<String>read(served.body(), "$.detail")).isEqualTo(
+      "a status is required: one of PLACED, PAID, SHIPPED, CANCELLED"
+    );
+  }
+
+  @Test
+  @DisplayName("an unknown status is a problem response that lists the statuses, with no class name in it")
+  void anUnknownStatusIsRefused() {
+    final var served = DashboardPage.get(port, factory, "/orders/dashboard?status=sent");
+    assertThat(served.status()).isEqualTo(400);
+    assertThat(JsonPath.<String>read(served.body(), "$.detail")).isEqualTo(
+      "there is no status 'sent': use one of PLACED, PAID, SHIPPED, CANCELLED"
+    );
   }
 
   @Test

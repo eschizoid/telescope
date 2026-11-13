@@ -21,7 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * The dashboard request {@link DashboardTest} makes, run by the {@code testWithoutTelescopeJpa}
  * task alone, with telescope-jpa off the class path. The row mapper then copies each order's lazy
  * tags, and copying a lazy list loads it: one statement per row on top of the page's two. The
- * copies are loaded lists, so every row writes its tags whether the client asked for them or not.
+ * request did not ask for the tags, so the response leaves them out although they were loaded.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT, properties = DashboardPage.DATABASE)
 class DashboardWithoutTelescopeJpaTest {
@@ -50,14 +50,13 @@ class DashboardWithoutTelescopeJpaTest {
   }
 
   @Test
-  @DisplayName("a full page of rows costs the page's two statements and one more per row, to load its tags")
+  @DisplayName("a full page of rows costs one more statement per row, to load tags the response then leaves out")
   void aPageLoadsEveryOrdersTags() {
     final var served = DashboardPage.get(port, factory, "/orders/dashboard?status=PLACED");
     assertThat(served.statements())
       .as("the page's rows, its count and each row's tags")
       .isEqualTo(2L + DashboardPage.PLACED);
-    assertThat(JsonPath.<List<List<String>>>read(served.body(), "$.content[*].tags"))
-      .hasSize(DashboardPage.PLACED)
-      .allSatisfy(tags -> assertThat(tags).containsExactly("b2b"));
+    assertThat(JsonPath.<List<String>>read(served.body(), "$.content[*].number")).hasSize(DashboardPage.PLACED);
+    assertThat(served.body()).as("the tags were not asked for").doesNotContain("tags");
   }
 }

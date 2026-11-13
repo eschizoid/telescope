@@ -36,9 +36,10 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * The order API. Most handlers return the entity the service gave them, and the {@code Telescope*}
  * mapping annotations name the DTO the client receives: the starter maps the value where Spring MVC
- * writes the body. Two handlers convert by hand: {@code GET /orders/{number}} calls the entity's
- * generated {@code toOrderDto()}, and the partner import calls the {@link OrderImports} bean before
- * the service places the order.
+ * writes the body. Three handlers convert otherwise: {@code GET /orders/{number}} calls the
+ * entity's generated {@code toOrderDto()}, the dashboard gets its rows from the service, which
+ * decides per request whether they carry tags, and the partner import calls the {@link
+ * OrderImports} bean before the service places the order.
  */
 @RestController
 class OrderController {
@@ -63,16 +64,17 @@ class OrderController {
 
   /**
    * The back office's dashboard: one page of the orders in a status, newest first, one {@link
-   * OrderRow} each. A row's tags are written only when the client asks for them with {@code
-   * expand=tags}, which loads them for the whole page in one more query.
+   * OrderRow} each. The status is named in any case, and a missing or unknown one is a 400 that
+   * lists the statuses there are. A row carries its tags only when the client asks for them with
+   * {@code expand=tags}, which loads them for the whole page in one more query.
    */
-  @TelescopeGetMapping(value = "/orders/dashboard", to = OrderRow.class)
-  Page<Order> dashboard(
-    @RequestParam final OrderStatus status,
+  @GetMapping("/orders/dashboard")
+  Page<OrderRow> dashboard(
+    @RequestParam(required = false) final String status,
     @PageableDefault(size = 20, sort = { "placedOn", "number" }, direction = Direction.DESC) final Pageable pageable,
     @RequestParam(defaultValue = "") final Set<String> expand
   ) {
-    return orders.dashboard(status, pageable, expand.contains("tags"));
+    return orders.dashboard(OrderStatus.named(status), pageable, expand.contains("tags"));
   }
 
   /** One order. The entity converts itself through the generated {@code OrderMappings}. */

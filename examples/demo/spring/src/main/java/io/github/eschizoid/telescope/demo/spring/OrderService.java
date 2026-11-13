@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.demo.spring;
 
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
+import io.github.eschizoid.telescope.demo.api.OrderRow;
 import io.github.eschizoid.telescope.demo.api.PlaceOrder;
 import io.github.eschizoid.telescope.demo.order.Order;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
@@ -31,14 +32,15 @@ public class OrderService {
   }
 
   /**
-   * One page of the orders in {@code status}, with their customers. {@code withTags} loads the tags
-   * of the whole page in one more query; otherwise they stay unloaded.
+   * One page of the orders in {@code status} as dashboard rows, with their customers. With {@code
+   * withTags} the tags of the whole page are loaded in one more query and each row carries its
+   * order's; without it each row's tags are null.
    */
   @Transactional(readOnly = true)
-  public Page<Order> dashboard(final OrderStatus status, final Pageable pageable, final boolean withTags) {
+  public Page<OrderRow> dashboard(final OrderStatus status, final Pageable pageable, final boolean withTags) {
     final var page = repository.findByStatus(status, pageable);
     if (withTags && page.hasContent()) repository.loadTags(page.getContent());
-    return page;
+    return page.map(order -> withTags ? order.toOrderRow() : order.toOrderRow().withoutTags());
   }
 
   @Transactional(readOnly = true)
