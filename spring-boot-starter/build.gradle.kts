@@ -153,8 +153,8 @@ signing {
 }
 
 // A named application module that starts the web auto-configuration from the starter's jar, with every jar on the module
-// path. The bare run has no Spring Data or springdoc; the full run adds both, which loads the springdoc configuration
-// and the Page shape.
+// path. The bare run has no Spring Data, springdoc or telescope-jackson; the full run adds all three, which loads the
+// springdoc configuration, the Page shape and the Jackson module.
 val moduleSmoke by sourceSets.creating {
     compileClasspath += sourceSets.main.get().output
 }
@@ -178,6 +178,7 @@ val moduleSmokeFull by configurations.creating {
 dependencies {
     moduleSmokeFull("org.springframework.data:spring-data-commons")
     moduleSmokeFull("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+    moduleSmokeFull(project(":jackson"))
 }
 
 fun JavaExec.moduleSmoke(mode: String, runtime: FileCollection) {

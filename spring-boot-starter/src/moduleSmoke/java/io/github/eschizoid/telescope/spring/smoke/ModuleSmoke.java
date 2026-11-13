@@ -105,6 +105,11 @@ public final class ModuleSmoke {
         expect(mvc, "/accounts", "\"content\":[{\"id\":\"1\",\"name\":\"Ada\"},{\"id\":\"2\",\"name\":\"Bea\"}]");
         SpringdocCheck.run(context);
       }
+      // The full run puts telescope-jackson on the path, and the starter's configuration installs
+      // its module; the bare run leaves it off, and the configuration steps aside.
+      if (context.containsBean("telescopeModule") != full) throw new AssertionError(
+        "expected the telescopeModule bean " + (full ? "with" : "without") + " telescope-jackson on the path"
+      );
       System.out.println("module-path smoke (" + (full ? "full" : "bare") + "): ok");
     }
   }

@@ -88,7 +88,7 @@ class TelescopeModuleIntegrationTest {
 
     @TelescopeGetMapping(value = "/users/1", to = UserDto.class)
     User user() {
-      return new User("Ada");
+      return new User("1", "Ada");
     }
 
     @TelescopePostMapping(value = "/users", to = NewUserView.class)
@@ -122,7 +122,7 @@ class TelescopeModuleIntegrationTest {
   @Test
   @DisplayName("mapped responses and request bodies are unchanged by the module")
   void mappedBodiesAreUnchanged() {
-    assertThat(client().get().uri("/users/1").retrieve().body(JSON_OBJECT)).isEqualTo(Map.of("fullName", "Ada"));
+    assertThat(client().get().uri("/users/1").retrieve().body(JSON_OBJECT)).isEqualTo(Map.of("id", "1", "fullName", "Ada"));
     assertThat(
       client()
         .post()
