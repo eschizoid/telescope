@@ -78,6 +78,10 @@ dependencies {
     compileOnly("jakarta.servlet:jakarta.servlet-api")
     compileOnly("org.springframework.data:spring-data-commons")
     compileOnly("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+    // telescope-jackson is the application's choice: with it and Jackson 3 databind on the class
+    // path, the module is installed in Spring Boot's JsonMapper.
+    compileOnly(project(":jackson"))
+    compileOnly("tools.jackson.core:jackson-databind")
 
     testImplementation(platform(libs.junitBom))
     testImplementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
@@ -91,6 +95,7 @@ dependencies {
     testImplementation("org.springdoc:springdoc-openapi-starter-webmvc-api:$springdocVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation(testFixtures(project(":codegen")))
+    testImplementation(project(":jackson"))
     testAnnotationProcessor(project(":codegen"))
 }
 

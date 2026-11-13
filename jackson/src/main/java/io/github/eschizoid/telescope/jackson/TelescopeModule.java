@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonValue;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
 import java.util.ArrayDeque;
@@ -261,8 +262,7 @@ public final class TelescopeModule extends JacksonModule {
             "TelescopeModule: the wire type of " +
               describe(mapper) +
               " is " +
-              (domain == wire ? "" : "a ") +
-              domain.getSimpleName() +
+              (domain == wire ? domain.getSimpleName() : PairingMessages.withArticle(domain.getSimpleName())) +
               ", the domain type of " +
               describe(other) +
               ", so writing it would run that mapper too, and reading it would chain the two. Register" +
