@@ -103,6 +103,12 @@ class JsonMessagesTest {
         " TelescopeModule where a mapper converts it, or remove the annotation",
       PairingMessages.jsonAnnotationUnsupported("JsonNaming", "the class", "Partner")
     );
+    assertEquals(
+      "TelescopeJson.fromJson: constant RED of Color carries @JsonProperty, which JsonBinder does not read; it" +
+        " reads an enum constant by its exact name. Read the type holding it with Jackson databind, through a" +
+        " TelescopeModule where a mapper converts it, or remove the annotation",
+      PairingMessages.jsonEnumConstantRenamed("Color", "RED", "JsonProperty")
+    );
   }
 
   @Test
