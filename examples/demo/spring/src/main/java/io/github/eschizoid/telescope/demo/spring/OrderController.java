@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.demo.spring;
 
 import io.github.eschizoid.telescope.demo.api.ImportTrace;
-import io.github.eschizoid.telescope.demo.api.ImportedOrderFromMap;
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
 import io.github.eschizoid.telescope.demo.api.OrderDto;
 import io.github.eschizoid.telescope.demo.api.OrderSummary;
 import io.github.eschizoid.telescope.demo.api.OrderV2Dto;
+import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.PlaceOrder;
 import io.github.eschizoid.telescope.demo.api.PlaceOrderV2;
 import io.github.eschizoid.telescope.demo.order.Order;
@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The order API. Most handlers return the entity the service gave them, and the {@code Telescope*}
@@ -33,12 +35,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 class OrderController {
 
+  private static final TypeReference<Map<String, Object>> PAYLOAD = new TypeReference<>() {};
+
   private final OrderService orders;
   private final OrderImports imports;
+  private final JsonMapper json;
 
-  OrderController(final OrderService orders, final OrderImports imports) {
+  OrderController(final OrderService orders, final OrderImports imports, final JsonMapper json) {
     this.orders = orders;
     this.imports = imports;
+    this.json = json;
   }
 
   /** The order list, one {@link OrderSummary} per order. */
@@ -80,17 +86,18 @@ class OrderController {
   }
 
   /**
-   * Places an order from a partner's untyped payload. A payload the service refuses is answered
-   * with a 400 that carries the trace of how each field was read, which is usually enough for the
-   * partner to see what they sent wrong.
+   * Places an order from a partner's JSON, read as text by {@link PartnerFeed}. A payload the
+   * service refuses is answered with a 400 that carries the trace of how each field was read,
+   * which is usually enough for the partner to see what they sent wrong. Only a refused payload is
+   * parsed a second time, into the map the trace replays.
    */
   @TelescopePostMapping(value = "/orders/import", to = OrderDto.class)
-  ResponseEntity<Order> importOrder(@RequestBody final Map<String, Object> payload) {
+  ResponseEntity<Order> importOrder(@RequestBody final String body) {
     final Order order;
     try {
-      order = orders.place(imports.map(ImportedOrderFromMap.fromMap(payload)));
+      order = orders.place(imports.map(PartnerFeed.read(body)));
     } catch (final IllegalArgumentException refused) {
-      throw new ImportRefusedException(refused, ImportTrace.of(payload));
+      throw new ImportRefusedException(refused, ImportTrace.of(json.readValue(body, PAYLOAD)));
     }
     return created("/orders/", order);
   }

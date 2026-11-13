@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import tools.jackson.core.JacksonException;
 
 /** Turns the desk's refusals into problem responses. */
 @RestControllerAdvice
@@ -25,6 +26,12 @@ class ApiErrors {
   @ExceptionHandler(IllegalArgumentException.class)
   ProblemDetail badRequest(final IllegalArgumentException refused) {
     return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, refused.getMessage());
+  }
+
+  /** A body that is not JSON at all, which the partner feed's binder hands back as it parses. */
+  @ExceptionHandler(JacksonException.class)
+  ProblemDetail notJson(final JacksonException refused) {
+    return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, refused.getOriginalMessage());
   }
 
   @ExceptionHandler(IllegalStateException.class)

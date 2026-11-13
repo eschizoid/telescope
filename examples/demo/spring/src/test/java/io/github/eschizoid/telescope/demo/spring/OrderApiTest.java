@@ -194,6 +194,22 @@ class OrderApiTest {
   }
 
   @Test
+  @DisplayName("a partner who sends a number where the feed promises text is refused, naming the field and its position")
+  void aNumberWhereTheFeedPromisesTextIsRefused() {
+    final var refused = send(HttpMethod.POST, "/orders/import", "{\"customerEmail\":\"grace@example.com\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":2}]}");
+    assertThat(refused.getStatusCode().value()).isEqualTo(400);
+    assertThat(JsonPath.<String>read(refused.getBody(), "$.detail")).isEqualTo(
+      "'lines[0].quantity' got 2, not a String, at line 1, column 74"
+    );
+  }
+
+  @Test
+  @DisplayName("a body that is not JSON is refused with a 400")
+  void aBodyThatIsNotJsonIsRefused() {
+    assertThat(send(HttpMethod.POST, "/orders/import", "{\"customerEmail\":").getStatusCode().value()).isEqualTo(400);
+  }
+
+  @Test
   @DisplayName("the invoice merges the order, the customer, the configured seller and the totals")
   void theInvoiceMergesFourSources() {
     final var body = send(HttpMethod.GET, "/orders/SO-1001/invoice", null).getBody();

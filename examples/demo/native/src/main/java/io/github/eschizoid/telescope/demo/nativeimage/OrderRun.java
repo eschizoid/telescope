@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.demo.api.BankTransferDto;
 import io.github.eschizoid.telescope.demo.api.CardDto;
 import io.github.eschizoid.telescope.demo.api.ImportTrace;
 import io.github.eschizoid.telescope.demo.api.ImportedOrderFromMap;
+import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.ItemsV2;
 import io.github.eschizoid.telescope.demo.api.NewLine;
 import io.github.eschizoid.telescope.demo.api.NewLineV2;
@@ -109,6 +110,9 @@ public final class OrderRun {
     );
     results.add(
       step("the import trace finds each line's generated binder through ServiceLoader", OrderRun::importTrace)
+    );
+    results.add(
+      step("a partner's JSON text reads through telescope-jackson's streaming binder", OrderRun::partnerJson)
     );
     results.add(step("an invoice merges the order, the customer, the seller and the totals", OrderRun::invoice));
     results.add(step("orders waiting to ship are counted through a bean getter", OrderRun::countWaiting));
@@ -276,6 +280,21 @@ public final class OrderRun {
     expect(command.lines().equals(List.of(new NewLine("CAP-03", 4))), "lines: " + command.lines());
     final var total = openShop().place(command).toOrderDto().total();
     expect(total.compareTo(new BigDecimal("72.00")) == 0, "total: " + total);
+  }
+
+  private static void partnerJson() {
+    final var imported = PartnerFeed.read(
+      "{\"customerEmail\":\"" +
+        SampleData.ADA +
+        "\",\"delivery\":\"EXPRESS\",\"giftWrap\":\"true\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":\"4\"}]}"
+    );
+    expect(imported.equals(ImportedOrderFromMap.fromMap(partnerPayload("quantity"))), "imported: " + imported);
+    try {
+      PartnerFeed.read("{\"customerEmail\":\"a\",\"lines\":[{\"quantity\":4}]}");
+      expect(false, "a number where the feed promises text was read");
+    } catch (final IllegalArgumentException refused) {
+      expect(refused.getMessage().startsWith("'lines[0].quantity' got 4, not a String"), refused.getMessage());
+    }
   }
 
   private static void importTrace() {

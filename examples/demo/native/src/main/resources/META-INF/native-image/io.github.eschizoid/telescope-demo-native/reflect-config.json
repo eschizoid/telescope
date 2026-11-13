@@ -42,6 +42,12 @@
     "allDeclaredFields": true
   },
   {
+    "name": "io.github.eschizoid.telescope.demo.api.ImportedLine",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
     "name": "io.github.eschizoid.telescope.demo.api.ItemsV2",
     "allDeclaredMethods": true
   },

@@ -20,8 +20,16 @@ public final class ImportTrace {
 
   private ImportTrace() {}
 
-  /** Each field of the import: the key it read, the value found and the value it took. */
+  /**
+   * Each field of the import: the key it read, the value found and the value it took. A payload
+   * the map binding cannot replay, such as a number where the record holds text, is answered with
+   * why, so the response that carries the trace is still the partner's 400.
+   */
   public static String of(final Map<String, Object> payload) {
-    return BINDER.trace(payload).toString();
+    try {
+      return BINDER.trace(payload).toString();
+    } catch (final RuntimeException unreplayable) {
+      return "the payload could not be replayed: " + unreplayable.getMessage();
+    }
   }
 }

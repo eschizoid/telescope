@@ -26,6 +26,8 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     api(project(":core"))
+    // The partner feed's JSON text is read through telescope-jackson's streaming binder.
+    api(project(":jackson"))
     // The entities carry their JPA mapping. The Spring app reads it; elsewhere it is plain metadata.
     api("jakarta.persistence:jakarta.persistence-api:3.2.0")
     // Each app brings its own Jackson; the domain needs only the annotations that name the payment
