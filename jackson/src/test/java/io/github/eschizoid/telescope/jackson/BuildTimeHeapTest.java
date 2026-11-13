@@ -4,6 +4,8 @@ import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import io.github.eschizoid.telescope.jackson.Annotated.Feed;
+import io.github.eschizoid.telescope.jackson.Annotated.PartnerBean;
 import io.github.eschizoid.telescope.jackson.Fixtures.Address;
 import io.github.eschizoid.telescope.jackson.Fixtures.Booking;
 import io.github.eschizoid.telescope.jackson.Fixtures.Keyed;
@@ -42,6 +44,7 @@ class BuildTimeHeapTest {
     "io.github.eschizoid.telescope.jackson.Plan",
     "io.github.eschizoid.telescope.jackson.Frame",
     "io.github.eschizoid.telescope.jackson.Refused",
+    "io.github.eschizoid.telescope.jackson.JacksonAnnotations",
     "io.github.eschizoid.telescope.jackson.TelescopeModule",
     "io.github.eschizoid.telescope.jackson.TelescopeModule$Builder"
   );
@@ -70,7 +73,11 @@ class BuildTimeHeapTest {
       TelescopeJson.fromJson(Order.class),
       TelescopeJson.fromJson(Tree.class),
       TelescopeJson.fromJson(Keyed.class),
-      TelescopeJson.fromJson(Booking.class, extract("postal_code", Address::zip, Object::toString))
+      TelescopeJson.fromJson(Booking.class, extract("postal_code", Address::zip, Object::toString)),
+      // Read through Jackson annotations, whose attribute values include Jackson enum
+      // constants.
+      TelescopeJson.fromJson(Feed.class),
+      TelescopeJson.fromJson(PartnerBean.class)
     );
     assertEquals("x", TelescopeJson.fromJson(Order.class).read("{\"number\":\"x\"}").number());
     for (final var binder : binders) assertNull(jacksonReachable(binder, binder.toString()));

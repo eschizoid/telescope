@@ -572,7 +572,8 @@ class JsonBinderTest {
       );
       assertEquals(
         "TelescopeJson.fromJson: 'left' and 'right' of Pair both read the key \"left\", and a JSON value is" +
-          " read once; give one of them a row reading another key",
+          " read once; give one of them another key with @JsonProperty or a row, or drop the @JsonAlias that" +
+          " names it",
         refusal(() -> TelescopeJson.fromJson(Pair.class, extract("left", Pair::right, Object::toString))).getMessage()
       );
       assertTrue(

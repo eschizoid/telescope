@@ -117,7 +117,7 @@ final class Frame<T> {
         try {
           args[i] = read.from(parser);
         } catch (final Refused refused) {
-          throw refused.under(names[i], keys[i]);
+          throw refused.under(names[i], key);
         }
       }
       if (seen != null) seen[i] = true;

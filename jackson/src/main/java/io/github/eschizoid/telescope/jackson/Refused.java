@@ -52,7 +52,7 @@ final class Refused extends RuntimeException {
     return new Refused(message, null);
   }
 
-  /** The refusal, now inside the property {@code name}, which reads the JSON key {@code key}. */
+  /** The refusal, now inside the property {@code name}, read from the JSON key {@code key}. */
   Refused under(final String name, final String key) {
     names.addFirst(name);
     keys.addFirst(key);
