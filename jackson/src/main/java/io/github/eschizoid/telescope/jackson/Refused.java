@@ -2,24 +2,29 @@ package io.github.eschizoid.telescope.jackson;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayDeque;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
 
 /**
  * A value the binder refuses, on its way out of the nested readers. Each level it passes through
- * adds where it is, a property name or an element position, so the innermost reader needs no path
- * and a value that binds pays nothing for one. {@link JsonBinder} turns it into the {@link
- * IllegalArgumentException} a caller sees, with the message rendered once the path is complete.
+ * adds where it is, a property or an element position, so the innermost reader needs no path and a
+ * value that binds pays nothing for one. A property is added by its Java name and by the JSON key
+ * it reads, so a message can point at both the code and the payload. {@link JsonBinder} turns it
+ * into the {@link IllegalArgumentException} a caller sees, with the message rendered once the path
+ * is complete.
  */
 final class Refused extends RuntimeException {
 
   private static final long serialVersionUID = 1L;
 
-  private final transient ArrayDeque<String> segments = new ArrayDeque<>();
-  private final transient Function<String, String> message;
+  private final transient ArrayDeque<String> names = new ArrayDeque<>();
+  private final transient ArrayDeque<String> keys = new ArrayDeque<>();
 
-  private Refused(final Function<String, String> message, final Throwable cause) {
+  /** The message, given the path by Java names and the path by JSON keys. */
+  private final transient BiFunction<String, String, String> message;
+
+  private Refused(final BiFunction<String, String, String> message, final Throwable cause) {
     super(null, cause, false, false);
     this.message = message;
   }
@@ -33,41 +38,50 @@ final class Refused extends RuntimeException {
     final var at = parser.currentTokenLocation();
     final var line = at.getLineNr();
     final var column = at.getColumnNr();
-    return new Refused(path -> PairingMessages.jsonNotAValue(path, got, what, line, column), cause);
+    return new Refused(
+      (path, jsonPath) -> PairingMessages.jsonNotAValue(path, jsonPath, got, what, line, column),
+      cause
+    );
   }
 
-  /** A refusal whose whole message, given the path, is {@code message}. */
-  static Refused of(final Function<String, String> message) {
+  /**
+   * A refusal whose whole message, given the path by Java names and the path by JSON keys, is
+   * {@code message}.
+   */
+  static Refused of(final BiFunction<String, String, String> message) {
     return new Refused(message, null);
   }
 
-  /** The refusal, now inside the property {@code name}. */
-  Refused under(final String name) {
-    segments.addFirst(name);
+  /** The refusal, now inside the property {@code name}, which reads the JSON key {@code key}. */
+  Refused under(final String name, final String key) {
+    names.addFirst(name);
+    keys.addFirst(key);
     return this;
   }
 
   /** The refusal, now inside the element at {@code position} of a list, a set or an object. */
   Refused at(final Object position) {
-    segments.addFirst(PairingMessages.elementPosition(position));
+    final var segment = PairingMessages.elementPosition(position);
+    names.addFirst(segment);
+    keys.addFirst(segment);
     return this;
   }
 
   /** The exception a caller sees. */
   IllegalArgumentException toException() {
-    return new IllegalArgumentException(message.apply(path()), getCause());
+    return new IllegalArgumentException(getMessage(), getCause());
   }
 
   @Override
   public String getMessage() {
-    return message.apply(path());
+    return message.apply(path(names), path(keys));
   }
 
   /**
    * The path the levels added, properties joined by a dot and positions written after what holds
    * them: {@code lines[1].quantity}.
    */
-  private String path() {
+  private static String path(final ArrayDeque<String> segments) {
     final var path = new StringBuilder();
     for (final var segment : segments) {
       if (!segment.startsWith("[") && !path.isEmpty()) path.append('.');

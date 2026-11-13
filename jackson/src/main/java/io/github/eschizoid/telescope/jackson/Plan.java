@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.internal.pairing.Scalar;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import io.github.eschizoid.telescope.mapping.Require;
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -130,6 +131,8 @@ final class Plan {
     final String[] names;
     final Type[] types;
     final Beans.BeanWriter<T> writer;
+    final List<List<AnnotatedElement>> writes;
+    final var readers = new ArrayList<AnnotatedElement>();
     if (record) {
       final var components = type.getRecordComponents();
       names = new String[components.length];
@@ -137,45 +140,71 @@ final class Plan {
       for (var i = 0; i < components.length; i++) {
         names[i] = components[i].getName();
         types[i] = components[i].getGenericType();
+        readers.add(components[i].getAccessor());
       }
+      writes = JacksonAnnotations.recordWrites(type);
       writer = null;
     } else {
       writer = Beans.autoWriter(type);
       names = Beans.propertyNames(type);
       types = new Type[names.length];
+      writes = new ArrayList<>();
       for (var i = 0; i < names.length; i++) {
         final var ambiguity = Beans.setterAmbiguity(writer, type, names[i]);
         if (ambiguity != null) throw new IllegalArgumentException("TelescopeJson.fromJson: " + ambiguity);
         types[i] = Beans.conversionType(writer, type, names[i]);
+        writes.add(JacksonAnnotations.beanWrites(type, names[i]));
+        readers.add(Beans.propertyGetter(type, names[i]));
       }
     }
+    final var n = names.length;
+    final var members = LinkedHashMap.<String, List<AnnotatedElement>>newLinkedHashMap(n);
+    for (var i = 0; i < n; i++) {
+      final var declaring = new ArrayList<>(writes.get(i));
+      declaring.add(readers.get(i));
+      members.put(names[i], declaring);
+    }
+    JacksonAnnotations.refuseUnsupported(type, kind, members);
     final var byName = rowsFor(type, List.of(names));
     if (writer != null) refuseUnwritableRows(type, writer, byName);
-    final var readsOwnName = Arrays.stream(names).anyMatch(
-      name -> !byName.containsKey(name) || byName.get(name).key().equals(name)
-    );
+
+    // A row decides its property's key on its own; the annotations decide every other one.
+    final var annotated = new JacksonAnnotations.Keys[n];
+    final var keys = new String[n];
+    var readsOwnName = false;
+    for (var i = 0; i < n; i++) {
+      final var row = byName.get(names[i]);
+      if (row == null) {
+        annotated[i] = JacksonAnnotations.property(type, kind, names[i], writes.get(i), readers.get(i), record);
+        keys[i] = annotated[i].key();
+      } else {
+        keys[i] = row.key();
+      }
+      readsOwnName |= keys[i].equals(names[i]) && (annotated[i] == null || !annotated[i].ignored());
+    }
     final var declaredRequired = readsOwnName ? declaredRequired(type) : List.<String>of();
 
-    final var n = names.length;
-    final var keys = new String[n];
     final var declared = new String[n];
     final var reads = new Read[n];
     final var absents = new Object[n];
     final var required = new boolean[n];
+    final var ignored = new boolean[n];
     final var indexByKey = HashMap.<String, Integer>newHashMap(n);
     for (var i = 0; i < n; i++) {
       final var name = names[i];
       final var declaredType = types[i];
       declared[i] = typeName(declaredType);
       absents[i] = absentOf(declaredType);
+      final var ownKeyRequired = keys[i].equals(name) && declaredRequired.contains(name);
       final var row = byName.get(name);
       if (row != null) {
-        keys[i] = row.key();
         reads[i] = rowRead(row);
-        required[i] = row instanceof Require<?, ?> || (row.key().equals(name) && declaredRequired.contains(name));
+        required[i] = row instanceof Require<?, ?> || ownKeyRequired;
+      } else if (annotated[i].ignored()) {
+        ignored[i] = true;
+        continue;
       } else {
-        keys[i] = name;
-        required[i] = declaredRequired.contains(name);
+        required[i] = annotated[i].required() || ownKeyRequired;
         // A bean property its writer cannot set is never read, so its type is never resolved and
         // nothing about its value can refuse a document. A requirement on its key still holds.
         final var written = writer == null || writer.writes(name) || Beans.writtenOnlyConverted(writer, type, name);
@@ -189,17 +218,32 @@ final class Plan {
         } else if (!required[i]) {
           continue;
         }
+        for (final var alias : annotated[i].aliases()) claim(indexByKey, alias, i, names, type);
       }
-      final var previous = indexByKey.put(keys[i], i);
-      if (previous != null) {
-        throw new IllegalArgumentException(
-          PairingMessages.jsonKeyReadTwice(keys[i], names[previous], name, type.getSimpleName())
-        );
-      }
+      claim(indexByKey, keys[i], i, names, type);
     }
     final Function<Object[], T> construct =
       writer == null ? args -> Records.construct(type, args) : beanConstruct(type, writer, names, reads);
-    frame.complete(kind, names, keys, declared, reads, absents, required, indexByKey, construct);
+    frame.complete(kind, names, keys, declared, reads, absents, required, ignored, indexByKey, construct);
+  }
+
+  /**
+   * Gives {@code key} to the property at {@code index}, refusing it when another property of the
+   * same object reads it already: a streaming binder reads each value once.
+   */
+  private static void claim(
+    final Map<String, Integer> indexByKey,
+    final String key,
+    final int index,
+    final String[] names,
+    final Class<?> type
+  ) {
+    final var previous = indexByKey.putIfAbsent(key, index);
+    if (previous != null && previous != index) {
+      throw new IllegalArgumentException(
+        PairingMessages.jsonKeyReadTwice(key, names[previous], names[index], type.getSimpleName())
+      );
+    }
   }
 
   /** The rows that name a property of {@code type}, by the property they name. */

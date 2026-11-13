@@ -17,11 +17,15 @@ class JsonMessagesTest {
   void notAValue() {
     assertEquals(
       "'lines[1].quantity' got 1.5, not an int, at line 3, column 18",
-      PairingMessages.jsonNotAValue("lines[1].quantity", "1.5", "an int", 3, 18)
+      PairingMessages.jsonNotAValue("lines[1].quantity", "lines[1].quantity", "1.5", "an int", 3, 18)
+    );
+    assertEquals(
+      "'partner.id' (JSON 'partner.partner_id') got 12, not a String, at line 1, column 30",
+      PairingMessages.jsonNotAValue("partner.id", "partner.partner_id", "12", "a String", 1, 30)
     );
     assertEquals(
       "the document got an array, not an Order, at line 1, column 1",
-      PairingMessages.jsonNotAValue("", "an array", "an Order", 1, 1)
+      PairingMessages.jsonNotAValue("", "", "an array", "an Order", 1, 1)
     );
   }
 
@@ -31,12 +35,31 @@ class JsonMessagesTest {
     assertEquals(
       "TelescopeJson.fromJson: the object at 'lines[0]' carries no value for required key \"sku\" (component" +
         " 'sku') of Line, at line 1, column 24",
-      PairingMessages.jsonMissingRequired("lines[0]", List.of("\"sku\" (component 'sku')"), "Line", 1, 24)
+      PairingMessages.jsonMissingRequired("lines[0]", "lines[0]", List.of("\"sku\" (component 'sku')"), "Line", 1, 24)
+    );
+    assertEquals(
+      "TelescopeJson.fromJson: the object at 'partner' (JSON 'partner_info') carries no value for required key" +
+        " \"partner_id\" (component 'id') of Partner, at line 1, column 17",
+      PairingMessages.jsonMissingRequired(
+        "partner",
+        "partner_info",
+        List.of("\"partner_id\" (component 'id')"),
+        "Partner",
+        1,
+        17
+      )
     );
     assertEquals(
       "TelescopeJson.fromJson: the document carries no value for required keys \"a\" (component 'a'), \"b\"" +
         " (component 'b') of Pair, at line 1, column 2",
-      PairingMessages.jsonMissingRequired("", List.of("\"a\" (component 'a')", "\"b\" (component 'b')"), "Pair", 1, 2)
+      PairingMessages.jsonMissingRequired(
+        "",
+        "",
+        List.of("\"a\" (component 'a')", "\"b\" (component 'b')"),
+        "Pair",
+        1,
+        2
+      )
     );
   }
 
@@ -66,8 +89,19 @@ class JsonMessagesTest {
     );
     assertEquals(
       "TelescopeJson.fromJson: 'left' and 'right' of Pair both read the key \"left\", and a JSON value is read" +
-        " once; give one of them a row reading another key",
+        " once; give one of them another key with @JsonProperty or a row, or drop the @JsonAlias that names it",
       PairingMessages.jsonKeyReadTwice("left", "left", "right", "Pair")
+    );
+    assertEquals(
+      "TelescopeJson.fromJson: property 'name' of Customer is named \"f\" and \"s\" by @JsonProperty on the" +
+        " members it is written through, and a JSON value is read from one key; give them one name",
+      PairingMessages.jsonKeyNamedTwice("property", "name", "Customer", List.of("f", "s"))
+    );
+    assertEquals(
+      "TelescopeJson.fromJson: Partner carries @JsonNaming on the class, which JsonBinder does not read; it" +
+        " reads @JsonProperty, @JsonAlias and @JsonIgnore only. Read Partner with Jackson databind, through a" +
+        " TelescopeModule where a mapper converts it, or remove the annotation",
+      PairingMessages.jsonAnnotationUnsupported("JsonNaming", "the class", "Partner")
     );
   }
 

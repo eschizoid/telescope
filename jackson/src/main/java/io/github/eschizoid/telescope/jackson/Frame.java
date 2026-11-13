@@ -37,6 +37,10 @@ final class Frame<T> {
   private Object[] absents;
 
   private boolean[] required;
+
+  /** Whether each property is left unbound by its annotations, whatever the document holds. */
+  private boolean[] ignored;
+
   private boolean anyRequired;
   private Map<String, Integer> indexByKey;
   private Function<Object[], T> construct;
@@ -56,6 +60,7 @@ final class Frame<T> {
    *
    * @param kind {@code component} for a record, {@code property} for a bean
    * @param declared each property's declared type as a message names it
+   * @param indexByKey the property each key fills, an alias beside the key it stands for
    */
   void complete(
     final String kind,
@@ -65,6 +70,7 @@ final class Frame<T> {
     final Read[] reads,
     final Object[] absents,
     final boolean[] required,
+    final boolean[] ignored,
     final Map<String, Integer> indexByKey,
     final Function<Object[], T> construct
   ) {
@@ -75,6 +81,7 @@ final class Frame<T> {
     this.reads = reads;
     this.absents = absents;
     this.required = required;
+    this.ignored = ignored;
     this.indexByKey = indexByKey;
     this.construct = construct;
     var any = false;
@@ -110,7 +117,7 @@ final class Frame<T> {
         try {
           args[i] = read.from(parser);
         } catch (final Refused refused) {
-          throw refused.under(keys[i]);
+          throw refused.under(names[i], keys[i]);
         }
       }
       if (seen != null) seen[i] = true;
@@ -123,6 +130,10 @@ final class Frame<T> {
   List<OpticNode> explain() {
     final var trail = new ArrayList<OpticNode>(names.length);
     for (var i = 0; i < names.length; i++) {
+      if (ignored[i]) {
+        trail.add(new OpticNode.Skipped(names[i], OpticNode.Reason.DROPPED));
+        continue;
+      }
       if (reads[i] == null && !required[i]) {
         trail.add(new OpticNode.Skipped(names[i], OpticNode.Reason.MISSING_SOURCE));
         continue;
@@ -152,6 +163,8 @@ final class Frame<T> {
     final var column = at.getColumnNr();
     final var named = List.copyOf(missing);
     final var target = type.getSimpleName();
-    throw Refused.of(path -> PairingMessages.jsonMissingRequired(path, named, target, line, column));
+    throw Refused.of((path, jsonPath) ->
+      PairingMessages.jsonMissingRequired(path, jsonPath, named, target, line, column)
+    );
   }
 }
