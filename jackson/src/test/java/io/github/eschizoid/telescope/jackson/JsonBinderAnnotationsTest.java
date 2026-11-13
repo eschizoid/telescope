@@ -5,6 +5,7 @@ import static io.github.eschizoid.telescope.mapping.MapExtractStep.required;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.jackson.Annotated.AliasClash;
@@ -201,7 +202,138 @@ class JsonBinderAnnotationsTest {
   }
 
   @Nested
+  class PropertyCombinations {
+
+    /** Keys each combination's annotations could name, alone, together and in either order. */
+    private static final List<String> DOCUMENTS = List.of(
+      "{\"p\":\"P\"}",
+      "{\"k\":\"K\"}",
+      "{\"f\":\"F\"}",
+      "{\"g\":\"G\"}",
+      "{\"s\":\"S\"}",
+      "{\"acc\":\"A\"}",
+      "{\"x2\":\"X\"}",
+      "{\"p\":\"P\",\"x2\":\"X\"}",
+      "{\"x2\":\"X\",\"p\":\"P\"}",
+      "{\"x3\":\"Y\",\"p\":\"P\"}",
+      "{\"p\":\"P\",\"k\":\"K\"}",
+      "{\"p\":\"P\",\"q\":\"Q\"}",
+      "{\"p\":\"P\",\"p2\":\"Z\"}",
+      "{}",
+      "{\"p\":null}"
+    );
+
+    /** Every document read into {@code type} both ways; each mismatch, or none. */
+    private static List<String> mismatches(final Class<?> type) {
+      final var binder = TelescopeJson.fromJson(type);
+      final var wrong = new ArrayList<String>();
+      for (final var json : DOCUMENTS) {
+        final var expected = DATABIND.readValue(json, type);
+        final var actual = binder.read(json);
+        if (!expected.equals(actual)) wrong.add(json + ": databind " + expected + ", binder " + actual);
+      }
+      return wrong;
+    }
+
+    @Test
+    @DisplayName("a bean's field, getter and setter annotations, in each combination, read as databind reads them")
+    void beans() {
+      final var wrong = new ArrayList<String>();
+      for (final var type : List.<Class<?>>of(
+        Combinations.FieldNamed.class,
+        Combinations.GetterNamed.class,
+        Combinations.GetterIgnoredSetterNamed.class,
+        Combinations.GetterNamedSetterIgnored.class,
+        Combinations.FieldIgnoredGetterNamed.class,
+        Combinations.FieldIgnoredSetterExplicit.class,
+        Combinations.FieldIgnored.class,
+        Combinations.FieldNamedAndIgnored.class,
+        Combinations.FieldNotIgnored.class,
+        Combinations.GetterIgnored.class,
+        Combinations.SetterIgnored.class,
+        Combinations.SetterReadOnly.class,
+        Combinations.FieldWriteOnly.class,
+        Combinations.FieldAlias.class
+      )) {
+        wrong.addAll(mismatches(type));
+      }
+      assertEquals(List.of(), wrong);
+    }
+
+    @Test
+    @DisplayName("a record component's annotations, in each combination, read as databind reads them")
+    void records() {
+      final var wrong = new ArrayList<String>();
+      for (final var type : List.<Class<?>>of(
+        Combinations.Renamed.class,
+        Combinations.AccessorNamed.class,
+        Combinations.Aliased.class,
+        Combinations.Ignored.class,
+        Combinations.NamedAndIgnored.class,
+        Combinations.ReadOnly.class,
+        Combinations.WriteOnly.class,
+        Combinations.NotIgnored.class,
+        Combinations.Swapped.class
+      )) {
+        wrong.addAll(mismatches(type));
+      }
+      assertEquals(List.of(), wrong);
+    }
+
+    @Test
+    @DisplayName("a field ignored beside a getter renamed and a plain setter reads the getter's key through the setter")
+    void fieldIgnoredGetterNamed() {
+      final var expected = new Combinations.FieldIgnoredGetterNamed();
+      expected.setP("G");
+      assertEquals(expected, same(Combinations.FieldIgnoredGetterNamed.class, "{\"g\":\"G\"}"));
+    }
+
+    @Test
+    @DisplayName("a component both renamed and ignored is ignored, though its parameter carries only the rename")
+    void namedAndIgnored() {
+      assertEquals(
+        new Combinations.NamedAndIgnored(null, null),
+        same(Combinations.NamedAndIgnored.class, "{\"k\":\"K\",\"p\":\"P\"}")
+      );
+    }
+  }
+
+  @Nested
   class Refusals {
+
+    @Test
+    @DisplayName("an enum constant renamed by @JsonProperty or @JsonAlias is refused, as a value or a map key")
+    void renamedConstants() {
+      assertEquals(
+        "TelescopeJson.fromJson: constant RED of Color carries @JsonProperty, which JsonBinder does not read; it" +
+          " reads an enum constant by its exact name. Read the type holding it with Jackson databind, through a" +
+          " TelescopeModule where a mapper converts it, or remove the annotation",
+        refusal(() -> TelescopeJson.fromJson(Combinations.Colored.class)).getMessage()
+      );
+      assertTrue(
+        refusal(() -> TelescopeJson.fromJson(Combinations.Sized.class))
+          .getMessage()
+          .startsWith("TelescopeJson.fromJson: constant SMALL of Size carries @JsonAlias")
+      );
+      assertTrue(
+        refusal(() -> TelescopeJson.fromJson(Combinations.ColorKeyed.class))
+          .getMessage()
+          .startsWith("TelescopeJson.fromJson: constant RED of Color carries @JsonProperty")
+      );
+      assertEquals(
+        Fixtures.Status.PAID,
+        TelescopeJson.fromJson(Fixtures.Order.class).read("{\"status\":\"PAID\"}").status()
+      );
+    }
+
+    @Test
+    @DisplayName("@JsonIgnoreProperties on a component is accepted when it only ignores unknown keys")
+    void ignoreUnknownOnComponent() {
+      assertEquals(
+        new Combinations.IgnoresUnknownInside(new Combinations.Inner("a")),
+        same(Combinations.IgnoresUnknownInside.class, "{\"inner\":{\"n\":\"a\",\"z\":1}}")
+      );
+    }
 
     @Test
     @DisplayName("two components reading one key by @JsonProperty are refused, as databind refuses them")
@@ -252,7 +384,23 @@ class JsonBinderAnnotationsTest {
         new Object[] { AnySetterField.class, "AnySetterField carries @JsonAnySetter on field 'other'" },
         new Object[] { Viewed.class, "Viewed carries @JsonView on component 'id'" },
         new Object[] { ViewedClass.class, "ViewedClass carries @JsonView on the class" },
-        new Object[] { IgnoresByName.class, "IgnoresByName carries @JsonIgnoreProperties on the class" }
+        new Object[] { IgnoresByName.class, "IgnoresByName carries @JsonIgnoreProperties on the class" },
+        new Object[] {
+          Combinations.IgnoresInside.class,
+          "IgnoresInside carries @JsonIgnoreProperties on component 'inner'",
+        },
+        new Object[] { Combinations.SetterConfigured.class, "SetterConfigured carries @JsonSetter on property 'p'" },
+        new Object[] { Combinations.ComponentSetter.class, "ComponentSetter carries @JsonSetter on component 'p'" },
+        new Object[] { Combinations.Formatted.class, "Formatted carries @JsonFormat on component 'p'" },
+        new Object[] { Combinations.FormattedClass.class, "FormattedClass carries @JsonFormat on the class" },
+        new Object[] {
+          Combinations.Composite.class,
+          "Composite carries @Bundled, which bundles Jackson annotations, on component 'p'",
+        },
+        new Object[] {
+          Combinations.CompositeClass.class,
+          "CompositeClass carries @Bundled, which bundles Jackson annotations, on the class",
+        }
       );
       final var wrong = new ArrayList<String>();
       for (final var refused : cases) {

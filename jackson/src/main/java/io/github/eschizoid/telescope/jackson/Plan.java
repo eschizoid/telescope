@@ -525,6 +525,7 @@ final class Plan {
 
   /** An enum constant, named by its exact name in a JSON string. */
   private static Read enumRead(final Class<?> type) {
+    JacksonAnnotations.refuseRenamedConstants(type);
     final var constants = new HashMap<String, Object>();
     for (final var constant : type.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
     final var what = PairingMessages.scalarPhrase(Scalar.ENUM, false, type.getSimpleName());
@@ -669,6 +670,7 @@ final class Plan {
         return Resolution.reads(JsonParser::currentName);
       }
       case ENUM -> {
+        JacksonAnnotations.refuseRenamedConstants(raw);
         final var constants = new HashMap<String, Object>();
         for (final var constant : raw.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
         what = PairingMessages.scalarPhrase(Scalar.ENUM, false, raw.getSimpleName());

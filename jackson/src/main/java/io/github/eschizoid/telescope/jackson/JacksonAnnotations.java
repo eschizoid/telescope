@@ -7,6 +7,7 @@ import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.lang.reflect.RecordComponent;
@@ -42,6 +43,9 @@ final class JacksonAnnotations {
   private static final String ANY_SETTER = ANNOTATION + "JsonAnySetter";
   private static final String UNWRAPPED = ANNOTATION + "JsonUnwrapped";
   private static final String VIEW = ANNOTATION + "JsonView";
+  private static final String SETTER = ANNOTATION + "JsonSetter";
+  private static final String FORMAT = ANNOTATION + "JsonFormat";
+  private static final String INSIDE = ANNOTATION + "JacksonAnnotationsInside";
   private static final String NAMING = "tools.jackson.databind.annotation.JsonNaming";
 
   private JacksonAnnotations() {}
@@ -59,19 +63,27 @@ final class JacksonAnnotations {
   /**
    * How the property {@code name} reads, from the annotations on the members it is written through,
    * {@code writes}, most preferred first, and the member it is read through, {@code read}, which
-   * may be null.
+   * may be null. Whether the property is ignored is decided once for the whole property, as
+   * databind decides it, and only then are the names of the members it keeps read.
    *
    * <ul>
+   *   <li>A member is ignored when it carries {@code @JsonIgnore}, whatever else it carries. A
+   *       member that carries {@code @JsonProperty} and is not ignored is explicit. A record's
+   *       constructor parameter is never explicit: {@code @JsonIgnore} cannot sit on a parameter,
+   *       so a component carrying both annotations hands the parameter {@code @JsonProperty} alone.
+   *   <li>The property is ignored when {@code @JsonProperty(access = READ_ONLY)} is on any member;
+   *       when a member is ignored and no member is explicit; and, on a bean, when a member is
+   *       ignored and every setter it has is ignored, since an explicit getter or field keeps the
+   *       property but leaves nothing to write it through. So {@code @JsonIgnore} on a field with
+   *       {@code @JsonProperty("g")} on the getter and a plain setter reads {@code g} through the
+   *       setter, and {@code @JsonIgnore} on a getter with {@code @JsonProperty} on the setter
+   *       reads the property, as databind reads both.
    *   <li>The key is the one {@code @JsonProperty} gives on a member the property is written
    *       through, else the one it gives on the member it is read through, else the property's own
-   *       name. An empty {@code @JsonProperty} keeps the name.
+   *       name, counting only members that are not ignored. An empty {@code @JsonProperty} keeps
+   *       the name.
    *   <li>The aliases are the ones {@code @JsonAlias} gives on the most preferred member carrying
    *       one, the read member last.
-   *   <li>The property is ignored when {@code @JsonProperty(access = READ_ONLY)} is on any member,
-   *       or {@code @JsonIgnore} is on any member and no member it is written through carries
-   *       {@code @JsonProperty} without {@code @JsonIgnore} beside it. So {@code @JsonIgnore} on a
-   *       getter with {@code @JsonProperty} on the setter leaves the property read, as databind
-   *       reads it.
    *   <li>The property is required when {@code @JsonProperty(required = true)} is on any member and
    *       {@code creator} is set: databind holds a document to the key only for a property its
    *       constructor takes, which is every record component and no bean property.
@@ -94,7 +106,9 @@ final class JacksonAnnotations {
     String readName = null;
     List<String> aliases = null;
     var ignoral = false;
-    var keptByWrite = false;
+    var explicit = false;
+    var setters = false;
+    var setterKept = false;
     var readOnly = false;
     var required = false;
     for (final var member : members) {
@@ -102,36 +116,50 @@ final class JacksonAnnotations {
       final var ignore = find(member, IGNORE);
       final var ignored = ignore != null && (Boolean) attribute(ignore, "value");
       ignoral |= ignored;
+      if (writing && member instanceof Method) {
+        setters = true;
+        setterKept |= !ignored;
+      }
       final var property = find(member, PROPERTY);
       if (property != null) {
+        readOnly |= ((Enum<?>) attribute(property, "access")).name().equals("READ_ONLY");
+        required |= creator && (Boolean) attribute(property, "required");
+        explicit |= !ignored && !(member instanceof Parameter);
         final var value = (String) attribute(property, "value");
-        if (!value.isEmpty()) {
+        if (!ignored && !value.isEmpty()) {
           if (writing) writeNames.add(value);
           else readName = value;
         }
-        keptByWrite |= writing && !ignored;
-        readOnly |= ((Enum<?>) attribute(property, "access")).name().equals("READ_ONLY");
-        required |= creator && (Boolean) attribute(property, "required");
       }
       final var alias = aliases == null ? find(member, ALIAS) : null;
       if (alias != null) aliases = List.of((String[]) attribute(alias, "value"));
     }
-    if (writeNames.size() > 1) {
+    final var ignored = readOnly || (ignoral && (!explicit || (setters && !setterKept)));
+    if (!ignored && writeNames.size() > 1) {
       throw new IllegalArgumentException(
         PairingMessages.jsonKeyNamedTwice(kind, name, owner.getSimpleName(), List.copyOf(writeNames))
       );
     }
     final var key = !writeNames.isEmpty() ? writeNames.getFirst() : readName != null ? readName : name;
-    final var ignored = readOnly || (ignoral && !keptByWrite);
     return new Keys(key, aliases == null ? List.of() : aliases, ignored, required && !ignored);
   }
 
   /**
    * Refuses {@code type} when it carries a Jackson annotation that changes how databind reads it
-   * and that the binder does not read, rather than read it differently without a word: a naming
-   * strategy, an ignore list, a view, a creator, an any-setter, or an unwrapped or view-bound
-   * property. {@code @JsonIgnoreProperties} that only ignores unknown keys is accepted, since the
-   * binder skips them anyway.
+   * and that the binder does not read, rather than read it differently without a word:
+   *
+   * <ul>
+   *   <li>on the class, a naming strategy, a view, a format, or an ignore list naming properties;
+   *   <li>on a constructor or a static method, a creator;
+   *   <li>on a method or field of the class or a superclass, an any-setter;
+   *   <li>on a property's members, an unwrapping, a view, a setter's own settings, a format, or an
+   *       ignore list naming properties;
+   *   <li>on the class or a property's members, an annotation of the application's own that bundles
+   *       Jackson annotations through {@code @JacksonAnnotationsInside}.
+   * </ul>
+   *
+   * <p>{@code @JsonIgnoreProperties} that only ignores unknown keys is accepted, since the binder
+   * skips them anyway.
    *
    * @param members the members each property is declared by, by property name
    * @throws IllegalArgumentException naming the annotation and what carries it
@@ -141,11 +169,9 @@ final class JacksonAnnotations {
     final String kind,
     final Map<String, List<AnnotatedElement>> members
   ) {
-    refuse(type, type, "the class", NAMING, VIEW);
-    final var ignoreProperties = find(type, IGNORE_PROPERTIES);
-    if (ignoreProperties != null && ((String[]) attribute(ignoreProperties, "value")).length > 0) {
-      throw refusal(type, IGNORE_PROPERTIES, "the class");
-    }
+    refuse(type, type, "the class", NAMING, VIEW, FORMAT);
+    refuseIgnoreList(type, type, "the class");
+    refuseComposite(type, type, "the class");
     for (final var constructor : type.getDeclaredConstructors()) {
       refuse(type, constructor, "constructor " + signature(constructor), CREATOR);
     }
@@ -157,8 +183,54 @@ final class JacksonAnnotations {
       for (final var field : c.getDeclaredFields()) refuse(type, field, "field '" + field.getName() + "'", ANY_SETTER);
     }
     for (final var property : members.entrySet()) {
+      final var where = kind + " '" + property.getKey() + "'";
       for (final var member : property.getValue()) {
-        refuse(type, member, kind + " '" + property.getKey() + "'", UNWRAPPED, VIEW);
+        refuse(type, member, where, UNWRAPPED, VIEW, SETTER, FORMAT);
+        refuseIgnoreList(type, member, where);
+        refuseComposite(type, member, where);
+      }
+    }
+  }
+
+  /**
+   * Refuses the enum {@code type} when {@code @JsonProperty} or {@code @JsonAlias} gives one of its
+   * constants another name: databind reads such a constant by that name, and the binder reads a
+   * constant by its exact name only.
+   *
+   * @throws IllegalArgumentException naming the constant and the annotation
+   */
+  static void refuseRenamedConstants(final Class<?> type) {
+    for (final var field : type.getDeclaredFields()) {
+      if (!field.isEnumConstant()) continue;
+      for (final var annotation : List.of(PROPERTY, ALIAS)) {
+        if (find(field, annotation) != null) {
+          throw new IllegalArgumentException(
+            PairingMessages.jsonEnumConstantRenamed(type.getSimpleName(), field.getName(), simpleName(annotation))
+          );
+        }
+      }
+    }
+  }
+
+  /** Refuses {@code @JsonIgnoreProperties} on {@code member} when it names properties. */
+  private static void refuseIgnoreList(final Class<?> type, final AnnotatedElement member, final String where) {
+    final var ignoreProperties = find(member, IGNORE_PROPERTIES);
+    if (ignoreProperties != null && ((String[]) attribute(ignoreProperties, "value")).length > 0) {
+      throw refusal(type, IGNORE_PROPERTIES, where);
+    }
+  }
+
+  /** Refuses an annotation on {@code member} that bundles Jackson annotations. */
+  private static void refuseComposite(final Class<?> type, final AnnotatedElement member, final String where) {
+    for (final var annotation : member.getDeclaredAnnotations()) {
+      if (find(annotation.annotationType(), INSIDE) != null) {
+        throw new IllegalArgumentException(
+          PairingMessages.jsonAnnotationUnsupported(
+            annotation.annotationType().getSimpleName() + ", which bundles Jackson annotations,",
+            where,
+            type.getSimpleName()
+          )
+        );
       }
     }
   }
@@ -213,12 +285,13 @@ final class JacksonAnnotations {
 
   private static IllegalArgumentException refusal(final Class<?> type, final String annotation, final String where) {
     return new IllegalArgumentException(
-      PairingMessages.jsonAnnotationUnsupported(
-        annotation.substring(annotation.lastIndexOf('.') + 1),
-        where,
-        type.getSimpleName()
-      )
+      PairingMessages.jsonAnnotationUnsupported(simpleName(annotation), where, type.getSimpleName())
     );
+  }
+
+  /** An annotation's class name without its package: {@code JsonFormat}. */
+  private static String simpleName(final String annotation) {
+    return annotation.substring(annotation.lastIndexOf('.') + 1);
   }
 
   /**

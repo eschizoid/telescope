@@ -2164,6 +2164,24 @@ public final class PairingMessages {
   }
 
   /**
+   * An enum constant {@code @JsonProperty} or {@code @JsonAlias} gives another name, which a JSON
+   * binder reading constants by their exact names would read differently from databind.
+   */
+  public static String jsonEnumConstantRenamed(final String type, final String constant, final String annotation) {
+    return (
+      "TelescopeJson.fromJson: constant " +
+      constant +
+      " of " +
+      type +
+      " carries @" +
+      annotation +
+      ", which JsonBinder does not read; it reads an enum constant by its exact name. Read the type" +
+      " holding it with Jackson databind, through a TelescopeModule where a mapper converts it, or" +
+      " remove the annotation"
+    );
+  }
+
+  /**
    * The subject a JSON refusal opens with: the quoted path, with the path by keys after it where
    * the two differ, or the document itself.
    */
