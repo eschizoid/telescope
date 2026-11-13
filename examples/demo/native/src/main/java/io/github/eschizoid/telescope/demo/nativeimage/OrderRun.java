@@ -88,6 +88,7 @@ public final class OrderRun {
       step("the public view hides what only the shop sees, through order.toOrderDto()", OrderRun::publicView)
     );
     results.add(step("the order list, through order.toOrderSummary()", OrderRun::orderList));
+    results.add(step("the back office's dashboard rows, through order.toOrderRow()", OrderRun::dashboardRows));
     results.add(step("version 2 renames fields and writes the date and money as text", OrderRun::versionTwoView));
     results.add(
       step(
@@ -152,6 +153,14 @@ public final class OrderRun {
     expect(summaries.size() == 2, "summaries: " + summaries);
     expect(summaries.get(1).status() == OrderStatus.SHIPPED, "second status: " + summaries.get(1));
     expect(summaries.get(1).total().compareTo(new BigDecimal("18.00")) == 0, "second total: " + summaries.get(1));
+  }
+
+  private static void dashboardRows() {
+    final var rows = openShop().list().stream().map(Order::toOrderRow).toList();
+    expect(rows.size() == 2, "rows: " + rows);
+    expect(rows.get(0).customerName().equals("Ada Lovelace"), "first customer: " + rows.get(0));
+    expect(rows.get(0).tags().equals(List.of("gift")), "first tags: " + rows.get(0));
+    expect(rows.get(1).delivery() == Delivery.EXPRESS, "second delivery: " + rows.get(1));
   }
 
   private static void versionTwoView() {

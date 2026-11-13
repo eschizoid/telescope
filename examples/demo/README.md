@@ -12,8 +12,6 @@ text; a partner's feed, where every value arrives as a string; a PATCH body that
 invoice that no one object holds. Hand-written, that is a page of getters and setters per shape, and each one drifts the
 day someone adds a field. This demo writes each shape's difference as a few typed rows and lets the build check them.
 
-A request's path: `PATCH /orders/SO-1001` JSON → `OrderChanges` → the `Order` entity, and back out as an `OrderDto`.
-
 The service runs three ways over the same code:
 
 | Module                         | What it is                                                                     | Run it                                        |
@@ -37,6 +35,37 @@ what differs between two types; fields of the same name map without one, nested 
 `telescope-codegen` compiles each field into a plain Java class at build time. A few mappers run on the runtime path
 instead, each for a reason given where it appears: the import's trace, the Spring app's customer cards, and the native
 module's coverage of shapes the service does not use.
+
+## One request, all the way through
+
+Telescope is the mapping layer between a service's REST, service and entity layers. `PATCH /orders/SO-1001`, which
+changes an order that has not been paid, crosses all three on the Spring app and comes back:
+
+```bash
+curl -s -X PATCH localhost:8080/orders/SO-1001 -H 'Content-Type: application/json' \
+  -d '{"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}'
+```
+
+1. **The body** names only what changes: the delivery, and a new list of lines.
+2. **REST.** Spring's Jackson reads it into
+   [`OrderChanges`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/OrderChanges.java), a record whose
+   fields are all optional, so the discount code, gift wrap and tags the client left out arrive as null.
+3. **Service.** [`OrderDesk.change`](domain/src/main/java/io/github/eschizoid/telescope/demo/order/OrderDesk.java)
+   checks the rules: only a placed order changes, and every line has a quantity.
+4. **Entity.** `EDITS.patchInto(order, changes)`, from
+   [`OrderMappers`](domain/src/main/java/io/github/eschizoid/telescope/demo/order/OrderMappers.java), writes the fields
+   that are not null into the `Order` the persistence context manages. The lines go through `addLine` into the
+   `@OneToMany` list the entity already holds, so the list keeps its identity, Hibernate deletes the old line rows and
+   the new line gets its foreign key.
+5. **Back out.** `@TelescopePatchMapping(to = OrderDto.class)` on
+   [`OrderController`](spring/src/main/java/io/github/eschizoid/telescope/demo/spring/OrderController.java) maps the
+   entity the handler returns through the bridge generated from `OrderMappers.DTO`. The response has the new lines, a
+   total computed from them, the discount code and tags the order kept, and no cost price:
+
+```text
+{"number":"SO-1001","delivery":"EXPRESS","lines":[{"sku":"BAG-04","name":"Tote bag","quantity":3,"unitPrice":15.00}],
+ "total":40.50,"discountCode":"WELCOME10","tags":["gift"], ...}
+```
 
 ## The three hops
 
@@ -128,6 +157,26 @@ On Spring the handler takes the service's type, and `@TelescopeRequestBody` name
 ResponseEntity<Order> placeV2(@TelescopeRequestBody(from = PlaceOrderV2.class) final PlaceOrder command)
 ```
 
+**Support signs customers up and looks them up as cards.** A `Customer` is an entity, and the support tool works with a
+`CustomerCard`: an id, a name and an email. On Spring, the card mapper is handed to
+[`telescope-jackson`](../../jackson/README.md)'s `TelescopeModule` through the starter's `TelescopeModuleCustomizer`, so
+Spring's JSON mapper reads and writes every `Customer` as a card, and the handlers take and return the entity:
+
+```java
+@Bean
+TelescopeModuleCustomizer customerCards() {
+  return (module) -> module.add(CustomerCards.CARDS);
+}
+
+@GetMapping("/orders/{number}/customer")
+Customer customerOf(@PathVariable final String number) {
+  return orders.get(number).getCustomer();
+}
+```
+
+The order holds its customer as a lazy Hibernate proxy, a subclass of `Customer`, and the module writes it through the
+same mapper, so the response is the card and not the proxy.
+
 **A partner sends orders as JSON, every value written as text.** The import handler takes the body as text, and
 [`PartnerFeed`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/PartnerFeed.java) reads it into
 `ImportedOrder` through [`telescope-jackson`](../../jackson/README.md)'s streaming binder, with no map in between:
@@ -142,7 +191,9 @@ gets a 400 that says so, `'lines[0].quantity' got 2, not a String, at line 1, co
 field has the name the service uses, so `RequestMappers.IMPORT` has no rows: the built-in conversions turn `"2"` into an
 `int`, `"EXPRESS"` into the `Delivery` enum and `"true"` into a `boolean`. Partners also type SKUs by hand, so a
 `@TelescopeTransformer` cleans them before the mapping, and a `@TelescopeMapper` interface runs both. The processor
-writes each as a Spring bean or a CDI bean, and the import handler calls it:
+writes each as a Spring bean or a CDI bean, and the import handler calls it. The import reads with `JsonBinder` rather
+than through the module because a partner's text has to be checked key by key, with the position of each refusal, before
+anything is mapped; the module serves types that the application's own JSON mapper reads and writes for a handler.
 
 ```java
 @TelescopeTransformer
@@ -255,9 +306,36 @@ OrderMappers.EDITS.patchInto(order, changes);
 Hibernate proxy until then. The support team's `GET /orders/{n}/customer` reads that proxy into a `CustomerCard` through
 a mapper with no `@Bridge`, on the runtime path, which reads it as the `Customer` it stands for and loads the row once.
 The invoice's `merge` files the same proxy under `Customer` because [`telescope-jpa`](../../jpa/README.md), which the
-Spring starter brings, resolves a Hibernate proxy to the entity class it stands for. The same module leaves a lazy
-collection Hibernate has not loaded as it is wherever a mapping only copies it. The
-[Spring app's README](spring/README.md) has the details.
+Spring starter brings, resolves a Hibernate proxy to the entity class it stands for.
+
+**The back office's dashboard pages through orders without loading what a row does not show.** On Spring,
+`GET /orders/dashboard?status=PAID` returns twenty orders at a time, newest first, each an
+[`OrderRow`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/OrderRow.java): the number, the customer, the
+status, the delivery, the gift wrap and the date. The repository joins the customer into the page's query, and the row
+has no lines and no total, so no line is read. The status is named in any case, and a missing or unknown status is a 400
+that lists the statuses there are.
+
+The request decides whether a row carries the order's tags. With `expand=tags` the service loads the tags of the whole
+page in one more query and every row has a `tags` field, `"tags": []` for an order with none. Without it the service
+sets each row's tags to null and the field is left out, so a row with no `tags` field means the tags were not asked for,
+not that the order has none.
+
+The row mapper passes the tags through as a `List<String>`, and a mapper copies such a list, which loads a lazy one.
+`telescope-jpa` hands a list Hibernate has not loaded across as it is, so a row whose tags were not asked for costs no
+query to map, and [`Unloaded`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/Unloaded.java), a Jackson
+filter on the field, leaves out a list that is null or unloaded rather than load it. The Spring app's
+[`DashboardTest`](spring/src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardTest.java) counts the
+statements Hibernate prepares for a full page of 20 placed orders:
+
+| Request                           | Statements                                                             |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| with telescope-jpa                | 2: the rows with their customers, and the count of all rows            |
+| with telescope-jpa, `expand=tags` | 3: the same two, and the tags of all 20 rows                           |
+| without telescope-jpa             | 22: the same two, and one per row to load tags the response leaves out |
+
+The last row comes from
+[`DashboardWithoutTelescopeJpaTest`](spring/src/test/java/io/github/eschizoid/telescope/demo/spring/DashboardWithoutTelescopeJpaTest.java),
+which the `testWithoutTelescopeJpa` task runs with the module taken off the class path.
 
 ## The build checks the mappers
 
@@ -269,19 +347,21 @@ fails naming `buyerEmail`.
 
 ## Where each feature is tested
 
-| Feature                                                              | Test                                                   |
-| -------------------------------------------------------------------- | ------------------------------------------------------ |
-| `to`, `path`, a navigator path, `compute`, `when`, `drop`            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| `toOrElse`, `toFormatted`, `toFormattedNumber`, built-in conversions | `OrderDeskTest`, both apps' `OrderApiTest`             |
-| `via` with methods and with a class, sealed cases                    | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| `merge`, with a lazy customer proxy among the sources                | `OrderDeskTest`, both apps' `OrderApiTest`             |
-| `OrderMappings` (`order.toOrderDto()`)                               | every test                                             |
-| `patchInto` with `ADDERS`                                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| the order lifecycle and its 409s                                     | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| `@FromMap`, `trace()` in the import's 400                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| `telescope-jackson`'s `JsonBinder` reading the partner's JSON        | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
-| `explain()`                                                          | `OrderDeskTest`, `OrderRun`                            |
-| `@TelescopeMapper`, `@TelescopeTransformer`                          | both apps' `OrderApiTest`                              |
-| `@TelescopeGetMapping`, `@TelescopeRequestBody`                      | the Spring app's `OrderApiTest`                        |
-| a runtime mapper over a lazy Hibernate proxy                         | the Spring app's `CustomerProxyTest`                   |
-| the compile-time verifier                                            | `VerifierTest`                                         |
+| Feature                                                                | Test                                                                    |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `to`, `path`, a navigator path, `compute`, `when`, `drop`              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `toOrElse`, `toFormatted`, `toFormattedNumber`, built-in conversions   | `OrderDeskTest`, both apps' `OrderApiTest`                              |
+| `via` with methods and with a class, sealed cases                      | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `merge`, with a lazy customer proxy among the sources                  | `OrderDeskTest`, both apps' `OrderApiTest`                              |
+| `OrderMappings` (`order.toOrderDto()`)                                 | every test                                                              |
+| `patchInto` with `ADDERS`                                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| the order lifecycle and its 409s                                       | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `@FromMap`, `trace()` in the import's 400                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `telescope-jackson`'s `JsonBinder` reading the partner's JSON          | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `telescope-jackson`'s `TelescopeModule` reading and writing `Customer` | the Spring app's `OrderApiTest`                                         |
+| `telescope-jpa` leaving the dashboard's unloaded tags unloaded         | the Spring app's `DashboardTest` and `DashboardWithoutTelescopeJpaTest` |
+| `explain()`                                                            | `OrderDeskTest`, `OrderRun`                                             |
+| `@TelescopeMapper`, `@TelescopeTransformer`                            | both apps' `OrderApiTest`                                               |
+| `@TelescopeGetMapping`, `@TelescopeRequestBody`                        | the Spring app's `OrderApiTest`                                         |
+| a runtime mapper over a lazy Hibernate proxy                           | the Spring app's `CustomerProxyTest`                                    |
+| the compile-time verifier                                              | `VerifierTest`                                                          |

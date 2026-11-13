@@ -41,6 +41,28 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-serial", "-parameters"))
 }
 
-tasks.named<Test>("test") {
+tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+}
+
+// The dashboard's statement count is measured twice: by the test task with telescope-jpa on the
+// class path, as the starter brings it, and by this task with the module's classes and resources
+// taken off, so its container policy is not registered.
+val withoutTelescopeJpa = "*WithoutTelescopeJpa*"
+
+tasks.named<Test>("test") {
+    filter { excludeTestsMatching(withoutTelescopeJpa) }
+}
+
+val testWithoutTelescopeJpa by tasks.registering(Test::class) {
+    description = "Runs the dashboard's statement count with telescope-jpa off the class path."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    val jpaBuild = project(":jpa").layout.buildDirectory.get().asFile
+    classpath = sourceSets["test"].runtimeClasspath.filter { !it.startsWith(jpaBuild) }
+    filter { includeTestsMatching(withoutTelescopeJpa) }
+}
+
+tasks.named("check") {
+    dependsOn(testWithoutTelescopeJpa)
 }

@@ -30,6 +30,7 @@ import io.github.eschizoid.telescope.demo.api.OrderDto;
 import io.github.eschizoid.telescope.demo.api.OrderDtoTelescope;
 import io.github.eschizoid.telescope.demo.api.OrderLineDto;
 import io.github.eschizoid.telescope.demo.api.OrderLineV2Dto;
+import io.github.eschizoid.telescope.demo.api.OrderRow;
 import io.github.eschizoid.telescope.demo.api.OrderSummary;
 import io.github.eschizoid.telescope.demo.api.OrderV2Dto;
 import io.github.eschizoid.telescope.demo.api.PlaceOrder;
@@ -98,6 +99,19 @@ public final class OrderMappers {
     OrderSummary.class,
     to(path(Order::getCustomer, Customer::getName), OrderSummary::customerName),
     compute(OrderSummary::total, Pricing::total)
+  );
+
+  /**
+   * One row of the back office's dashboard. The tags have the same type on both sides, so the row
+   * takes a copy of the order's list. With {@code telescope-jpa} on the class path, a list
+   * Hibernate has not loaded is handed across as it is instead, so mapping a page of rows does not
+   * load each order's tags.
+   */
+  @Bridge
+  public static final ForwardMapper<Order, OrderRow> ROW = mapperForward(
+    Order.class,
+    OrderRow.class,
+    to(path(Order::getCustomer, Customer::getName), OrderRow::customerName)
   );
 
   /**
