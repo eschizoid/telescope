@@ -205,6 +205,11 @@ extensions. A module with both telescope starters is refused until you choose th
 
 The module has no `telescope.default-write-strategy` setting.
 
+It does not install [`telescope-jackson`](../jackson/README.md)'s `TelescopeModule`: Quarkus 3 ships Jackson 2
+(`com.fasterxml.jackson`), and the module is a Jackson 3 module. The streaming `JsonBinder` needs only Jackson 3's
+`jackson-core`, whose packages do not overlap Jackson 2's, so it runs in a Quarkus application; the order-service demo
+reads its partner import through it.
+
 The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency, and
 `@QuarkusComponentTest` classes that run `TelescopeProducer` and the generated beans in an ArC container. The
 [order-service demo](../examples/demo/quarkus/README.md) checks the wiring end to end: its `@QuarkusTest` starts a

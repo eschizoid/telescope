@@ -1950,11 +1950,11 @@ public final class PairingMessages {
   /**
    * A JSON value a binder cannot take into the property at {@code path}, in the words {@link
    * #notAValue} refuses a text value with. {@code got} is the value as the document writes it,
-   * {@code 1.5} or {@code "12x"}, or the kind of a structure, {@code an object} or {@code an array};
-   * {@code what} is the property's type with its article, as {@link #scalarPhrase} writes a scalar.
-   * The message reads {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column 18}. A path
-   * names a nested property after its parent, joined by a dot, and an element by its position as
-   * {@link #elementPosition} writes it. An empty path is the document itself.
+   * {@code 1.5} or {@code "12x"}, or the kind of a structure, {@code an object} or {@code an
+   * array}; {@code what} is the property's type with its article, as {@link #scalarPhrase} writes a
+   * scalar. The message reads {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column
+   * 18}. A path names a nested property after its parent, joined by a dot, and an element by its
+   * position as {@link #elementPosition} writes it. An empty path is the document itself.
    */
   public static String jsonNotAValue(
     final String path,
@@ -1992,9 +1992,9 @@ public final class PairingMessages {
   }
 
   /**
-   * A property of {@code target} no row names, whose declared type has no reading from JSON.
-   * {@code kind} is {@code component} for a record and {@code property} for a bean, and {@code
-   * reason} names the innermost type at fault and the remedy.
+   * A property of {@code target} no row names, whose declared type has no reading from JSON. {@code
+   * kind} is {@code component} for a record and {@code property} for a bean, and {@code reason}
+   * names the innermost type at fault and the remedy.
    */
   public static String jsonUnbindable(
     final String kind,
@@ -2058,8 +2058,8 @@ public final class PairingMessages {
   }
 
   /**
-   * Two properties of one object reading the same key. A streaming binder reads each value once,
-   * so the value cannot fill both.
+   * Two properties of one object reading the same key. A streaming binder reads each value once, so
+   * the value cannot fill both.
    */
   public static String jsonKeyReadTwice(
     final String key,

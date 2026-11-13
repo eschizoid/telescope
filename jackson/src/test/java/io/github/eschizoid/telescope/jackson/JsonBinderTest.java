@@ -137,7 +137,10 @@ class JsonBinderTest {
     @Test
     @DisplayName("a key that appears twice keeps the value it holds last, null included")
     void duplicateKeyKeepsTheLast() {
-      assertEquals(new Line("B", 0, null), LINES.read("{\"sku\":\"A\",\"quantity\":5,\"sku\":\"B\",\"quantity\":null}"));
+      assertEquals(
+        new Line("B", 0, null),
+        LINES.read("{\"sku\":\"A\",\"quantity\":5,\"sku\":\"B\",\"quantity\":null}")
+      );
     }
 
     @Test
@@ -153,7 +156,10 @@ class JsonBinderTest {
     @DisplayName("a type that holds itself reads at every depth")
     void recursiveType() {
       assertEquals(
-        new Tree("root", List.of(new Tree("leaf", List.of()), new Tree("branch", List.of(new Tree("twig", List.of()))))),
+        new Tree(
+          "root",
+          List.of(new Tree("leaf", List.of()), new Tree("branch", List.of(new Tree("twig", List.of()))))
+        ),
         TelescopeJson.fromJson(Tree.class).read(
           "{\"name\":\"root\",\"children\":[{\"name\":\"leaf\"},{\"name\":\"branch\",\"children\":[{\"name\":\"twig\"}]}]}"
         )
@@ -227,7 +233,13 @@ class JsonBinderTest {
       assertEquals("Ada", customer.getName());
       assertEquals(3, customer.getVisits());
       assertEquals(List.of("vip"), customer.getTags());
-      assertTrue(binder.explain().skipped().stream().anyMatch(skip -> skip.field().equals("label")));
+      assertTrue(
+        binder
+          .explain()
+          .skipped()
+          .stream()
+          .anyMatch(skip -> skip.field().equals("label"))
+      );
     }
 
     @Test
@@ -264,22 +276,55 @@ class JsonBinderTest {
         "'l' got 9223372036854775808, not a long, at line 1, column 6",
         refusal(() -> SCALARS.read("{\"l\":9223372036854775808}")).getMessage()
       );
-      assertEquals("'d' got 1e400, not a double, at line 1, column 6", refusal(() -> SCALARS.read("{\"d\":1e400}")).getMessage());
-      assertEquals("'f' got 1e40, not a float, at line 1, column 6", refusal(() -> SCALARS.read("{\"f\":1e40}")).getMessage());
+      assertEquals(
+        "'d' got 1e400, not a double, at line 1, column 6",
+        refusal(() -> SCALARS.read("{\"d\":1e400}")).getMessage()
+      );
+      assertEquals(
+        "'f' got 1e40, not a float, at line 1, column 6",
+        refusal(() -> SCALARS.read("{\"f\":1e40}")).getMessage()
+      );
     }
 
     @Test
     @DisplayName("a value is never read from another JSON kind")
     void crossKindIsRefused() {
-      assertEquals("'quantity' got \"12\", not an int, at line 1, column 13", refusal(() -> LINES.read("{\"quantity\":\"12\"}")).getMessage());
-      assertEquals("'sku' got 12, not a String, at line 1, column 8", refusal(() -> LINES.read("{\"sku\":12}")).getMessage());
-      assertEquals("'price' got \"1.50\", not a BigDecimal, at line 1, column 10", refusal(() -> LINES.read("{\"price\":\"1.50\"}")).getMessage());
-      assertEquals("'z' got 1, not a boolean, at line 1, column 6", refusal(() -> SCALARS.read("{\"z\":1}")).getMessage());
-      assertEquals("'c' got \"ab\", not a char, at line 1, column 6", refusal(() -> SCALARS.read("{\"c\":\"ab\"}")).getMessage());
-      assertEquals("'boxed' got true, not an Integer, at line 1, column 10", refusal(() -> SCALARS.read("{\"boxed\":true}")).getMessage());
-      assertEquals("'big' got 1.0, not a BigInteger, at line 1, column 8", refusal(() -> SCALARS.read("{\"big\":1.0}")).getMessage());
-      assertEquals("'chars' got an array, not a CharSequence, at line 1, column 10", refusal(() -> SCALARS.read("{\"chars\":[]}")).getMessage());
-      assertEquals("'id' got 7, not an UUID, at line 1, column 7", refusal(() -> SCALARS.read("{\"id\":7}")).getMessage());
+      assertEquals(
+        "'quantity' got \"12\", not an int, at line 1, column 13",
+        refusal(() -> LINES.read("{\"quantity\":\"12\"}")).getMessage()
+      );
+      assertEquals(
+        "'sku' got 12, not a String, at line 1, column 8",
+        refusal(() -> LINES.read("{\"sku\":12}")).getMessage()
+      );
+      assertEquals(
+        "'price' got \"1.50\", not a BigDecimal, at line 1, column 10",
+        refusal(() -> LINES.read("{\"price\":\"1.50\"}")).getMessage()
+      );
+      assertEquals(
+        "'z' got 1, not a boolean, at line 1, column 6",
+        refusal(() -> SCALARS.read("{\"z\":1}")).getMessage()
+      );
+      assertEquals(
+        "'c' got \"ab\", not a char, at line 1, column 6",
+        refusal(() -> SCALARS.read("{\"c\":\"ab\"}")).getMessage()
+      );
+      assertEquals(
+        "'boxed' got true, not an Integer, at line 1, column 10",
+        refusal(() -> SCALARS.read("{\"boxed\":true}")).getMessage()
+      );
+      assertEquals(
+        "'big' got 1.0, not a BigInteger, at line 1, column 8",
+        refusal(() -> SCALARS.read("{\"big\":1.0}")).getMessage()
+      );
+      assertEquals(
+        "'chars' got an array, not a CharSequence, at line 1, column 10",
+        refusal(() -> SCALARS.read("{\"chars\":[]}")).getMessage()
+      );
+      assertEquals(
+        "'id' got 7, not an UUID, at line 1, column 7",
+        refusal(() -> SCALARS.read("{\"id\":7}")).getMessage()
+      );
     }
 
     @Test
@@ -319,12 +364,30 @@ class JsonBinderTest {
     @Test
     @DisplayName("a structure of the wrong kind is named by its kind")
     void wrongStructure() {
-      assertEquals("'lines' got an object, not a List, at line 1, column 10", refusal(() -> ORDERS.read("{\"lines\":{}}")).getMessage());
-      assertEquals("'tags' got \"x\", not a Set, at line 1, column 9", refusal(() -> ORDERS.read("{\"tags\":\"x\"}")).getMessage());
-      assertEquals("'counts' got an array, not a Map, at line 1, column 11", refusal(() -> ORDERS.read("{\"counts\":[]}")).getMessage());
-      assertEquals("'lines[0]' got 4, not a Line, at line 1, column 11", refusal(() -> ORDERS.read("{\"lines\":[4]}")).getMessage());
-      assertEquals("the document got an array, not an Order, at line 1, column 1", refusal(() -> ORDERS.read("[]")).getMessage());
-      assertEquals("the document got no value, not an Order, at line 1, column 0", refusal(() -> ORDERS.read("")).getMessage());
+      assertEquals(
+        "'lines' got an object, not a List, at line 1, column 10",
+        refusal(() -> ORDERS.read("{\"lines\":{}}")).getMessage()
+      );
+      assertEquals(
+        "'tags' got \"x\", not a Set, at line 1, column 9",
+        refusal(() -> ORDERS.read("{\"tags\":\"x\"}")).getMessage()
+      );
+      assertEquals(
+        "'counts' got an array, not a Map, at line 1, column 11",
+        refusal(() -> ORDERS.read("{\"counts\":[]}")).getMessage()
+      );
+      assertEquals(
+        "'lines[0]' got 4, not a Line, at line 1, column 11",
+        refusal(() -> ORDERS.read("{\"lines\":[4]}")).getMessage()
+      );
+      assertEquals(
+        "the document got an array, not an Order, at line 1, column 1",
+        refusal(() -> ORDERS.read("[]")).getMessage()
+      );
+      assertEquals(
+        "the document got no value, not an Order, at line 1, column 0",
+        refusal(() -> ORDERS.read("")).getMessage()
+      );
     }
 
     @Test
@@ -416,7 +479,14 @@ class JsonBinderTest {
       );
       assertEquals(
         OpticNode.WhenAbsent.REFUSES,
-        binder.explain().extractions().stream().filter(row -> row.field().equals("email")).findFirst().orElseThrow().whenAbsent()
+        binder
+          .explain()
+          .extractions()
+          .stream()
+          .filter(row -> row.field().equals("email"))
+          .findFirst()
+          .orElseThrow()
+          .whenAbsent()
       );
     }
   }
@@ -434,16 +504,24 @@ class JsonBinderTest {
         refusal(() -> TelescopeJson.fromJson(Holder.class)).getMessage()
       );
       assertTrue(
-        refusal(() -> TelescopeJson.fromJson(Listy.class)).getMessage().contains("java.util.ArrayList is a collection subtype")
+        refusal(() -> TelescopeJson.fromJson(Listy.class))
+          .getMessage()
+          .contains("java.util.ArrayList is a collection subtype")
       );
       assertTrue(
-        refusal(() -> TelescopeJson.fromJson(WithThread.class)).getMessage().contains("java.lang.Thread can't be read from a JSON value")
+        refusal(() -> TelescopeJson.fromJson(WithThread.class))
+          .getMessage()
+          .contains("java.lang.Thread can't be read from a JSON value")
       );
       assertTrue(
-        refusal(() -> TelescopeJson.fromJson(WithShape.class)).getMessage().contains("is neither a record nor a class with properties to bind")
+        refusal(() -> TelescopeJson.fromJson(WithShape.class))
+          .getMessage()
+          .contains("is neither a record nor a class with properties to bind")
       );
       assertTrue(
-        refusal(() -> TelescopeJson.fromJson(BadKeys.class)).getMessage().contains("a JSON object's keys are text")
+        refusal(() -> TelescopeJson.fromJson(BadKeys.class))
+          .getMessage()
+          .contains("a JSON object's keys are text")
       );
       assertEquals(
         "TelescopeJson.fromJson: " +
@@ -464,7 +542,11 @@ class JsonBinderTest {
       assertEquals(
         "TelescopeJson.fromJson: two rows name 'sku' of Line; keep one",
         refusal(() ->
-          TelescopeJson.fromJson(Line.class, extract("a", Line::sku, Object::toString), extract("b", Line::sku, Object::toString))
+          TelescopeJson.fromJson(
+            Line.class,
+            extract("a", Line::sku, Object::toString),
+            extract("b", Line::sku, Object::toString)
+          )
         ).getMessage()
       );
       assertEquals(
@@ -490,9 +572,18 @@ class JsonBinderTest {
         Arrays.asList(new Line("A", 1, null), null),
         LINES.readList("[{\"sku\":\"A\",\"quantity\":1},null]")
       );
-      assertEquals("'[1]' got 3, not a Line, at line 1, column 5", refusal(() -> LINES.readList("[{},3]")).getMessage());
-      assertEquals("'[0].quantity' got \"x\", not an int, at line 1, column 14", refusal(() -> LINES.readList("[{\"quantity\":\"x\"}]")).getMessage());
-      assertEquals("the document got an object, not an array of Line, at line 1, column 1", refusal(() -> LINES.readList("{}")).getMessage());
+      assertEquals(
+        "'[1]' got 3, not a Line, at line 1, column 5",
+        refusal(() -> LINES.readList("[{},3]")).getMessage()
+      );
+      assertEquals(
+        "'[0].quantity' got \"x\", not an int, at line 1, column 14",
+        refusal(() -> LINES.readList("[{\"quantity\":\"x\"}]")).getMessage()
+      );
+      assertEquals(
+        "the document got an object, not an array of Line, at line 1, column 1",
+        refusal(() -> LINES.readList("{}")).getMessage()
+      );
     }
 
     @Test
@@ -516,14 +607,21 @@ class JsonBinderTest {
     }
 
     @Test
-    @DisplayName("parse reads from a parser the caller owns, fresh or already on the object, and leaves it on the object's end")
+    @DisplayName(
+      "parse reads from a parser the caller owns, fresh or already on the object, and leaves it on the object's end"
+    )
     void parsePositioning() {
       final var factory = new JsonFactory();
       try (final var fresh = factory.createParser(ObjectReadContext.empty(), "{\"sku\":\"A\"}")) {
         assertEquals(new Line("A", 0, null), LINES.parse(fresh));
         assertEquals(JsonToken.END_OBJECT, fresh.currentToken());
       }
-      try (final var inner = factory.createParser(ObjectReadContext.empty(), "{\"wrap\":{\"sku\":\"B\"},\"after\":[{\"sku\":\"C\"}]}")) {
+      try (
+        final var inner = factory.createParser(
+          ObjectReadContext.empty(),
+          "{\"wrap\":{\"sku\":\"B\"},\"after\":[{\"sku\":\"C\"}]}"
+        )
+      ) {
         inner.nextToken();
         inner.nextName();
         inner.nextToken();

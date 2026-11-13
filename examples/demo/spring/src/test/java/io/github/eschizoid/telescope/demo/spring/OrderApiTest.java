@@ -194,9 +194,15 @@ class OrderApiTest {
   }
 
   @Test
-  @DisplayName("a partner who sends a number where the feed promises text is refused, naming the field and its position")
+  @DisplayName(
+    "a partner who sends a number where the feed promises text is refused, naming the field and its position"
+  )
   void aNumberWhereTheFeedPromisesTextIsRefused() {
-    final var refused = send(HttpMethod.POST, "/orders/import", "{\"customerEmail\":\"grace@example.com\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":2}]}");
+    final var refused = send(
+      HttpMethod.POST,
+      "/orders/import",
+      "{\"customerEmail\":\"grace@example.com\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":2}]}"
+    );
     assertThat(refused.getStatusCode().value()).isEqualTo(400);
     assertThat(JsonPath.<String>read(refused.getBody(), "$.detail")).isEqualTo(
       "'lines[0].quantity' got 2, not a String, at line 1, column 74"

@@ -165,8 +165,8 @@ final class Plan {
     if (writer != null) {
       refuseUnwritableRows(type, writer, byName);
     }
-    final var readsOwnName = Arrays.stream(names).anyMatch(name ->
-      !byName.containsKey(name) || byName.get(name).key().equals(name)
+    final var readsOwnName = Arrays.stream(names).anyMatch(
+      name -> !byName.containsKey(name) || byName.get(name).key().equals(name)
     );
     final var declaredRequired = readsOwnName ? declaredRequired(type) : List.<String>of();
 
@@ -211,9 +211,8 @@ final class Plan {
         );
       }
     }
-    final Function<Object[], T> construct = writer == null
-      ? args -> Records.construct(type, args)
-      : beanConstruct(type, writer, names, reads);
+    final Function<Object[], T> construct =
+      writer == null ? args -> Records.construct(type, args) : beanConstruct(type, writer, names, reads);
     frame.complete(kind, names, keys, declared, reads, absents, required, indexByKey, construct);
   }
 
@@ -341,7 +340,10 @@ final class Plan {
         return provider.required();
       } catch (final UnsupportedOperationException e) {
         throw new IllegalArgumentException(
-          "TelescopeJson.fromJson: " + type.getSimpleName() + " has a registered @FromMap binder, but " + e.getMessage(),
+          "TelescopeJson.fromJson: " +
+            type.getSimpleName() +
+            " has a registered @FromMap binder, but " +
+            e.getMessage(),
           e
         );
       }
@@ -392,7 +394,9 @@ final class Plan {
       return rawOf(type).isEnum();
     }
 
-    /** Every record and bean the binder can build is read as a nested object by its own frame. */
+    /**
+     * Every record and bean the binder can build is read as a nested object by its own frame.
+     */
     @Override
     public boolean hasGeneratedBinder(final Type type) {
       return bindable(rawOf(type));
@@ -469,11 +473,12 @@ final class Plan {
         }
         return value;
       };
-      case "boolean" -> parser -> switch (parser.currentToken()) {
-        case VALUE_TRUE -> Boolean.TRUE;
-        case VALUE_FALSE -> Boolean.FALSE;
-        default -> throw Refused.value(parser, what, null);
-      };
+      case "boolean" -> parser ->
+        switch (parser.currentToken()) {
+          case VALUE_TRUE -> Boolean.TRUE;
+          case VALUE_FALSE -> Boolean.FALSE;
+          default -> throw Refused.value(parser, what, null);
+        };
       case "char" -> parser -> {
         if (parser.currentToken() != JsonToken.VALUE_STRING || parser.getStringLength() != 1) {
           throw Refused.value(parser, what, null);
@@ -723,11 +728,12 @@ final class Plan {
       case "byte" -> Byte::valueOf;
       case "double" -> Double::valueOf;
       case "float" -> Float::valueOf;
-      case "boolean" -> name -> switch (name) {
-        case "true" -> Boolean.TRUE;
-        case "false" -> Boolean.FALSE;
-        default -> throw new IllegalArgumentException(name);
-      };
+      case "boolean" -> name ->
+        switch (name) {
+          case "true" -> Boolean.TRUE;
+          case "false" -> Boolean.FALSE;
+          default -> throw new IllegalArgumentException(name);
+        };
       case "char" -> name -> {
         if (name.length() != 1) {
           throw new IllegalArgumentException(name);
@@ -780,9 +786,8 @@ final class Plan {
    * agree on a missing key.
    */
   static Object absentOf(final Type type) {
-    final var raw = type instanceof Class<?> c
-      ? c
-      : type instanceof ParameterizedType p ? (Class<?>) p.getRawType() : null;
+    final var raw =
+      type instanceof Class<?> c ? c : type instanceof ParameterizedType p ? (Class<?>) p.getRawType() : null;
     if (raw != null && raw.isPrimitive()) {
       return primitiveDefault(raw);
     }

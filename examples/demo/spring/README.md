@@ -42,12 +42,12 @@ Order ship(@PathVariable final String number) {
 ```
 
 Two handlers convert by hand. `GET /orders/{number}` returns `orders.get(number).toOrderDto()`, through the entity's
-generated `OrderMappings`. The partner import calls
-[`OrderImports`](src/main/java/io/github/eschizoid/telescope/demo/spring/OrderImports.java), a `@TelescopeMapper`
-interface, which runs [`SkuCleanup`](src/main/java/io/github/eschizoid/telescope/demo/spring/SkuCleanup.java), a
-`@TelescopeTransformer`, and then the import's bridge. `telescope-codegen` writes both as Spring components. When the
-service refuses an imported order, the handler answers with a problem response whose `trace` property says how each
-field of the payload was read.
+generated `OrderMappings`. The partner import reads the body as text through `PartnerFeed`, telescope-jackson's
+streaming binder, and calls [`OrderImports`](src/main/java/io/github/eschizoid/telescope/demo/spring/OrderImports.java),
+a `@TelescopeMapper` interface, which runs
+[`SkuCleanup`](src/main/java/io/github/eschizoid/telescope/demo/spring/SkuCleanup.java), a `@TelescopeTransformer`, and
+then the import's bridge. `telescope-codegen` writes both as Spring components. When the service refuses an imported
+order, the handler answers with a problem response whose `trace` property says how each field of the payload was read.
 
 The mobile app's cart sends version 2's request shape. `@TelescopeRequestBody` reads the body as `PlaceOrderV2`, through
 Spring's own `@RequestBody` machinery, and maps it to the `PlaceOrder` the service takes before the handler runs:
@@ -125,7 +125,8 @@ curl -s localhost:8080/orders/import -H 'Content-Type: application/json' \
 ```
 
 The last call is refused with a 400, and its `trace` shows why: the partner sent `qty` instead of `quantity`, so the
-line was read with `quantity=null`.
+line was read with `quantity=null`. A quantity sent as the number `2` is refused before the mapping, naming the field
+and where it is in the body.
 
 ## Tests
 

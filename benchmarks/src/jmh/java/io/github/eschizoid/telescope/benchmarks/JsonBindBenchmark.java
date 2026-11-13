@@ -25,8 +25,8 @@ import tools.jackson.databind.json.JsonMapper;
  * parser alone.
  *
  * <p>How to read it: {@code tokensOnly} is the parse every row pays and nothing more, and {@code
- * handWritten} is the parse plus the building of the record with every decision made in source,
- * the floor a binder can approach. Both are controls: neither changes with telescope's code, so a
+ * handWritten} is the parse plus the building of the record with every decision made in source, the
+ * floor a binder can approach. Both are controls: neither changes with telescope's code, so a
  * difference in either between two runs is a difference in the runners, and every ratio in that
  * pair moves with it. {@code telescope} and {@code databind} are the two being compared. Allocation
  * ({@code -Pjmh.profilers=gc}) does not depend on the runner and is the durable comparison.

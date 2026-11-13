@@ -122,7 +122,9 @@ class TelescopeModuleIntegrationTest {
   @Test
   @DisplayName("mapped responses and request bodies are unchanged by the module")
   void mappedBodiesAreUnchanged() {
-    assertThat(client().get().uri("/users/1").retrieve().body(JSON_OBJECT)).isEqualTo(Map.of("id", "1", "fullName", "Ada"));
+    assertThat(client().get().uri("/users/1").retrieve().body(JSON_OBJECT)).isEqualTo(
+      Map.of("id", "1", "fullName", "Ada")
+    );
     assertThat(
       client()
         .post()

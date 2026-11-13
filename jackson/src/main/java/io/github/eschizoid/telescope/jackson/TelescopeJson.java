@@ -32,8 +32,8 @@ public final class TelescopeJson {
    * @param rows overrides for single properties
    * @param <T> the type built
    * @return the binder
-   * @throws IllegalArgumentException when a property's type has no reading from JSON, or a row names
-   *     a property that is not there
+   * @throws IllegalArgumentException when a property's type has no reading from JSON, or a row
+   *     names a property that is not there
    */
   public static <T> JsonBinder<T> fromJson(final Class<T> target, final MapExtractStep... rows) {
     Objects.requireNonNull(target, "target");

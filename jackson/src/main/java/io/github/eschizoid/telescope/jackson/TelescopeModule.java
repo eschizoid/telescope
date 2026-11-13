@@ -58,8 +58,8 @@ import tools.jackson.databind.util.Converter;
  * inside a list, a map or another wire type, and a value whose class extends a registered domain
  * type, such as a persistence proxy, is written through that registration.
  *
- * <p>Jackson answers a JSON {@code null} without calling a deserializer, so a mapper never sees one;
- * how a {@code null} reads is the wire type's configuration.
+ * <p>Jackson answers a JSON {@code null} without calling a deserializer, so a mapper never sees
+ * one; how a {@code null} reads is the wire type's configuration.
  *
  * <p>Not supported: a domain type as a {@code Map} key, which needs a key deserializer the module
  * does not provide, and {@code @JsonUnwrapped} on a domain-typed property. {@code
@@ -382,7 +382,9 @@ public final class TelescopeModule extends JacksonModule {
   }
 
   private static <W, D> ValueDeserializer<D> reading(final Mapper<W, D> mapper) {
-    return new StdConvertingDeserializer<>(new Conversion<>(mapper.sourceClass(), mapper.targetClass(), mapper::forward));
+    return new StdConvertingDeserializer<>(
+      new Conversion<>(mapper.sourceClass(), mapper.targetClass(), mapper::forward)
+    );
   }
 
   private static <W, D> ValueSerializer<?> writing(final Mapper<W, D> mapper) {
@@ -391,8 +393,8 @@ public final class TelescopeModule extends JacksonModule {
 
   /**
    * One direction of a mapper as a Jackson converter. Its types are the mapper's classes, so
-   * Jackson finds the handler for the other side by them rather than by reading type arguments
-   * that erasure has removed.
+   * Jackson finds the handler for the other side by them rather than by reading type arguments that
+   * erasure has removed.
    */
   private record Conversion<I, O>(Class<I> in, Class<O> out, Function<I, O> convert) implements Converter<I, O> {
     @Override

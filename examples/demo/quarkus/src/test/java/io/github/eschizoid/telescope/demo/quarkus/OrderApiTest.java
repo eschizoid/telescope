@@ -177,7 +177,9 @@ class OrderApiTest {
   }
 
   @Test
-  @DisplayName("a partner who sends a number where the feed promises text is refused, naming the field and its position")
+  @DisplayName(
+    "a partner who sends a number where the feed promises text is refused, naming the field and its position"
+  )
   void aNumberWhereTheFeedPromisesTextIsRefused() {
     final var json = given()
       .contentType(ContentType.JSON)

@@ -604,6 +604,23 @@ These fail startup with the parameter named:
 With springdoc on the classpath, the operation's request body shows the wire type, and no query parameter is derived
 from the handler's argument.
 
+## Jackson
+
+With [`telescope-jackson`](../jackson/README.md) on the classpath, the starter installs a `TelescopeModule` in Spring
+Boot's `JsonMapper`, so Jackson reads and writes a domain type in the wire shape a mapper converts it from. The module
+carries only the mappers a `TelescopeModuleCustomizer` bean adds, in `@Order` order. A `Mapper` bean is not a JSON
+converter on its own: a mapper between an entity and a DTO would otherwise change how every such entity is written.
+
+```java
+@Bean
+TelescopeModuleCustomizer wireShapes() {
+  return (module) -> module.add(ContactMappers.WIRE);
+}
+```
+
+A `TelescopeModule` bean of your own replaces the starter's. Mapped responses and request bodies are unaffected: they
+map between the types they name, and the module maps only the domain types it carries.
+
 ## Configuration
 
 | Property                           | Default | Effect                                                                                                                  |

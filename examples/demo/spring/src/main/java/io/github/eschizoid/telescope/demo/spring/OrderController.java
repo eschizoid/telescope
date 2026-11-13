@@ -87,9 +87,9 @@ class OrderController {
 
   /**
    * Places an order from a partner's JSON, read as text by {@link PartnerFeed}. A payload the
-   * service refuses is answered with a 400 that carries the trace of how each field was read,
-   * which is usually enough for the partner to see what they sent wrong. Only a refused payload is
-   * parsed a second time, into the map the trace replays.
+   * service refuses is answered with a 400 that carries the trace of how each field was read, which
+   * is usually enough for the partner to see what they sent wrong. Only a refused payload is parsed
+   * a second time, into the map the trace replays.
    */
   @TelescopePostMapping(value = "/orders/import", to = OrderDto.class)
   ResponseEntity<Order> importOrder(@RequestBody final String body) {

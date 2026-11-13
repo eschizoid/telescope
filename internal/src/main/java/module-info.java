@@ -38,9 +38,9 @@
  * them.
  */
 module io.github.eschizoid.telescope.internal {
-  // telescope-jpa takes the native-image flag and the MethodHandle accessor closures from here, so
-  // its proxy accessors follow the same substrate rule as this module's own. telescope-jackson
-  // builds records and beans through the same reflection helpers the runtime fromMap uses.
+// telescope-jpa takes the native-image flag and the MethodHandle accessor closures from here, so
+// its proxy accessors follow the same substrate rule as this module's own. telescope-jackson
+// builds records and beans through the same reflection helpers the runtime fromMap uses.
   exports io.github.eschizoid.telescope.internal
     to io.github.eschizoid.telescope, io.github.eschizoid.telescope.jpa, io.github.eschizoid.telescope.jackson;
   exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;

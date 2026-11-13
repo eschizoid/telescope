@@ -20,22 +20,23 @@ import tools.jackson.core.json.JsonFactory;
  * <p>The rules, per value:
  *
  * <ul>
- *   <li>A key that is missing and a key that holds {@code null} give the same value: the default for
- *       the property's declared type, a primitive's zero, an empty {@code List}, {@code Set}, {@code
- *       Map} or {@code Optional}, and {@code null} for anything else. A converter is called only for a
- *       value that is present. A key no property reads is skipped, whatever it holds.
+ *   <li>A key that is missing and a key that holds {@code null} give the same value: the default
+ *       for the property's declared type, a primitive's zero, an empty {@code List}, {@code Set},
+ *       {@code Map} or {@code Optional}, and {@code null} for anything else. A converter is called
+ *       only for a value that is present. A key no property reads is skipped, whatever it holds.
  *   <li>A key that appears twice in one object keeps the value it holds last.
- *   <li>A value is read only from the JSON kind its type is written as: a number from a number, text
- *       from a string, a boolean from {@code true} or {@code false}. An integral property refuses a
- *       fraction and an integer past its range rather than truncate or wrap it, and {@code BigDecimal}
- *       keeps every digit. A row's converter reads another kind where the payload needs one.
+ *   <li>A value is read only from the JSON kind its type is written as: a number from a number,
+ *       text from a string, a boolean from {@code true} or {@code false}. An integral property
+ *       refuses a fraction and an integer past its range rather than truncate or wrap it, and
+ *       {@code BigDecimal} keeps every digit. A row's converter reads another kind where the
+ *       payload needs one.
  *   <li>A record or a bean outside the JDK is read from a nested object by the same rules, a {@code
- *       List} or {@code Set} from an array, a {@code Map} from an object, and an enum constant from its
- *       exact name.
+ *       List} or {@code Set} from an array, a {@code Map} from an object, and an enum constant from
+ *       its exact name.
  * </ul>
  *
- * <p>A value the rules refuse throws {@link IllegalArgumentException} naming where it is and what it
- * is: {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column 18}. JSON that does not
+ * <p>A value the rules refuse throws {@link IllegalArgumentException} naming where it is and what
+ * it is: {@code 'lines[1].quantity' got 1.5, not an int, at line 3, column 18}. JSON that does not
  * parse throws {@code jackson-core}'s own {@code StreamReadException}, which carries its location.
  *
  * @param <T> the type the binder builds

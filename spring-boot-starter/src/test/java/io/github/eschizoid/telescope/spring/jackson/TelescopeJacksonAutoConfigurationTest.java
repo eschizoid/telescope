@@ -38,7 +38,11 @@ class TelescopeJacksonAutoConfigurationTest {
     to(TicketWire::subject, Ticket::title)
   );
 
-  static final Mapper<NoteWire, Note> NOTES = Telescope.mapper(NoteWire.class, Note.class, to(NoteWire::text, Note::body));
+  static final Mapper<NoteWire, Note> NOTES = Telescope.mapper(
+    NoteWire.class,
+    Note.class,
+    to(NoteWire::text, Note::body)
+  );
 
   private final ApplicationContextRunner runner = new ApplicationContextRunner().withConfiguration(
     AutoConfigurations.of(JacksonAutoConfiguration.class, TelescopeJacksonAutoConfiguration.class)

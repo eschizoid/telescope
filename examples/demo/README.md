@@ -128,12 +128,21 @@ On Spring the handler takes the service's type, and `@TelescopeRequestBody` name
 ResponseEntity<Order> placeV2(@TelescopeRequestBody(from = PlaceOrderV2.class) final PlaceOrder command)
 ```
 
-**A partner sends orders as untyped JSON, every value written as text.** `@FromMap` on `ImportedOrder` generates
-`ImportedOrderFromMap`, which binds the parsed map with no reflection. Every field has the name the service uses, so
-`RequestMappers.IMPORT` has no rows: the built-in conversions turn `"2"` into an `int`, `"EXPRESS"` into the `Delivery`
-enum and `"true"` into a `boolean`. Partners also type SKUs by hand, so a `@TelescopeTransformer` cleans them before the
-mapping, and a `@TelescopeMapper` interface runs both. The processor writes each as a Spring bean or a CDI bean, and the
-import handler calls it:
+**A partner sends orders as JSON, every value written as text.** The import handler takes the body as text, and
+[`PartnerFeed`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/PartnerFeed.java) reads it into
+`ImportedOrder` through [`telescope-jackson`](../../jackson/README.md)'s streaming binder, with no map in between:
+
+```java
+private static final JsonBinder<ImportedOrder> ORDERS = TelescopeJson.fromJson(ImportedOrder.class);
+```
+
+The binder holds the payload to the keys `@FromMap(required = ...)` names on `ImportedOrder`, and reads each value only
+from the JSON kind the record declares. A partner who sends a quantity as the number `2` where the feed promises text
+gets a 400 that says so, `'lines[0].quantity' got 2, not a String, at line 1, column 74`, instead of a guess. Every
+field has the name the service uses, so `RequestMappers.IMPORT` has no rows: the built-in conversions turn `"2"` into an
+`int`, `"EXPRESS"` into the `Delivery` enum and `"true"` into a `boolean`. Partners also type SKUs by hand, so a
+`@TelescopeTransformer` cleans them before the mapping, and a `@TelescopeMapper` interface runs both. The processor
+writes each as a Spring bean or a CDI bean, and the import handler calls it:
 
 ```java
 @TelescopeTransformer
@@ -155,8 +164,9 @@ public interface OrderImports {
 
 **A partner's order is refused, and they need to know why.** The import's 400 response carries the `trace()` of
 [`ImportTrace`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/ImportTrace.java), the same binding built at
-run time, which says for each field the key it read and the value it took. A quantity sent as `qty` shows up as a line
-with `quantity=null`, next to the refusal `line CAP-03 has a quantity of 0`.
+run time over the parsed payload, which says for each field the key it read and the value it took. Only a refused
+payload is parsed into that map. A quantity sent as `qty` shows up as a line with `quantity=null`, next to the refusal
+`line CAP-03 has a quantity of 0`.
 
 ### 2. Service: domain rules, merges and computed values
 
@@ -269,6 +279,7 @@ fails naming `buyerEmail`.
 | `patchInto` with `ADDERS`                                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | the order lifecycle and its 409s                                     | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | `@FromMap`, `trace()` in the import's 400                            | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
+| `telescope-jackson`'s `JsonBinder` reading the partner's JSON        | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun` |
 | `explain()`                                                          | `OrderDeskTest`, `OrderRun`                            |
 | `@TelescopeMapper`, `@TelescopeTransformer`                          | both apps' `OrderApiTest`                              |
 | `@TelescopeGetMapping`, `@TelescopeRequestBody`                      | the Spring app's `OrderApiTest`                        |

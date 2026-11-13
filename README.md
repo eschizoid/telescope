@@ -51,16 +51,19 @@ same field runs the same rows at run time instead, with the same result.
 
 ## From the wire to the database
 
-| Hop                       | What telescope does there                                                                                  | Guide                                                                                  |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body    | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md)     |
-| Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                    | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md) |
-| Service and entity        | `into` and `patchInto` update a managed entity in place, and `ADDERS` fills a collection through its adder | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                         |
+| Hop                       | What telescope does there                                                                                                                                                                          | Guide                                                                                                                      |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| REST endpoint and service | `@TelescopeGetMapping` and its siblings map the response, `@TelescopeRequestBody` maps the request body; `telescope-jackson` binds JSON text straight to a type and registers mappers with Jackson | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md), [telescope-jackson](jackson/README.md) |
+| Inside the service        | typed rows on a `@Bridge` mapper field, run as `forward`, `backward`, `patch` or `into`                                                                                                            | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md)                                     |
+| Service and entity        | `into` and `patchInto` update a managed entity in place, and `ADDERS` fills a collection through its adder                                                                                         | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                                                             |
 
 At the REST endpoint, a mapped handler can return a single value, a `List`, `Set`, `Optional`, `Page` or
-`ResponseEntity`, and with springdoc on the classpath the API documentation shows the response type. `toFormatted` and
-`toFormattedNumber` rows write a date or a number as text in a pattern you give. `@TelescopeMapper` and
-`@TelescopeTransformer` turn an interface into an injectable bean on Spring and on Quarkus.
+`ResponseEntity`, and with springdoc on the classpath the API documentation shows the response type. With
+[`telescope-jackson`](jackson/README.md), `TelescopeJson.fromJson(Order.class)` reads JSON text into a record or bean
+over `jackson-core`'s streaming parser, with no map in between, refusing a value of the wrong JSON kind by its path and
+position; and `TelescopeModule` makes the mappers you name Jackson converters, so Jackson reads and writes a domain type
+in its wire shape. `toFormatted` and `toFormattedNumber` rows write a date or a number as text in a pattern you give.
+`@TelescopeMapper` and `@TelescopeTransformer` turn an interface into an injectable bean on Spring and on Quarkus.
 
 Inside the service, `Telescope.merge(...)` builds one value from several sources, and fields convert between common
 types such as a number and its text without a row. `explain()` and `trace()` describe what a mapper does, and the
@@ -77,8 +80,8 @@ not loaded is shared rather than copied, so mapping an entity never loads it and
 [`examples/demo/spring/`](examples/demo/spring/README.md) is an order service on Spring Boot and Hibernate whose PATCH
 runs `patchInto` on the managed entity and refills its lines through `ADDERS`.
 
-One module is planned and not built yet: `telescope-jackson` ([ADR-0016](docs/adr/0016-jackson-integration.md)) would
-register mappers with Jackson and bind JSON straight to a type. Typed `before` and `after` edit rows are proposed in
+The generated, reflection-free form of the JSON binder, `@FromJson`, is planned
+([ADR-0016](docs/adr/0016-jackson-integration.md)). Typed `before` and `after` edit rows are proposed in
 [ADR-0024](docs/adr/0024-typed-before-and-after-edit-rows.md).
 
 Telescope can also replace MapStruct. The cheat sheet below pairs MapStruct's annotations with telescope's rows, and on
@@ -328,6 +331,10 @@ constructor or its setters and never mutates the original. [docs/pojos.md](docs/
   [starter guide](spring-boot-starter/README.md).
 - **Quarkus.** `telescope-quarkus` adds the same registry as a CDI bean, and `@TelescopeMapper` interfaces become CDI
   beans there too. See the [Quarkus guide](quarkus/README.md).
+- **Jackson.** `telescope-jackson` reads JSON text straight into a record or bean over `jackson-core`, and its
+  `TelescopeModule` makes the mappers you name Jackson 3 converters. The Spring Boot starter installs the module in
+  Spring Boot's `JsonMapper`, carrying the mappers a `TelescopeModuleCustomizer` bean adds. Quarkus 3 ships Jackson 2,
+  so there the binder runs and the module is not installed. See the [Jackson guide](jackson/README.md).
 - **JPA.** `telescope-jpa` shares a lazy collection the provider has not loaded instead of copying it, so mapping an
   entity never loads it, and reads a lazy Hibernate proxy as its entity class. It is written against the Jakarta
   Persistence API alone and comes with both starters. See the [JPA guide](jpa/README.md).
@@ -364,6 +371,7 @@ Everything is on Maven Central under `io.github.eschizoid`.
 | `telescope-lombok`              | the processor variant for Lombok `@Data`, `@Value` and `@Builder` classes                                        |
 | `telescope-spring-boot-starter` | Spring Boot auto-configuration, the mapper registry and generated mapper beans                                   |
 | `telescope-quarkus`             | the mapper registry as a Quarkus CDI bean, and generated mapper beans                                            |
+| `telescope-jackson`             | a streaming JSON binder over `jackson-core`, and mappers as Jackson 3 converters                                 |
 | `telescope-internal`            | the engine underneath, which arrives with `telescope-core` and isn't meant to be used directly                   |
 
 ## Documentation
@@ -376,6 +384,7 @@ The guides are grouped by the hop they cover, then by the MapStruct comparison a
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | [spring-boot-starter/README.md](spring-boot-starter/README.md) | mapped responses and request bodies, springdoc, the mapper registry and generated beans on Spring |
 | [quarkus/README.md](quarkus/README.md)                         | the mapper registry and generated beans on Quarkus                                                |
+| [jackson/README.md](jackson/README.md)                         | `telescope-jackson`: JSON straight into a type, and mappers as Jackson converters                 |
 
 ### Inside the service
 
