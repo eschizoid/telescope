@@ -17,13 +17,14 @@ public final class TelescopeJson {
   private TelescopeJson() {}
 
   /**
-   * A binder for {@code target}. Every property reads the JSON key of its own name, and every
-   * record or bean outside the JDK that the target holds is read from a nested object the same way.
-   * A row overrides one property, of the target or of any type it holds: {@link
-   * MapExtractStep#extract extract} reads another key or converts the value with a function of its
-   * own, and {@link MapExtractStep#required required} refuses a document without the key. They are
-   * the rows {@code Telescope.fromMap} takes, and a converter receives the value as an untyped map
-   * would hold it, with a fraction as a {@code BigDecimal}.
+   * A binder for {@code target}. Every property reads the JSON key of its own name, or the one
+   * Jackson's {@code @JsonProperty} gives it, also reads the keys {@code @JsonAlias} adds, and is
+   * left unbound by {@code @JsonIgnore}. Every record or bean outside the JDK that the target holds
+   * is read from a nested object the same way. A row overrides one property, of the target or of
+   * any type it holds: {@link MapExtractStep#extract extract} reads another key or converts the
+   * value with a function of its own, and {@link MapExtractStep#required required} refuses a
+   * document without the key. They are the rows {@code Telescope.fromMap} takes, and a converter
+   * receives the value as an untyped map would hold it, with a fraction as a {@code BigDecimal}.
    *
    * <p>A target whose generated {@code @FromMap} binder declares keys required is held to the same
    * keys.
@@ -32,8 +33,9 @@ public final class TelescopeJson {
    * @param rows overrides for single properties
    * @param <T> the type built
    * @return the binder
-   * @throws IllegalArgumentException when a property's type has no reading from JSON, or a row
-   *     names a property that is not there
+   * @throws IllegalArgumentException when a property's type has no reading from JSON, a row names a
+   *     property that is not there, two properties read one key, or a type the binder builds
+   *     carries a Jackson annotation it does not read
    */
   public static <T> JsonBinder<T> fromJson(final Class<T> target, final MapExtractStep... rows) {
     Objects.requireNonNull(target, "target");

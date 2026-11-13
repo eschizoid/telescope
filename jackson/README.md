@@ -24,9 +24,10 @@ application that registers a Jackson module already has.
 
 ## Reading JSON with `JsonBinder`
 
-Every property reads the JSON key of its own name. Every record or bean outside the JDK that the target holds is read
-from a nested object the same way, at any depth, a type that holds itself included. A binder is built once, is safe to
-share between threads, and reads from a `String`, a `byte[]` or an `InputStream`; `readList` reads an array of objects.
+Every property reads the JSON key of its own name, or the key Jackson's `@JsonProperty` gives it (see
+[Jackson annotations](#jackson-annotations)). Every record or bean outside the JDK that the target holds is read from a
+nested object the same way, at any depth, a type that holds itself included. A binder is built once, is safe to share
+between threads, and reads from a `String`, a `byte[]` or an `InputStream`; `readList` reads an array of objects.
 
 The rules, per value:
 
@@ -51,7 +52,57 @@ after it but whitespace is refused, as JSON that does not parse is. The binder r
 'lines[1].quantity' got 1.5, not an int, at line 3, column 18
 ```
 
+The path names each property by its Java name. Where a property reads a key other than its name, the path by keys
+follows, so the message points at both the code and the payload:
+
+```text
+'partner.id' (JSON 'partner_info.partner_id') got 12, not a String, at line 1, column 31
+```
+
 JSON that does not parse throws `jackson-core`'s own `StreamReadException`, which carries the location.
+
+### Jackson annotations
+
+The binder reads three of Jackson's annotations, the way databind reads them, so a record annotated for databind reads
+the same through the binder:
+
+| Annotation                          | What the binder does                                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `@JsonProperty("partner_id")`       | the property reads `partner_id`; its own name is then a key no property reads                                |
+| `@JsonProperty(access = READ_ONLY)` | the property is not read, and takes its default                                                              |
+| `@JsonProperty(required = true)`    | on a record component, a document without the key is refused; on a bean property, as in databind, it is not  |
+| `@JsonAlias({"partnerId", "pid"})`  | each alias fills the property too; when the key and an alias both appear, the one later in the document wins |
+| `@JsonIgnore`                       | the property is not read and takes its default, as for a missing key; the key is skipped                     |
+
+The binder looks for them where databind does. A record component's annotations reach its canonical constructor's
+parameter, its field and its accessor, and an accessor declared in the record body can carry its own. A bean property's
+are on its field, its getter and its setter. A key given on the field or setter wins over one given on the getter, so
+`@JsonProperty("written_as")` on a getter and `@JsonProperty("read_as")` on its setter reads `read_as`. `@JsonIgnore` on
+a getter with `@JsonProperty` on the setter leaves the property read, and the reverse leaves it unread. A row names its
+property's key itself, over whatever the annotations say.
+
+The annotations are read once, when the binder is built, and found by class name: the binder needs no
+`jackson-annotations` at run time, and without it no annotation is present.
+
+Refused when the binder is built, with an `IllegalArgumentException` naming the properties:
+
+- two properties of one object reading the same key, by their names, `@JsonProperty`, `@JsonAlias` or a row;
+- one property given two different keys by `@JsonProperty` on its field and its setter, which databind refuses too.
+
+The binder does not read naming strategies (`@JsonNaming`, or a `PropertyNamingStrategies` set on a `JsonMapper`, which
+the binder never sees), `@JsonUnwrapped`, `@JsonCreator`, `@JsonAnySetter`, `@JsonView`, or `@JsonIgnoreProperties`
+naming properties. A record or bean the binder would build that carries one of them is refused by name when the binder
+is built, rather than read differently from databind without a word. `@JsonIgnoreProperties(ignoreUnknown = true)` is
+accepted, since the binder skips unknown keys anyway. For full databind behavior, read the type with databind, through a
+`TelescopeModule` where a mapper converts it.
+
+Where the binder still reads differently from databind on an annotated type:
+
+- An alias that is another property's key is refused; databind gives the key to the property it names.
+- A required component whose key holds `null` is refused, as a missing one is; databind takes the `null` as a value.
+- A property the annotations leave unread takes its default, as a missing key does: a bean is built with it written,
+  where databind leaves it as the constructor left it.
+- `@JsonProperty` and `@JsonAlias` on an enum constant are not read: an enum is read by its constant's exact name.
 
 ### Stricter than `fromMap`
 
