@@ -28,9 +28,7 @@ class ProxyClassesTest {
    */
   private static Iterator<ProxyClasses> registrations(final ProxyClasses... entries) {
     final var queue = new ArrayList<ProxyClasses>();
-    for (final var entry : entries) {
-      queue.add(entry);
-    }
+    for (final var entry : entries) queue.add(entry);
     return new Iterator<>() {
       @Override
       public boolean hasNext() {
@@ -40,9 +38,7 @@ class ProxyClassesTest {
       @Override
       public ProxyClasses next() {
         final var entry = queue.removeFirst();
-        if (entry == null) {
-          throw new ServiceConfigurationError("not a subtype");
-        }
+        if (entry == null) throw new ServiceConfigurationError("not a subtype");
         return entry;
       }
     };

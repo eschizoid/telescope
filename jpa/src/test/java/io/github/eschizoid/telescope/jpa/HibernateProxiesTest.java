@@ -74,9 +74,7 @@ class HibernateProxiesTest {
 
       @Override
       public LazyInitializer getHibernateLazyInitializer() {
-        if (initializer == null) {
-          throw new IllegalStateException("no initializer");
-        }
+        if (initializer == null) throw new IllegalStateException("no initializer");
         return initializer;
       }
     };

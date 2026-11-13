@@ -294,9 +294,7 @@ class OrderApiTest {
 
   private ResponseEntity<String> send(final HttpMethod method, final String path, final Object body) {
     final var request = client.method(method).uri(path);
-    if (body != null) {
-      request.contentType(MediaType.APPLICATION_JSON).body(body);
-    }
+    if (body != null) request.contentType(MediaType.APPLICATION_JSON).body(body);
     return request
       .retrieve()
       .onStatus(HttpStatusCode::isError, (req, res) -> {})

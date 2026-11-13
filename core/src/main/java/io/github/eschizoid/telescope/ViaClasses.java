@@ -322,9 +322,7 @@ final class ViaClasses {
       called,
       unfit -> boxed(methods.get(parameters.indexOf(unfit)).getParameterTypes()[0]).getSimpleName()
     );
-    if (refusal != null) {
-      throw new IllegalArgumentException(refusal);
-    }
+    if (refusal != null) throw new IllegalArgumentException(refusal);
   }
 
   /**

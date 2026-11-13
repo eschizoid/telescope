@@ -44,9 +44,7 @@ public class PatchIntoBenchmark {
   @Setup
   public void setup() {
     final var tags = new ArrayList<String>(size);
-    for (var i = 0; i < size; i++) {
-      tags.add("t" + i);
-    }
+    for (var i = 0; i < size; i++) tags.add("t" + i);
     changes = new PatchIntoChanges(null, null, "EXPRESS", null, null, null, tags);
     target = new PatchIntoEntity();
     target.setNumber("SO-1");
@@ -89,24 +87,12 @@ public class PatchIntoBenchmark {
   public PatchIntoEntity handWritten() {
     final var into = target;
     final var sent = changes;
-    if (sent.number() != null) {
-      into.setNumber(sent.number());
-    }
-    if (sent.status() != null) {
-      into.setStatus(sent.status());
-    }
-    if (sent.delivery() != null) {
-      into.setDelivery(sent.delivery());
-    }
-    if (sent.discountCode() != null) {
-      into.setDiscountCode(sent.discountCode());
-    }
-    if (sent.trackingNumber() != null) {
-      into.setTrackingNumber(sent.trackingNumber());
-    }
-    if (sent.quantity() != null) {
-      into.setQuantity(sent.quantity());
-    }
+    if (sent.number() != null) into.setNumber(sent.number());
+    if (sent.status() != null) into.setStatus(sent.status());
+    if (sent.delivery() != null) into.setDelivery(sent.delivery());
+    if (sent.discountCode() != null) into.setDiscountCode(sent.discountCode());
+    if (sent.trackingNumber() != null) into.setTrackingNumber(sent.trackingNumber());
+    if (sent.quantity() != null) into.setQuantity(sent.quantity());
     if (sent.tags() != null) {
       final List<String> held = into.getTags();
       held.clear();

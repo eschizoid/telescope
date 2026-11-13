@@ -1189,11 +1189,8 @@ final class FieldRows {
       gating = false;
       if (refused != null) return refused;
       final var gate = new Gate(((Gate) predicate).predicate(), ((Gate) predicate).held(), kind, sourceField);
-      if (kind.startsWith("Compute") || kind.equals("Constant")) {
-        gatedTargets.put(lastFilled, gate);
-      } else {
-        gatedPaths.put(order, gate);
-      }
+      if (kind.startsWith("Compute") || kind.equals("Constant")) gatedTargets.put(lastFilled, gate);
+      else gatedPaths.put(order, gate);
       // The runtime builds one Conditional row, which names the inner row's flat accessors alone.
       rowKinds.set(rowKinds.size() - 1, "Conditional");
       rowAccessors.set(
@@ -2222,9 +2219,7 @@ final class FieldRows {
 
     private Refused drop(final MethodInvocationTree row) {
       final var args = row.getArguments();
-      if (args.size() != 1) {
-        return new Refused(row, "drop(...) keyed to a nested pair has no generated form yet");
-      }
+      if (args.size() != 1) return new Refused(row, "drop(...) keyed to a nested pair has no generated form yet");
       final var src = accessor(args.get(0), source);
       if (src instanceof Refused refused) return refused;
       final var property = ((Accessor) src).property();

@@ -53,9 +53,7 @@ public class EffectfulTraversalBenchmark {
   @Setup
   public void setup() {
     final var items = new ArrayList<Integer>(size);
-    for (var i = 0; i < size; i++) {
-      items.add(i);
-    }
+    for (var i = 0; i < size; i++) items.add(i);
     bag = new Bag(items);
     each = Telescope.of(Bag.class).each(Bag::items);
   }

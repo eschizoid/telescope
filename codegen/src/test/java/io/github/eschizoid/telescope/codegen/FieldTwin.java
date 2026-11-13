@@ -314,9 +314,7 @@ final class FieldTwin {
     }
     if (type.isArray()) {
       final var out = new StringBuilder(type.getComponentType().getSimpleName()).append("[](");
-      for (var i = 0; i < Array.getLength(value); i++) {
-        out.append(describe(Array.get(value, i), depth + 1)).append(';');
-      }
+      for (var i = 0; i < Array.getLength(value); i++) out.append(describe(Array.get(value, i), depth + 1)).append(';');
       return out.append(')').toString();
     }
     if (ownsToString(type)) return type.getSimpleName() + ":" + value;

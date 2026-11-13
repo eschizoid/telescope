@@ -2579,11 +2579,8 @@ public final class Beans {
       }
       for (final var name : names) {
         final var adder = adders.get(name);
-        if (adder == null) {
-          setterFor(name).accept(pojo, valueByName.apply(name));
-        } else if (valueByName.apply(name) instanceof Iterable<?> elements) {
-          AdderCalls.add(pojo, name, elements, adder);
-        }
+        if (adder == null) setterFor(name).accept(pojo, valueByName.apply(name));
+        else if (valueByName.apply(name) instanceof Iterable<?> elements) AdderCalls.add(pojo, name, elements, adder);
       }
       return pojo;
     }

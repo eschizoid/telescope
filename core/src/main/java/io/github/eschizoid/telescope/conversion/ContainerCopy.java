@@ -176,11 +176,8 @@ public final class ContainerCopy {
     /** Adds one element as this write adds it: through the owner's adder, or to {@link #held()}. */
     @SuppressWarnings("unchecked")
     public void add(final Object element) {
-      if (adder != null) {
-        adder.accept(owner, element);
-      } else {
-        ((Collection<Object>) held).add(element);
-      }
+      if (adder != null) adder.accept(owner, element);
+      else ((Collection<Object>) held).add(element);
     }
 
     /**
@@ -201,9 +198,7 @@ public final class ContainerCopy {
   private static Policy registeredPolicy() {
     final var registered = new ArrayList<Policy>();
     for (final var policy : ServiceLoader.load(Policy.class, ContainerCopy.class.getClassLoader())) {
-      if (policy.active()) {
-        registered.add(policy);
-      }
+      if (policy.active()) registered.add(policy);
     }
     if (registered.size() > 1) throw new IllegalStateException(
       "ContainerCopy: more than one active ContainerCopy.Policy is registered (" +
@@ -396,11 +391,8 @@ public final class ContainerCopy {
       // reads through to the held one, such as the held list itself or an unmodifiable view of it,
       // still fills it.
       elements = detached(held, incoming);
-      if (POLICY == STANDARD) {
-        standardRefill(owner, held, elements, adds);
-      } else {
-        POLICY.refill(new Refill(owner, property, held, elements, adds));
-      }
+      if (POLICY == STANDARD) standardRefill(owner, held, elements, adds);
+      else POLICY.refill(new Refill(owner, property, held, elements, adds));
     } catch (final RuntimeException failed) {
       final var adderThrew = failed instanceof AdderRejected;
       final var cause = adderThrew ? (RuntimeException) failed.getCause() : failed;
@@ -433,9 +425,7 @@ public final class ContainerCopy {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object detached(final Object held, final Object incoming) {
-    if (incoming == null || (incoming != held && COPY_CONSTRUCTORS.containsKey(incoming.getClass()))) {
-      return incoming;
-    }
+    if (incoming == null || (incoming != held && COPY_CONSTRUCTORS.containsKey(incoming.getClass()))) return incoming;
     return incoming instanceof Map map ? new LinkedHashMap<>(map) : new ArrayList<>((Collection) incoming);
   }
 

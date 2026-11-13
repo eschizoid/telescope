@@ -725,9 +725,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // multi-target tracking (multiTargetSources) keys on the SOURCE FQN — and the source of a
       // carrier-anchored Bridge is the `source = ...` attribute, not the element itself. The
       // model-anchored form (the legacy path) treats the element as the source.
-      if (bridges.size() > 1) {
-        multiTargetSources.add(((TypeElement) element).getQualifiedName().toString());
-      }
+      if (bridges.size() > 1) multiTargetSources.add(((TypeElement) element).getQualifiedName().toString());
 
       for (final var bridgeAm : bridges) {
         // Carrier-form: `@Bridge(source = X.class, target = Y.class)` on a third class. The
@@ -905,9 +903,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
       }
     }
-    if (roundEnv.processingOver()) {
-      refuseFinalRoundAwaits();
-    }
+    if (roundEnv.processingOver()) refuseFinalRoundAwaits();
     // Drain the eager queue, generating bridges for pure record/POJO pairs. Each generate(...) call
     // may discover sub-pairs and add them to `pending` for recursive emission. The `seen` set
     // guards against re-emission (cycle safety + multiple parent bridges sharing the same
@@ -1235,9 +1231,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var target = pair == null ? null : elements.getTypeElement(pair.targetFq());
         final var lombok =
           (source != null && carriesLombokTrigger(source)) || (target != null && carriesLombokTrigger(target));
-        if (!lombok) {
-          unwritten.add(bridge);
-        }
+        if (!lombok) unwritten.add(bridge);
       }
       final var field = entry.getKey();
       if (unwritten.isEmpty()) {
@@ -1440,9 +1434,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private boolean lenientFromMirror(final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
-      if (entry.getKey().getSimpleName().contentEquals("lenient")) {
-        return (Boolean) entry.getValue().getValue();
-      }
+      if (entry.getKey().getSimpleName().contentEquals("lenient")) return (Boolean) entry.getValue().getValue();
     }
     return false;
   }
@@ -3878,9 +3870,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
-        if (elementsLocated) {
-          emitLocatedHelper(out);
-        }
+        if (elementsLocated) emitLocatedHelper(out);
       }
     );
   }
@@ -6004,14 +5994,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         lenient,
         parentPkg
       );
-      if (inner == null) {
-        return null;
-      }
+      if (inner == null) return null;
       final var name = "__Nested" + nestedElements.size();
       nestedElements.put(name, new NestedElement(srcElement, tgtElement, inner));
-      if (threadedRefs.contains(inner.subBridgeName())) {
-        threadedRefs.add(name);
-      }
+      if (threadedRefs.contains(inner.subBridgeName())) threadedRefs.add(name);
       return FieldPlan.ofKind(kind, name);
     }
     // An element pair the shared spec copies element for element, such as a generic class used
@@ -7083,9 +7069,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             .toList()
         ) !=
         null;
-      if (uncalled) {
-        uncalledBackwards.add(field);
-      }
+      if (uncalled) uncalledBackwards.add(field);
       final var sourceHeld = fieldByName(paired.source(), field).type();
       final var targetHeld = fieldByName(paired.target(), tgtName).type();
       final var variable = MirrorProps.typeVariableIn(sourceOwn) || MirrorProps.typeVariableIn(targetOwn);
@@ -7110,15 +7094,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, refusal);
         return null;
       }
-      if (forward.cast() != null) {
-        forwardCasts.put(field, forward.cast());
-      }
-      if (forward.reached() != null) {
-        forwardReached.put(field, forward.reached());
-      }
-      if (uncalled) {
-        continue;
-      }
+      if (forward.cast() != null) forwardCasts.put(field, forward.cast());
+      if (forward.reached() != null) forwardReached.put(field, forward.reached());
+      if (uncalled) continue;
       final var backward = viaCall(mapper, "backward", targetOwn, targetHeld, bridgePackage);
       final var backRefusal =
         backward == null
@@ -7259,9 +7237,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       bridgePackage,
       true
     );
-    if (forward != null) {
-      return forward;
-    }
+    if (forward != null) return forward;
     return viaSideNeverFits(
       source,
       target,
@@ -8733,9 +8709,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private String locatedComponent(final String element) {
     final var nested = element == null ? null : nestedElements.get(element);
-    if (nested == null) {
-      return null;
-    }
+    if (nested == null) return null;
     return switch (nested.plan().kind()) {
       case CONVERT -> builtInComponents.get(element);
       case LIST, SET, MAP_VALUES, RESHAPE, OPTIONAL -> locatedComponent(nested.plan().subBridgeName());
@@ -8748,9 +8722,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * elements have an index to name, and null otherwise.
    */
   private String indexedComponent(final TypeMirror container, final String component) {
-    if (component == null) {
-      return null;
-    }
+    if (component == null) return null;
     final var types = processingEnv.getTypeUtils();
     final var list = processingEnv.getElementUtils().getTypeElement("java.util.List");
     return types.isSubtype(types.erasure(container), types.erasure(list.asType())) ? component : null;
@@ -8995,22 +8967,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(indent + "for (final var e : src.entrySet()) {");
       }
       out.println(indent + "  final var __k = e.getKey();");
-      if (located) {
-        out.println(indent + "  try {");
-      }
+      if (located) out.println(indent + "  try {");
       out.println(indent + "  final var __v = " + (convert == null ? "e.getValue()" : convert) + ";");
     } else {
       ordered = convert == null ? "x" : "__e";
-      if (located) {
-        out.println(indent + "var __index = 0;");
-      }
+      if (located) out.println(indent + "var __index = 0;");
       out.println(indent + "for (final var x : src) {");
-      if (located) {
-        out.println(indent + "  try {");
-      }
-      if (convert != null) {
-        out.println(indent + "  final var __e = " + convert + ";");
-      }
+      if (located) out.println(indent + "  try {");
+      if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
     }
     out.println(indent + "  try {");
     out.println(indent + (map ? "    out.put(__k, __v);" : "    out.add(" + ordered + ");"));
@@ -9028,9 +8992,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(indent + "  }");
     if (located) {
       emitLocatedCatch(out, indent + "  ", component, map ? "__k" : "__index");
-      if (!map) {
-        out.println(indent + "  __index++;");
-      }
+      if (!map) out.println(indent + "  __index++;");
     }
     out.println(indent + "}");
   }
@@ -10699,11 +10661,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ", " +
         hasSetter +
         ")";
-      if (setterWrite == null) {
-        unset.add(guardedBy(sent, call + ";"));
-      } else {
-        set.add(guardedBy(sent, "if (!" + call + ") { " + setterWrite + " }"));
-      }
+      if (setterWrite == null) unset.add(guardedBy(sent, call + ";"));
+      else set.add(guardedBy(sent, "if (!" + call + ") { " + setterWrite + " }"));
     }
     final var statements = new ArrayList<>(reads);
     statements.addAll(checks);
@@ -11587,12 +11546,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           }
         }
       }
-      if (!types.isAssignable(sourceOwn, sourceRead)) {
-        sourceReads.put(sf.name(), types.erasure(sourceRead).toString());
-      }
-      if (!types.isAssignable(targetOwn, targetRead)) {
-        targetReads.put(tf.name(), types.erasure(targetRead).toString());
-      }
+      if (!types.isAssignable(sourceOwn, sourceRead)) sourceReads.put(sf.name(), types.erasure(sourceRead).toString());
+      if (!types.isAssignable(targetOwn, targetRead)) targetReads.put(tf.name(), types.erasure(targetRead).toString());
     }
     return new PairedFields(
       List.copyOf(pairedSource),

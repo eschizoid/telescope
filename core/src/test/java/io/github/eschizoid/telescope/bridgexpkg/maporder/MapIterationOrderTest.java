@@ -61,9 +61,7 @@ class MapIterationOrderTest {
   @DisplayName("the keys used here really do reorder under a HashMap, so the assertions can fail")
   void theKeysUsedHereActuallyReorderUnderAHashMap() {
     final Map<String, String> hashed = new HashMap<>();
-    for (final var key : KEYS) {
-      hashed.put(key, key);
-    }
+    for (final var key : KEYS) hashed.put(key, key);
 
     assertNotEquals(
       KEYS,

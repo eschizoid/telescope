@@ -45,9 +45,7 @@ class BridgeProcessorTest {
   /** The text of the method of {@code source} whose declaration contains {@code signature}. */
   private static String methodNamed(final String source, final String signature) {
     final var start = source.indexOf(signature);
-    if (start < 0) {
-      throw new AssertionError("no method " + signature.trim() + " in\n" + source);
-    }
+    if (start < 0) throw new AssertionError("no method " + signature.trim() + " in\n" + source);
     return source.substring(start, source.indexOf("\n  }\n", start));
   }
 

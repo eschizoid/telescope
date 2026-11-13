@@ -321,9 +321,7 @@ public record Reflective(
     }
     final var componentNames = names(cls);
     final var nameIndex = indexMap(componentNames);
-    if (holderConstructor != null) {
-      return arr -> (T) holderConstructor.apply(i -> arr[nameIndex.get(i)]);
-    }
+    if (holderConstructor != null) return arr -> (T) holderConstructor.apply(i -> arr[nameIndex.get(i)]);
     return arr -> cls.cast(construct(cls, i -> arr[nameIndex.get(i)]));
   }
 

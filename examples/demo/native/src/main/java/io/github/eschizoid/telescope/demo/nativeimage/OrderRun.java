@@ -71,9 +71,7 @@ public final class OrderRun {
       System.out.println(
         (result.passed() ? "PASS  " : "FAIL  ") + result.step() + (result.passed() ? "" : "  — " + result.detail())
       );
-      if (!result.passed()) {
-        failures++;
-      }
+      if (!result.passed()) failures++;
     }
     System.out.println();
     System.out.println(
@@ -462,9 +460,7 @@ public final class OrderRun {
   }
 
   private static void expect(final boolean condition, final String message) {
-    if (!condition) {
-      throw new AssertionError(message);
-    }
+    if (!condition) throw new AssertionError(message);
   }
 
   private static Result step(final String step, final Runnable body) {

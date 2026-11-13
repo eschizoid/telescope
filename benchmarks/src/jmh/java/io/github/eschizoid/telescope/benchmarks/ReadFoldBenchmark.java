@@ -92,9 +92,7 @@ public class ReadFoldBenchmark {
   public List<String> toListHand() {
     final var out = new ArrayList<String>();
     for (final var team : org.teams()) {
-      for (final var user : team.users()) {
-        out.add(user.email());
-      }
+      for (final var user : team.users()) out.add(user.email());
     }
     return List.copyOf(out);
   }
@@ -122,9 +120,7 @@ public class ReadFoldBenchmark {
   @Benchmark
   public long countAbsoluteFloor() {
     var n = 0L;
-    for (final var team : org.teams()) {
-      n += team.users().size();
-    }
+    for (final var team : org.teams()) n += team.users().size();
     return n;
   }
 
@@ -159,9 +155,7 @@ public class ReadFoldBenchmark {
   @Benchmark
   public String readHand() {
     for (final var team : org.teams()) {
-      for (final var user : team.users()) {
-        return user.email();
-      }
+      for (final var user : team.users()) return user.email();
     }
     throw new IllegalStateException("fixture has no users");
   }

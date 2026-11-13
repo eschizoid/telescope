@@ -51,9 +51,7 @@ public interface ProxyClasses {
 
     /** The class {@code value} stands for under {@code registered}, which may be null. */
     static Class<?> classOf(final Object value, final ProxyClasses registered) {
-      if (registered == null) {
-        return value.getClass();
-      }
+      if (registered == null) return value.getClass();
       final var resolved = registered.resolve(value);
       return resolved != null ? resolved : value.getClass();
     }
@@ -76,13 +74,9 @@ public interface ProxyClasses {
       // Bounded, so a loader that failed on the same registration again could not spin forever.
       for (var attempts = 0; attempts < MAX_REGISTRATIONS; attempts++) {
         try {
-          if (!registrations.hasNext()) {
-            return null;
-          }
+          if (!registrations.hasNext()) return null;
           final var implementation = registrations.next();
-          if (implementation.active()) {
-            return implementation;
-          }
+          if (implementation.active()) return implementation;
         } catch (final ServiceConfigurationError unloadable) {
           // Passed over and reported; the iterator has already moved past the registration it
           // failed on.

@@ -22,9 +22,7 @@ public final class SampleData {
   private SampleData() {}
 
   public static void load(final OrderDesk desk, final Orders orders) {
-    if (orders.customerByEmail(ADA).isPresent()) {
-      return;
-    }
+    if (orders.customerByEmail(ADA).isPresent()) return;
     orders.saveCustomer(new Customer("Ada Lovelace", ADA));
     orders.saveCustomer(new Customer("Grace Hopper", GRACE));
 

@@ -150,9 +150,7 @@ class TelescopeMapperBeanEmissionTest {
   private static Map<String, String> generate(final List<String> options, final List<JavaFileObject>... groups) {
     final var sources = new ArrayList<JavaFileObject>(MODELS);
     sources.addAll(BLUEPRINTS);
-    for (final var group : groups) {
-      sources.addAll(group);
-    }
+    for (final var group : groups) sources.addAll(group);
     final var result = ProcessorHarness.compile(
       List.of(new TelescopeMapperProcessor(), new BridgeProcessor()),
       options,

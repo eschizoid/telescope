@@ -61,9 +61,7 @@ class CollectionWritesTest {
       for (final var field : List.of("strings", "integers", "numbers", "raw", "map", "sortedMap")) {
         assertTrue(WRITES.refilledInPlace(declared(field)), field);
       }
-      for (final var field : List.of("optional", "text")) {
-        assertFalse(WRITES.refilledInPlace(declared(field)), field);
-      }
+      for (final var field : List.of("optional", "text")) assertFalse(WRITES.refilledInPlace(declared(field)), field);
     }
 
     @Test

@@ -677,9 +677,7 @@ public class Mapper<A, B> {
       if (entry.getValue().sourceField() == null) continue;
       if (patched == null) patched = new HashMap<>();
       patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
-      if (sent != null) {
-        sent.add(entry.getValue().sourceField());
-      }
+      if (sent != null) sent.add(entry.getValue().sourceField());
     }
     final var overlay = patched;
     Object rebuilt =
@@ -750,15 +748,11 @@ public class Mapper<A, B> {
     if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("patchInto()"));
     if (cases != null) {
       final var entry = caseOfSource(target);
-      if (!entry.targetCase().isInstance(partial)) {
-        return target;
-      }
+      if (!entry.targetCase().isInstance(partial)) return target;
       return (A) ((Mapper<Object, Object>) entry.mapper()).patchInto(target, partial);
     }
     refusePatchIntoRecord(target.getClass());
-    if (partial == null) {
-      return target;
-    }
+    if (partial == null) return target;
     for (final var entry : patchByTargetField.values()) {
       if (entry.overlay() != null) {
         throw new UnsupportedOperationException(PairingMessages.patchIntoThroughPath(sourceClass.getSimpleName()));
@@ -769,17 +763,13 @@ public class Mapper<A, B> {
       // take
       // a value instead, is written here through the setters of its own class, from the bridge's
       // overlay, as into writes one.
-      if (target.getClass() == sourceClass) {
-        return bridged.fn().patchInto(target, partial);
-      }
+      if (target.getClass() == sourceClass) return bridged.fn().patchInto(target, partial);
       final var names = bridged.fn().patchIntoProperties();
       final var flags = new boolean[names.size()];
       final var produced = bridged.fn().overlaid(target, partial, flags);
       final var sent = new LinkedHashSet<String>();
       for (var i = 0; i < flags.length; i++) {
-        if (flags[i]) {
-          sent.add(names.get(i));
-        }
+        if (flags[i]) sent.add(names.get(i));
       }
       writeSent(target, sent, produced, null);
       return target;
@@ -815,9 +805,7 @@ public class Mapper<A, B> {
   /** The bound writers of {@link #patchInto} for a target of {@code writeClass}. */
   private PatchIntoPlan patchIntoPlan(final Class<?> writeClass) {
     final var known = patchIntoPlan;
-    if (known != null && known.writeClass() == writeClass) {
-      return known;
-    }
+    if (known != null && known.writeClass() == writeClass) return known;
     final var plan = new PatchIntoPlan(writeClass, patchIntoAdders(writeClass), new ConcurrentHashMap<>());
     patchIntoPlan = plan;
     return plan;
@@ -834,9 +822,7 @@ public class Mapper<A, B> {
     final Object produced,
     final Map<String, Object> deferred
   ) {
-    if (sent.isEmpty()) {
-      return;
-    }
+    if (sent.isEmpty()) return;
     final var writeClass = Beans.persistentClassOf(target);
     final var plan = patchIntoPlan(writeClass);
     final var adders = plan.adders();
@@ -1293,9 +1279,7 @@ public class Mapper<A, B> {
     final var adders = intoAdders(writeClass);
     final var built = new IntoSlot[names.size()];
     var i = 0;
-    for (final var name : names) {
-      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, adders);
-    }
+    for (final var name : names) built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, adders);
     intoPlan = new IntoPlan(readClass, writeClass, built);
     return built;
   }

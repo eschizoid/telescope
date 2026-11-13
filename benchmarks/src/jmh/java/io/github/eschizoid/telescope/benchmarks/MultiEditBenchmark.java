@@ -73,9 +73,7 @@ public class MultiEditBenchmark {
   public void setup() {
     flat = new Flat("Alpha", "Beta", "Gamma", "Delta", 41, 7);
     final var users = new ArrayList<User>(100);
-    for (var i = 0; i < 100; i++) {
-      users.add(new User(" Name" + i + " ", "USER" + i + "@ACME.COM", i));
-    }
+    for (var i = 0; i < 100; i++) users.add(new User(" Name" + i + " ", "USER" + i + "@ACME.COM", i));
     org = new Org("org", List.copyOf(users));
 
     final var fa = Telescope.of(Flat.class).field(Flat::a);
@@ -99,9 +97,7 @@ public class MultiEditBenchmark {
 
     focusFlat = new BenchFusionFlat("Alpha", "Beta", "Gamma", "Delta", 41, 7);
     final var focusUsers = new ArrayList<BenchFusionUser>(100);
-    for (var i = 0; i < 100; i++) {
-      focusUsers.add(new BenchFusionUser(" Name" + i + " ", "USER" + i + "@ACME.COM", i));
-    }
+    for (var i = 0; i < 100; i++) focusUsers.add(new BenchFusionUser(" Name" + i + " ", "USER" + i + "@ACME.COM", i));
     focusOrg = new BenchFusionOrg("org", List.copyOf(focusUsers));
 
     navigatorFlat4 = Telescope.all(
@@ -197,9 +193,7 @@ public class MultiEditBenchmark {
   public Org handFusedTree3() {
     final var users = org.users();
     final var out = new ArrayList<User>(users.size());
-    for (final var u : users) {
-      out.add(new User(u.name().trim(), u.email().toLowerCase(), u.age() + 1));
-    }
+    for (final var u : users) out.add(new User(u.name().trim(), u.email().toLowerCase(), u.age() + 1));
     return new Org(org.title(), Collections.unmodifiableList(out));
   }
 }

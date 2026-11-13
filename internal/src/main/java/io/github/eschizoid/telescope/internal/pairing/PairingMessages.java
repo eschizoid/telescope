@@ -1972,9 +1972,7 @@ public final class PairingMessages {
    */
   public static String notAValueAt(final String message, final String componentName, final String position) {
     final var name = notAValueName(componentName);
-    if (message == null || !(message.startsWith(name + "'") || message.startsWith(name + "["))) {
-      return null;
-    }
+    if (message == null || !(message.startsWith(name + "'") || message.startsWith(name + "["))) return null;
     return name + position + message.substring(name.length());
   }
 

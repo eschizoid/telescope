@@ -107,11 +107,8 @@ final class MethodInstantiation {
     final var gathered = new Gathered(variables, facts);
     if (!gather(declared, taken, Relation.TOP, gathered)) return null;
     final var parameter = parameterVariable(member);
-    if (parameter >= 0) {
-      facts.get(parameter).lower.add(boxed(argument));
-    } else if (!argumentMeetsParameter(member, argument, gathered)) {
-      return null;
-    }
+    if (parameter >= 0) facts.get(parameter).lower.add(boxed(argument));
+    else if (!argumentMeetsParameter(member, argument, gathered)) return null;
     if (!sharedSupertypes(gathered)) return null;
     final var solved = new TypeMirror[variables.size()];
     for (int i = 0; i < variables.size(); i++) {

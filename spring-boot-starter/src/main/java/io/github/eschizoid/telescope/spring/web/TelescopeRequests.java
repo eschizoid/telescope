@@ -116,11 +116,8 @@ final class TelescopeRequests implements SmartInitializingSingleton {
 
       final var target = shape.source();
       final Function<Object, Object> element;
-      if (hasUsing) {
-        element = mappers.using(using, wire, "the body is read as", target, "the parameter is");
-      } else {
-        element = mappers.forPair(wire, target, ANNOTATION);
-      }
+      if (hasUsing) element = mappers.using(using, wire, "the body is read as", target, "the parameter is");
+      else element = mappers.forPair(wire, target, ANNOTATION);
       final Type wireType = holder ? wire : shape.mappedType(wire);
       final var view = new WireParameter(parameter, wireType, ResolvableType.forType(wireType).toClass(), required);
       view.initParameterNameDiscovery(new DefaultParameterNameDiscoverer());

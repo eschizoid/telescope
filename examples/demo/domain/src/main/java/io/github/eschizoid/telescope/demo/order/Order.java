@@ -87,9 +87,7 @@ public class Order implements OrderMappings {
 
   /** Adds a tag, once: a tag the order already has is not added again. */
   public void addTag(final String tag) {
-    if (!tags.contains(tag)) {
-      tags.add(tag);
-    }
+    if (!tags.contains(tag)) tags.add(tag);
   }
 
   public Long getId() {

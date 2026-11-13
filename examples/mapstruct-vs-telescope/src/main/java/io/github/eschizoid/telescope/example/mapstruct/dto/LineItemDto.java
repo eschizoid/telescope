@@ -41,12 +41,8 @@ public final class LineItemDto {
 
   @Override
   public boolean equals(final Object other) {
-    if (this == other) {
-      return true;
-    }
-    if (!(other instanceof LineItemDto that)) {
-      return false;
-    }
+    if (this == other) return true;
+    if (!(other instanceof LineItemDto that)) return false;
     return quantity == that.quantity && Objects.equals(sku, that.sku) && Objects.equals(price, that.price);
   }
 

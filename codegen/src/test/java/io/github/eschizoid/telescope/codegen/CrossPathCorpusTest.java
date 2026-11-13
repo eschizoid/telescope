@@ -15577,9 +15577,7 @@ class CrossPathCorpusTest {
       }
       final var runtime =
         row.runtime() == null ? "a mapper" : "java.lang.IllegalStateException: " + row.runtime().formatted(prefix);
-      if (!runtime.equals(built)) {
-        failures.add(row.name() + ": the runtime owed '" + runtime + "', saw " + built);
-      }
+      if (!runtime.equals(built)) failures.add(row.name() + ": the runtime owed '" + runtime + "', saw " + built);
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
@@ -17218,9 +17216,7 @@ class CrossPathCorpusTest {
         Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
       )) {
         final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
-        if (!gave.equals(owed)) {
-          failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
-        }
+        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
@@ -17464,9 +17460,7 @@ class CrossPathCorpusTest {
         Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
       )) {
         final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
-        if (!gave.equals(owed)) {
-          failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
-        }
+        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));

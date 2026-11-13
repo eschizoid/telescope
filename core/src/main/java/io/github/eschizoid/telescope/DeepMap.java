@@ -1026,9 +1026,7 @@ public final class DeepMap {
         return null;
       }
       final var cases = new ArrayList<PairWalk.Pair<Type>>();
-      for (final var pair : pairs) {
-        cases.add(new PairWalk.Pair<>(pair.source, pair.target));
-      }
+      for (final var pair : pairs) cases.add(new PairWalk.Pair<>(pair.source, pair.target));
       return cases;
     }
   }
@@ -1298,9 +1296,7 @@ public final class DeepMap {
       final var first = hops.get(step);
       final var owner = first.owner();
       if (owner != null) {
-        if (owner.isAssignableFrom(topSource)) {
-          return new SourceRoot(kept.rootedAt((Class<Object>) topSource), null);
-        }
+        if (owner.isAssignableFrom(topSource)) return new SourceRoot(kept.rootedAt((Class<Object>) topSource), null);
         if (owner.isInterface() && mayBeInstance(topSource, owner)) return givenOnly(kept, owner, row, source, target);
         throw new IllegalArgumentException(
           PairingMessages.sourceRowOffSource(source, target, row, owner.getSimpleName(), first.component())
@@ -1470,9 +1466,7 @@ public final class DeepMap {
     if (srcCls == null || tgtCls == null) return;
     final var pairs = sealedCases.decided(new TypePair(srcCls, tgtCls));
     if (pairs == null) return;
-    for (final var pair : pairs) {
-      out.add(new OpticNode.Dispatched(path, pair.source, pair.target));
-    }
+    for (final var pair : pairs) out.add(new OpticNode.Dispatched(path, pair.source, pair.target));
   }
 
   /**
@@ -2733,18 +2727,12 @@ public final class DeepMap {
     //       own allocator, an interface as the default implementation the shared allocation table
     //       names for its family. The element-type, kind-discriminator and allocability gates live
     //       on the shared spec; the decision only fires when the copy is buildable.
-    if (decision instanceof PairDecision.CollectionCopy) {
-      return ContainerLifts.collectionCopyIso(srcType, tgtType);
-    }
-    if (decision instanceof PairDecision.MapCopy) {
-      return ContainerLifts.mapCopyIso(srcType, tgtType);
-    }
+    if (decision instanceof PairDecision.CollectionCopy) return ContainerLifts.collectionCopyIso(srcType, tgtType);
+    if (decision instanceof PairDecision.MapCopy) return ContainerLifts.mapCopyIso(srcType, tgtType);
 
     // (a.1b) Two different enums whose constants line up by name in every direction this mapper
     //        converts → constant to constant by name, null to null.
-    if (decision instanceof PairDecision.EnumByName) {
-      return enumByNameIso((Class<?>) srcType, (Class<?>) tgtType);
-    }
+    if (decision instanceof PairDecision.EnumByName) return enumByNameIso((Class<?>) srcType, (Class<?>) tgtType);
 
     // (a.1c) Two different scalars a built-in conversion takes between → parse, write as text, or
     //        widen, each direction the JDK call the generated bridge makes for the pair.

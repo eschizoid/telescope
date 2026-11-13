@@ -359,9 +359,7 @@ class DocCitationsResolveTest {
 
   private static Path repoRoot() {
     var dir = Path.of("").toAbsolutePath();
-    while (dir != null && !Files.exists(dir.resolve("settings.gradle.kts"))) {
-      dir = dir.getParent();
-    }
+    while (dir != null && !Files.exists(dir.resolve("settings.gradle.kts"))) dir = dir.getParent();
     if (dir == null) throw new IllegalStateException("no settings.gradle.kts above " + Path.of("").toAbsolutePath());
     return dir;
   }

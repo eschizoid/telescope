@@ -338,9 +338,7 @@ public final class ReflectionProps implements PropertySystem<Type> {
     bind(type, bindings);
     for (final var parent : cls.getGenericInterfaces()) {
       final var resolved = substitute(parent, bindings);
-      if (rawType(resolved) instanceof Class<?> c && target.isAssignableFrom(c)) {
-        return argumentsAs(resolved, target);
-      }
+      if (rawType(resolved) instanceof Class<?> c && target.isAssignableFrom(c)) return argumentsAs(resolved, target);
     }
     final var parent = cls.getGenericSuperclass();
     return parent == null ? List.of() : argumentsAs(substitute(parent, bindings), target);

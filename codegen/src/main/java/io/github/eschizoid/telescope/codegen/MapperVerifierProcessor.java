@@ -1246,9 +1246,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         all.add(sharedRow);
         final var oneHop = keyed.kind() == PairWalk.RowKind.PATH && readsOneSourceProperty(row, rowExec);
         if (oneHop) oneHopReads.add(sharedRow);
-        if (keyed.kind() == PairWalk.RowKind.PATH && !writesOneTargetProperty(row, tgtEl)) {
-          callPathWritesKnown = false;
-        }
+        if (keyed.kind() == PairWalk.RowKind.PATH && !writesOneTargetProperty(row, tgtEl)) callPathWritesKnown = false;
         if (
           keyed.kind() == PairWalk.RowKind.PATH &&
           keyed.sourceMethod() == null &&
@@ -2242,21 +2240,15 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final boolean forwardOnly
     ) {
       final var using = classLiteral(named);
-      if (using == null || !(types.asElement(using) instanceof TypeElement mapper)) {
-        return;
-      }
+      if (using == null || !(types.asElement(using) instanceof TypeElement mapper)) return;
       final var srcView = rules.containerViewOf(src.type());
       final var tgtView = rules.containerViewOf(tgt.type());
       final var srcShape = rules.settledAgainst(srcView, tgtView);
       final var tgtShape = rules.settledAgainst(tgtView, srcView);
-      if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
-        return;
-      }
+      if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) return;
       final var forwards = viaParameters(mapper, "forward");
       final var backwards = viaParameters(mapper, "backward");
-      if (forwards == null || backwards == null) {
-        return;
-      }
+      if (forwards == null || backwards == null) return;
       final var source = src.owner().getSimpleName().toString();
       final var target = tgt.owner().getSimpleName().toString();
       final var forward = rules.viaNeverFitsRefusal(
@@ -2283,9 +2275,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         !forwardOnly,
         this::boxedName
       );
-      if (backward != null) {
-        report(row, backward);
-      }
+      if (backward != null) report(row, backward);
     }
 
     /**
@@ -2298,23 +2288,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var hidden = new ArrayList<TypeMirror>();
       for (var type = mapper; type != null && !type.getQualifiedName().contentEquals(OBJECT_FQN); ) {
         for (final var method : ElementFilter.methodsIn(type.getEnclosedElements())) {
-          if (!method.getSimpleName().contentEquals(name) || method.getParameters().size() != 1) {
-            continue;
-          }
-          if (!method.getModifiers().contains(Modifier.STATIC)) {
-            continue;
-          }
+          if (!method.getSimpleName().contentEquals(name) || method.getParameters().size() != 1) continue;
+          if (!method.getModifiers().contains(Modifier.STATIC)) continue;
           final var parameter = types.erasure(method.getParameters().getFirst().asType());
-          if (hidden.stream().anyMatch(h -> types.isSameType(h, parameter))) {
-            continue;
-          }
+          if (hidden.stream().anyMatch(h -> types.isSameType(h, parameter))) continue;
           hidden.add(parameter);
-          if (method.getModifiers().contains(Modifier.PRIVATE)) {
-            continue;
-          }
-          if (!method.getModifiers().contains(Modifier.PUBLIC)) {
-            return null;
-          }
+          if (method.getModifiers().contains(Modifier.PRIVATE)) continue;
+          if (!method.getModifiers().contains(Modifier.PUBLIC)) return null;
           found.add(method.getParameters().getFirst().asType());
         }
         type = types.asElement(type.getSuperclass()) instanceof TypeElement superclass ? superclass : null;
@@ -2423,9 +2403,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           }
           if (src == null || tgt == null) return false;
-          if ("via".equals(rowName) && rowArgs.size() == 3) {
-            verifyViaClass(row, rowArgs.get(2), src, tgt, forwardOnly);
-          }
+          if ("via".equals(rowName) && rowArgs.size() == 3) verifyViaClass(row, rowArgs.get(2), src, tgt, forwardOnly);
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
           // here; nested-keyed rows are still shape-checked against their own types below. Both
@@ -2508,9 +2486,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var tgt = accessorProp(arg);
           if (tgt != null) verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
           else verifyTargetPath(row, rowName, arg, tgtType, srcSimple, tgtSimple);
-          if ("compute".equals(rowName)) {
-            verifyComputeReference(rowExec, rowArgs.get(1), tgt, srcType, tgtType);
-          }
+          if ("compute".equals(rowName)) verifyComputeReference(rowExec, rowArgs.get(1), tgt, srcType, tgtType);
           return true;
         }
         case "zip" -> {
@@ -2564,9 +2540,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         return;
       }
       final var binaryName = elements.getBinaryName(targetEl).toString();
-      if (!hintTargets.add(binaryName)) {
-        report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
-      }
+      if (!hintTargets.add(binaryName)) report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
       if (
         row.getArguments().size() == 2 &&
         elementAt(row.getArguments().get(1)) instanceof VariableElement constant &&

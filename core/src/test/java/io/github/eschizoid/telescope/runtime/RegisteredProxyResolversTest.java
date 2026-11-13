@@ -67,9 +67,7 @@ class RegisteredProxyResolversTest {
    */
   private static Iterator<ProxyResolver> registrations(final ProxyResolver... entries) {
     final var queue = new ArrayList<ProxyResolver>();
-    for (final var entry : entries) {
-      queue.add(entry);
-    }
+    for (final var entry : entries) queue.add(entry);
     return new Iterator<>() {
       @Override
       public boolean hasNext() {
@@ -79,9 +77,7 @@ class RegisteredProxyResolversTest {
       @Override
       public ProxyResolver next() {
         final var entry = queue.removeFirst();
-        if (entry == null) {
-          throw new ServiceConfigurationError("BrokenResolver could not be instantiated");
-        }
+        if (entry == null) throw new ServiceConfigurationError("BrokenResolver could not be instantiated");
         return entry;
       }
     };
