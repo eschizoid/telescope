@@ -32,7 +32,7 @@ dependencies {
     api("jakarta.persistence:jakarta.persistence-api:3.2.0")
     // Each app brings its own Jackson; the domain needs only the annotations that name the payment
     // cases on the wire.
-    compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.20")
+    compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.23")
     annotationProcessor(project(":codegen"))
 
     testImplementation(platform(libs.junitBom))
@@ -42,5 +42,5 @@ dependencies {
     // The verifier test compiles a broken mapper against these classes with the processor.
     testImplementation(project(":codegen"))
     testImplementation(testFixtures(project(":codegen")))
-    testCompileOnly("com.fasterxml.jackson.core:jackson-annotations:2.20")
+    testCompileOnly("com.fasterxml.jackson.core:jackson-annotations:2.23")
 }
