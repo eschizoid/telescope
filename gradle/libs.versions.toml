@@ -14,7 +14,7 @@ lombok = "1.18.48"
 jakartaPersistence = "3.2.0"
 hibernate = "7.4.13.Final"
 h2 = "2.4.240"
-jackson = "3.1.7"
+jackson = "3.3.0"
 
 [libraries]
 junitBom = { module = "org.junit:junit-bom", version.ref = "junit" }
