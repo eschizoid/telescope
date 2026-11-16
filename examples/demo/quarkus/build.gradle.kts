@@ -1,6 +1,6 @@
 plugins {
     java
-    id("io.quarkus") version "3.40.1"
+    id("io.quarkus") version "3.40.1.2"
 }
 
 description = "telescope demo — the order service on Quarkus 3, through the Quarkus starter"
@@ -20,7 +20,7 @@ repositories {
 }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.40.1.1"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.40.1.2"))
     implementation(project(":examples:demo:domain"))
     implementation(project(":quarkus"))
     // Writes the @TelescopeMapper and @TelescopeTransformer interfaces as CDI beans.
