@@ -31,8 +31,9 @@ import java.util.regex.Pattern;
  * and the tables of types taken by a cast or built from a {@code String} live here once, so where
  * both models report the same facts about a type, both paths classify it as the same kind.
  *
- * <p>What each kind does to a value is written once per path, since generated code cannot call into
- * this module; the cross-path tests hold the two renderings to the same results.
+ * <p>What each kind does to a value is decided once too, by {@link MapValueConversions}: the
+ * runtime calls it directly, and the generated binder through core's public {@code FromMapValues},
+ * since generated code cannot read this module.
  */
 public final class MapValueTypes {
 
@@ -128,14 +129,13 @@ public final class MapValueTypes {
   }
 
   /**
-   * How a JDK value type is rebuilt from the {@code String} form it arrives in.
+   * How a JDK value type is rebuilt from the {@code String} form it arrives in. A text the type
+   * does not read is refused by an exception, never read as some other value.
    *
    * @param type the value type
-   * @param factory the static method taking that {@code String}, or {@code null} for the type's
-   *     {@code String} constructor
-   * @param build the same conversion, for the runtime
+   * @param build the conversion
    */
-  public record StringBuilt(Class<?> type, String factory, Function<String, Object> build) {}
+  public record StringBuilt(Class<?> type, Function<String, Object> build) {}
 
   private static final Map<String, String> WRAPPERS = Map.of(
     "java.lang.Integer",
@@ -159,21 +159,21 @@ public final class MapValueTypes {
   private static final Set<String> CAST = Set.of("java.lang.String", "java.lang.CharSequence");
 
   private static final Map<String, StringBuilt> STRING_BUILT = table(
-    new StringBuilt(Instant.class, "parse", Instant::parse),
-    new StringBuilt(LocalDate.class, "parse", LocalDate::parse),
-    new StringBuilt(LocalDateTime.class, "parse", LocalDateTime::parse),
-    new StringBuilt(LocalTime.class, "parse", LocalTime::parse),
-    new StringBuilt(OffsetDateTime.class, "parse", OffsetDateTime::parse),
-    new StringBuilt(ZonedDateTime.class, "parse", ZonedDateTime::parse),
-    new StringBuilt(Duration.class, "parse", Duration::parse),
-    new StringBuilt(Period.class, "parse", Period::parse),
-    new StringBuilt(UUID.class, "fromString", UUID::fromString),
-    new StringBuilt(BigDecimal.class, null, BigDecimal::new),
-    new StringBuilt(BigInteger.class, null, BigInteger::new),
-    new StringBuilt(URI.class, "create", URI::create),
-    new StringBuilt(Currency.class, "getInstance", Currency::getInstance),
-    new StringBuilt(Locale.class, "forLanguageTag", Locale::forLanguageTag),
-    new StringBuilt(Pattern.class, "compile", Pattern::compile)
+    new StringBuilt(Instant.class, Instant::parse),
+    new StringBuilt(LocalDate.class, LocalDate::parse),
+    new StringBuilt(LocalDateTime.class, LocalDateTime::parse),
+    new StringBuilt(LocalTime.class, LocalTime::parse),
+    new StringBuilt(OffsetDateTime.class, OffsetDateTime::parse),
+    new StringBuilt(ZonedDateTime.class, ZonedDateTime::parse),
+    new StringBuilt(Duration.class, Duration::parse),
+    new StringBuilt(Period.class, Period::parse),
+    new StringBuilt(UUID.class, UUID::fromString),
+    new StringBuilt(BigDecimal.class, BigDecimal::new),
+    new StringBuilt(BigInteger.class, BigInteger::new),
+    new StringBuilt(URI.class, URI::create),
+    new StringBuilt(Currency.class, Currency::getInstance),
+    new StringBuilt(Locale.class, MapValueTypes::languageTag),
+    new StringBuilt(Pattern.class, Pattern::compile)
   );
 
   private MapValueTypes() {}
@@ -212,6 +212,15 @@ public final class MapValueTypes {
   /** Whether a class of this qualified name belongs to the JDK, and so carries no binder. */
   public static boolean isJdk(final String qualifiedName) {
     return qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.");
+  }
+
+  /**
+   * The locale a well-formed language tag names. {@link Locale#forLanguageTag} reads a tag that is
+   * not well formed, such as {@code "::bad::"} or {@code "en_US"}, as the empty locale, which would
+   * lose the value, so the stricter builder reads it and refuses one it cannot.
+   */
+  private static Locale languageTag(final String tag) {
+    return new Locale.Builder().setLanguageTag(tag).build();
   }
 
   private static Classified of(final Kind kind) {

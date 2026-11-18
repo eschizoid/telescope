@@ -42,11 +42,13 @@ import java.lang.annotation.Target;
  * same map, or refuse it with a message worded the same way after its own prefix. A nested field of
  * a {@code @FromMap} type is built there by this generated binder.
  *
- * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
- * container field yields an empty collection, a {@code Boolean} is taken as is and otherwise only
- * {@code "true"} in any case is truthy for a boolean, a multi-character String for a {@code char}
- * takes the first character, and a non-numeric String for a numeric field throws {@code
- * NumberFormatException}.
+ * <p>A value is converted without loss or refused, by the conversions the runtime {@code fromMap}
+ * applies: a number goes into an integral field only when it is whole and in range, text is parsed
+ * by the type's own parse, a boolean is a {@code Boolean} or {@code true} or {@code false} in any
+ * case, a {@code char} is a {@code Character} or text one character long, a container field takes a
+ * container of its shape, and a {@code Locale} a well-formed language tag. A value refused throws
+ * an {@link IllegalArgumentException} naming where it is and what it holds: {@code
+ * 'lines[1].quantity' got 1.5, not an int}.
  *
  * <pre>{@code
  * @FromMap

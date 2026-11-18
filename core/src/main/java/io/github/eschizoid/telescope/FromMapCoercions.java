@@ -1,16 +1,14 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.FromMapProvider;
+import io.github.eschizoid.telescope.internal.pairing.MapValueConversions;
 import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,9 +23,9 @@ import java.util.function.Supplier;
 /**
  * How a {@code fromMap} component no row names is filled from the map value under its own name: the
  * conversion for its declared type, or why that type has none. Which kind of conversion a type gets
- * is decided by {@link MapValueTypes#classify}, which the {@code @FromMap} processor calls too;
- * this class renders each kind as a function that behaves as the expression the processor writes
- * for it.
+ * is decided by {@link MapValueTypes#classify}, which the {@code @FromMap} processor calls too, and
+ * what each kind does to a value by {@link MapValueConversions}, which the generated binder calls
+ * through {@code FromMapValues}; this class puts the two together as a function per type.
  *
  * <p>A type with no conversion is refused while the mapper is built, as the processor refuses it.
  */
@@ -161,11 +159,13 @@ final class FromMapCoercions {
         final var valueBuild = ((Converts) value).build();
         yield new Converts(() -> mapOf(keyBuild.get(), valueBuild.get()));
       }
-      case CAST -> Converts.to(raw == String.class ? v -> (String) v : v -> (CharSequence) v);
-      case AS_IS -> Converts.to(Function.identity());
-      case STRING_BUILT -> Converts.to(
-        stringBuilt(raw, MapValueTypes.stringBuilt(raw.getName()).orElseThrow().build())
+      case CAST -> Converts.to(
+        raw == String.class
+          ? v -> MapValueConversions.toText(v, null)
+          : v -> MapValueConversions.toCharSequence(v, null)
       );
+      case AS_IS -> Converts.to(Function.identity());
+      case STRING_BUILT -> Converts.to(v -> MapValueConversions.toValue(v, raw, null));
       case COLLECTION_SUBTYPE -> new Refused(
         raw.getName() + " is a collection subtype; declare it as List/Set/Map/Optional, or " + ROW
       );
@@ -195,105 +195,57 @@ final class FromMapCoercions {
   }
 
   /**
-   * A primitive or its wrapper. A {@code Number} is narrowed as a Java cast narrows it, a {@code
-   * Boolean} or {@code Character} taken as itself, and anything else read from its {@code String}
-   * form: {@code "true"} in any case is the only truthy string, and a character is the first of a
-   * non-empty string. A null value is the primitive's default, or null for a wrapper.
+   * A primitive or its wrapper, converted as {@link MapValueConversions} converts it. A null value
+   * is the primitive's default, or null for a wrapper.
    */
   private static Function<Object, Object> scalar(final String primitive, final boolean unboxed) {
     return switch (primitive) {
-      case "int" -> number(Number::intValue, Integer::parseInt, unboxed ? 0 : null);
-      case "long" -> number(Number::longValue, Long::parseLong, unboxed ? 0L : null);
-      case "double" -> number(Number::doubleValue, Double::parseDouble, unboxed ? 0.0d : null);
-      case "float" -> number(Number::floatValue, Float::parseFloat, unboxed ? 0.0f : null);
-      case "short" -> number(Number::shortValue, Short::parseShort, unboxed ? (short) 0 : null);
-      case "byte" -> number(Number::byteValue, Byte::parseByte, unboxed ? (byte) 0 : null);
-      case "boolean" -> {
-        final Object absent = unboxed ? Boolean.FALSE : null;
-        yield raw -> raw instanceof Boolean b ? b : raw == null ? absent : Boolean.parseBoolean(String.valueOf(raw));
-      }
-      case "char" -> {
-        final Object absent = unboxed ? '\0' : null;
-        yield raw -> {
-          if (raw instanceof Character c) return c;
-          if (raw == null) return absent;
-          final var text = String.valueOf(raw);
-          return text.isEmpty() ? absent : text.charAt(0);
-        };
-      }
+      case "int" -> absentOr(unboxed ? 0 : null, raw -> MapValueConversions.toInt(raw, unboxed, null));
+      case "long" -> absentOr(unboxed ? 0L : null, raw -> MapValueConversions.toLong(raw, unboxed, null));
+      case "double" -> absentOr(unboxed ? 0.0d : null, raw -> MapValueConversions.toDouble(raw, unboxed, null));
+      case "float" -> absentOr(unboxed ? 0.0f : null, raw -> MapValueConversions.toFloat(raw, unboxed, null));
+      case "short" -> absentOr(unboxed ? (short) 0 : null, raw -> MapValueConversions.toShort(raw, unboxed, null));
+      case "byte" -> absentOr(unboxed ? (byte) 0 : null, raw -> MapValueConversions.toByte(raw, unboxed, null));
+      case "boolean" -> absentOr(unboxed ? false : null, raw -> MapValueConversions.toBoolean(raw, unboxed, null));
+      case "char" -> absentOr(unboxed ? '\0' : null, raw -> MapValueConversions.toChar(raw, unboxed, null));
       default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
   }
 
-  private static Function<Object, Object> number(
-    final Function<Number, Object> narrow,
-    final Function<String, Object> parse,
-    final Object absent
-  ) {
-    return raw -> raw instanceof Number n ? narrow.apply(n) : raw == null ? absent : parse.apply(String.valueOf(raw));
+  /** {@code absent} for a null value, and the conversion of any other. */
+  private static Function<Object, Object> absentOr(final Object absent, final Function<Object, Object> convert) {
+    return raw -> raw == null ? absent : convert.apply(raw);
   }
 
   /** An enum constant taken as itself, or looked up by the value's {@code String} form. */
-  private static Function<Object, Object> enumOf(final Class<?> type) {
-    return raw -> type.isInstance(raw) ? raw : raw == null ? null : constant(type, String.valueOf(raw));
-  }
-
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Object constant(final Class<?> type, final String name) {
-    return Enum.valueOf((Class) type, name);
+  private static Function<Object, Object> enumOf(final Class<?> type) {
+    return raw -> MapValueConversions.toEnum(raw, (Class) type, null);
   }
 
-  /** A JDK value type taken as itself, or built from the value's {@code String} form. */
-  private static Function<Object, Object> stringBuilt(final Class<?> type, final Function<String, Object> build) {
-    return raw -> type.isInstance(raw) ? raw : raw == null ? null : build.apply(String.valueOf(raw));
-  }
-
-  /**
-   * A type with a generated binder, built by that binder from the nested map. The value must be a
-   * map; anything else fails the cast as the generated expression's cast fails.
-   */
-  @SuppressWarnings("unchecked")
+  /** A type with a generated binder, built by that binder from the nested map. */
   private static Function<Object, Object> nested(final Class<?> type) {
     final var binder = providerFor(type).binder();
-    return raw -> raw == null ? null : binder.forward((Map<String, Object>) raw);
+    final var name = type.getSimpleName();
+    return raw -> MapValueConversions.nested(raw, null, name, binder::forward);
   }
 
-  /**
-   * A {@code List} of converted elements, or an empty one for a value that is not a {@code List}.
-   */
+  /** A {@code List} of converted elements, from any collection. */
   private static Function<Object, Object> listOf(final Function<Object, Object> each) {
-    return raw -> {
-      if (!(raw instanceof List<?> src)) return List.of();
-      final var out = new ArrayList<>(src.size());
-      for (final var element : src) out.add(each.apply(element));
-      return out;
-    };
+    return raw -> MapValueConversions.toList(raw, null, each);
   }
 
-  /** A {@code Set} of converted elements, or an empty one for a value that is not a {@code Set}. */
+  /** A {@code Set} of converted elements, from any collection. */
   private static Function<Object, Object> setOf(final Function<Object, Object> each) {
-    return raw -> {
-      if (!(raw instanceof Set<?> src)) return Set.of();
-      final var out = LinkedHashSet.newLinkedHashSet(src.size());
-      for (final var element : src) out.add(each.apply(element));
-      return out;
-    };
+    return raw -> MapValueConversions.toSet(raw, null, each);
   }
 
-  /**
-   * A {@code Map} of converted keys and values, or an empty one for a value that is not a {@code
-   * Map}. A null value is kept rather than refused.
-   */
+  /** A {@code Map} of converted keys and values, from any map. A null value is kept. */
   private static Function<Object, Object> mapOf(
     final Function<Object, Object> eachKey,
     final Function<Object, Object> eachValue
   ) {
-    return raw -> {
-      if (!(raw instanceof Map<?, ?> src)) return Map.of();
-      final var out = LinkedHashMap.newLinkedHashMap(src.size());
-      for (final var entry : src.entrySet()) out.put(eachKey.apply(entry.getKey()), eachValue.apply(entry.getValue()));
-      return out;
-    };
+    return raw -> MapValueConversions.toMap(raw, null, eachKey, eachValue);
   }
 
   /**

@@ -5,10 +5,12 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
+import io.github.eschizoid.telescope.internal.pairing.MapValueConversions;
 import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.Scalar;
+import io.github.eschizoid.telescope.internal.pairing.ValueRefused;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import io.github.eschizoid.telescope.mapping.Require;
@@ -37,7 +39,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
-import tools.jackson.core.exc.InputCoercionException;
 
 /**
  * Builds the frames a {@link JsonBinder} reads with, once, when the binder is built. Every property
@@ -46,10 +47,13 @@ import tools.jackson.core.exc.InputCoercionException;
  *
  * <p>Which kind of reading a declared type gets is decided by {@link MapValueTypes#classify}, the
  * rule {@code fromMap} and the {@code @FromMap} binder use, so the three readers accept the same
- * types. A record or a bean the binder can build is read as a nested object by its own frame. The
- * JSON readings are stricter than the map conversions in one way: a value is taken only from the
- * JSON kind its type is written as. A number is never read from text, text never from a number, and
- * an integral property never from a fraction or from an integer past its range.
+ * types. A record or a bean the binder can build is read as a nested object by its own frame. A
+ * value a JSON token carries is converted by {@link MapValueConversions}, the conversions the two
+ * map readers apply, so an integer past an integral type's range, a character that is not one, a
+ * locale tag that is not well formed or a JSON key that is no value of the map's key type is
+ * refused by the same rule. What JSON adds is its kinds: a value is taken only from the JSON kind
+ * its type is written as. A number is never read from text, text never from a number, and an
+ * integral property never from a fraction token.
  *
  * <p>The token loop is boundary machinery at the same floor as the record and bean assembly it ends
  * in: a streaming parser has no reversible, lawful decomposition into optics, so this engine builds
@@ -463,16 +467,10 @@ final class Plan {
   private static Read scalar(final String primitive, final boolean unboxed) {
     final var what = PairingMessages.scalarPhrase(SCALARS.get(primitive), unboxed, null);
     return switch (primitive) {
-      case "int" -> integral(what, JsonParser::getIntValue);
-      case "long" -> integral(what, JsonParser::getLongValue);
-      case "short" -> integral(what, JsonParser::getShortValue);
-      // jackson-core's own byte reading accepts 128 through 255 as unsigned and wraps them, so
-      // the signed range is enforced here.
-      case "byte" -> integral(what, parser -> {
-        final var value = parser.getIntValue();
-        if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) throw Refused.value(parser, what, null);
-        return (byte) value;
-      });
+      case "int" -> integral(what, number -> MapValueConversions.toInt(number, unboxed, null));
+      case "long" -> integral(what, number -> MapValueConversions.toLong(number, unboxed, null));
+      case "short" -> integral(what, number -> MapValueConversions.toShort(number, unboxed, null));
+      case "byte" -> integral(what, number -> MapValueConversions.toByte(number, unboxed, null));
       case "double" -> parser -> {
         requireNumber(parser, what);
         final var value = parser.getDoubleValue();
@@ -492,25 +490,29 @@ final class Plan {
           default -> throw Refused.value(parser, what, null);
         };
       case "char" -> parser -> {
-        if (parser.currentToken() != JsonToken.VALUE_STRING || parser.getStringLength() != 1) {
-          throw Refused.value(parser, what, null);
+        if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
+        try {
+          return MapValueConversions.toChar(parser.getString(), unboxed, null);
+        } catch (final ValueRefused refused) {
+          throw Refused.value(parser, what, refused);
         }
-        return parser.getString().charAt(0);
       };
       default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
   }
 
   /**
-   * An integral value: an integer token in the type's range. A fraction is refused rather than
-   * truncated, and an integer past the range is refused rather than wrapped.
+   * An integral value: an integer token, which jackson-core hands over as the smallest of {@code
+   * Integer}, {@code Long} and {@code BigInteger} that holds it, converted by the shared rule. A
+   * fraction is refused rather than truncated, and an integer past the range is refused rather than
+   * wrapped.
    */
-  private static Read integral(final String what, final Function<JsonParser, Object> value) {
+  private static Read integral(final String what, final Function<Number, Object> convert) {
     return parser -> {
       if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) throw Refused.value(parser, what, null);
       try {
-        return value.apply(parser);
-      } catch (final InputCoercionException outOfRange) {
+        return convert.apply(parser.getNumberValue());
+      } catch (final ValueRefused outOfRange) {
         throw Refused.value(parser, what, outOfRange);
       }
     };
@@ -671,18 +673,12 @@ final class Plan {
       }
       case ENUM -> {
         JacksonAnnotations.refuseRenamedConstants(raw);
-        final var constants = new HashMap<String, Object>();
-        for (final var constant : raw.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
         what = PairingMessages.scalarPhrase(Scalar.ENUM, false, raw.getSimpleName());
-        parse = name -> {
-          final var constant = constants.get(name);
-          if (constant == null) throw new IllegalArgumentException(name);
-          return constant;
-        };
+        parse = name -> enumConstant(raw, name);
       }
       case STRING_BUILT -> {
         what = PairingMessages.withArticle(raw.getSimpleName());
-        parse = MapValueTypes.stringBuilt(raw.getName()).orElseThrow().build();
+        parse = name -> MapValueConversions.toValue(name, raw, null);
       }
       case SCALAR -> {
         what = PairingMessages.scalarPhrase(SCALARS.get(classified.scalar()), false, null);
@@ -706,26 +702,24 @@ final class Plan {
     });
   }
 
+  /** A key of a primitive's wrapper type, read from its text by the shared rule. */
   private static Function<String, Object> keyScalar(final String primitive) {
     return switch (primitive) {
-      case "int" -> Integer::valueOf;
-      case "long" -> Long::valueOf;
-      case "short" -> Short::valueOf;
-      case "byte" -> Byte::valueOf;
-      case "double" -> Double::valueOf;
-      case "float" -> Float::valueOf;
-      case "boolean" -> name ->
-        switch (name) {
-          case "true" -> Boolean.TRUE;
-          case "false" -> Boolean.FALSE;
-          default -> throw new IllegalArgumentException(name);
-        };
-      case "char" -> name -> {
-        if (name.length() != 1) throw new IllegalArgumentException(name);
-        return name.charAt(0);
-      };
+      case "int" -> name -> MapValueConversions.toInt(name, false, null);
+      case "long" -> name -> MapValueConversions.toLong(name, false, null);
+      case "short" -> name -> MapValueConversions.toShort(name, false, null);
+      case "byte" -> name -> MapValueConversions.toByte(name, false, null);
+      case "double" -> name -> MapValueConversions.toDouble(name, false, null);
+      case "float" -> name -> MapValueConversions.toFloat(name, false, null);
+      case "boolean" -> name -> MapValueConversions.toBoolean(name, false, null);
+      case "char" -> name -> MapValueConversions.toChar(name, false, null);
       default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Object enumConstant(final Class<?> type, final String name) {
+    return MapValueConversions.toEnum(name, (Class) type, null);
   }
 
   /**

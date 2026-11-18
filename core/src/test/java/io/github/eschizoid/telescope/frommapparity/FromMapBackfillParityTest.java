@@ -77,14 +77,14 @@ class FromMapBackfillParityTest {
     m.put("s", "3");
     m.put("b", "4");
     m.put("flag", "TRUE");
-    m.put("c", "xyz");
+    m.put("c", "x");
     m.put("boxedInt", "9");
     m.put("boxedLong", "10");
     m.put("boxedDouble", "1.25");
     m.put("boxedFloat", "0.5");
     m.put("boxedShort", "5");
     m.put("boxedByte", "6");
-    m.put("boxedFlag", "yes");
+    m.put("boxedFlag", "false");
     m.put("boxedChar", "y");
     m.put("text", "t");
     m.put("chars", "cs");
@@ -95,20 +95,19 @@ class FromMapBackfillParityTest {
     return m;
   }
 
-  /** Numbers of another width, empty strings, and containers of the wrong shape. */
+  /**
+   * Numbers of another width that fit, a whole fraction, and containers of another shape that hold
+   * the same elements.
+   */
   private static Map<String, Object> mismatched() {
     final var m = new LinkedHashMap<String, Object>();
-    m.put("i", 7.9d);
+    m.put("i", 7.0d);
     m.put("l", 8);
     m.put("d", 3);
-    m.put("s", 70_000);
+    m.put("s", 300);
     m.put("boxedInt", 9L);
     m.put("boxedDouble", 2);
-    m.put("c", "");
-    m.put("boxedChar", "");
     m.put("tags", List.of("a"));
-    m.put("numbers", "nope");
-    m.put("counts", List.of());
     m.put("maybeLongs", Set.of(1));
     return m;
   }
@@ -184,9 +183,9 @@ class FromMapBackfillParityTest {
     for (final var source : List.of(
       typed,
       Map.<String, Object>of(),
-      Map.<String, Object>of("count", 3.7d),
-      Map.<String, Object>of("flag", "TRUE", "initial", "xyz"),
-      Map.<String, Object>of("flag", "no", "initial", ""),
+      Map.<String, Object>of("count", 3.0d),
+      Map.<String, Object>of("flag", "TRUE", "initial", "x"),
+      Map.<String, Object>of("flag", "False", "initial", "z"),
       Map.<String, Object>of("flag", false, "initial", 'q')
     )) {
       assertSameProperties(BackfillBeanFromMap.fromMap(source), runtime.forward(source), source);
@@ -219,14 +218,21 @@ class FromMapBackfillParityTest {
       Map.of("tone", "MIDDLE"),
       Map.of("text", 5),
       Map.of("when", "yesterday"),
-      Map.of("leaf", "Rome")
+      Map.of("leaf", "Rome"),
+      Map.of("i", 7.9d),
+      Map.of("s", 70_000),
+      Map.of("c", ""),
+      Map.of("c", "xyz"),
+      Map.of("boxedFlag", "yes"),
+      Map.of("numbers", "nope"),
+      Map.of("counts", List.of())
     )) {
       final var generated = assertThrows(RuntimeException.class, () -> BackfillRowFromMap.fromMap(source));
       final var runtime = assertThrows(RuntimeException.class, () ->
         Telescope.fromMap(BackfillRow.class).forward(source)
       );
-      // Each failure is the platform's own (a parse, an enum lookup, a cast), raised by the same
-      // call on both paths, so the message is the same too and pins which call failed.
+      // Both paths refuse through the one shared conversion, so the class and the message, which
+      // names the property and the value, are the same.
       assertEquals(generated.getClass(), runtime.getClass(), () -> "for " + source);
       assertEquals(generated.getMessage(), runtime.getMessage(), () -> "for " + source);
     }

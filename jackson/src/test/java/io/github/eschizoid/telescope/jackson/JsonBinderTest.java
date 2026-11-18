@@ -267,7 +267,7 @@ class JsonBinderTest {
     void outOfRange() {
       final var refused = refusal(() -> LINES.read("{\"quantity\":2147483648}"));
       assertEquals("'quantity' got 2147483648, not an int, at line 1, column 13", refused.getMessage());
-      assertInstanceOf(StreamReadException.class, refused.getCause());
+      assertInstanceOf(IllegalArgumentException.class, refused.getCause());
       assertEquals(
         "'b' got 128, not a byte, at line 1, column 6",
         refusal(() -> SCALARS.read("{\"b\":128}")).getMessage()

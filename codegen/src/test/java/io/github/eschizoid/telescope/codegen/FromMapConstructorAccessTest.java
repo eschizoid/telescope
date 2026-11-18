@@ -109,7 +109,9 @@ class FromMapConstructorAccessTest {
     assertTrue(compilation.success(), compilation::errorMessages);
     final var binder = compilation.generated().get("demo.BothFromMap");
     assertTrue(
-      binder.contains("return new demo.Both((java.lang.String) __m_name);"),
+      binder.contains(
+        "return new demo.Both(io.github.eschizoid.telescope.conversion.FromMapValues.toText(__m_name, \"name\"));"
+      ),
       () -> "the binder should call the constructor; saw " + binder
     );
     assertFalse(binder.contains("bean.setName("), () -> "and not the setter; saw " + binder);
@@ -138,7 +140,9 @@ class FromMapConstructorAccessTest {
 
     assertTrue(compilation.success(), compilation::errorMessages);
     final var binder = compilation.generated().get("demo.BothFromMap");
-    final var refusal = binder.indexOf("if (__m_name == null) __refuseMissing(");
+    final var refusal = binder.indexOf(
+      "if (__m_name == null) throw io.github.eschizoid.telescope.conversion.FromMapValues.missing("
+    );
     final var built = binder.indexOf("return new demo.Both(");
     assertTrue(refusal >= 0 && built > refusal, () -> "the refusal should precede the constructor call; saw " + binder);
   }

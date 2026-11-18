@@ -1341,21 +1341,29 @@ public sealed class Telescope<
    *
    * <p><b>Every component reads the map key with its own name unless a row says otherwise.</b> A
    * component no row names converts its value exactly as the binder generated for {@link
-   * io.github.eschizoid.telescope.annotations.FromMap} converts it: a {@code Number} is narrowed to
-   * a numeric component and any other value parsed from its {@code String} form, an enum is looked
-   * up by name, a JDK value type such as {@code Instant}, {@code UUID} or {@code BigDecimal} is
-   * built from its {@code String} form, a type with a generated binder is built by that binder from
-   * a nested map, and {@code List}, {@code Set}, {@code Map} and {@code Optional} convert each
-   * element the same way. A value that cannot be converted throws, as it does in the generated
-   * binder. When {@code T} has a registered generated binder (its {@code FromMapProvider} found
-   * through {@code ServiceLoader}), a component its {@code @FromMap(required = ...)} lists is
-   * required whenever its slot reads that component's own key: with no row, or with a row reading
-   * the same key. Without the registration, such as a named module with no {@code provides}
-   * directive or a fat jar whose service files were not merged, no declared key is enforced. A
-   * declared key is enforced only for its own component's slot: a row reading that key into another
-   * component does not make it required. With no rows and the binder registered, the two paths give
-   * the same object for the same map, or refuse it with a message worded the same way after its own
-   * prefix.
+   * io.github.eschizoid.telescope.annotations.FromMap} converts it, and as {@code JsonBinder} in
+   * telescope-jackson converts the same value from JSON: a value is kept whole or refused. A number
+   * goes into an integral component only when it is whole and in the type's range, so {@code 2.0}
+   * reads as {@code 2} while {@code 1.5}, and {@code 128} for a {@code byte}, are refused; into a
+   * {@code float} or {@code double} at the nearest value, refused where that overflows to an
+   * infinity. Text is parsed by the type's own parse, so {@code "12"} reads into an {@code int}. A
+   * {@code boolean} takes a {@code Boolean} or {@code true} or {@code false} in any case, and a
+   * {@code char} a {@code Character} or text one character long. An enum is looked up by name, a
+   * JDK value type such as {@code Instant}, {@code UUID} or {@code BigDecimal} is built from its
+   * {@code String} form, a {@code Locale} only from a well-formed language tag, a type with a
+   * generated binder is built by that binder from a nested map, and {@code List}, {@code Set},
+   * {@code Map} and {@code Optional} take a container of the matching shape and convert each
+   * element the same way. A value that cannot be converted is refused with an {@link
+   * IllegalArgumentException} naming where it is, what it holds and what it is not, {@code
+   * 'lines[1].quantity' got 1.5, not an int}, worded as the generated binder words it. When {@code
+   * T} has a registered generated binder (its {@code FromMapProvider} found through {@code
+   * ServiceLoader}), a component its {@code @FromMap(required = ...)} lists is required whenever
+   * its slot reads that component's own key: with no row, or with a row reading the same key.
+   * Without the registration, such as a named module with no {@code provides} directive or a fat
+   * jar whose service files were not merged, no declared key is enforced. A declared key is
+   * enforced only for its own component's slot: a row reading that key into another component does
+   * not make it required. With no rows and the binder registered, the two paths give the same
+   * object for the same map, or refuse it with a message worded the same way after its own prefix.
    *
    * <p>A row overrides that for the component it names, with its own key and converter, which
    * covers what reading by name can't, such as a key spelled differently from the component:

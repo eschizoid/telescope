@@ -129,14 +129,20 @@ Where the binder still reads differently from databind on an annotated type:
 - A property the annotations leave unread takes its default, as a missing key does: a bean is built with it written,
   where databind leaves it as the constructor left it.
 
-### Stricter than `fromMap`
+### The same rules as `fromMap`
 
-The binder accepts the same declared types as `Telescope.fromMap` and the `@FromMap` binder, and leaves the same value
-for a missing key, but it reads values strictly where they read leniently. Given a map, `fromMap` narrows a number as a
-Java cast does, so an integer past an `int`'s range wraps and `1.5` truncates to `1`; it reads text that is not `true`
-as `false`; and it answers a value of the wrong shape for a `List`, `Set` or `Map` with an empty one. The binder refuses
-each of these. Its messages use the wording of telescope's built-in conversions, naming the property and the value,
-where `fromMap` lets the underlying exception through, such as a `NumberFormatException` for text that is no number.
+The binder accepts the same declared types as `Telescope.fromMap` and the `@FromMap` binder, leaves the same value for a
+missing key, and converts a value by the same rules, which telescope decides once for all three. Each of them refuses an
+integer past a property's range, a fraction into an integral property, anything but a boolean for a `boolean`, text that
+is not one character for a `char`, a collection element that does not convert, and a locale tag that is not well formed,
+such as `"::bad::"` or `"en_US"`. Each refuses with an `IllegalArgumentException` in the same words,
+`'lines[1].quantity' got 1.5, not an int`, and the binder adds where in the document the value is.
+
+Where the two inputs differ, so do the readings. A map can hold text where JSON holds a number, so the map binders read
+`"12"` into an `int` and `"TRUE"` into a `boolean`, and read a map's whole `2.0` into an `int` as `2`. JSON reads a
+value only from the kind its type is written as, so the binder refuses all three. A decimal that reached the map as a
+`Double` has already lost its scale, so `2.50` reads into a `BigDecimal` as `2.5`; a service that needs exact decimals
+parses its JSON with databind's `USE_BIG_DECIMAL_FOR_FLOATS`, or reads it with `JsonBinder`.
 
 ### Rows
 
