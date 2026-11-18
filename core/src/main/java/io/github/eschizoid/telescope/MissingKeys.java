@@ -1,8 +1,9 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.internal.pairing.ValueRefused;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-import java.util.StringJoiner;
 
 /**
  * The refusal a {@code fromMap} binder makes when a key its required rows name carries no value.
@@ -60,20 +61,12 @@ final class MissingKeys {
 
   /** Throws naming every required key {@code source} carries no value for, or returns. */
   void check(final Map<String, Object> source) {
-    StringJoiner missing = null;
-    var count = 0;
+    List<String> missing = null;
     for (var i = 0; i < keys.length; i++) {
       if (source.get(keys[i]) != null) continue;
-      if (missing == null) missing = new StringJoiner(", ");
+      if (missing == null) missing = new ArrayList<>();
       missing.add("\"" + keys[i] + "\" (" + kind + " '" + slots[i] + "')");
-      count++;
     }
-    if (missing != null) throw new IllegalArgumentException(
-      "Telescope.fromMap: the map carries no value for required " +
-        (count == 1 ? "key " : "keys ") +
-        missing +
-        " of " +
-        target
-    );
+    if (missing != null) throw ValueRefused.missing("Telescope.fromMap", missing, target);
   }
 }

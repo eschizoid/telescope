@@ -87,8 +87,12 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.AccountFromMap");
       assertNotNull(generated, () -> "AccountFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("demo.Role.valueOf(java.lang.String.valueOf(__m_role))"), generated);
-      assertTrue(generated.contains("instanceof demo.Role"), generated);
+      assertTrue(
+        generated.contains(
+          "io.github.eschizoid.telescope.conversion.FromMapValues.toEnum(__m_role, demo.Role.class, \"role\")"
+        ),
+        generated
+      );
     }
 
     @Test
@@ -119,7 +123,7 @@ class FromMapProcessorTest {
       final var generated = compilation.generated().get("demo.ProfileFromMap");
       assertNotNull(generated, () -> "ProfileFromMap not generated; saw " + compilation.generated().keySet());
       // The nested input object recurses through the nested type's own generated converter.
-      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
+      assertTrue(generated.contains("AddressFromMap::fromMap"), generated);
     }
 
     @Test
@@ -151,7 +155,7 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.ProfileFromMap");
       assertNotNull(generated, () -> "ProfileFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("other.AddressFromMap.fromMap("), generated);
+      assertTrue(generated.contains("other.AddressFromMap::fromMap"), generated);
       assertFalse(generated.contains("import "), () -> "the binder imports nothing:\n" + generated);
     }
 
@@ -184,9 +188,9 @@ class FromMapProcessorTest {
       final var generated = compilation.generated().get("demo.TeamFromMap");
       assertNotNull(generated, () -> "TeamFromMap not generated; saw " + compilation.generated().keySet());
       // Each element run through the element type's own generated converter, by a sized loop.
-      assertTrue(generated.contains("__coerceList("), generated);
+      assertTrue(generated.contains("io.github.eschizoid.telescope.conversion.FromMapValues.toList(__m_"), generated);
       assertFalse(generated.contains(".stream()"), generated);
-      assertTrue(generated.contains("MemberFromMap.fromMap("), generated);
+      assertTrue(generated.contains("MemberFromMap::fromMap"), generated);
     }
 
     @Test
@@ -228,22 +232,16 @@ class FromMapProcessorTest {
     }
 
     @Test
-    @DisplayName("every container shape emits a binder that actually compiles, helpers included")
+    @DisplayName("every container shape emits a binder that actually compiles")
     void containerBindersCompile() {
       // The rest of this class drives the processor with -proc:only, which completes declarations
-      // and never attributes what was emitted -- so a binder calling a helper that was never
-      // written passes every assertion here and fails only in an adopter's build. That is not
-      // hypothetical: the helpers are contributed by the coercions and emitted by the converter,
-      // and wiring the first without the second produced exactly that.
+      // and never attributes what was emitted, so a binder whose expressions do not type-check
+      // passes every assertion there and fails only in an adopter's build. This one compiles the
+      // binders fully.
       //
-      // All three container shapes in one record, because each contributes a different helper and
-      // a converter that emitted only the first would still satisfy a single-shape fixture.
-      //
-      // A second record carries the nested shapes, which is a different property: a composite
-      // coercion has to pass its children's helpers along. It holds no flat container on purpose --
-      // a list beside a map of lists contributes the list helper itself, so the propagation could
-      // stop and the binder would still compile. Here the only route to the list and set helpers is
-      // through the map's value and the optional's element.
+      // All three container shapes in one record, and a second record holding them only nested, in
+      // a map's value and an optional's element, where each element conversion is a lambda whose
+      // type is inferred from the one around it.
       final var compilation = ProcessorHarness.compileFully(
         List.of(new FromMapProcessor()),
         List.of(),
@@ -279,10 +277,10 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "the emitted binder does not compile: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.EveryFromMap");
       assertNotNull(generated, () -> "EveryFromMap not generated; saw " + compilation.generated().keySet());
-      for (final var helper : List.of("__coerceList", "__coerceSet", "__coerceMap")) {
+      for (final var conversion : List.of(".toList(", ".toSet(", ".toMap(")) {
         assertTrue(
-          generated.contains("private static") && generated.contains(helper + "("),
-          () -> helper + " is called but never emitted: " + generated
+          generated.contains("io.github.eschizoid.telescope.conversion.FromMapValues" + conversion),
+          () -> conversion + " is never called: " + generated
         );
       }
     }
@@ -305,8 +303,10 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.LabelsFromMap");
       assertNotNull(generated, () -> "LabelsFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("__coerceSet("), generated);
-      assertTrue(generated.contains("newLinkedHashSet(src.size())"), generated);
+      assertTrue(
+        generated.contains("io.github.eschizoid.telescope.conversion.FromMapValues.toSet(__m_tags, \"tags\""),
+        generated
+      );
       assertFalse(generated.contains(".stream()"), generated);
     }
 
@@ -337,8 +337,11 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.RegistryFromMap");
       assertNotNull(generated, () -> "RegistryFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("entrySet()"), generated);
-      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
+      assertTrue(
+        generated.contains("io.github.eschizoid.telescope.conversion.FromMapValues.toMap(__m_byCity, \"byCity\""),
+        generated
+      );
+      assertTrue(generated.contains("AddressFromMap::fromMap"), generated);
     }
   }
 
@@ -460,10 +463,9 @@ class FromMapProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       // The diagnostic is the assertion: javac reports a cast that narrows nothing, and every
-      // module
-      // here compiles with -Werror, so a binder that emits one does not build. A String component
-      // in
-      // the same record is the control -- its cast is narrower than the read and must survive.
+      // module here compiles with -Werror, so a binder that emits one does not build. A String
+      // component in the same record is the control: it is converted, where the Object one is
+      // taken as it is.
       assertFalse(
         compilation.errorMessages().contains("redundant cast"),
         () -> "the binder cast a value to the type it already had: " + compilation.errorMessages()
@@ -471,8 +473,10 @@ class FromMapProcessorTest {
       final var generated = compilation.generated().get("demo.OpaqueFromMap");
       assertNotNull(generated, () -> "OpaqueFromMap not generated; saw " + compilation.generated().keySet());
       assertTrue(
-        generated.contains("(java.lang.String) "),
-        () -> "a String component still needs its cast: " + generated
+        generated.contains(
+          "return new demo.Opaque(io.github.eschizoid.telescope.conversion.FromMapValues.toText(__m_name, \"name\"), __m_payload);"
+        ),
+        () -> "a String component is converted and an Object one taken as it is: " + generated
       );
     }
   }

@@ -11,7 +11,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -43,8 +42,6 @@ import javax.tools.StandardLocation;
 public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
-
-  private static final String REFUSE_MISSING = "__refuseMissing";
 
   private static final String MAP_TYPE = "java.util.Map<java.lang.String, java.lang.Object>";
 
@@ -127,16 +124,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .toList();
     final var required = requiredNames(record, componentNames, "component");
     if (required == null) return;
-    final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
-    final var helpers = new LinkedHashMap<String, String>();
-    for (final var coercion : coercions) helpers.putAll(coercion.helpers());
-    addRefusal(record, required, helpers);
 
-    emitConverter(record, unchecked, helpers, required, out -> {
+    emitConverter(record, required, out -> {
       for (final var component : components) hoist(out, component.getSimpleName().toString());
-      emitRefusalCall(out, required, "component");
+      emitRefusalCall(out, record, required, "component");
       final var args = IntStream.range(0, components.size())
-        .mapToObj(i -> coercions.get(i).emit(local(components.get(i).getSimpleName().toString()), 0))
+        .mapToObj(i -> valueOf(coercions.get(i), componentNames.get(i)))
         .collect(Collectors.joining(", "));
       out.println("    return new " + record.getQualifiedName() + "(" + args + ");");
     });
@@ -195,18 +188,13 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (!coercible) return;
     final var required = requiredNames(pojo, props.stream().map(Prop::name).toList(), "property");
     if (required == null) return;
-    final var resolved = coercions.stream().filter(Objects::nonNull).toList();
-    final var unchecked = resolved.stream().anyMatch(Coercion::unchecked);
-    final var helpers = new LinkedHashMap<String, String>();
-    for (final var coercion : resolved) helpers.putAll(coercion.helpers());
-    addRefusal(pojo, required, helpers);
 
     final Function<Prop, String> coerced = prop -> valueOf(coercions.get(props.indexOf(prop)), prop.name());
-    emitConverter(pojo, unchecked, helpers, required, out -> {
+    emitConverter(pojo, required, out -> {
       for (var i = 0; i < props.size(); i++) {
         if (written[i] || required.contains(props.get(i).name())) hoist(out, props.get(i).name());
       }
-      emitRefusalCall(out, required, "property");
+      emitRefusalCall(out, pojo, required, "property");
       final var target = pojo.getQualifiedName().toString();
       switch (rebuild.strategy()) {
         case BUILDER -> {
@@ -284,50 +272,20 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The helper the binder calls once a required key is found missing, with one entry per required
-   * slot and null where its key carried a value. It names every missing key in one refusal, worded
-   * as the runtime {@code fromMap} words it after the binder's own prefix.
-   *
-   * <p>It names the JDK types it uses by their qualified names and adds no import, because an
-   * import would shadow a type of the same simple name in the target's package, the target itself
-   * included.
+   * The refusal for a map missing a required key, made after every key is read once. The guard
+   * tests the hoisted locals, so a map that carries every required key allocates nothing for it. It
+   * names every missing key in one refusal, worded as the runtime {@code fromMap} words it after
+   * the binder's own prefix, with one entry per required slot and null where its key carried a
+   * value.
    */
-  private static void addRefusal(
+  private static void emitRefusalCall(
+    final PrintWriter out,
     final TypeElement type,
     final List<String> required,
-    final Map<String, String> helpers
+    final String kind
   ) {
     if (required.isEmpty()) return;
     final var name = type.getSimpleName().toString();
-    helpers.put(
-      REFUSE_MISSING,
-      "private static void " +
-        REFUSE_MISSING +
-        "(final java.lang.String... missing) {\n" +
-        "  final java.lang.StringBuilder named = new java.lang.StringBuilder();\n" +
-        "  int count = 0;\n" +
-        "  for (final java.lang.String entry : missing) {\n" +
-        "    if (entry == null) continue;\n" +
-        "    if (count++ > 0) named.append(\", \");\n" +
-        "    named.append(entry);\n" +
-        "  }\n" +
-        "  throw new java.lang.IllegalArgumentException(\n" +
-        "    \"" +
-        name +
-        "FromMap.fromMap: the map carries no value for required \" + (count == 1 ? \"key \" : \"keys \") + named + \" of " +
-        name +
-        "\"\n" +
-        "  );\n" +
-        "}"
-    );
-  }
-
-  /**
-   * The refusal for a map missing a required key, made after every key is read once. The guard
-   * tests the hoisted locals, so a map that carries every required key allocates nothing for it.
-   */
-  private static void emitRefusalCall(final PrintWriter out, final List<String> required, final String kind) {
-    if (required.isEmpty()) return;
     final var guard = required
       .stream()
       .map(slot -> local(slot) + " == null")
@@ -336,12 +294,24 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(slot -> local(slot) + " == null ? \"\\\"" + slot + "\\\" (" + kind + " '" + slot + "')\" : null")
       .collect(Collectors.joining(", "));
-    out.println("    if (" + guard + ") " + REFUSE_MISSING + "(" + args + ");");
+    out.println(
+      "    if (" +
+        guard +
+        ") throw " +
+        Coercion.VALUES +
+        ".missing(\"" +
+        name +
+        "FromMap.fromMap\", \"" +
+        name +
+        "\", " +
+        args +
+        ");"
+    );
   }
 
   /** The coerced value expression for a property, read from the local its key was hoisted into. */
   private static String valueOf(final Coercion coercion, final String key) {
-    return coercion.emit(local(key), 0);
+    return coercion.emit(local(key), "\"" + key + "\"", 0);
   }
 
   /**
@@ -367,13 +337,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
    * Emit the shared {@code <X>FromMap} class shell — the fromMap method (body supplied) and
    * FROM_MAP constant.
    */
-  private void emitConverter(
-    final TypeElement type,
-    final boolean unchecked,
-    final Map<String, String> helpers,
-    final List<String> required,
-    final Consumer<PrintWriter> body
-  ) {
+  private void emitConverter(final TypeElement type, final List<String> required, final Consumer<PrintWriter> body) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
     final var name = type.getSimpleName().toString();
     final var holder = name + "FromMap";
@@ -387,20 +351,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
     final var javadoc = "Generated by telescope-codegen for @FromMap " + name + ".";
     writeClass(qualified, holder, Set.of(), javadoc, type, out -> {
-      if (unchecked) out.println("  @java.lang.SuppressWarnings(\"unchecked\")");
       out.println("  public static " + ref + " fromMap(final " + MAP_TYPE + " map) {");
       out.println("    if (map == null) return null;");
       body.accept(out);
       out.println("  }");
-      // Beside the binder rather than inside it: a coercion emits an expression, so a
-      // conversion
-      // that wants a loop has nowhere else to put one. Contributed by name, so two fields of
-      // the
-      // same shape ask for the same helper and get one copy.
-      for (final var helper : helpers.values()) {
-        out.println();
-        out.println(helper.indent(2).stripTrailing());
-      }
       out.println();
       // Map.class is a raw Class<Map>; create wants Class<Map<String, Object>> — same unchecked
       // bridge the runtime Telescope.fromMap makes.
@@ -542,19 +496,16 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     return switch (classified.kind()) {
       case SCALAR -> scalarCoercion(classified.scalar(), classified.primitive());
       case ENUM -> new Coercion.EnumOf(fqn);
-      case NESTED -> new Coercion.Nested(fqn + "FromMap");
+      case NESTED -> new Coercion.Nested(fqn + "FromMap", ((DeclaredType) type).asElement().getSimpleName().toString());
       case LIST -> new Coercion.Listed(resolveCoercion(argument(type, 0)));
       case SET -> new Coercion.Setted(resolveCoercion(argument(type, 0)));
       case OPTIONAL -> new Coercion.OptionalOf(resolveCoercion(argument(type, 0)));
       case MAP -> new Coercion.MapValues(resolveCoercion(argument(type, 0)), resolveCoercion(argument(type, 1)));
-      case CAST, AS_IS -> new Coercion.Cast(fqn);
-      case STRING_BUILT -> {
-        final var factory = MapValueTypes.stringBuilt(typeModel.declaredName(type)).orElseThrow().factory();
-        yield new Coercion.StringFactory(
-          fqn,
-          factory == null ? new Coercion.Factory.Ctor() : new Coercion.Factory.Static(factory)
-        );
-      }
+      case CAST -> new Coercion.Text(
+        "java.lang.String".equals(typeModel.declaredName(type)) ? "toText" : "toCharSequence"
+      );
+      case AS_IS -> new Coercion.AsIs();
+      case STRING_BUILT -> new Coercion.Value(fqn);
       case COLLECTION_SUBTYPE -> new Coercion.Unsupported(
         fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
       );
@@ -573,19 +524,19 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A primitive, parsed from a {@code Number} or a {@code String}, or its wrapper, parsed the same
-   * way but left {@code null} where the primitive takes its default.
+   * A primitive, or its wrapper, converted the same way but left {@code null} where the primitive
+   * takes its default.
    */
   private static Coercion scalarCoercion(final String primitive, final boolean unboxed) {
     return switch (primitive) {
-      case "int" -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", unboxed ? "0" : "null");
-      case "long" -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", unboxed ? "0L" : "null");
-      case "double" -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", unboxed ? "0.0d" : "null");
-      case "float" -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", unboxed ? "0.0f" : "null");
-      case "short" -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", unboxed ? "(short) 0" : "null");
-      case "byte" -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", unboxed ? "(byte) 0" : "null");
-      case "boolean" -> new Coercion.BoolParse(unboxed ? "false" : "null");
-      case "char" -> new Coercion.CharParse(unboxed ? "'\\0'" : "null");
+      case "int" -> new Coercion.Scalar("toInt", unboxed, unboxed ? "0" : "null");
+      case "long" -> new Coercion.Scalar("toLong", unboxed, unboxed ? "0L" : "null");
+      case "double" -> new Coercion.Scalar("toDouble", unboxed, unboxed ? "0.0d" : "null");
+      case "float" -> new Coercion.Scalar("toFloat", unboxed, unboxed ? "0.0f" : "null");
+      case "short" -> new Coercion.Scalar("toShort", unboxed, unboxed ? "(short) 0" : "null");
+      case "byte" -> new Coercion.Scalar("toByte", unboxed, unboxed ? "(byte) 0" : "null");
+      case "boolean" -> new Coercion.Scalar("toBoolean", unboxed, unboxed ? "false" : "null");
+      case "char" -> new Coercion.Scalar("toChar", unboxed, unboxed ? "'\\0'" : "null");
       default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
   }

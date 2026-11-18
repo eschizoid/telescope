@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.ValueRefused;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
@@ -162,7 +163,7 @@ final class FromMap {
           cause
         )
       );
-      slots.put(name, new Slot(name, converter, declaredRequired.contains(name), true));
+      slots.put(name, new Slot(name, named(converter, name), declaredRequired.contains(name), true));
     }
     if (writer != null) refuseUnwritableRows(target, writer, byField);
     final Function<Map<String, Object>, T> forward =
@@ -282,6 +283,20 @@ final class FromMap {
       final var bean = writer.construct(propertyNames, valueByName);
       for (final var i : afterBuild) convertedWriters[i].accept(bean, valueByName.apply(propertyNames[i]));
       return bean;
+    };
+  }
+
+  /**
+   * {@code converter}, whose refusal of a value is placed inside the property {@code name}, so it
+   * names where the value is as the generated binder names it.
+   */
+  private static Function<Object, Object> named(final Function<Object, Object> converter, final String name) {
+    return raw -> {
+      try {
+        return converter.apply(raw);
+      } catch (final ValueRefused refused) {
+        throw refused.under(name);
+      }
     };
   }
 

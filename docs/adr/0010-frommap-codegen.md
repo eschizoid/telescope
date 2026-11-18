@@ -1,6 +1,6 @@
 # ADR-0010: `@FromMap` codegen for reflection-free, native-image-clean `Map<String, Object>` ingestion
 
-**Status:** Accepted — shipping in the `@FromMap` codegen PR · **Date:** 2026-06-24
+**Status:** Accepted — shipping in the `@FromMap` codegen PR · **Date:** 2026-06-24 (amended 2026-11-18)
 
 ## Context
 
@@ -76,3 +76,25 @@ coercions cover the motivating cases.
 - **`@FromMap` is a secondary capability, not a new identity.** Map→POJO ingestion is an untyped-source concern adjacent
   to telescope's typed-optics core; it earns its place by closing a native-image gap MapStruct also leaves open, not by
   redefining what telescope is.
+
+## Amendment: the binder converts through the shared rules, and refuses what it would lose
+
+**Date:** 2026-11-18
+
+The lenient coercion this ADR describes is replaced, on the binder and on the runtime `fromMap` alike, by the
+conversions ADR-0008's amendment of the same date records: a value is converted without loss or refused, and every
+refusal is an `IllegalArgumentException` naming the property and its position in the shared wording.
+
+The generated expressions no longer narrow, parse and cast on their own. Each one calls core's public `FromMapValues`, a
+codegen-support seam that hands on `MapValueConversions` from the shared pairing spec, which the runtime calls directly.
+Generated code cannot read the spec's module, so the seam is the narrowest way for both paths to run one implementation
+instead of two that tests hold together. The `Coercion` taxonomy keeps its shape, one permit per kind
+`MapValueTypes.classify` returns, but each permit now writes one call: `Scalar`, `Text`, `AsIs`, `EnumOf`, `Value`,
+`Nested`, `Listed`, `Setted`, `MapValues`, `OptionalOf`, and `Unsupported`, which is still never emitted. The binder no
+longer writes container helpers or a refusal helper beside itself, and needs no `@SuppressWarnings("unchecked")` on
+`fromMap`.
+
+What a missing key leaves, which types are refused at compile time, and the `FROM_MAP` constant and its provider are
+unchanged. The bullet above that read "Coercion is lenient" no longer holds: a wrong-shaped container value is refused
+rather than read as an empty collection, only `true` and `false`, in any case, are booleans, and a value that does not
+fit its type throws in the shared words.

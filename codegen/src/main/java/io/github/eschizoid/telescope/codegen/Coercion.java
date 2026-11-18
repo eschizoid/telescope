@@ -1,69 +1,56 @@
 package io.github.eschizoid.telescope.codegen;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 
 /**
  * A per-field coercion from a raw {@code Map} value expression to the target field's type, emitted
  * as a Java expression. The processor resolves each field's declared type to one of these, then
- * asks it to {@link #emit(String, int)} the conversion around the raw {@code map.get("key")}
- * expression. Sealed so each strategy is a distinct, independently testable shape; container
- * strategies compose recursively over their element coercion.
+ * asks it to {@link #emit} the conversion around the local the map value was read into. Sealed so
+ * each strategy is a distinct, independently testable shape; container strategies compose
+ * recursively over their element coercion.
+ *
+ * <p>Every conversion is a call into core's {@code FromMapValues}, which hands on the conversions
+ * the runtime {@code Telescope.fromMap} applies, so the generated binder takes and refuses the same
+ * values in the same words. What an expression adds itself is the default a missing value takes.
  *
  * <p>Every type an emitted expression names is written by its qualified name, {@code java.lang}
  * included. The binder lives in its target's package, where a simple name means whatever that
  * package declares: a type there named {@code String} shadows {@code java.lang.String}, and an
  * import would shadow a type there of the same name or collide with another import.
  *
- * <p>{@code depth} disambiguates generated local/pattern variable names so nested containers (e.g.
- * {@code List<List<X>>}) don't shadow each other's lambda parameters.
+ * <p>{@code depth} disambiguates generated lambda parameter names so nested containers (e.g. {@code
+ * List<List<X>>}) don't shadow each other's.
  */
 sealed interface Coercion
   permits
-    Coercion.Cast,
-    Coercion.Parse,
-    Coercion.BoolParse,
-    Coercion.CharParse,
+    Coercion.Scalar,
+    Coercion.Text,
+    Coercion.AsIs,
     Coercion.EnumOf,
+    Coercion.Value,
     Coercion.Nested,
     Coercion.Listed,
     Coercion.Setted,
     Coercion.MapValues,
     Coercion.OptionalOf,
-    Coercion.StringFactory,
     Coercion.Unsupported
 {
+  /** The class every emitted conversion calls. */
+  String VALUES = "io.github.eschizoid.telescope.conversion.FromMapValues";
+
   /**
    * Emit a Java expression converting {@code raw} (an {@code Object}-typed expression) to the field
    * type.
-   */
-  String emit(String raw, int depth);
-
-  /**
-   * Private static methods the generated converter needs beside its binder, keyed by name so two
-   * coercions asking for the same one contribute it once.
    *
-   * <p>A coercion emits an expression, which is the whole reason this exists: a conversion that
-   * wants a loop has nowhere to put one, and the alternatives an expression does offer — a stream
-   * and a collector — cost a Spliterator and forfeit the size the source already knows.
+   * @param name a Java expression for the property's name, a string literal, or {@code null} for an
+   *     element, whose container names where it is
    */
-  default Map<String, String> helpers() {
-    return Map.of();
-  }
-
-  /**
-   * Whether the emitted expression performs an unchecked cast (so the enclosing method needs
-   * {@code @SuppressWarnings}).
-   */
-  default boolean unchecked() {
-    return false;
-  }
+  String emit(String raw, String name, int depth);
 
   /**
    * The first {@link Unsupported} reason in this coercion tree (containers delegate to their
    * element/value), or empty when the field is coercible. The processor turns a present reason into
-   * a compile error instead of emitting code that would {@code ClassCastException} at runtime.
+   * a compile error instead of emitting code that would fail on every map.
    */
   default Optional<String> firstUnsupported() {
     return Optional.empty();
@@ -76,235 +63,94 @@ sealed interface Coercion
   }
 
   /**
-   * A generated local/pattern variable name, scoped by {@code depth} so nested containers don't
-   * shadow each other. The {@code __} prefix (avoiding any user identifier) lives here, in one
-   * place, rather than inlined per permit.
+   * A generated lambda parameter name, scoped by {@code depth} so nested containers don't shadow
+   * each other. The {@code __} prefix (avoiding any user identifier) lives here, in one place,
+   * rather than inlined per permit.
    */
   static String gensym(final String tag, final int depth) {
     return "__" + tag + depth;
   }
 
   /**
-   * How a JDK value type is rebuilt from its {@code String} form: a named static factory ({@code
-   * Instant.parse}, {@code UUID.fromString}, …) or the {@code String} constructor ({@code new
-   * BigDecimal(...)}). A sealed pair so {@link StringFactory} dispatches on the type, not a magic
-   * string.
+   * A primitive or its wrapper, through the {@code FromMapValues} method named {@code method}. A
+   * missing value is {@code defaultLiteral}: the primitive's default, or {@code null} for the
+   * wrapper.
    */
-  sealed interface Factory permits Factory.Static, Factory.Ctor {
-    /** The build expression for {@code type} from the {@code String}-form {@code arg}. */
-    String build(String type, String arg);
-
-    /** Build via {@code Type.method(String)}. */
-    record Static(String method) implements Factory {
-      @Override
-      public String build(final String type, final String arg) {
-        return type + "." + method + "(" + arg + ")";
-      }
-    }
-
-    /** Build via {@code new Type(String)}. */
-    record Ctor() implements Factory {
-      @Override
-      public String build(final String type, final String arg) {
-        return "new " + type + "(" + arg + ")";
-      }
-    }
-  }
-
-  /**
-   * Reference type (including {@code String}): a direct cast. A {@code null} raw casts to {@code
-   * null}.
-   */
-  record Cast(String fqn) implements Coercion {
+  record Scalar(String method, boolean primitive, String defaultLiteral) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
-      // A reader hands back an Object, so a cast to Object narrows nothing and javac says so. The
-      // other members of this family — String, CharSequence — are narrower than what the reader
-      // returns, and their cast is what makes the assignment compile.
-      return "java.lang.Object".equals(fqn) ? raw : "(" + fqn + ") " + raw;
-    }
-  }
-
-  /**
-   * {@code String}/{@code Number} to a primitive: take the {@code Number} directly when present,
-   * else fall back to the primitive's JLS default when the key is absent, else parse the {@code
-   * String} form.
-   */
-  record Parse(String narrowMethod, String parseMethod, String defaultLiteral) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      final var v = gensym("n", depth);
+    public String emit(final String raw, final String name, final int depth) {
       return (
         raw +
-        " instanceof java.lang.Number " +
-        v +
-        " ? " +
-        v +
+        " == null ? " +
+        defaultLiteral +
+        " : " +
+        VALUES +
         "." +
-        narrowMethod +
-        "() : " +
+        method +
+        "(" +
         raw +
-        " == null ? " +
-        defaultLiteral +
-        " : " +
-        parseMethod +
-        "(java.lang.String.valueOf(" +
-        raw +
-        "))"
-      );
-    }
-  }
-
-  /**
-   * {@code boolean}/{@code Boolean} target: take an existing {@code Boolean} directly, else parse a
-   * {@code String} ({@code Boolean.parseBoolean} — only {@code "true"} is truthy), else the
-   * default.
-   */
-  record BoolParse(String defaultLiteral) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      final var v = gensym("b", depth);
-      return (
-        raw +
-        " instanceof java.lang.Boolean " +
-        v +
-        " ? " +
-        v +
-        " : " +
-        raw +
-        " == null ? " +
-        defaultLiteral +
-        " : java.lang.Boolean.parseBoolean(java.lang.String.valueOf(" +
-        raw +
-        "))"
-      );
-    }
-  }
-
-  /**
-   * {@code char}/{@code Character} target: take an existing {@code Character} directly, else the
-   * first char of the {@code String} form, else the default.
-   */
-  record CharParse(String defaultLiteral) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      final var v = gensym("c", depth);
-      return (
-        raw +
-        " instanceof java.lang.Character " +
-        v +
-        " ? " +
-        v +
-        " : " +
-        raw +
-        " == null || java.lang.String.valueOf(" +
-        raw +
-        ").isEmpty() ? " +
-        defaultLiteral +
-        " : java.lang.String.valueOf(" +
-        raw +
-        ").charAt(0)"
-      );
-    }
-  }
-
-  /**
-   * Enum target: take an existing enum value directly, else map a {@code String} name via {@code
-   * valueOf}.
-   */
-  record EnumOf(String fqn) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      final var type = fqn;
-      final var v = gensym("e", depth);
-      return (
-        raw +
-        " instanceof " +
-        type +
-        " " +
-        v +
-        " ? " +
-        v +
-        " : " +
-        raw +
-        " == null ? null : " +
-        type +
-        ".valueOf(java.lang.String.valueOf(" +
-        raw +
-        "))"
-      );
-    }
-  }
-
-  /**
-   * A JDK value type with a well-known String factory ({@code Instant.parse}, {@code
-   * UUID.fromString}, {@code new BigDecimal}, …): take an existing instance directly, else build it
-   * from the value's {@code String} form — the shape these arrive in from an untyped map.
-   */
-  record StringFactory(String fqn, Factory factory) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      final var type = fqn;
-      final var build = factory.build(type, "java.lang.String.valueOf(" + raw + ")");
-      final var v = gensym("sf", depth);
-      return raw + " instanceof " + type + " " + v + " ? " + v + " : " + raw + " == null ? null : " + build;
-    }
-  }
-
-  /**
-   * Nested {@code @FromMap} target: a {@code null}-guarded recursion through its generated
-   * converter.
-   */
-  record Nested(String converterFqn) implements Coercion {
-    @Override
-    public String emit(final String raw, final int depth) {
-      return (
-        raw +
-        " == null ? null : " +
-        converterFqn +
-        ".fromMap((java.util.Map<java.lang.String, java.lang.Object>) " +
-        raw +
+        ", " +
+        primitive +
+        ", " +
+        name +
         ")"
       );
     }
+  }
 
+  /** {@code String} or {@code CharSequence}, through the {@code FromMapValues} method named. */
+  record Text(String method) implements Coercion {
     @Override
-    public boolean unchecked() {
-      return true;
+    public String emit(final String raw, final String name, final int depth) {
+      return VALUES + "." + method + "(" + raw + ", " + name + ")";
     }
   }
 
-  /** {@code List<E>} target: stream each element through the element coercion into a fresh list. */
+  /** {@code Object}, which takes the value as it is. */
+  record AsIs() implements Coercion {
+    @Override
+    public String emit(final String raw, final String name, final int depth) {
+      return raw;
+    }
+  }
+
+  /** An enum: a constant of it, or the constant the value's text names. */
+  record EnumOf(String fqn) implements Coercion {
+    @Override
+    public String emit(final String raw, final String name, final int depth) {
+      return VALUES + ".toEnum(" + raw + ", " + fqn + ".class, " + name + ")";
+    }
+  }
+
+  /**
+   * A JDK value type built from its text ({@code Instant}, {@code UUID}, {@code BigDecimal}, …): a
+   * value of it, or one built from its text form.
+   */
+  record Value(String fqn) implements Coercion {
+    @Override
+    public String emit(final String raw, final String name, final int depth) {
+      return VALUES + ".toValue(" + raw + ", " + fqn + ".class, " + name + ")";
+    }
+  }
+
+  /**
+   * Nested {@code @FromMap} target: built by its generated converter from a nested map.
+   *
+   * @param simpleName the target's name in source, which a refusal of a value that is no map names
+   */
+  record Nested(String converterFqn, String simpleName) implements Coercion {
+    @Override
+    public String emit(final String raw, final String name, final int depth) {
+      return (VALUES + ".nested(" + raw + ", " + name + ", \"" + simpleName + "\", " + converterFqn + "::fromMap)");
+    }
+  }
+
+  /** {@code List<E>} target: each element through the element coercion into a fresh list. */
   record Listed(Coercion element) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
+    public String emit(final String raw, final String name, final int depth) {
       final var el = gensym("el", depth);
-      return ("__coerceList(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")");
-    }
-
-    @Override
-    public Map<String, String> helpers() {
-      final var all = new LinkedHashMap<>(element.helpers());
-      all.put(
-        "__coerceList",
-        """
-        private static <E> java.util.List<E> __coerceList(
-          final java.lang.Object raw,
-          final java.util.function.Function<java.lang.Object, E> each
-        ) {
-          if (!(raw instanceof java.util.List<?> src)) return java.util.List.of();
-          final var out = new java.util.ArrayList<E>(src.size());
-          for (final var element : src) out.add(each.apply(element));
-          return out;
-        }\
-        """
-      );
-      return all;
-    }
-
-    @Override
-    public boolean unchecked() {
-      return element.unchecked();
+      return VALUES + ".toList(" + raw + ", " + name + ", " + el + " -> " + element.emit(el, "null", depth + 1) + ")";
     }
 
     @Override
@@ -313,37 +159,12 @@ sealed interface Coercion
     }
   }
 
-  /** {@code Set<E>} target: stream each element through the element coercion into a fresh set. */
+  /** {@code Set<E>} target: each element through the element coercion into a fresh set. */
   record Setted(Coercion element) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
+    public String emit(final String raw, final String name, final int depth) {
       final var el = gensym("el", depth);
-      return "__coerceSet(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")";
-    }
-
-    @Override
-    public Map<String, String> helpers() {
-      final var all = new LinkedHashMap<>(element.helpers());
-      all.put(
-        "__coerceSet",
-        """
-        private static <E> java.util.Set<E> __coerceSet(
-          final java.lang.Object raw,
-          final java.util.function.Function<java.lang.Object, E> each
-        ) {
-          if (!(raw instanceof java.util.Set<?> src)) return java.util.Set.of();
-          final var out = java.util.LinkedHashSet.<E>newLinkedHashSet(src.size());
-          for (final var element : src) out.add(each.apply(element));
-          return out;
-        }\
-        """
-      );
-      return all;
-    }
-
-    @Override
-    public boolean unchecked() {
-      return element.unchecked();
+      return VALUES + ".toSet(" + raw + ", " + name + ", " + el + " -> " + element.emit(el, "null", depth + 1) + ")";
     }
 
     @Override
@@ -364,20 +185,13 @@ sealed interface Coercion
    */
   record OptionalOf(Coercion element) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
+    public String emit(final String raw, final String name, final int depth) {
       return (
-        raw + " == null ? java.util.Optional.empty() : java.util.Optional.ofNullable(" + element.emit(raw, depth) + ")"
+        raw +
+        " == null ? java.util.Optional.empty() : java.util.Optional.ofNullable(" +
+        element.emit(raw, name, depth) +
+        ")"
       );
-    }
-
-    @Override
-    public Map<String, String> helpers() {
-      return element.helpers();
-    }
-
-    @Override
-    public boolean unchecked() {
-      return element.unchecked();
     }
 
     @Override
@@ -386,58 +200,28 @@ sealed interface Coercion
     }
   }
 
-  /**
-   * {@code Map<K, V>} target: coerce both key and value into a fresh {@code LinkedHashMap}. Uses a
-   * put-accumulating collect (not {@code Collectors.toMap}) so a {@code null} value doesn't throw —
-   * matching the lenient spirit of {@code fromMap}.
-   */
+  /** {@code Map<K, V>} target: both key and value coerced into a fresh map, a null value kept. */
   record MapValues(Coercion key, Coercion value) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
+    public String emit(final String raw, final String name, final int depth) {
       final var k = gensym("k", depth);
       final var v = gensym("v", depth);
       return (
-        "__coerceMap(" +
+        VALUES +
+        ".toMap(" +
         raw +
+        ", " +
+        name +
         ", " +
         k +
         " -> " +
-        key.emit(k, depth + 1) +
+        key.emit(k, "null", depth + 1) +
         ", " +
         v +
         " -> " +
-        value.emit(v, depth + 1) +
+        value.emit(v, "null", depth + 1) +
         ")"
       );
-    }
-
-    @Override
-    public Map<String, String> helpers() {
-      final var all = new LinkedHashMap<>(key.helpers());
-      all.putAll(value.helpers());
-      all.put(
-        "__coerceMap",
-        """
-        private static <K, V> java.util.Map<K, V> __coerceMap(
-          final java.lang.Object raw,
-          final java.util.function.Function<java.lang.Object, K> eachKey,
-          final java.util.function.Function<java.lang.Object, V> eachValue
-        ) {
-          if (!(raw instanceof java.util.Map<?, ?> src)) return java.util.Map.of();
-          final var out = java.util.LinkedHashMap.<K, V>newLinkedHashMap(src.size());
-          for (final var entry : src.entrySet()) {
-            out.put(eachKey.apply(entry.getKey()), eachValue.apply(entry.getValue()));
-          }
-          return out;
-        }\
-        """
-      );
-      return all;
-    }
-
-    @Override
-    public boolean unchecked() {
-      return true;
     }
 
     @Override
@@ -453,7 +237,7 @@ sealed interface Coercion
    */
   record Unsupported(String reason) implements Coercion {
     @Override
-    public String emit(final String raw, final int depth) {
+    public String emit(final String raw, final String name, final int depth) {
       throw new IllegalStateException("Unsupported coercion must not be emitted: " + reason);
     }
 

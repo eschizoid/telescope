@@ -238,18 +238,18 @@ class FromMapRefusalCrossPathTest {
   }
 
   /**
-   * What a conversion produced, in a form two paths can be compared by: the value, or the class of
-   * the exception it threw. A {@code Pattern} has no value equality of its own, so it is compared
-   * by its source.
+   * What a conversion produced, in a form two paths can be compared by: the value, or the class and
+   * message of the exception it threw. A {@code Pattern} has no value equality of its own, so it is
+   * compared by its source.
    */
   private static String outcome(final Call call) {
     try {
       final var value = call.run();
       return "value " + (value instanceof Pattern p ? "Pattern(" + p.pattern() + ")" : describe(value));
     } catch (final InvocationTargetException e) {
-      return "throws " + e.getCause().getClass().getName();
+      return "throws " + e.getCause().getClass().getName() + ": " + e.getCause().getMessage();
     } catch (final RuntimeException e) {
-      return "throws " + e.getClass().getName();
+      return "throws " + e.getClass().getName() + ": " + e.getMessage();
     } catch (final ReflectiveOperationException e) {
       throw new AssertionError(e);
     }

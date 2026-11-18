@@ -295,6 +295,8 @@ from "compile-checked" to "runtime-checked" is a regression.
 - `hop(OpticNode)` — appends an introspection node; generated navigators call it after each step.
 - `whenPredicateThrew(String, String, Throwable)` — the failure a generated bridge throws when a `when(...)` predicate
   throws, in the words the runtime mapper reports it with, which `PairingMessages` holds for both.
+- `FromMapValues` in `conversion` — the conversions a generated `@FromMap` binder calls for each value, handing on
+  `MapValueConversions` from the shared pairing spec, which the runtime `fromMap` calls directly.
 - `mergeSourceMissing(Collection, Class, String)` and `mergeHasNoInverse()` — the failures a bridge generated from a
   `Telescope.merge` field throws for a missing source and for `backward`, in the runtime merge's words.
 - `componentLens(Class, String, getter, setter)` — the lens a navigator composes per component, carrying the fusion
@@ -453,11 +455,13 @@ exported package:
 | `Refused`                     | a refusal carrying its path outwards without a stack trace, rendered once as the `IllegalArgumentException` a caller sees                                                                                                 |
 | `TelescopeModule`             | a `JacksonModule` over Jackson's `StdConvertingDeserializer` / `StdConvertingSerializer`, carrying only the mappers it is given, with a per-instance registration id and the fail-fast checks of ADR-0016                 |
 
-The JSON rules are stricter than the map conversions: a value is read only from the JSON kind its type is written as,
-integral slots refuse fractions and out-of-range integers (jackson-core's `getByteValue` accepts 128 to 255, so the
-binder checks the signed range itself), `BigDecimal` keeps every digit, and the last of a duplicated key wins. The token
-loop is boundary machinery like `FromMap`, not a lattice value — ADR-0016 records the carve-out. `imageTest` reruns the
-suite with the `imagecode` property set.
+The binder converts every value a token carries through `MapValueConversions`, the rules `fromMap` and `@FromMap`
+follow, so the three refuse an out-of-range integer, a char that is not one character or a malformed locale tag alike
+and in the same words (jackson-core's `getByteValue` accepts 128 to 255, so the range comes from the shared rule, not
+from the parser). What JSON adds is its kinds: a value is read only from the JSON kind its type is written as, so a
+fraction token never reaches an integral slot. `BigDecimal` keeps every digit, and the last of a duplicated key wins.
+The token loop is boundary machinery like `FromMap`, not a lattice value — ADR-0016 records the carve-out. `imageTest`
+reruns the suite with the `imagecode` property set.
 
 ## Modules: `:quarkus` and `:spring-boot-starter` (integration starters)
 
@@ -769,11 +773,13 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
    `source`/`target`. Closes the split-module MapStruct-parity gap.
 8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped.) Forward-only factory; every component
    reads the key with its own name, converted as `@FromMap` converts it, and `extract(key, accessor, converter)` rows
-   override that; lenient default.
+   override that; a missing key takes its default, and a value is converted without loss or refused (amended 2026-11-18,
+   the rules in `MapValueConversions`).
 9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped.) Codegen sibling of the runtime `mapperForward` lenient
    default. Opt-in flag; partial-Iso when on.
 10. **0010 — `@FromMap` codegen.** (Accepted, shipped.) Reflection-free `Map<String, Object> → record` ingestion —
-    codegen sibling of ADR-0008's runtime `fromMap`.
+    codegen sibling of ADR-0008's runtime `fromMap`. Amended 2026-11-18: each value converts through core's
+    `FromMapValues` seam into the shared `MapValueConversions`.
 11. **0011 — Carrier-`@Bridge` runtime discovery via `ServiceLoader` SPI.** (Accepted.) `BridgeProvider` /
     `BridgeRegistry` in `:core/conversion` let the runtime `mapperForward` find carrier-form codegen bridges.
 12. **0012 — Compile-time mapper verification via a shared pairing spec.** (Accepted.) `internal/pairing` —

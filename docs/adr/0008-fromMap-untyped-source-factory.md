@@ -1,6 +1,6 @@
 # ADR-0008: `Telescope.fromMap(Class<T>, MapExtractStep...)` for untyped sources
 
-**Status:** Accepted — shipped in #150 · **Date:** 2026-06-16 (accepted 2026-06-21, amended 2026-10-10)
+**Status:** Accepted — shipped in #150 · **Date:** 2026-06-16 (accepted 2026-06-21, amended 2026-10-10 and 2026-11-18)
 
 ## Context
 
@@ -101,6 +101,68 @@ This changes behaviour: a component that used to stay at its default now takes t
 under that name that cannot be converted now throws where it used to be ignored, a map missing a required key of the
 target or of a nested type with a binder is now refused, and a mapper that needs a provider's `binder()` or `required()`
 when the provider does not implement it is refused at construction.
+
+## Amendment: a value is converted without loss, or refused
+
+**Date:** 2026-11-18
+
+As shipped, a component no row names converted its map value leniently, and some of that changed the data without a
+word: a number was narrowed as a Java cast narrows it, so `128` read into a `byte` as `-128` and `1.5` into an `int` as
+`1`; any value but the text `true` read as `false` for a `boolean`; a `char` took the first character of whatever text
+it was given; a `List`, `Set` or `Map` answered a value of another shape with an empty one, a `List` given to a `Set`
+included; and a failure surfaced as the exception underneath, a `NumberFormatException` or a `ClassCastException`. The
+streaming `JsonBinder` of ADR-0016 reads the same declared types strictly, so two ingestion paths in one library
+disagreed on whether `128` fits a `byte`.
+
+The conversions are now decided once, by `MapValueConversions` in the shared pairing spec, beside the `MapValueTypes`
+classification that picks which one a type gets. The runtime `fromMap` calls it, the generated binder calls it through
+core's public `FromMapValues` seam, and `JsonBinder` calls it for every value a JSON token carries.
+
+- A number goes into an integral type only when it is whole and in the type's range. `2.0` reads as `2`; `1.5`, `128`
+  for a `byte`, NaN and an infinity are refused. `BigInteger` follows the same rule and also takes a whole `Double`.
+- A `double` or `float` is taken at the shortest decimal its `toString` writes, for every numeric type, which is the
+  number a JSON parser reads from the same text: `1e23` is ten to the 23rd as a `BigInteger` and as a `BigDecimal`
+  alike, and `1.2345678901234568E18` reads into a `long` as `1234567890123456800`, where it used to read as its binary
+  value `1234567890123456768`.
+- A number goes into a `float` or a `double` at the nearest value, and is refused where that is an infinity the number
+  is not.
+- Text is any `CharSequence`, read through its `toString`, wherever text is read: a `String` property, a number, a
+  boolean, a character, an enum constant and a JDK value type read from text alike. It is parsed by the JDK's own parse
+  for the type, as before: `"12"` still reads into an `int`, and `"12.0"` and `"128"` for a `byte` are refused as they
+  were, now in the shared words.
+- A `boolean` takes a `Boolean`, or `true` or `false` in any case; anything else is refused.
+- A `char` takes a `Character`, or text exactly one character long; empty text and longer text are refused.
+- A `List`, `Set` or `Map` takes any collection, or any map, of the matching shape and converts each element as its type
+  argument, refusing an element by its position; a value of another shape is refused.
+- A `Locale` is read from a well-formed language tag only. `Locale.forLanguageTag` reads `"::bad::"` and `"en_US"` as
+  the empty locale, which loses the value, so the shared table builds it through `Locale.Builder` and refuses what that
+  refuses. `JsonBinder` reads the same table, and refuses those tags too.
+- A JDK value type read from text, such as an `Instant`, a `URI` or a `Locale`, takes a value of its own class or text,
+  and refuses anything else, where it used to read the value's `toString`: `true` read as the `Locale` of the language
+  `"true"`, and NaN as `"nan"`. An enum takes a constant of its own type or text naming one, and refuses anything else,
+  a constant of another enum included.
+- A value for a type with a generated binder that is no map is refused.
+- Every refusal is an `IllegalArgumentException` in the words `JsonBinder` uses, naming the property and, for an
+  element, its position: `'lines[1].quantity' got 1.5, not an int`. A refusal inside a nested type names the path
+  through it, and so does a nested map missing a required key:
+  `the map at 'signups[0]' carries no value for required key "email"`.
+
+What does not change: which declared types are accepted or refused while the mapper is built, the default a missing key
+or a `null` leaves, and a row's converter, which receives the value as the map holds it and decides on its own.
+
+Where the inputs differ, the readings do. A map can hold text where JSON holds a number, so the map paths keep reading
+`"12"` into an `int` and `"TRUE"` into a `boolean`, and a whole `Double` into an `int`, while `JsonBinder` reads a value
+only from the JSON kind its type is written as.
+
+This changes behaviour, and ships as `fix!`. Each of these inputs, accepted before, is now refused: an integral value
+out of range; a fraction, NaN or an infinity into an integral type; a number overflowing a `float` or a `double`;
+anything but `true` or `false` for a `boolean`; text that is not one character, or a value that is not text, for a
+`char`; a value of the wrong shape for a `List`, `Set` or `Map`; a locale tag that is not well formed; a value that is
+neither text nor of its own class for a JDK value type read from text or an enum. A whole double above 2^53 now reads as
+its shortest decimal form, `1.2345678901234568E18` as `1234567890123456800`, where it used to read as its binary value
+`1234567890123456768`. A failure that was a `ClassCastException` or a `DateTimeParseException` is now an
+`IllegalArgumentException`. A `List` read into a `Set`, a `Set` into a `List`, a whole `Double` into a `BigInteger`, and
+any `CharSequence` where text is read now convert where they came back empty or threw.
 
 ## Alternatives considered
 

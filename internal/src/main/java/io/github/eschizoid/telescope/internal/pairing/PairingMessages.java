@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.internal.pairing;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The single source of truth for every diagnostic the shared pairing decisions emit. The runtime
@@ -1995,7 +1997,68 @@ public final class PairingMessages {
     final int line,
     final int column
   ) {
-    return jsonSubject(path, jsonPath) + " got " + got + ", not " + what + jsonAt(line, column);
+    return refusedValue(jsonSubject(path, jsonPath), got, what) + jsonAt(line, column);
+  }
+
+  /**
+   * A value an untyped map holds that the property at {@code path} does not take, in the words
+   * {@link #jsonNotAValue} refuses a JSON value with, less the location a map does not have: {@code
+   * 'lines[1].quantity' got 1.5, not an int}. {@code got} is the value as {@link #mapValueShown}
+   * shows it, and {@code what} the property's type with its article. An empty path is the value
+   * itself.
+   */
+  public static String mapValueRefused(final String path, final String got, final String what) {
+    return refusedValue(path.isEmpty() ? "the value" : "'" + path + "'", got, what);
+  }
+
+  /**
+   * A value from an untyped map as a refusal shows it: text, any {@code CharSequence}, in double
+   * quotes, a character in single quotes, a number, a boolean or an enum constant as it stands, and
+   * anything else by its kind: {@code a Map}, {@code a List}, {@code an Instant}.
+   */
+  public static String mapValueShown(final Object value) {
+    return switch (value) {
+      case null -> "null";
+      case CharSequence text -> "\"" + text + "\"";
+      case Character c -> "'" + c + "'";
+      case Number n -> String.valueOf(n);
+      case Boolean b -> String.valueOf(b);
+      case Enum<?> constant -> constant.name();
+      case Map<?, ?> map -> "a Map";
+      case List<?> list -> "a List";
+      case Set<?> set -> "a Set";
+      default -> value.getClass().isArray() ? "an array" : withArticle(value.getClass().getSimpleName());
+    };
+  }
+
+  /**
+   * An untyped map with no value for keys its target requires. {@code missing} names each key and
+   * the property it fills, {@code "sku" (component 'sku')}, and {@code path} where the map is,
+   * empty for the map a binder was handed. A key holding {@code null} counts as missing.
+   *
+   * @param prefix what refuses, {@code Telescope.fromMap} or a generated binder's method
+   */
+  public static String mapMissingRequired(
+    final String prefix,
+    final String path,
+    final List<String> missing,
+    final String target
+  ) {
+    return (
+      prefix +
+      ": " +
+      (path.isEmpty() ? "the map" : "the map at '" + path + "'") +
+      " carries no value for required " +
+      (missing.size() == 1 ? "key " : "keys ") +
+      String.join(", ", missing) +
+      " of " +
+      target
+    );
+  }
+
+  /** The words every refusal of a value reads in: {@code 'qty' got 1.5, not an int}. */
+  private static String refusedValue(final String subject, final String got, final String what) {
+    return subject + " got " + got + ", not " + what;
   }
 
   /**
