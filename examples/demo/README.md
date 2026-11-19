@@ -179,10 +179,11 @@ same mapper, so the response is the card and not the proxy.
 
 **A partner sends orders as JSON, every value written as text.** The import handler takes the body as text, and
 [`PartnerFeed`](domain/src/main/java/io/github/eschizoid/telescope/demo/api/PartnerFeed.java) reads it into
-`ImportedOrder` through [`telescope-jackson`](../../jackson/README.md)'s streaming binder, with no map in between:
+`ImportedOrder` through the binder [`telescope-jackson`](../../jackson/README.md)'s `@FromJson` generates for the
+record, a streaming parser loop with no map in between and no reflection, which reads as `TelescopeJson.fromJson` does:
 
 ```java
-private static final JsonBinder<ImportedOrder> ORDERS = TelescopeJson.fromJson(ImportedOrder.class);
+return ImportedOrderFromJson.BINDER.read(json);
 ```
 
 The binder holds the payload to the keys `@FromMap(required = ...)` names on `ImportedOrder`, and reads each value only

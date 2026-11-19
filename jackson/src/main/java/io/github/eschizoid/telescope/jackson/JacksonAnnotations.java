@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.jackson;
 
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.pairing.JsonPropertyKeys;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
@@ -13,7 +14,6 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -51,48 +51,14 @@ final class JacksonAnnotations {
   private JacksonAnnotations() {}
 
   /**
-   * How one property reads.
-   *
-   * @param key the key the property reads
-   * @param aliases the other keys that fill it too
-   * @param ignored whether the property reads no key at all and takes its default
-   * @param required whether a document must carry the key
-   */
-  record Keys(String key, List<String> aliases, boolean ignored, boolean required) {}
-
-  /**
-   * How the property {@code name} reads, from the annotations on the members it is written through,
-   * {@code writes}, most preferred first, and the member it is read through, {@code read}, which
-   * may be null. Whether the property is ignored is decided once for the whole property, as
-   * databind decides it, and only then are the names of the members it keeps read.
-   *
-   * <ul>
-   *   <li>A member is ignored when it carries {@code @JsonIgnore}, whatever else it carries. A
-   *       member that carries {@code @JsonProperty} and is not ignored is explicit. A record's
-   *       constructor parameter is never explicit: {@code @JsonIgnore} cannot sit on a parameter,
-   *       so a component carrying both annotations hands the parameter {@code @JsonProperty} alone.
-   *   <li>The property is ignored when {@code @JsonProperty(access = READ_ONLY)} is on any member;
-   *       when a member is ignored and no member is explicit; and, on a bean, when a member is
-   *       ignored and every setter it has is ignored, since an explicit getter or field keeps the
-   *       property but leaves nothing to write it through. So {@code @JsonIgnore} on a field with
-   *       {@code @JsonProperty("g")} on the getter and a plain setter reads {@code g} through the
-   *       setter, and {@code @JsonIgnore} on a getter with {@code @JsonProperty} on the setter
-   *       reads the property, as databind reads both.
-   *   <li>The key is the one {@code @JsonProperty} gives on a member the property is written
-   *       through, else the one it gives on the member it is read through, else the property's own
-   *       name, counting only members that are not ignored. An empty {@code @JsonProperty} keeps
-   *       the name.
-   *   <li>The aliases are the ones {@code @JsonAlias} gives on the most preferred member carrying
-   *       one, the read member last.
-   *   <li>The property is required when {@code @JsonProperty(required = true)} is on any member and
-   *       {@code creator} is set: databind holds a document to the key only for a property its
-   *       constructor takes, which is every record component and no bean property.
-   * </ul>
+   * How the property {@code name} reads, decided by {@link JsonPropertyKeys#decide} from the
+   * annotations on the members it is written through, {@code writes}, most preferred first, and the
+   * member it is read through, {@code read}, which may be null.
    *
    * @throws IllegalArgumentException when two members the property is written through name it with
    *     different keys
    */
-  static Keys property(
+  static JsonPropertyKeys.Keys property(
     final Class<?> owner,
     final String kind,
     final String name,
@@ -100,48 +66,35 @@ final class JacksonAnnotations {
     final AnnotatedElement read,
     final boolean creator
   ) {
-    final var members = new ArrayList<AnnotatedElement>(writes);
-    if (read != null) members.add(read);
-    final var writeNames = new LinkedHashSet<String>();
-    String readName = null;
-    List<String> aliases = null;
-    var ignoral = false;
-    var explicit = false;
-    var setters = false;
-    var setterKept = false;
-    var readOnly = false;
-    var required = false;
-    for (final var member : members) {
-      final var writing = member != read;
-      final var ignore = find(member, IGNORE);
-      final var ignored = ignore != null && (Boolean) attribute(ignore, "value");
-      ignoral |= ignored;
-      if (writing && member instanceof Method) {
-        setters = true;
-        setterKept |= !ignored;
-      }
-      final var property = find(member, PROPERTY);
-      if (property != null) {
-        readOnly |= ((Enum<?>) attribute(property, "access")).name().equals("READ_ONLY");
-        required |= creator && (Boolean) attribute(property, "required");
-        explicit |= !ignored && !(member instanceof Parameter);
-        final var value = (String) attribute(property, "value");
-        if (!ignored && !value.isEmpty()) {
-          if (writing) writeNames.add(value);
-          else readName = value;
-        }
-      }
-      final var alias = aliases == null ? find(member, ALIAS) : null;
-      if (alias != null) aliases = List.of((String[]) attribute(alias, "value"));
-    }
-    final var ignored = readOnly || (ignoral && (!explicit || (setters && !setterKept)));
-    if (!ignored && writeNames.size() > 1) {
-      throw new IllegalArgumentException(
-        PairingMessages.jsonKeyNamedTwice(kind, name, owner.getSimpleName(), List.copyOf(writeNames))
-      );
-    }
-    final var key = !writeNames.isEmpty() ? writeNames.getFirst() : readName != null ? readName : name;
-    return new Keys(key, aliases == null ? List.of() : aliases, ignored, required && !ignored);
+    final var members = new ArrayList<JsonPropertyKeys.Member>(writes.size() + 1);
+    for (final var member : writes) members.add(member(member, true));
+    if (read != null) members.add(member(read, false));
+    return JsonPropertyKeys.decide(owner.getSimpleName(), kind, name, members, creator);
+  }
+
+  /** What the annotations on {@code member} say, read through reflection by class name. */
+  private static JsonPropertyKeys.Member member(final AnnotatedElement member, final boolean writing) {
+    final var ignore = find(member, IGNORE);
+    final var ignored = ignore != null && (Boolean) attribute(ignore, "value");
+    final var property = find(member, PROPERTY);
+    final var said =
+      property == null
+        ? null
+        : new JsonPropertyKeys.Property(
+            (String) attribute(property, "value"),
+            ((Enum<?>) attribute(property, "access")).name().equals("READ_ONLY"),
+            (Boolean) attribute(property, "required")
+          );
+    final var alias = find(member, ALIAS);
+    final var aliases = alias == null ? null : List.of((String[]) attribute(alias, "value"));
+    return new JsonPropertyKeys.Member(
+      writing,
+      writing && member instanceof Method,
+      member instanceof Parameter,
+      ignored,
+      said,
+      aliases
+    );
   }
 
   /**

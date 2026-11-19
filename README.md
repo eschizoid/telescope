@@ -364,15 +364,15 @@ runs three ways:
 
 Everything is on Maven Central under `io.github.eschizoid`.
 
-| Artifact                        | What it is                                                                                                       |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `telescope-core`                | typed paths, runtime mappers and the annotations; the one dependency you always add                              |
-| `telescope-codegen`             | the optional annotation processor for `@Bridge`, `@Focus`, `@BeanFocus` and `@FromMap`, plus the mapper verifier |
-| `telescope-lombok`              | the processor variant for Lombok `@Data`, `@Value` and `@Builder` classes                                        |
-| `telescope-spring-boot-starter` | Spring Boot auto-configuration, the mapper registry and generated mapper beans                                   |
-| `telescope-quarkus`             | the mapper registry as a Quarkus CDI bean, and generated mapper beans                                            |
-| `telescope-jackson`             | a streaming JSON binder over `jackson-core`, and mappers as Jackson 3 converters                                 |
-| `telescope-internal`            | the engine underneath, which arrives with `telescope-core` and isn't meant to be used directly                   |
+| Artifact                        | What it is                                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `telescope-core`                | typed paths, runtime mappers and the annotations; the one dependency you always add                                           |
+| `telescope-codegen`             | the optional annotation processor for `@Bridge`, `@Focus`, `@BeanFocus`, `@FromMap` and `@FromJson`, plus the mapper verifier |
+| `telescope-lombok`              | the processor variant for Lombok `@Data`, `@Value` and `@Builder` classes                                                     |
+| `telescope-spring-boot-starter` | Spring Boot auto-configuration, the mapper registry and generated mapper beans                                                |
+| `telescope-quarkus`             | the mapper registry as a Quarkus CDI bean, and generated mapper beans                                                         |
+| `telescope-jackson`             | a streaming JSON binder over `jackson-core`, and mappers as Jackson 3 converters                                              |
+| `telescope-internal`            | the engine underneath, which arrives with `telescope-core` and isn't meant to be used directly                                |
 
 ## Documentation
 

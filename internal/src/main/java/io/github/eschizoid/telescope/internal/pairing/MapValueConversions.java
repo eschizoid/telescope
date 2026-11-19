@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,7 +40,39 @@ import java.util.function.Function;
  */
 public final class MapValueConversions {
 
+  /**
+   * What a refusal says a value is not, for each scalar as a primitive and as its wrapper or class:
+   * built once, so a value that converts pays nothing for the words it was never refused in.
+   */
+  private static final Map<Scalar, String> PRIMITIVE_PHRASES = phrases(true);
+
+  private static final Map<Scalar, String> BOXED_PHRASES = phrases(false);
+
   private MapValueConversions() {}
+
+  private static Map<Scalar, String> phrases(final boolean primitive) {
+    final var phrases = new EnumMap<Scalar, String>(Scalar.class);
+    for (final var scalar : Scalar.values()) {
+      if (scalar == Scalar.ENUM) continue;
+      phrases.put(scalar, PairingMessages.scalarPhrase(scalar, primitive && scalar.primitive() != null, null));
+    }
+    return phrases;
+  }
+
+  /** The phrase {@link PairingMessages#scalarPhrase} gives {@code scalar}, from the table. */
+  private static String phrase(final Scalar scalar, final boolean primitive) {
+    return (primitive ? PRIMITIVE_PHRASES : BOXED_PHRASES).get(scalar);
+  }
+
+  /** What a refusal says a value is not, for a constant of {@code type}. */
+  private static String constantOf(final Class<?> type) {
+    return PairingMessages.scalarPhrase(Scalar.ENUM, false, type.getSimpleName());
+  }
+
+  /** What a refusal says a value is not, for a JDK value type read from text. */
+  private static String article(final Class<?> type) {
+    return PairingMessages.withArticle(type.getSimpleName());
+  }
 
   /** A {@code byte} or {@code Byte}; {@code primitive} says which a refusal names. */
   public static byte toByte(final Object raw, final boolean primitive, final String name) {
@@ -63,7 +96,7 @@ public final class MapValueConversions {
 
   /** A {@code double} or {@code Double}. */
   public static double toDouble(final Object raw, final boolean primitive, final String name) {
-    final var what = PairingMessages.scalarPhrase(Scalar.DOUBLE, primitive, null);
+    final var what = phrase(Scalar.DOUBLE, primitive);
     final double value;
     switch (raw) {
       case Double d -> {
@@ -82,7 +115,7 @@ public final class MapValueConversions {
 
   /** A {@code float} or {@code Float}. */
   public static float toFloat(final Object raw, final boolean primitive, final String name) {
-    final var what = PairingMessages.scalarPhrase(Scalar.FLOAT, primitive, null);
+    final var what = phrase(Scalar.FLOAT, primitive);
     final float value;
     switch (raw) {
       case Float f -> {
@@ -106,14 +139,15 @@ public final class MapValueConversions {
       if (text.toString().equalsIgnoreCase("true")) return true;
       if (text.toString().equalsIgnoreCase("false")) return false;
     }
-    throw ValueRefused.value(raw, PairingMessages.scalarPhrase(Scalar.BOOLEAN, primitive, null), null).under(name);
+    throw ValueRefused.value(raw, phrase(Scalar.BOOLEAN, primitive), null).under(name);
   }
 
   /** A {@code char} or {@code Character}: a {@code Character}, or text one character long. */
   public static char toChar(final Object raw, final boolean primitive, final String name) {
     if (raw instanceof Character c) return c;
-    if (raw instanceof CharSequence text && text.length() == 1) return text.charAt(0);
-    throw ValueRefused.value(raw, PairingMessages.scalarPhrase(Scalar.CHAR, primitive, null), null).under(name);
+    final var text = raw instanceof CharSequence sequence ? sequence.toString() : null;
+    if (text != null && text.length() == 1) return text.charAt(0);
+    throw ValueRefused.value(raw, phrase(Scalar.CHAR, primitive), null).under(name);
   }
 
   /** A {@code String}, from any text, a {@code CharSequence}; null for null. */
@@ -135,12 +169,11 @@ public final class MapValueConversions {
    */
   public static <E extends Enum<E>> E toEnum(final Object raw, final Class<E> type, final String name) {
     if (raw == null || type.isInstance(raw)) return type.cast(raw);
-    final var what = PairingMessages.scalarPhrase(Scalar.ENUM, false, type.getSimpleName());
-    if (!(raw instanceof CharSequence text)) throw ValueRefused.value(raw, what, null).under(name);
+    if (!(raw instanceof CharSequence text)) throw ValueRefused.value(raw, constantOf(type), null).under(name);
     try {
       return Enum.valueOf(type, text.toString());
     } catch (final IllegalArgumentException unknown) {
-      throw ValueRefused.value(raw, what, unknown).under(name);
+      throw ValueRefused.value(raw, constantOf(type), unknown).under(name);
     }
   }
 
@@ -153,17 +186,16 @@ public final class MapValueConversions {
    */
   public static <T> T toValue(final Object raw, final Class<T> type, final String name) {
     if (raw == null || type.isInstance(raw)) return type.cast(raw);
-    final var what = PairingMessages.withArticle(type.getSimpleName());
-    if (type == BigInteger.class) return type.cast(bigInteger(raw, what, name));
-    if (type == BigDecimal.class) return type.cast(bigDecimal(raw, what, name));
+    if (type == BigInteger.class) return type.cast(bigInteger(raw, phrase(Scalar.BIG_INTEGER, false), name));
+    if (type == BigDecimal.class) return type.cast(bigDecimal(raw, phrase(Scalar.BIG_DECIMAL, false), name));
     final var built = MapValueTypes.stringBuilt(type.getName()).orElseThrow(() ->
       new IllegalStateException("no conversion from text into " + type.getName())
     );
-    if (!(raw instanceof CharSequence text)) throw ValueRefused.value(raw, what, null).under(name);
+    if (!(raw instanceof CharSequence text)) throw ValueRefused.value(raw, article(type), null).under(name);
     try {
       return type.cast(built.build().apply(text.toString()));
     } catch (final RuntimeException unparsable) {
-      throw ValueRefused.value(raw, what, unparsable).under(name);
+      throw ValueRefused.value(raw, article(type), unparsable).under(name);
     }
   }
 
@@ -266,7 +298,7 @@ public final class MapValueConversions {
     final boolean primitive,
     final String name
   ) {
-    final var what = PairingMessages.scalarPhrase(to, primitive, null);
+    final var what = phrase(to, primitive);
     final long value = switch (raw) {
       case Integer i -> i;
       case Long l -> l;

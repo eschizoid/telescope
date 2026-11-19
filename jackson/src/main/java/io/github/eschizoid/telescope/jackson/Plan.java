@@ -5,12 +5,11 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
-import io.github.eschizoid.telescope.internal.pairing.MapValueConversions;
+import io.github.eschizoid.telescope.internal.pairing.JsonPropertyKeys;
 import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.Scalar;
-import io.github.eschizoid.telescope.internal.pairing.ValueRefused;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import io.github.eschizoid.telescope.mapping.Require;
@@ -18,8 +17,6 @@ import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -27,7 +24,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,7 +34,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import tools.jackson.core.JsonParser;
-import tools.jackson.core.JsonToken;
 
 /**
  * Builds the frames a {@link JsonBinder} reads with, once, when the binder is built. Every property
@@ -60,8 +55,6 @@ import tools.jackson.core.JsonToken;
  * values and does not compose them.
  */
 final class Plan {
-
-  private static final String ROW = "name it with an extract(key, accessor, converter) row";
 
   private static final Map<String, Scalar> SCALARS = Arrays.stream(Scalar.values())
     .filter(scalar -> scalar.primitive() != null)
@@ -173,7 +166,7 @@ final class Plan {
     if (writer != null) refuseUnwritableRows(type, writer, byName);
 
     // A row decides its property's key on its own; the annotations decide every other one.
-    final var annotated = new JacksonAnnotations.Keys[n];
+    final var annotated = new JsonPropertyKeys.Keys[n];
     final var keys = new String[n];
     var readsOwnName = false;
     for (var i = 0; i < n; i++) {
@@ -442,18 +435,11 @@ final class Plan {
       case SET -> container(argument(type, 0), element -> set(element, absentOf(argument(type, 0))));
       case OPTIONAL -> container(argument(type, 0), Plan::optional);
       case MAP -> map(argument(type, 0), argument(type, 1));
-      case CAST -> Resolution.reads(text(PairingMessages.withArticle(raw.getSimpleName())));
-      case AS_IS -> Resolution.reads(Plan::natural);
-      case STRING_BUILT -> Resolution.reads(stringBuilt(raw));
-      case COLLECTION_SUBTYPE -> Resolution.refused(
-        raw.getName() + " is a collection subtype; declare it as List/Set/Map/Optional, or " + ROW
-      );
-      case UNKNOWN_JDK -> Resolution.refused(raw.getName() + " can't be read from a JSON value; " + ROW);
-      case NO_BINDER -> Resolution.refused(
-        raw.getName() + " is neither a record nor a class with properties to bind; " + ROW
-      );
-      case UNSUPPORTED -> Resolution.refused(
-        type.getTypeName() + " can't be read from a JSON value (type variable / array / unsupported kind); " + ROW
+      case CAST -> Resolution.reads(raw == String.class ? JsonReads::readText : JsonReads::readCharSequence);
+      case AS_IS -> Resolution.reads(JsonReads::readNatural);
+      case STRING_BUILT -> Resolution.reads(parser -> JsonReads.readValue(parser, raw));
+      case COLLECTION_SUBTYPE, UNKNOWN_JDK, NO_BINDER, UNSUPPORTED -> Resolution.refused(
+        PairingMessages.jsonNoReading(classified.kind(), raw == null ? null : raw.getName(), type.getTypeName())
       );
     };
   }
@@ -463,173 +449,51 @@ final class Plan {
     return resolved.read() == null ? resolved : Resolution.reads(lift.apply(resolved.read()));
   }
 
-  /** A primitive or its wrapper, read only from the JSON kind it is written as. */
+  /**
+   * A primitive or its wrapper, read only from the JSON kind it is written as, by the reading the
+   * generated binder calls too.
+   */
   private static Read scalar(final String primitive, final boolean unboxed) {
-    final var what = PairingMessages.scalarPhrase(SCALARS.get(primitive), unboxed, null);
     return switch (primitive) {
-      case "int" -> integral(what, number -> MapValueConversions.toInt(number, unboxed, null));
-      case "long" -> integral(what, number -> MapValueConversions.toLong(number, unboxed, null));
-      case "short" -> integral(what, number -> MapValueConversions.toShort(number, unboxed, null));
-      case "byte" -> integral(what, number -> MapValueConversions.toByte(number, unboxed, null));
-      case "double" -> parser -> {
-        requireNumber(parser, what);
-        final var value = parser.getDoubleValue();
-        if (Double.isInfinite(value)) throw Refused.value(parser, what, null);
-        return value;
-      };
-      case "float" -> parser -> {
-        requireNumber(parser, what);
-        final var value = parser.getFloatValue();
-        if (Float.isInfinite(value)) throw Refused.value(parser, what, null);
-        return value;
-      };
-      case "boolean" -> parser ->
-        switch (parser.currentToken()) {
-          case VALUE_TRUE -> Boolean.TRUE;
-          case VALUE_FALSE -> Boolean.FALSE;
-          default -> throw Refused.value(parser, what, null);
-        };
-      case "char" -> parser -> {
-        if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
-        try {
-          return MapValueConversions.toChar(parser.getString(), unboxed, null);
-        } catch (final ValueRefused refused) {
-          throw Refused.value(parser, what, refused);
-        }
-      };
+      case "int" -> parser -> JsonReads.readInt(parser, unboxed);
+      case "long" -> parser -> JsonReads.readLong(parser, unboxed);
+      case "short" -> parser -> JsonReads.readShort(parser, unboxed);
+      case "byte" -> parser -> JsonReads.readByte(parser, unboxed);
+      case "double" -> parser -> JsonReads.readDouble(parser, unboxed);
+      case "float" -> parser -> JsonReads.readFloat(parser, unboxed);
+      case "boolean" -> parser -> JsonReads.readBoolean(parser, unboxed);
+      case "char" -> parser -> JsonReads.readChar(parser, unboxed);
       default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
   }
 
-  /**
-   * An integral value: an integer token, which jackson-core hands over as the smallest of {@code
-   * Integer}, {@code Long} and {@code BigInteger} that holds it, converted by the shared rule. A
-   * fraction is refused rather than truncated, and an integer past the range is refused rather than
-   * wrapped.
-   */
-  private static Read integral(final String what, final Function<Number, Object> convert) {
-    return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) throw Refused.value(parser, what, null);
-      try {
-        return convert.apply(parser.getNumberValue());
-      } catch (final ValueRefused outOfRange) {
-        throw Refused.value(parser, what, outOfRange);
-      }
-    };
-  }
-
-  private static void requireNumber(final JsonParser parser, final String what) {
-    final var token = parser.currentToken();
-    if (token != JsonToken.VALUE_NUMBER_INT && token != JsonToken.VALUE_NUMBER_FLOAT) {
-      throw Refused.value(parser, what, null);
-    }
-  }
-
   /** An enum constant, named by its exact name in a JSON string. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Read enumRead(final Class<?> type) {
     JacksonAnnotations.refuseRenamedConstants(type);
-    final var constants = new HashMap<String, Object>();
-    for (final var constant : type.getEnumConstants()) constants.put(((Enum<?>) constant).name(), constant);
-    final var what = PairingMessages.scalarPhrase(Scalar.ENUM, false, type.getSimpleName());
-    return parser -> {
-      if (parser.currentToken() == JsonToken.VALUE_STRING) {
-        final var constant = constants.get(parser.getString());
-        if (constant != null) return constant;
-      }
-      throw Refused.value(parser, what, null);
-    };
-  }
-
-  /** {@code String} or {@code CharSequence}: a JSON string, as it stands. */
-  private static Read text(final String what) {
-    return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
-      return parser.getString();
-    };
-  }
-
-  /**
-   * A JDK value type. {@code BigDecimal} and {@code BigInteger} are numbers in JSON and are read
-   * from a number token, every digit kept; every other type in the table is read from its text.
-   */
-  private static Read stringBuilt(final Class<?> type) {
-    final var what = PairingMessages.withArticle(type.getSimpleName());
-    if (type == BigDecimal.class) {
-      return parser -> {
-        requireNumber(parser, what);
-        return parser.getDecimalValue();
-      };
-    }
-    if (type == BigInteger.class) {
-      return parser -> {
-        if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT) throw Refused.value(parser, what, null);
-        return parser.getBigIntegerValue();
-      };
-    }
-    final var build = MapValueTypes.stringBuilt(type.getName()).orElseThrow().build();
-    return parser -> {
-      if (parser.currentToken() != JsonToken.VALUE_STRING) throw Refused.value(parser, what, null);
-      try {
-        return build.apply(parser.getString());
-      } catch (final RuntimeException unparsable) {
-        throw Refused.value(parser, what, unparsable);
-      }
-    };
+    final Class<Enum> constants = (Class<Enum>) type;
+    return parser -> JsonReads.readEnum(parser, constants);
   }
 
   /** A record or bean, built by its own frame from a JSON object. */
   private static Read nested(final Frame<?> frame) {
-    final var what = PairingMessages.withArticle(frame.type().getSimpleName());
-    return parser -> {
-      if (parser.currentToken() != JsonToken.START_OBJECT) throw Refused.value(parser, what, null);
-      return frame.read(parser);
-    };
+    final var name = frame.type().getSimpleName();
+    return parser -> JsonReads.readObject(parser, name, frame::read);
   }
 
   /** A {@code List}, from a JSON array; a {@code null} element takes its type's absent value. */
   private static Read list(final Read element, final Object absent) {
-    return parser -> {
-      if (parser.currentToken() != JsonToken.START_ARRAY) throw Refused.value(parser, "a List", null);
-      final var out = new ArrayList<>();
-      addElements(parser, element, absent, out);
-      return out;
-    };
+    return parser -> JsonReads.readList(parser, element::from, absent);
   }
 
   /** A {@code Set}, from a JSON array, in the order the array holds its elements. */
   private static Read set(final Read element, final Object absent) {
-    return parser -> {
-      if (parser.currentToken() != JsonToken.START_ARRAY) throw Refused.value(parser, "a Set", null);
-      final var out = new LinkedHashSet<>();
-      addElements(parser, element, absent, out);
-      return out;
-    };
-  }
-
-  private static void addElements(
-    final JsonParser parser,
-    final Read element,
-    final Object absent,
-    final Collection<Object> out
-  ) {
-    var index = 0;
-    for (var token = parser.nextToken(); token != JsonToken.END_ARRAY; token = parser.nextToken()) {
-      if (token == JsonToken.VALUE_NULL) {
-        out.add(absent);
-      } else {
-        try {
-          out.add(element.from(parser));
-        } catch (final Refused refused) {
-          throw refused.at(index);
-        }
-      }
-      index++;
-    }
+    return parser -> JsonReads.readSet(parser, element::from, absent);
   }
 
   /** An {@code Optional}: present for any value; the caller answers {@code null} with empty. */
   private static Read optional(final Read element) {
-    return parser -> Optional.ofNullable(element.from(parser));
+    return parser -> JsonReads.readOptional(parser, element::from);
   }
 
   /**
@@ -638,88 +502,16 @@ final class Plan {
    * literal. A key that appears twice keeps the value it holds last.
    */
   private Resolution map(final Type keyType, final Type valueType) {
-    final var key = keyRead(keyType);
-    if (key.read() == null) return key;
+    final var keyKind = MapValueTypes.classify(keyType, MODEL).kind();
+    final var keyRefusal = PairingMessages.jsonNoKeyReading(keyKind, keyType.getTypeName());
+    if (keyRefusal != null) return Resolution.refused(keyRefusal);
+    final var keyClass = rawOf(keyType);
+    if (keyKind == MapValueTypes.Kind.ENUM) JacksonAnnotations.refuseRenamedConstants(keyClass);
     final var value = resolve(valueType);
     if (value.read() == null) return value;
-    final var keyRead = key.read();
     final var valueRead = value.read();
     final var absent = absentOf(valueType);
-    return Resolution.reads(parser -> {
-      if (parser.currentToken() != JsonToken.START_OBJECT) throw Refused.value(parser, "a Map", null);
-      final var out = new LinkedHashMap<>();
-      for (var name = parser.nextName(); name != null; name = parser.nextName()) {
-        try {
-          final var k = keyRead.from(parser);
-          final var token = parser.nextToken();
-          out.put(k, token == JsonToken.VALUE_NULL ? absent : valueRead.from(parser));
-        } catch (final Refused refused) {
-          throw refused.at(name);
-        }
-      }
-      return out;
-    });
-  }
-
-  /** How a JSON key, the parser on its name, becomes a key of the declared type. */
-  private static Resolution keyRead(final Type type) {
-    final var classified = MapValueTypes.classify(type, MODEL);
-    final var raw = rawOf(type);
-    final Function<String, Object> parse;
-    final String what;
-    switch (classified.kind()) {
-      case CAST -> {
-        return Resolution.reads(JsonParser::currentName);
-      }
-      case ENUM -> {
-        JacksonAnnotations.refuseRenamedConstants(raw);
-        what = PairingMessages.scalarPhrase(Scalar.ENUM, false, raw.getSimpleName());
-        parse = name -> enumConstant(raw, name);
-      }
-      case STRING_BUILT -> {
-        what = PairingMessages.withArticle(raw.getSimpleName());
-        parse = name -> MapValueConversions.toValue(name, raw, null);
-      }
-      case SCALAR -> {
-        what = PairingMessages.scalarPhrase(SCALARS.get(classified.scalar()), false, null);
-        parse = keyScalar(classified.scalar());
-      }
-      default -> {
-        return Resolution.refused(
-          "a JSON object's keys are text, and " +
-            type.getTypeName() +
-            " is not read from text; declare the key as a String, an enum or a JDK value type, or " +
-            ROW
-        );
-      }
-    }
-    return Resolution.reads(parser -> {
-      try {
-        return parse.apply(parser.currentName());
-      } catch (final RuntimeException unparsable) {
-        throw Refused.value(parser, what, unparsable);
-      }
-    });
-  }
-
-  /** A key of a primitive's wrapper type, read from its text by the shared rule. */
-  private static Function<String, Object> keyScalar(final String primitive) {
-    return switch (primitive) {
-      case "int" -> name -> MapValueConversions.toInt(name, false, null);
-      case "long" -> name -> MapValueConversions.toLong(name, false, null);
-      case "short" -> name -> MapValueConversions.toShort(name, false, null);
-      case "byte" -> name -> MapValueConversions.toByte(name, false, null);
-      case "double" -> name -> MapValueConversions.toDouble(name, false, null);
-      case "float" -> name -> MapValueConversions.toFloat(name, false, null);
-      case "boolean" -> name -> MapValueConversions.toBoolean(name, false, null);
-      case "char" -> name -> MapValueConversions.toChar(name, false, null);
-      default -> throw new IllegalStateException("not a primitive: " + primitive);
-    };
-  }
-
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Object enumConstant(final Class<?> type, final String name) {
-    return MapValueConversions.toEnum(name, (Class) type, null);
+    return Resolution.reads(parser -> JsonReads.readMap(parser, keyClass, valueRead::from, absent));
   }
 
   /**
@@ -727,28 +519,7 @@ final class Plan {
    * Object}.
    */
   static Object natural(final JsonParser parser) {
-    return switch (parser.currentToken()) {
-      case START_OBJECT -> {
-        final var out = new LinkedHashMap<String, Object>();
-        for (var name = parser.nextName(); name != null; name = parser.nextName()) {
-          parser.nextToken();
-          out.put(name, natural(parser));
-        }
-        yield out;
-      }
-      case START_ARRAY -> {
-        final var out = new ArrayList<>();
-        while (parser.nextToken() != JsonToken.END_ARRAY) out.add(natural(parser));
-        yield out;
-      }
-      case VALUE_STRING -> parser.getString();
-      case VALUE_NUMBER_INT -> parser.getNumberValue();
-      case VALUE_NUMBER_FLOAT -> parser.getDecimalValue();
-      case VALUE_TRUE -> Boolean.TRUE;
-      case VALUE_FALSE -> Boolean.FALSE;
-      case VALUE_NULL -> null;
-      default -> throw new IllegalStateException("not a value token: " + parser.currentToken());
-    };
+    return JsonReads.readNatural(parser);
   }
 
   // ---------------------------------------------------------------------------------------------

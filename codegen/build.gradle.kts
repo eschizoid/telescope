@@ -74,6 +74,10 @@ dependencies {
     implementation(project(":internal"))
 
     testImplementation(project(":core"))
+    // The @FromJson tests compare the generated binder with telescope-jackson's runtime one, over
+    // sources that carry Jackson's annotations.
+    testImplementation(project(":jackson"))
+    testImplementation(libs.jacksonDatabind)
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)

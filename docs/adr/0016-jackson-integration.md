@@ -1,7 +1,7 @@
 # ADR-0016: `telescope-jackson` — Jackson integration via a mapper-backed module and a streaming `JsonBinder`
 
 **Status:** Accepted — grilled 2026-09-07 (two adversarial review passes; 28 findings folded in); sections 1 and 2
-shipped, section 3 not built · **Date:** 2026-09-07
+shipped, section 3's `@FromJson` shipped and its generated module not built · **Date:** 2026-09-07 (amended 2026-11-18)
 
 ## Context
 
@@ -175,6 +175,29 @@ Semantics, precisely:
   - **JPMS apps:** `ServiceLoader` ignores `META-INF/services` on the module path; the user adds
     `provides … with <generated module>` to their `module-info.java` — a processor cannot inject it; documented as user
     responsibility.
+
+_Amended 2026-11-18:_ `@FromJson` is built. The annotation is telescope-jackson's
+(`io.github.eschizoid.telescope.jackson.FromJson`); the processor, `FromJsonProcessor`, lives in telescope-codegen
+beside `FromMapProcessor` and matches `@FromJson` and the Jackson annotations by name, a no-op where they are absent, so
+an application puts telescope-codegen alone on its processor path, as for `@FromMap` and `@Bridge`. This replaces the
+section's plan of a processor in the jackson jar, which would have needed telescope-codegen beside it on the processor
+path anyway, since a bean is built through codegen's rebuilds. For a top-level record or bean it writes `<X>FromJson`,
+whose `BINDER` is a `JsonBinder<X>` made by the `JsonBinder.generated` seam: the document-level reading (one value per
+document, `readList`, `parse`) is the runtime binder's own, and only the reading of each object is generated, one method
+per record or bean the target holds. The two binders share every rule rather than restate it: the generated methods call
+`JsonReads`, the class the runtime frames read every value through; a property's key, aliases, ignoral and requirement
+are decided by `JsonPropertyKeys` in the shared pairing spec from the facts each side reads off its own model, the
+runtime through reflection and the processor through annotation mirrors; a bean is built by the strategy
+`BeanWriteStrategy.AUTO_ORDER` picks, through the builder, constructor and setter rebuilds the other telescope
+processors emit; and the refusals of types, annotations and unbuildable beans come from the same `PairingMessages`
+entries. A type the runtime refuses when the binder is built is a compile error in the same words, after `@FromJson:`.
+What the processor cannot do as the runtime does is refused by name: a bean the runtime builds through a private
+no-argument constructor, an inner class, a generic type, a nested target, and a type whose `@FromMap` binder was
+compiled apart from it. The one difference left is where a constructor's parameter names come from: the processor reads
+them from the source, the runtime from a class compiled with `-parameters` or `-g`. The generated binder takes no rows.
+
+The generated `TelescopeGeneratedModule` is not built: `TelescopeModule` takes the mappers it is given, and nothing has
+asked for a module that collects every annotated pair.
 
 ### Shipping order
 

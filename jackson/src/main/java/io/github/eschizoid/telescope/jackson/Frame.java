@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.jackson;
 
-import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.ArrayList;
 import java.util.List;
@@ -158,13 +157,6 @@ final class Frame<T> {
       missing.add("\"" + keys[i] + "\" (" + kind + " '" + names[i] + "')");
     }
     if (missing == null) return;
-    final var at = parser.currentTokenLocation();
-    final var line = at.getLineNr();
-    final var column = at.getColumnNr();
-    final var named = List.copyOf(missing);
-    final var target = type.getSimpleName();
-    throw Refused.of((path, jsonPath) ->
-      PairingMessages.jsonMissingRequired(path, jsonPath, named, target, line, column)
-    );
+    throw Refused.missing(parser, List.copyOf(missing), type.getSimpleName());
   }
 }

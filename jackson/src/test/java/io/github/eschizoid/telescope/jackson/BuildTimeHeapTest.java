@@ -11,6 +11,9 @@ import io.github.eschizoid.telescope.jackson.Fixtures.Booking;
 import io.github.eschizoid.telescope.jackson.Fixtures.Keyed;
 import io.github.eschizoid.telescope.jackson.Fixtures.Order;
 import io.github.eschizoid.telescope.jackson.Fixtures.Tree;
+import io.github.eschizoid.telescope.jackson.fromjson.BuiltBeanFromJson;
+import io.github.eschizoid.telescope.jackson.fromjson.OrderFromJson;
+import io.github.eschizoid.telescope.jackson.fromjson.PartnerBeanFromJson;
 import java.io.File;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
@@ -47,7 +50,14 @@ class BuildTimeHeapTest {
     "io.github.eschizoid.telescope.jackson.Refused",
     "io.github.eschizoid.telescope.jackson.JacksonAnnotations",
     "io.github.eschizoid.telescope.jackson.TelescopeModule",
-    "io.github.eschizoid.telescope.jackson.TelescopeModule$Builder"
+    "io.github.eschizoid.telescope.jackson.TelescopeModule$Builder",
+    "io.github.eschizoid.telescope.jackson.JsonReads",
+    // A binder @FromJson generates keeps its JsonBinder in a static field of the
+    // application's own
+    // class, which an image initializes at build time where the application asks for it.
+    "io.github.eschizoid.telescope.jackson.fromjson.OrderFromJson",
+    "io.github.eschizoid.telescope.jackson.fromjson.PartnerBeanFromJson",
+    "io.github.eschizoid.telescope.jackson.fromjson.MadeBeanFromJson"
   );
 
   @Test
@@ -78,9 +88,13 @@ class BuildTimeHeapTest {
       // Read through Jackson annotations, whose attribute values include Jackson enum
       // constants.
       TelescopeJson.fromJson(Feed.class),
-      TelescopeJson.fromJson(PartnerBean.class)
+      TelescopeJson.fromJson(PartnerBean.class),
+      OrderFromJson.BINDER,
+      PartnerBeanFromJson.BINDER,
+      BuiltBeanFromJson.BINDER
     );
     assertEquals("x", TelescopeJson.fromJson(Order.class).read("{\"number\":\"x\"}").number());
+    assertEquals("x", OrderFromJson.BINDER.read("{\"number\":\"x\"}").number());
     for (final var binder : binders) assertNull(jacksonReachable(binder, binder.toString()));
   }
 

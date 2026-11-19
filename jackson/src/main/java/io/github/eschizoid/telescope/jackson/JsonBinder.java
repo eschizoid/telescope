@@ -1,11 +1,13 @@
 package io.github.eschizoid.telescope.jackson;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Supplier;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
 import tools.jackson.core.ObjectReadContext;
@@ -53,12 +55,44 @@ public final class JsonBinder<T> {
    */
   private static volatile JsonFactory factory;
 
-  private final Frame<T> root;
+  private final Class<T> type;
+
+  /** Reads one object, the parser on its {@code START_OBJECT}, and leaves it on its end. */
+  private final JsonReads.Reader<T> object;
+
+  private final Supplier<List<OpticNode>> plan;
   private final String what;
 
   JsonBinder(final Frame<T> root) {
-    this.root = root;
-    this.what = PairingMessages.withArticle(root.type().getSimpleName());
+    this(root.type(), root::read, root::explain);
+  }
+
+  private JsonBinder(final Class<T> type, final JsonReads.Reader<T> object, final Supplier<List<OpticNode>> plan) {
+    this.type = type;
+    this.object = object;
+    this.plan = plan;
+    this.what = PairingMessages.withArticle(type.getSimpleName());
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The binder a class generated for
+   * {@link FromJson} holds: {@code object} reads one object of {@code type} with the parser on its
+   * {@code START_OBJECT}, through the readings of {@link JsonReads}, and {@code plan} is the
+   * binding plan the processor decided. Everything around the object, a document, a list, a parser
+   * the caller owns and the refusals they make, is this class's, as for a binder {@link
+   * TelescopeJson#fromJson} builds.
+   *
+   * @return the binder
+   */
+  public static <T> JsonBinder<T> generated(
+    final Class<T> type,
+    final JsonReads.Reader<T> object,
+    final List<OpticNode> plan
+  ) {
+    final var decided = List.copyOf(plan);
+    return new JsonBinder<>(Objects.requireNonNull(type, "type"), Objects.requireNonNull(object, "object"), () ->
+      decided
+    );
   }
 
   /**
@@ -168,12 +202,12 @@ public final class JsonBinder<T> {
    * @return the plan; never null
    */
   public OpticReport explain() {
-    return new OpticReport(root.explain());
+    return new OpticReport(plan.get());
   }
 
   @Override
   public String toString() {
-    return "JsonBinder[" + root.type().getName() + "]";
+    return "JsonBinder[" + type.getName() + "]";
   }
 
   private static JsonFactory factory() {
@@ -211,7 +245,7 @@ public final class JsonBinder<T> {
     if (token == JsonToken.VALUE_NULL) return null;
     try {
       if (token != JsonToken.START_OBJECT) throw Refused.value(parser, what, null);
-      return root.read(parser);
+      return object.read(parser);
     } catch (final Refused refused) {
       throw refused.toException();
     }
@@ -222,7 +256,7 @@ public final class JsonBinder<T> {
     if (token == JsonToken.VALUE_NULL) return null;
     try {
       if (token != JsonToken.START_ARRAY) {
-        throw Refused.value(parser, "an array of " + root.type().getSimpleName(), null);
+        throw Refused.value(parser, "an array of " + type.getSimpleName(), null);
       }
       final var out = new ArrayList<T>();
       var index = 0;
@@ -231,7 +265,7 @@ public final class JsonBinder<T> {
           out.add(null);
         } else if (element == JsonToken.START_OBJECT) {
           try {
-            out.add(root.read(parser));
+            out.add(object.read(parser));
           } catch (final Refused refused) {
             throw refused.at(index);
           }

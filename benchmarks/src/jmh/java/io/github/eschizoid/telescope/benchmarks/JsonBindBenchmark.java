@@ -20,16 +20,17 @@ import tools.jackson.core.json.JsonFactory;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Reading one JSON order into the same record four ways: telescope-jackson's streaming binder,
- * Jackson databind, a loop written by hand over the same {@code jackson-core} parser, and the
- * parser alone.
+ * Reading one JSON order into the same record five ways: telescope-jackson's streaming binder, the
+ * binder {@code @FromJson} generates for it, Jackson databind, a loop written by hand over the same
+ * {@code jackson-core} parser, and the parser alone.
  *
  * <p>How to read it: {@code tokensOnly} is the parse every row pays and nothing more, and {@code
  * handWritten} is the parse plus the building of the record with every decision made in source, the
  * floor a binder can approach. Both are controls: neither changes with telescope's code, so a
  * difference in either between two runs is a difference in the runners, and every ratio in that
- * pair moves with it. {@code telescope} and {@code databind} are the two being compared. Allocation
- * ({@code -Pjmh.profilers=gc}) does not depend on the runner and is the durable comparison.
+ * pair moves with it. {@code telescope}, {@code generated} and {@code databind} are the three being
+ * compared. Allocation ({@code -Pjmh.profilers=gc}) does not depend on the runner and is the
+ * durable comparison.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=JsonBindBenchmark -Pjmh.profilers=gc
@@ -39,27 +40,6 @@ import tools.jackson.databind.json.JsonMapper;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class JsonBindBenchmark {
-
-  /** A status. */
-  public enum JbStatus {
-    PLACED,
-    PAID,
-    SHIPPED,
-  }
-
-  /** One line of an order. */
-  public record JbLine(String sku, int quantity, BigDecimal price) {}
-
-  /** An order, nested one level. */
-  public record JbOrder(
-    String number,
-    String customerEmail,
-    JbStatus status,
-    long placedAt,
-    boolean gift,
-    BigDecimal total,
-    List<JbLine> lines
-  ) {}
 
   private static final String JSON =
     "{\"number\":\"SO-1001\",\"customerEmail\":\"ada@example.org\",\"status\":\"PAID\"," +
@@ -75,6 +55,11 @@ public class JsonBindBenchmark {
   @Benchmark
   public JbOrder telescope() {
     return BINDER.read(JSON);
+  }
+
+  @Benchmark
+  public JbOrder generated() {
+    return JbOrderFromJson.BINDER.read(JSON);
   }
 
   @Benchmark
