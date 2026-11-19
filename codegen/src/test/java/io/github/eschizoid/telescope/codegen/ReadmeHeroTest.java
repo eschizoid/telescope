@@ -18,10 +18,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * The README's opening example, compiled as written: a record declaring a {@code @Bridge} mapper
- * field with a renamed field, a field read through a nested object, a field computed from the whole
- * source and a dropped field. The processor must compile every row, and the generated mapper must
- * give what the runtime mapper built from the same rows gives.
+ * The README's {@code Invoice} example, compiled as written: a record declaring a {@code @Bridge}
+ * mapper field with a renamed field, a field read through a nested object, a field computed from
+ * the whole source and a dropped field. The processor must compile every row, and the generated
+ * mapper must give what the runtime mapper built from the same rows gives.
  */
 class ReadmeHeroTest {
 
