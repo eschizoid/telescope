@@ -11,12 +11,17 @@
 [![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Telescope is the mapping layer between the REST, service and entity layers of a JVM service.
+**One typed mapping layer for the whole request path: JSON, service and entity.**
 
-A service usually holds the same data three times: as the wire DTO a REST endpoint reads and writes, as the domain type
-the service works with, and as the entity it persists. Telescope gives each hop between two of those layers one typed
-mapper. You write the mapper as an ordinary Java expression with method references instead of strings, the compiler
-checks every field it names, and an annotation processor turns it into plain Java that runs in MapStruct's time.
+Every Java service carries the same data in three shapes: the JSON a REST endpoint reads and writes, the types the
+service works with, and the entities it persists. Today each crossing takes a different tool. A JSON library covers the
+wire with its own annotations. A mapper generator covers DTOs, with field names written as strings. Nothing covers the
+rest, so every team writes it by hand: the PATCH that must change only what the client sent, the entity update that must
+not replace a managed collection, the response that must not load a lazy one.
+
+Telescope covers all three crossings with one model. You write each mapping as an ordinary Java expression made of
+method references, the compiler checks every field it names, and an annotation processor turns it into plain Java that
+runs in the time of hand-written code.
 
 ```java
 public record Invoice(String id, Customer customer, long totalCents, String internalNote) {
@@ -47,6 +52,17 @@ along with everything else. Fields with the same name on both sides map without 
 `telescope-codegen` processor reads the expression and generates the conversion, which calls `id()`,
 `customer().email()` and `Money.format(invoice)` directly, with no reflection. Leave the processor off the build and the
 same field runs the same rows at run time instead, with the same result.
+
+## What you stop writing
+
+| Today, by hand or with a second tool                                    | With telescope                                                                |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| a PATCH handler full of `if (x != null) entity.setX(x)`                 | `EDITS.patchInto(entity, changes)`                                            |
+| clearing and refilling a `@OneToMany` list, setting each back-reference | the same call, through the entity's own `addLine`                             |
+| a `LazyInitializationException` when a mapper touches a lazy collection | an unloaded collection is never read                                          |
+| a controller that converts every return value to a DTO                  | `@TelescopeGetMapping(to = OrderDto.class)` on a handler returning the entity |
+| field names as strings in mapper annotations                            | method references the compiler checks and the IDE renames                     |
+| a reflective mapper for convenience, a generated one for speed          | one mapper that runs both ways, tested to give the same result                |
 
 ## One request, three hops
 
@@ -102,6 +118,19 @@ public Order change(String number, OrderChanges changes) {
   OrderMappers.EDITS.patchInto(order, changes);
   return orders.save(order);
 }
+```
+
+That one `patchInto` call stands in for the code every service writes by hand:
+
+```java
+if (changes.delivery() != null) order.setDelivery(changes.delivery());
+if (changes.discountCode() != null) order.setDiscountCode(changes.discountCode());
+if (changes.giftWrap() != null) order.setGiftWrap(changes.giftWrap());
+if (changes.lines() != null) {
+  order.getLines().clear(); // never setLines(...): Hibernate tracks this list
+  for (final var item : changes.lines()) order.addLine(LineEdits.backward(item));
+}
+// and one more branch for each field anyone adds later, if they remember
 ```
 
 `patchInto` writes only the fields the client sent into the `Order` the persistence context manages. A field left out
