@@ -74,6 +74,25 @@ tasks.named("check") {
 }
 
 tasks.jacocoTestReport {
+    // The merge by identifier writes each element through core: the element writes DeepMap builds,
+    // Mapper's in-place write of one element, and the refill and check ContainerCopy hands this
+    // module's policy. Core's own tests run with no policy registered, so only these tests reach
+    // that code. A report covers only the classes it lists, so they are listed here too, and the
+    // lines these tests execute count toward them beside the :core report's.
+    val core = project(":core")
+    dependsOn(":core:classes")
+    classDirectories.from(
+        core.layout.buildDirectory.dir("classes/java/main").map { dir ->
+            fileTree(dir) {
+                include(
+                    "io/github/eschizoid/telescope/DeepMap*.class",
+                    "io/github/eschizoid/telescope/conversion/Mapper*.class",
+                    "io/github/eschizoid/telescope/conversion/ContainerCopy*.class",
+                )
+            }
+        },
+    )
+    sourceDirectories.from(core.file("src/main/java"))
     reports {
         csv.required.set(true)
         xml.required.set(true)

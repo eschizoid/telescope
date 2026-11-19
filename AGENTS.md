@@ -305,6 +305,16 @@ from "compile-checked" to "runtime-checked" is a regression.
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
   that writes more makes `Telescope.all` fuse to a different result than the sequential fold.
+- `ContainerCopy.refuseUnwritable`, `refill` and `fill`, which a generated `into` and `patchInto` call for each
+  container property, each handed the owner, the source's container the value was converted from, and the
+  `ContainerCopy.Elements` of the element pair where its elements are written in place (null otherwise);
+  `refuseUnwritable` answers what the container policy's `check` prepared, which the same property's `refill` or `fill`
+  is handed back. `ContainerCopy.Elements` converts one sent element, checks one element's write, its own collections
+  included, and writes it. Every generated bridge declares its own as `INTO_ELEMENTS` and `PATCH_INTO_ELEMENTS` (null
+  where it writes none in place), with the `writeConverted` / `checkConverted` and `writeConvertedBack` /
+  `checkConvertedBack` statics they call, and its `BridgeFn` answers them from `targetWrite` and `sourceWrite`. On the
+  runtime path the same conversions are `Mapper.intoElements()` and `patchIntoElements()`, final, of the element pair's
+  mapper.
 - The protected `Mapper(Mapper, BridgeGrant)` and `ForwardMapper(ForwardMapper, BridgeGrant)` constructors: the class
   the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
   call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
@@ -439,11 +449,15 @@ through `ServiceLoader`, each inactive where what it consults is absent:
 | `HibernateProxies` | `ProxyResolver`        | resolves a Hibernate proxy to its entity class without initializing it, found by name, never linked    |
 
 `LoadStates` holds the load check: a container whose class is in `java.base` is never asked about, and the persistence
-API is touched only once it is known to be on the class path. Because both paths copy through `ContainerCopy`, the
-runtime mapper and every generated bridge take the policy alike. Three test tasks run in `check`: `test`, `imageTest`
-(the `imagecode` property set, so the proxy accessors run as `MhAccessors` closures), and `testWithoutTheModule`, which
-runs `WithoutTheModuleTest` with the module's classes and resources off the class path, so the same Hibernate statistics
-count what a mapping costs with no policy registered.
+API is touched only once it is known to be on the class path. The same policy merges a collection of entities by
+identifier when `into` or `patchInto` writes it into one the owner holds (`IdMerge`, over the `@Id` that `Identifiers`
+finds once per class): a converted element matching a held one is written into it in place through the element writer
+the write hands `ContainerCopy`, and refusals are made in `Policy.check`, before anything is written. Elements converted
+by a hand-written class or method pair have no element writer and are cleared and refilled. Because both paths copy and
+write through `ContainerCopy`, the runtime mapper and every generated bridge take the policy alike. Three test tasks run
+in `check`: `test`, `imageTest` (the `imagecode` property set, so the proxy accessors run as `MhAccessors` closures),
+and `testWithoutTheModule`, which runs `WithoutTheModuleTest` with the module's classes and resources off the class
+path, so the same Hibernate statistics count what a mapping costs with no policy registered.
 
 ## Module: `:jackson` (telescope-jackson)
 
@@ -804,12 +818,13 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     mappers it is given and which the Spring Boot starter installs; a streaming `JsonBinder` over `jackson-core`; and
     `@FromJson`, whose processor in telescope-codegen writes a reflection-free binder that reads through the runtime
     binder's own `JsonReads`. Quarkus 3 ships Jackson 2, so its extension does not install the module.
-17. **0017 — `telescope-jpa`.** (Accepted, amended 2026-11-12; decisions 1, 3 and 4 shipped.) Persistence-aware
-    container copies through a `ContainerCopy` SPI (an unloaded lazy collection is shared, not loaded), proxy unwrapping
-    moved out of core into a `ProxyResolver`, and starters that carry the module, inactive without
-    `jakarta.persistence`, all against the Jakarta Persistence API. The amendment drops decision 2 (leaving an unloaded
-    held collection alone on `into`) and keeps `patch` pure: in-place updates are `into`'s alone. The `share(src, tgt)`
-    row is not built.
+17. **0017 — `telescope-jpa`.** (Accepted, amended 2026-11-12 and 2026-11-19; decisions 1, 3 and 4 shipped.)
+    Persistence-aware container copies through a `ContainerCopy` SPI (an unloaded lazy collection is shared, not
+    loaded), proxy unwrapping moved out of core into a `ProxyResolver`, and starters that carry the module, inactive
+    without `jakarta.persistence`, all against the Jakarta Persistence API. The first amendment drops decision 2
+    (leaving an unloaded held collection alone on `into`) and keeps `patch` pure: in-place updates are `into`'s alone.
+    The second merges a managed collection by `@Id` on `into` and `patchInto`, on both paths, wherever the elements
+    convert through a conversion that can write in place. The `share(src, tgt)` row is not built.
 18. **0018 — Generated mapper parity with MapStruct.** (Accepted, shipped.) Closes the gaps on the `@Bridge` path in
     order: cycle guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths,
     update in place. Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.

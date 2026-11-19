@@ -157,7 +157,7 @@ class MapperIntoCollectionTest {
     @DisplayName("a source that hands the target's own collection across leaves it as it is")
     void theSameContainerOnBothSidesIsLeftAlone() {
       final var shared = new ArrayList<>(List.of("x"));
-      assertTrue(ContainerCopy.refill("S", "T", new Object(), "tags", shared, shared, true));
+      assertTrue(ContainerCopy.refill("S", "T", new Object(), "tags", shared, shared, true, null, null, null));
       assertEquals(List.of("x"), shared);
     }
   }

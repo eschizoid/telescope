@@ -66,10 +66,66 @@ What it does not change:
 - **A collection whose elements convert is still read.** `List<OrderLine>` mapped to `List<OrderLineDto>` builds a new
   list of converted elements, which needs the elements. A mapper reads only the properties its target declares, so a
   collection the target has no property for is never read in the first place, with or without this module.
-- **`into` reads the collection the entity holds.** Writing a container into an entity that already holds one clears and
-  refills that instance, so a managed `orphanRemoval` collection keeps its identity, and the elements it held are read
-  first so that a refill that fails can put them back. A held collection that cannot be read, such as a lazy one outside
+- **`into` reads the collection the entity holds.** Writing a container into an entity that already holds one writes
+  into that instance, so a managed `orphanRemoval` collection keeps its identity, and the elements it held are read
+  first so that a write that fails can put them back. A held collection that cannot be read, such as a lazy one outside
   its session, is replaced through the setter instead, and refused by the property's name where there is no setter.
+
+## A managed collection is merged by identifier
+
+`into` and `patchInto` writing a collection of entities into an entity that holds one merge it by identifier: a sent
+element whose identifier matches a held element is written into that element in place, a new one is added, and a held
+element nothing matches is removed. A row that did not change is not written.
+
+```java
+public record OrderForm(Long id, List<LineForm> lines) {}
+public record LineForm(Long id, String sku, int quantity) {}
+
+static final Mapper<OrderForm, Order> EDIT = Telescope.mapper(OrderForm.class, Order.class, writeBean(Order.class, ADDERS));
+
+final Order order = orders.findById(id).orElseThrow();
+EDIT.into(order, form);
+// A line sent as it is held:    no statement.
+// A line with a new quantity:    one UPDATE of that line, its other columns as they were.
+// A line the form leaves out:    one DELETE, through orphan removal.
+// A line sent with no id:        one INSERT, added through Order.addLine.
+```
+
+Without the module, the same `into` clears the order's lines and adds a new instance per sent line: every line the order
+held is deleted and every sent one inserted, and a sent line carrying the id of a held one fails at flush, since it is a
+new instance with the identifier of a managed one.
+
+- **The identifier is the converted element's.** The entity's `@Id` or `@EmbeddedId`, on a field or a getter, read
+  through its getter from the element the conversion built, so whatever the element conversion writes into it, by name
+  or through a row, is what is matched. A sent element with no identifier is new, and so is one whose primitive
+  identifier, a `long id`, holds 0; a boxed `Long` holding 0 is an identifier. An identifier the collection does not
+  hold is new where the entity assigns its identifiers, and refused by name where it is generated, by `@GeneratedValue`
+  or by a Hibernate generator annotation such as `@UuidGenerator`.
+- **Refused before anything is written.** One identifier sent twice is refused, and so are two elements sent with
+  different identifiers that convert into equal values of a set, which would keep one and delete the other's row. To
+  find those, each sent element is converted a second time when a converted set comes out smaller than what was sent, so
+  a `compute` row or a converter with an effect of its own runs twice for it. Two new elements, sent with no identifier,
+  that convert equal are not refused: the set keeps one and drops the other, as `forward` does without the module. The
+  check runs before the first write, through every level of collections, so a refusal in an element's own collection
+  leaves every element above it as it was. A collection nothing has loaded yet is loaded by that check, so its refusals
+  come first too.
+- **Order and sets.** A list ends in the order the elements were sent. A collection that already holds the merged
+  elements in that order is not touched, so an unchanged collection leaves its owner clean. A set whose element changed
+  its `hashCode` is refilled with the same instances, so it finds each one again. A collection that is refilled is dirty
+  to the provider, so on a `@Version` owner a reordered list or a rehashed set costs one UPDATE of the owner's version;
+  on a set mapped through a join column, Hibernate also writes the moved element's join column again.
+- **It needs a conversion that can write in place.** That is a nested pair the mapper converts property by property, or
+  the mapper of a `via(..., Mapper)` row, on both paths. Elements converted by a `via` converter class or method pair,
+  whose written properties are the hand-written code's own, are cleared and refilled as without the module, and so are
+  elements handed across unchanged, a `Map`, and elements that are not entities. On a managed owner, a converter that
+  sets the identifier of a held element still fails at flush there, as it does today; map the elements with a mapper to
+  merge them.
+- **A collection that cannot be read is not merged.** A lazy collection outside its session is written through the
+  setter, as without the module. Any other failure to load it, such as a database error, reaches the caller.
+
+The generated bridge merges the same way, through the same policy: each generated bridge carries the conversion of one
+element, its check and its write in place, and a bridge converting a collection of those elements hands it to
+`ContainerCopy`. `MergeByIdTest` and `MergeByIdEdgesTest` count the statements Hibernate issues on both paths.
 
 ## A lazy proxy is read as its entity
 
@@ -93,7 +149,7 @@ The module registers two providers through `ServiceLoader`, with a `provides` cl
 
 | Provider           | Core SPI                          | What it does                                                           |
 | ------------------ | --------------------------------- | ---------------------------------------------------------------------- |
-| `LoadedContainers` | `ContainerCopy.Policy`            | shares a same-typed container the provider has not loaded              |
+| `LoadedContainers` | `ContainerCopy.Policy`            | shares an unloaded container, merges a collection of entities by `@Id` |
 | `HibernateProxies` | `ProxyResolver` (in `conversion`) | resolves a Hibernate proxy to its entity class without initializing it |
 
 At most one active `ContainerCopy.Policy` may be registered, so an application that registers a policy of its own

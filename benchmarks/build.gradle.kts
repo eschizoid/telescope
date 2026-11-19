@@ -43,13 +43,14 @@ dependencies {
     jmhAnnotationProcessor(project(":codegen"))
     jmhAnnotationProcessor("org.mapstruct:mapstruct-processor:1.6.3")
     jmhImplementation("org.mapstruct:mapstruct:1.6.3")
-    // LoadCheckBenchmark instantiates telescope-jpa's container policy itself, from a copy of the
-    // module's jar without its service registrations (below), so every other benchmark copies
-    // through the standard policy as before. Hibernate is there so the persistence utility the
-    // policy calls asks a real provider.
+    // LoadCheckBenchmark instantiates telescope-jpa's container policy itself, and MergeByIdBenchmark
+    // registers it in a class loader of its own, both from a copy of the module's jar without its
+    // service registrations (below), so every other benchmark copies through the standard policy as
+    // before. Hibernate is there so the persistence utility the policy calls asks a real provider,
+    // and the persistence API at compile time for the entities MergeByIdBenchmark writes.
     jpaJar(project(":jpa"))
     jmhRuntimeOnly(files(jpaUnregistered))
-    jmhRuntimeOnly(libs.jakartaPersistenceApi)
+    jmhImplementation(libs.jakartaPersistenceApi)
     jmhRuntimeOnly(libs.hibernateCore)
 }
 

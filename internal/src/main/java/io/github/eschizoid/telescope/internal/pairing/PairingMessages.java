@@ -1191,6 +1191,32 @@ public final class PairingMessages {
   }
 
   /**
+   * The refusal of a container write the registered container policy makes, such as a merge by
+   * identifier finding two converted elements with one identifier, for {@code reason}, a sentence
+   * the policy writes.
+   */
+  public static String intoElementsRefused(
+    final String source,
+    final String target,
+    final String bean,
+    final String property,
+    final String reason
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into cannot write '" +
+      property +
+      "' of the " +
+      bean +
+      " it is given. " +
+      reason
+    );
+  }
+
+  /**
    * A bean written through its adders whose collection {@code property} has no adder: no public
    * instance method under any of {@code names} takes a value of {@code element}, which is null
    * where the collection names no element class.

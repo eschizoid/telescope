@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
+import io.github.eschizoid.telescope.conversion.ContainerCopy;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.Match;
@@ -490,7 +491,7 @@ public final class DeepMap {
             defaultWriterFactory
           );
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
-    final var cache = new HashMap<TypePair, Iso<?, ?>>();
+    final var cache = new PairCache(beanRefl);
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
@@ -562,7 +563,7 @@ public final class DeepMap {
     }
     sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
-    final var patchTable = patchTableOf(topSteps, source);
+    final var patchTable = patchTableOf(topSteps, source, cache);
     final Iso<A, B> guarded = cyclicPairs.isEmpty()
       ? iso
       : Iso.of(
@@ -579,11 +580,16 @@ public final class DeepMap {
    * convert them, rather than in the order the steps were resolved. A step writing no source field,
    * a constant or a computed value, comes after the rest, in the order it was resolved, and a step
    * writing its value back through a source path comes last, in the order its rows came.
+   *
+   * <p>A step converting a collection element by element through a pair {@code cache} walked, or
+   * through the mapper of a {@code via} row, carries the write of one converted element into a held
+   * one, which {@code into} and {@code patchInto} hand the container policy.
    */
   @SuppressWarnings("unchecked")
   private static Map<String, Mapper.PatchEntry> patchTableOf(
     final Map<String, FieldStep> steps,
-    final Class<?> source
+    final Class<?> source,
+    final Map<TypePair, Iso<?, ?>> cache
   ) {
     final var order = List.of((source.isRecord() ? Reflective.RECORDS : Reflective.BEANS).names(source));
     final var entries = new ArrayList<>(steps.entrySet());
@@ -598,9 +604,17 @@ public final class DeepMap {
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
     for (final var entry : entries) {
       final var step = entry.getValue();
+      final var paired = step.elements == null || !(cache instanceof PairCache walked) ? null : walked;
       patchTable.put(
         entry.getKey(),
-        new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v), step.overlay, step.read)
+        new Mapper.PatchEntry(
+          step.sourceName,
+          v -> ((Iso<Object, Object>) step.iso).from(v),
+          step.overlay,
+          step.read,
+          paired == null ? null : paired.intoWrite(step.elements),
+          paired == null ? null : paired.patchIntoWrite(step.elements)
+        )
       );
     }
     return patchTable;
@@ -1900,7 +1914,18 @@ public final class DeepMap {
                 tgtRefl,
                 forwardOnly
               );
-        final var step = new FieldStep(srcField, tgtField, rowIso);
+        final var step = new FieldStep(
+          srcField,
+          tgtField,
+          rowIso,
+          null,
+          null,
+          switch (row) {
+            case Via<?, ?> via -> viaElements(via, srcType, tgtType);
+            case SameTypedTo<?, ?, ?> __ -> elementPairOf(srcType, tgtType);
+            default -> null;
+          }
+        );
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
         // A same-typed row is a (possibly renamed) pass-through; a row carrying user
@@ -2094,7 +2119,10 @@ public final class DeepMap {
             new RowSides(source, target, name, name),
             name,
             forwardOnly
-          )
+          ),
+          null,
+          null,
+          elementPairOf(autoSrcType, autoTgtType)
         );
         byTargetName.put(name, step);
         bySourceName.put(name, step);
@@ -2173,6 +2201,8 @@ public final class DeepMap {
           ? baseIso
           : TelescopeFixups.wrap(baseIso, telescopeFixups, srcRefl, source, tgtRefl, target, beanRefl)
       );
+      // A pair whose rows write through a path is not written element by element in place.
+      if (telescopeFixups.isEmpty() && cache instanceof PairCache walked) walked.walked(key, byTargetName);
       if (topStepsOut != null) {
         // Patch writes the partial's value of a target property a source path fills back through
         // the path, after the rest of the source is rebuilt, in the order the rows came.
@@ -2411,7 +2441,14 @@ public final class DeepMap {
         null
       );
       iso = eraseIso(lazyCacheIso(cache, pair, !cyclicPairs.contains(pair), ownBridges));
-      mapper = Mapper.ofIso((Iso) cache.get(pair), source, target, patchTableOf(steps, source), List.of(), beanRefl);
+      mapper = Mapper.ofIso(
+        (Iso) cache.get(pair),
+        source,
+        target,
+        patchTableOf(steps, source, cache),
+        List.of(),
+        beanRefl
+      );
     } else {
       // A case that is no record, bean or sealed interface, such as an enum, converts as the shared
       // decision says and has no fields to patch.
@@ -4032,10 +4069,154 @@ public final class DeepMap {
     String targetName,
     Iso<?, ?> iso,
     BiFunction<Object, Object, Object> overlay,
-    Function<Object, Object> read
+    Function<Object, Object> read,
+    ElementPair elements
   ) {
     FieldStep(final String sourceName, final String targetName, final Iso<?, ?> iso) {
-      this(sourceName, targetName, iso, null, null);
+      this(sourceName, targetName, iso, null, null, null);
+    }
+
+    FieldStep(
+      final String sourceName,
+      final String targetName,
+      final Iso<?, ?> iso,
+      final BiFunction<Object, Object, Object> overlay,
+      final Function<Object, Object> read
+    ) {
+      this(sourceName, targetName, iso, overlay, read, null);
+    }
+  }
+
+  /**
+   * What converts the elements of a collection a step converts element by element: a pair the
+   * resolution walks, or the mapper of a {@code via} row. The pair is null for a via row.
+   */
+  private record ElementPair(TypePair pair, Mapper<?, ?> via) {}
+
+  /**
+   * The element pair of two collection types, each a {@code Collection} of one class, where the two
+   * classes differ; null for anything else, whose elements are handed across unchanged or are no
+   * class of their own.
+   */
+  private static ElementPair elementPairOf(final Type srcType, final Type tgtType) {
+    final var src = collectionElement(srcType);
+    final var tgt = collectionElement(tgtType);
+    return src == null || tgt == null || src == tgt ? null : new ElementPair(new TypePair(src, tgt), null);
+  }
+
+  /** The element pair of a via row whose mapper converts the two collections' elements. */
+  private static ElementPair viaElements(final Via<?, ?> via, final Type srcType, final Type tgtType) {
+    final var nested = (Mapper<?, ?>) via.nested();
+    return collectionElement(srcType) == nested.sourceClass() && collectionElement(tgtType) == nested.targetClass()
+      ? new ElementPair(null, nested)
+      : null;
+  }
+
+  /** The element class of a {@code Collection} of one class, or null. */
+  private static Class<?> collectionElement(final Type type) {
+    if (!(type instanceof ParameterizedType parameterized)) return null;
+    if (!(parameterized.getRawType() instanceof Class<?> raw) || !Collection.class.isAssignableFrom(raw)) return null;
+    final var arguments = parameterized.getActualTypeArguments();
+    return arguments.length == 1 && arguments[0] instanceof Class<?> element ? element : null;
+  }
+
+  /**
+   * The conversion of every type pair one resolution builds, and the field steps of each pair it
+   * walks, from which the write of one converted element into a held one is built for {@code into}
+   * and {@code patchInto}. Each write is built the first time a write asks for it, as the mapper of
+   * the element pair over those steps, whose own collections carry their own element writes.
+   */
+  private static final class PairCache extends HashMap<TypePair, Iso<?, ?>> {
+
+    private static final long serialVersionUID = 1L;
+
+    private final transient Reflective beanRefl;
+    private final transient Map<TypePair, Map<String, FieldStep>> walked = new ConcurrentHashMap<>();
+    private final transient Map<TypePair, Mapper<Object, Object>> mappers = new ConcurrentHashMap<>();
+
+    PairCache(final Reflective beanRefl) {
+      this.beanRefl = beanRefl;
+    }
+
+    /**
+     * Records the steps of a walked pair whose rows write through no path. A step reading no source
+     * property is then a target property nothing fills, which a nested pair leaves at its default
+     * and an element written in place keeps as it was, so it is left out.
+     */
+    void walked(final TypePair pair, final Map<String, FieldStep> steps) {
+      final var written = new LinkedHashMap<String, FieldStep>();
+      for (final var entry : steps.entrySet())
+        if (entry.getValue().sourceName != null) written.put(entry.getKey(), entry.getValue());
+      walked.put(pair, written);
+    }
+
+    Supplier<ContainerCopy.Elements> intoWrite(final ElementPair elements) {
+      return new Memo<>(() -> {
+        final var bridged = bridgeOf(elements);
+        if (bridged != null) return bridged.targetWrite();
+        final var mapper = mapperOf(elements);
+        return mapper == null ? null : mapper.intoElements();
+      });
+    }
+
+    Supplier<ContainerCopy.Elements> patchIntoWrite(final ElementPair elements) {
+      return new Memo<>(() -> {
+        final var bridged = bridgeOf(elements);
+        if (bridged != null) return bridged.sourceWrite();
+        final var mapper = mapperOf(elements);
+        return mapper == null ? null : mapper.patchIntoElements();
+      });
+    }
+
+    /**
+     * The generated bridge an element pair the resolution did not walk converts through, its own,
+     * whose writes are the bridge's; null for a pair the resolution walked or a via row's mapper.
+     */
+    private BridgeFn<?, ?> bridgeOf(final ElementPair elements) {
+      if (elements.via() != null || walked.containsKey(elements.pair())) return null;
+      final var bridge = ownBridge(elements.pair().source(), elements.pair().target(), false);
+      return bridge.isPresent() && Telescope.bridgeFnOf(bridge.get()) instanceof BridgeFn<?, ?> fn ? fn : null;
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private Mapper<Object, Object> mapperOf(final ElementPair elements) {
+      if (elements.via() != null) return (Mapper<Object, Object>) elements.via();
+      final var steps = walked.get(elements.pair());
+      if (steps == null) return null;
+      return mappers.computeIfAbsent(elements.pair(), pair ->
+        Mapper.ofIso(
+          (Iso) get(pair),
+          (Class) pair.source(),
+          (Class) pair.target(),
+          patchTableOf(steps, pair.source(), this),
+          List.of(),
+          beanRefl
+        )
+      );
+    }
+  }
+
+  /** A value computed once, the first time it is asked for; a race computes an equal value. */
+  private static final class Memo<T> implements Supplier<T> {
+
+    private static final Object UNSET = new Object();
+
+    private final Supplier<T> compute;
+    private volatile Object value = UNSET;
+
+    Memo(final Supplier<T> compute) {
+      this.compute = compute;
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public T get() {
+      var known = value;
+      if (known == UNSET) {
+        known = compute.get();
+        value = known;
+      }
+      return (T) known;
     }
   }
 

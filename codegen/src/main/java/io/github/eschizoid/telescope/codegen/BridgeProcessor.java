@@ -521,6 +521,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Set<String> reportedCalls = new HashSet<>();
 
   /**
+   * The references, as a container plan names them, of the generated bridges that convert the
+   * elements of a collection, each of which declares the element writes {@code ContainerCopy}
+   * takes. A plan naming any other class, a nested helper of its own bridge, hands none.
+   */
+  private final Set<String> elementBridges = new HashSet<>();
+
+  /**
    * The bridges, by qualified name, of the {@code @Bridge} fields still waiting for the bridges
    * their {@code via} rows call to be written, and those bridges.
    */
@@ -3646,6 +3653,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // nothing fills. A strict bridge updates a target in place itself where generated code can.
     final var intoNames = new ArrayList<String>();
     for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
+    // A collection whose elements convert through a generated bridge, a nested pair's or the one a
+    // via row's mapper field declares, is handed that bridge's conversion of one element for the
+    // container policy, and the source's container its value was converted from.
+    final var intoElements = new LinkedHashMap<String, String>();
+    final var patchIntoElements = new LinkedHashMap<String, String>();
+    final var intoSent = new LinkedHashMap<String, String>();
+    final var patchIntoSent = new LinkedHashMap<String, String>();
+    final var writeSent = new LinkedHashMap<String, String>();
+    final var writeBackSent = new LinkedHashMap<String, String>();
+    for (final var entry : fieldPlans.entrySet()) {
+      final var plan = entry.getValue();
+      if (plan.kind() != FieldPlan.Kind.LIST && plan.kind() != FieldPlan.Kind.SET) continue;
+      final var elementBridge = elementBridges.contains(plan.subBridgeName())
+        ? plan.subBridgeName()
+        : viaBridge(viaMappers.get(entry.getKey()));
+      if (elementBridge == null) continue;
+      final var sourceName = entry.getKey();
+      final var targetName = renames.getOrDefault(sourceName, sourceName);
+      final var sf = fieldByName(sourceFields, sourceName);
+      final var tf = fieldByName(targetFields, targetName);
+      intoElements.put(targetName, elementBridge + ".INTO_ELEMENTS");
+      patchIntoElements.put(sourceName, elementBridge + ".PATCH_INTO_ELEMENTS");
+      intoSent.put(targetName, readExpr(source, "source", sf));
+      patchIntoSent.put(sourceName, readExpr(target, "partial", tf));
+      writeSent.put(targetName, "sent == null ? null : " + readExpr(source, "((" + sourceFq + ") sent)", sf));
+      writeBackSent.put(sourceName, "sent == null ? null : " + readExpr(target, "((" + targetFq + ") sent)", tf));
+    }
     final var intoStatements = lenient
       ? null
       : intoStatements(
@@ -3656,7 +3690,81 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           intoNames,
           targetRebuild.adders(),
           "forward(source)",
-          null
+          null,
+          intoElements,
+          intoSent,
+          false
+        );
+    // The second half of into, and of patchInto for every property patch overlays, over one
+    // element: the check before it writes and the write, which a bridge whose pair converts the
+    // elements of a collection hands the container policy. None where into or patchInto has none,
+    // a write goes through adders, or a row writes through a path.
+    final var writesInPlace = !(lenient || hasPathRows || targetRebuild.adders());
+    final var writesBackInPlace = !(lenient ||
+      hasPathRows ||
+      sourceRebuild.adders() ||
+      sourceRebuild.kind() == Rebuild.Kind.RECORD ||
+      sourceRebuild.kind() == Rebuild.Kind.NONE);
+    final var backNames = new ArrayList<>(patchSent.keySet());
+    final var writeConverted = !writesInPlace
+      ? null
+      : intoStatements(
+          source,
+          target,
+          target,
+          targetFields,
+          intoNames,
+          false,
+          "produced",
+          null,
+          intoElements,
+          writeSent,
+          false
+        );
+    final var checkConverted = !writesInPlace
+      ? null
+      : intoStatements(
+          source,
+          target,
+          target,
+          targetFields,
+          intoNames,
+          false,
+          "produced",
+          null,
+          intoElements,
+          writeSent,
+          true
+        );
+    final var writeConvertedBack = !writesBackInPlace
+      ? null
+      : intoStatements(
+          source,
+          target,
+          source,
+          sourceFields,
+          backNames,
+          false,
+          "produced",
+          null,
+          patchIntoElements,
+          writeBackSent,
+          false
+        );
+    final var checkConvertedBack = !writesBackInPlace
+      ? null
+      : intoStatements(
+          source,
+          target,
+          source,
+          sourceFields,
+          backNames,
+          false,
+          "produced",
+          null,
+          patchIntoElements,
+          writeBackSent,
+          true
         );
     final var sentFlags = new LinkedHashMap<String, String>();
     var sentIndex = 0;
@@ -3672,7 +3780,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             new ArrayList<>(patchSent.keySet()),
             sourceRebuild.adders(),
             "__overlaid(target, partial, __sent)",
-            sentFlags
+            sentFlags,
+            patchIntoElements,
+            patchIntoSent,
+            false
           );
 
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
@@ -3831,6 +3942,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           sourceFq,
           targetFq,
           intoStatements
+        );
+        emitElementConversion(
+          out,
+          target.getTypeParameters().isEmpty() && source.getTypeParameters().isEmpty()
+            ? suppressRaw
+            : RAW_SUPPRESSION + "\n",
+          new ElementConversion("INTO_ELEMENTS", "forward", sourceFq, targetFq, "Converted"),
+          writeConverted,
+          checkConverted
+        );
+        emitElementConversion(
+          out,
+          target.getTypeParameters().isEmpty() && source.getTypeParameters().isEmpty()
+            ? backwardSuppression
+            : RAW_SUPPRESSION + "\n",
+          new ElementConversion("PATCH_INTO_ELEMENTS", "backward", targetFq, sourceFq, "ConvertedBack"),
+          writeConvertedBack,
+          checkConvertedBack
         );
         emitBridgeHandles(
           out,
@@ -4682,6 +4811,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           named.add(e.targetCase());
         }
         final var namesRaw = rawNameSuppression(named);
+        // A value of a sealed interface converts through the bridge of its own case, and the
+        // properties written differ from case to case, so this bridge writes no element in
+        // place in either direction.
+        emitElementConversion(
+          out,
+          namesRaw,
+          new ElementConversion("INTO_ELEMENTS", "forward", sourceFq, targetFq, "Converted"),
+          null,
+          null
+        );
+        emitElementConversion(
+          out,
+          namesRaw,
+          new ElementConversion("PATCH_INTO_ELEMENTS", "backward", targetFq, sourceFq, "ConvertedBack"),
+          null,
+          null
+        );
         // Sealed-dispatch via Match — the dispatch is lattice-routed (Match composes internal
         // Prism instances per permit) and exhaustiveness is verified at class-load time by
         // .exhaustive() reading getPermittedSubclasses(). Belt-and-suspenders: if the processor
@@ -4862,6 +5008,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    @Override");
     out.println("    public " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {");
     out.println("      return " + bridgeName + ".patch(base, partial);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public io.github.eschizoid.telescope.conversion.ContainerCopy.Elements targetWrite() {");
+    out.println("      return " + bridgeName + ".INTO_ELEMENTS;");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public io.github.eschizoid.telescope.conversion.ContainerCopy.Elements sourceWrite() {");
+    out.println("      return " + bridgeName + ".PATCH_INTO_ELEMENTS;");
     out.println("    }");
     out.println();
     if (patchIntoNames != null || patchIntoRefusal != null) {
@@ -6054,6 +6210,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (lenient) lenientPairs.add(subPair);
       final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, parentPkg);
       threadPathTo(parentSource, parentTarget, subSourceEl, subTargetEl, subBridgeName);
+      if (kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET) elementBridges.add(subBridgeName);
       return FieldPlan.ofKind(kind, subBridgeName);
     }
     error(
@@ -9934,6 +10091,107 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * {@code fqn}, the class a {@code via} row names, where it is the bridge a {@code @Bridge} mapper
+   * field declares, whose conversions of one element a bridge converting a collection through it
+   * hands on; null for a class written by hand, and for a null {@code fqn}.
+   */
+  private String viaBridge(final String fqn) {
+    if (fqn == null) return null;
+    if (fieldBridgePairs.containsKey(fqn)) return fqn;
+    final var type = processingEnv.getElementUtils().getTypeElement(fqn);
+    if (type == null) return null;
+    for (final var member : type.getEnclosedElements())
+      if (member.getKind() == ElementKind.FIELD && member.getSimpleName().contentEquals("INTO_ELEMENTS")) return fqn;
+    return null;
+  }
+
+  /**
+   * One direction of a bridge's conversion of one element as a container policy writes it in place:
+   * the constant holding it, the bridge's method converting one element, the class it converts from
+   * and the class it writes, and the suffix of the {@code write} and {@code check} methods it
+   * calls.
+   */
+  private record ElementConversion(String constant, String convert, String fromFq, String writtenFq, String suffix) {}
+
+  /**
+   * The {@code write<suffix>} and {@code check<suffix>} methods of {@code conversion}, whose bodies
+   * are {@code writes} and {@code checks}, and the {@code ContainerCopy.Elements} constant holding
+   * the conversion, or the constant alone, holding null, where either is null. {@code write} is
+   * {@code into} after its {@code forward}, or {@code patchInto} for every property {@code patch}
+   * overlays; {@code check} is what each reads and refuses before it writes. A bridge converting
+   * the elements of a collection through this one hands the constant to the container policy, which
+   * writes a converted element into the held element it matches.
+   */
+  private static void emitElementConversion(
+    final PrintWriter out,
+    final String suppression,
+    final ElementConversion conversion,
+    final List<String> writes,
+    final List<String> checks
+  ) {
+    final var type = "io.github.eschizoid.telescope.conversion.ContainerCopy.Elements";
+    if (writes == null || checks == null) {
+      out.println("  /** This pair writes no converted element into an existing one in place this way. */");
+      out.println("  public static final " + type + " " + conversion.constant() + " = null;");
+      out.println();
+      return;
+    }
+    final var written = conversion.writtenFq();
+    out.println("  /**");
+    out.println("   * Writes into {@code target} each property this bridge writes, the value {@code produced}");
+    out.println("   * holds for it, as {@code into} writes them, and returns {@code target}.");
+    out.println("   */");
+    out.print(suppression);
+    out.println(
+      "  public static " +
+        written +
+        " write" +
+        conversion.suffix() +
+        "(final " +
+        written +
+        " target, final " +
+        written +
+        " produced, final Object sent) {"
+    );
+    for (final var statement : writes) out.println("    " + statement);
+    out.println("  }");
+    out.println();
+    out.println("  /** Reads and refuses what {@link #write" + conversion.suffix() + "} would, writing nothing. */");
+    out.print(suppression);
+    out.println(
+      "  public static void check" +
+        conversion.suffix() +
+        "(final " +
+        written +
+        " target, final " +
+        written +
+        " produced, final Object sent) {"
+    );
+    for (final var statement : checks) out.println("    " + statement);
+    out.println("  }");
+    out.println();
+    out.println("  /** The conversion of one element {@code ContainerCopy} takes. */");
+    out.print(suppression);
+    out.println("  public static final " + type + " " + conversion.constant() + " = new " + type + "() {");
+    out.println("    @Override");
+    out.println("    public Object convert(final Object sent) {");
+    out.println("      return " + conversion.convert() + "((" + conversion.fromFq() + ") sent);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public void check(final Object held, final Object converted, final Object sent) {");
+    out.println("      check" + conversion.suffix() + "((" + written + ") held, (" + written + ") converted, sent);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public void write(final Object held, final Object converted, final Object sent) {");
+    out.println("      write" + conversion.suffix() + "((" + written + ") held, (" + written + ") converted, sent);");
+    out.println("    }");
+    out.println("  };");
+    out.println();
+  }
+
+  /**
    * The bridge's {@code into(target, source)}, whose body is {@code statements}: a null target or
    * source is refused by name, as {@code Mapper.into} refuses it, before anything converts.
    */
@@ -10548,6 +10806,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * that setter's parameter type, which binds that method whatever javac would bind for the value's
    * own type. A value of a wrapper class bound for a primitive parameter is skipped when null, as
    * the runtime writer skips it.
+   *
+   * <p>{@code elementWrites} gives, by property name, the expression of the conversion of a
+   * collection's elements where a generated bridge writes them in place, which each container write
+   * hands {@code ContainerCopy}, and {@code sentReads} the expression reading the source's
+   * container that property was converted from, read once into a local; a property neither names is
+   * handed null. Where {@code checkOnly} is true the statements read and check as the write would,
+   * before it writes, and write nothing.
    */
   private List<String> intoStatements(
     final TypeElement source,
@@ -10557,7 +10822,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<String> names,
     final boolean adders,
     final String produce,
-    final Map<String, String> sentFlags
+    final Map<String, String> sentFlags,
+    final Map<String, String> elementWrites,
+    final Map<String, String> sentReads,
+    final boolean checkOnly
   ) {
     final var bound = adders ? addersOf(target, targetFields) : null;
     if (bound != null && bound.refusal() != null) return null;
@@ -10625,11 +10893,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         continue;
       }
       final var hasSetter = setterWrite != null ? "true" : "false";
+      final var elements = elementWrites.getOrDefault(name, "null");
+      final var suffix = held.substring("__held".length());
+      // What the container policy's check prepares for this property's write, handed back to it.
+      final var prepared = "__prepared" + suffix;
+      // The source's container this property's value was converted from.
+      final var sentRead = sentReads.get(name);
+      final var sentLocal = sentRead == null ? "null" : "__sent" + suffix;
       reads.add("final var " + held + " = " + readExpr(target, "target", field) + ";");
+      if (sentRead != null) reads.add("final Object " + sentLocal + " = " + sentRead + ";");
+      reads.add("Object " + prepared + " = null;");
       checks.add(
         guardedBy(
           sent,
-          CONTAINER_COPY +
+          prepared +
+            " = " +
+            CONTAINER_COPY +
             ".refuseUnwritable(" +
             held +
             ", " +
@@ -10644,6 +10923,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             literal(target.getSimpleName().toString()) +
             ", " +
             literal(name) +
+            ", target, " +
+            elements +
+            ", " +
+            sentLocal +
             ");"
         )
       );
@@ -10660,12 +10943,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         (adder != null ? ", " + targetFq + "::" + adder.getSimpleName() : "") +
         ", " +
         hasSetter +
+        ", " +
+        elements +
+        ", " +
+        sentLocal +
+        ", " +
+        prepared +
         ")";
       if (setterWrite == null) unset.add(guardedBy(sent, call + ";"));
       else set.add(guardedBy(sent, "if (!" + call + ") { " + setterWrite + " }"));
     }
     final var statements = new ArrayList<>(reads);
     statements.addAll(checks);
+    if (checkOnly) return statements;
     statements.addAll(unset);
     statements.addAll(set);
     statements.addAll(others);
