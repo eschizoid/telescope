@@ -43,6 +43,71 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A bean whose only write path is its private fields: a no-arg constructor and no other
+   * constructor, no public setter, and no static {@code builder()}. The runtime writer and the
+   * {@code @FromJson} processor refuse such a bean in these words.
+   */
+  public static String onlyPrivateFields(final String binaryName, final String simpleName) {
+    return (
+      "Cannot write " +
+      binaryName +
+      ": it has a no-arg constructor but no public setters, no static builder(), and no all-args" +
+      " constructor, and telescope does not write private fields. Add public setters, an" +
+      " all-args constructor (compiled with -parameters or -g), or a static builder() to " +
+      simpleName +
+      ", or supply an explicit Mapping row that produces it."
+    );
+  }
+
+  /**
+   * A bean whose only strategy is a builder that cannot carry the properties {@code missing}: one
+   * it has no member for, or one whose member cannot take the property's value.
+   */
+  public static String builderCannotCarry(
+    final String binaryName,
+    final String builderBinaryName,
+    final List<String> missing,
+    final String simpleName
+  ) {
+    return (
+      "Cannot write " +
+      binaryName +
+      ": its builder " +
+      builderBinaryName +
+      " has no member that takes " +
+      missing +
+      ", and the class offers no constructor or setters to write them instead. Building through" +
+      " the builder would drop those values. Add a builder member for each, a public all-args" +
+      " constructor (compiled with -parameters or -g), or setters; or supply an explicit Mapping row" +
+      " that produces " +
+      simpleName +
+      "."
+    );
+  }
+
+  /**
+   * A bean no name-based write strategy builds: no builder, no setters, no matching constructor.
+   */
+  public static String noNameBasedWriteStrategy(final String binaryName, final int properties) {
+    return (
+      "No name-based write strategy for " +
+      binaryName +
+      " — needs a static builder(), a no-arg constructor with setters, or exactly one public" +
+      " constructor whose arity matches the property count (" +
+      properties +
+      "), whose parameter names are known, and whose parameter names line up with the" +
+      " getter-derived properties. Primary fix: compile the target class with javac" +
+      " -parameters or -g so its constructor arguments can be matched by name; inside a" +
+      " native image only -parameters keeps them. The writeBean(targetClass, CONSTRUCTOR) hint" +
+      " at the Telescope.map(...) call site is an escape hatch. It matches arguments by name" +
+      " when -parameters or -g keeps the names and every one names a property, refuses a" +
+      " constructor only some of whose names are properties, and otherwise falls back to" +
+      " POSITIONAL argument matching, in getter-discovery order (not a stable, user-defined" +
+      " canonical order), so the hint should still be paired with -parameters or -g to be safe."
+    );
+  }
+
   /** Two {@code writeBeans} defaults in one mapper. */
   public static String duplicateWriteBeansDefault() {
     return "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call.";
@@ -2113,6 +2178,43 @@ public final class PairingMessages {
       reason
     );
   }
+
+  /**
+   * Why a JSON binder has no reading for a declared type of the kind {@code kind} {@link
+   * MapValueTypes#classify} sorted it into, naming the innermost type at fault and the remedy, or
+   * null for a kind it reads. {@code binaryName} is the class's binary name, null where the type
+   * names none, and {@code typeName} the type as it is written.
+   */
+  public static String jsonNoReading(final MapValueTypes.Kind kind, final String binaryName, final String typeName) {
+    return switch (kind) {
+      case COLLECTION_SUBTYPE -> binaryName +
+      " is a collection subtype; declare it as List/Set/Map/Optional, or " +
+      JSON_ROW;
+      case UNKNOWN_JDK -> binaryName + " can't be read from a JSON value; " + JSON_ROW;
+      case NO_BINDER -> binaryName + " is neither a record nor a class with properties to bind; " + JSON_ROW;
+      case UNSUPPORTED -> typeName +
+      " can't be read from a JSON value (type variable / array / unsupported kind); " +
+      JSON_ROW;
+      default -> null;
+    };
+  }
+
+  /**
+   * Why a JSON binder cannot read the keys of a map whose key type, written {@code typeName}, is of
+   * the kind {@code kind}, or null for a key type it reads from a JSON object's text: a {@code
+   * String}, an enum, a JDK value type or a primitive's wrapper.
+   */
+  public static String jsonNoKeyReading(final MapValueTypes.Kind kind, final String typeName) {
+    return switch (kind) {
+      case CAST, ENUM, STRING_BUILT, SCALAR -> null;
+      default -> "a JSON object's keys are text, and " +
+      typeName +
+      " is not read from text; declare the key as a String, an enum or a JDK value type, or " +
+      JSON_ROW;
+    };
+  }
+
+  private static final String JSON_ROW = "name it with an extract(key, accessor, converter) row";
 
   /** A type the binder is asked to build that is neither a record nor a bean it can build. */
   public static String jsonNotBindable(final String type) {

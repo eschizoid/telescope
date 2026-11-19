@@ -7,6 +7,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.api.BankTransferDto;
 import io.github.eschizoid.telescope.demo.api.CardDto;
 import io.github.eschizoid.telescope.demo.api.ImportTrace;
+import io.github.eschizoid.telescope.demo.api.ImportedOrder;
 import io.github.eschizoid.telescope.demo.api.ImportedOrderFromMap;
 import io.github.eschizoid.telescope.demo.api.ItemsV2;
 import io.github.eschizoid.telescope.demo.api.NewLine;
@@ -28,6 +29,7 @@ import io.github.eschizoid.telescope.demo.order.OrderStatus;
 import io.github.eschizoid.telescope.demo.order.SampleData;
 import io.github.eschizoid.telescope.demo.order.Seller;
 import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.jackson.TelescopeJson;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -111,7 +113,16 @@ public final class OrderRun {
       step("the import trace finds each line's generated binder through ServiceLoader", OrderRun::importTrace)
     );
     results.add(
-      step("a partner's JSON text reads through telescope-jackson's streaming binder", OrderRun::partnerJson)
+      step(
+        "a partner's JSON text reads through the binder @FromJson generates, as the runtime one reads it",
+        OrderRun::partnerJson
+      )
+    );
+    results.add(
+      step(
+        "a carrier's scan reads from JSON through its generated binder, its record registered nowhere",
+        OrderRun::carrierScan
+      )
     );
     results.add(step("an invoice merges the order, the customer, the seller and the totals", OrderRun::invoice));
     results.add(step("orders waiting to ship are counted through a bean getter", OrderRun::countWaiting));
@@ -296,11 +307,31 @@ public final class OrderRun {
         "\",\"delivery\":\"EXPRESS\",\"giftWrap\":\"true\",\"lines\":[{\"sku\":\"CAP-03\",\"quantity\":\"4\"}]}"
     );
     expect(imported.equals(ImportedOrderFromMap.fromMap(partnerPayload("quantity"))), "imported: " + imported);
+    final var bad = "{\"customerEmail\":\"a\",\"lines\":[{\"quantity\":4}]}";
     try {
-      PartnerFeed.read("{\"customerEmail\":\"a\",\"lines\":[{\"quantity\":4}]}");
+      PartnerFeed.read(bad);
       expect(false, "a number where the feed promises text was read");
     } catch (final IllegalArgumentException refused) {
       expect(refused.getMessage().startsWith("'lines[0].quantity' got 4, not a String"), refused.getMessage());
+      try {
+        TelescopeJson.fromJson(ImportedOrder.class).read(bad);
+        expect(false, "the runtime binder read what the generated one refused");
+      } catch (final IllegalArgumentException runtime) {
+        expect(runtime.getMessage().equals(refused.getMessage()), "the runtime binder says " + runtime.getMessage());
+      }
+    }
+  }
+
+  private static void carrierScan() {
+    final var scan = CarrierScanFromJson.BINDER.read(
+      "{\"trackingNumber\":\"TRK-1001\",\"city\":\"Leeds\",\"attempt\":2,\"device\":{\"id\":7}}"
+    );
+    expect(scan.equals(new CarrierScan("TRK-1001", "Leeds", 2)), "scan: " + scan);
+    try {
+      CarrierScanFromJson.BINDER.read("{\"attempt\":2.5}");
+      expect(false, "a fraction was read into an int");
+    } catch (final IllegalArgumentException refused) {
+      expect(refused.getMessage().equals("'attempt' got 2.5, not an int, at line 1, column 12"), refused.getMessage());
     }
   }
 

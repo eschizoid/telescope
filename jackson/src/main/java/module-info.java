@@ -2,6 +2,8 @@
  * telescope-jackson: JSON at the edge of a telescope mapping, on Jackson 3.
  *
  * <ul>
+ *   <li>{@link io.github.eschizoid.telescope.jackson.FromJson @FromJson} generates the same binder
+ *       at compile time, with no reflection, through telescope-codegen's processor.
  *   <li>{@link io.github.eschizoid.telescope.jackson.TelescopeJson#fromJson TelescopeJson.fromJson}
  *       builds a {@link io.github.eschizoid.telescope.jackson.JsonBinder JsonBinder}, which reads
  *       JSON straight into a record or a bean over {@code jackson-core}'s streaming parser, with no

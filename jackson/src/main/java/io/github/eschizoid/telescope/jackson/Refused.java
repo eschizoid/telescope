@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.jackson;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.function.BiFunction;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
@@ -45,11 +46,17 @@ final class Refused extends RuntimeException {
   }
 
   /**
-   * A refusal whose whole message, given the path by Java names and the path by JSON keys, is
-   * {@code message}.
+   * The object under the parser, on its {@code END_OBJECT}, which carries no value for the required
+   * keys {@code missing}, each named beside the property it fills.
    */
-  static Refused of(final BiFunction<String, String, String> message) {
-    return new Refused(message, null);
+  static Refused missing(final JsonParser parser, final List<String> missing, final String target) {
+    final var at = parser.currentTokenLocation();
+    final var line = at.getLineNr();
+    final var column = at.getColumnNr();
+    return new Refused(
+      (path, jsonPath) -> PairingMessages.jsonMissingRequired(path, jsonPath, missing, target, line, column),
+      null
+    );
   }
 
   /** The refusal, now inside the property {@code name}, read from the JSON key {@code key}. */

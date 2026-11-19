@@ -6,10 +6,11 @@ JsonBinder<Order> orders = TelescopeJson.fromJson(Order.class);
 Order order = orders.read(body);
 ```
 
-`telescope-jackson` puts JSON at the edge of a telescope mapping, on Jackson 3. It has two parts:
+`telescope-jackson` puts JSON at the edge of a telescope mapping, on Jackson 3. It has three parts:
 
 - `TelescopeJson.fromJson` builds a `JsonBinder`, which reads JSON straight into a record or a bean over
   `jackson-core`'s streaming parser. There is no tree and no `Map` in between, and no databind.
+- `@FromJson` generates the same binder at compile time, with no reflection, for a native image or a hot path.
 - `TelescopeModule` is a Jackson databind module. For each `Mapper<Wire, Domain>` you give it, Jackson reads a `Domain`
   by reading a `Wire` and calling `forward`, and writes one by calling `backward` and writing the `Wire`.
 
@@ -167,6 +168,52 @@ plan: for each property, the key it reads and whether a missing key defaults or 
 
 `parse(JsonParser)` and `parseList(JsonParser)` read from a parser you own, such as the one a custom deserializer is
 handed: a fresh parser is advanced to its first token, and one already on a value reads from there.
+
+## Generating a binder with `@FromJson`
+
+```java
+@FromJson
+public record Order(String number, List<Line> lines, Status status) {}
+
+Order order = OrderFromJson.BINDER.read(body);
+```
+
+`@FromJson` on a top-level record or bean makes the processor write `<Name>FromJson` beside it, whose `BINDER` is a
+`JsonBinder` like the one `TelescopeJson.fromJson` builds. Its reading of each object is a parser loop written at
+compile time, so it uses no reflection, no `SerializedLambda` and no lambda metafactory, and needs no reflection
+registration in a native image. Every record or bean the target holds, a static nested one included, is read by a method
+of the same class, with no annotation of its own.
+
+The processor is `telescope-codegen`'s, beside the ones for `@FromMap` and `@Bridge`, so put that module on the
+annotation-processor path:
+
+```kotlin
+dependencies {
+    implementation("io.github.eschizoid:telescope-jackson:<version>")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:<version>")
+}
+```
+
+The generated binder reads by the rules above, through the same code: the kinds a value is read from, the Jackson
+annotations the binder reads and the ones it refuses, the keys a target's `@FromMap(required = ...)` declares, and the
+messages it refuses a document with, location included. A bean is built the way the runtime builds it: through its
+static `builder()`, a public constructor whose parameters are named after its properties, or its setters, whichever the
+shared order picks first, a setter taking a wider type than its getter included. A type the runtime binder refuses when
+it is built is refused at compile time, in the same words after `@FromJson:` in place of `TelescopeJson.fromJson:`.
+
+What the processor cannot do as the runtime does is refused by name at compile time, so a type it accepts reads the same
+through both binders:
+
+- a bean the runtime builds through a private no-argument constructor, which generated code cannot call;
+- an inner class, whose instances need an instance of the class around it;
+- a generic type, and a nested type as the target itself;
+- a type whose `@FromMap` binder was compiled apart from it, whose required keys the processor cannot read.
+
+The processor reads a constructor's parameter names from the source, where the runtime reads them from a class compiled
+with `-parameters` or `-g`; compile the bean with either, as Gradle and Maven do by default, and the two build it alike.
+The generated binder takes no rows; a type whose properties need a row reads through `TelescopeJson.fromJson`. The
+binder for a Lombok-annotated bean is written in the final round, once Lombok has added its members, so javac warns that
+the file was created in the last round and a build with `-Werror` fails, as it does for `@BeanFocus` on a Lombok type.
 
 ## Mappers as Jackson converters with `TelescopeModule`
 

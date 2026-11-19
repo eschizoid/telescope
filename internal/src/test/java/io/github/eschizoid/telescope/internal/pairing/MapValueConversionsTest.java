@@ -38,6 +38,39 @@ class MapValueConversionsTest {
     HIGH,
   }
 
+  /**
+   * Text whose characters are known only through its {@code toString}, as a lazily rendered
+   * sequence's are, so a conversion reading it any other way reads something else.
+   */
+  private static final class Rendered implements CharSequence {
+
+    private final String rendered;
+
+    Rendered(final String rendered) {
+      this.rendered = rendered;
+    }
+
+    @Override
+    public int length() {
+      return 0;
+    }
+
+    @Override
+    public char charAt(final int index) {
+      throw new IndexOutOfBoundsException(index);
+    }
+
+    @Override
+    public CharSequence subSequence(final int start, final int end) {
+      return "";
+    }
+
+    @Override
+    public String toString() {
+      return rendered;
+    }
+  }
+
   private static String refusal(final Runnable conversion) {
     return assertThrows(ValueRefused.class, conversion::run).getMessage();
   }
@@ -181,6 +214,8 @@ class MapValueConversionsTest {
       "'s' got \"ab\", not a char",
       refusal(() -> MapValueConversions.toChar(new StringBuilder("ab"), true, "s"))
     );
+    assertEquals("q", MapValueConversions.toText(new Rendered("q"), "s"));
+    assertEquals('q', MapValueConversions.toChar(new Rendered("q"), true, "c"));
     assertNull(MapValueConversions.toText(null, "s"));
     assertEquals("'s' got 12, not a String", refusal(() -> MapValueConversions.toText(12, "s")));
     assertEquals("cs", MapValueConversions.toCharSequence(new StringBuilder("cs"), "s").toString());

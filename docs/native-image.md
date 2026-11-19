@@ -25,7 +25,8 @@ native-image is what we verify. Each step prints `PASS` / `FAIL` and the process
 | New order, PATCH                           | the generated bridge's adder calls under `ADDERS`, and its generated `into` refilling the held list             |
 | Partner import                             | the reflection-free generated `@FromMap` binder — the control (no LMF, no `SerializedLambda`)                   |
 | Import trace                               | a runtime `Telescope.fromMap(...)` finding each line's generated binder through its `ServiceLoader` entry       |
-| Partner JSON                               | telescope-jackson's runtime `JsonBinder` over `jackson-core`, building each record through its canonical ctor   |
+| Partner JSON                               | the binder `@FromJson` generates, checked against the runtime `JsonBinder` building each record reflectively    |
+| Carrier scan                               | a generated `@FromJson` binder over a record with no reflection registration at all                             |
 | Invoice                                    | the generated bridge of a `@Bridge` `merge` field                                                               |
 | Orders waiting to ship                     | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)               |
 | Navigator read and update                  | `OrderDtoTelescope.of().shipping().trackingNumber()`, with the navigator in `serialization-config.json`         |

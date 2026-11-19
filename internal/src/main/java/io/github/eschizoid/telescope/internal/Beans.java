@@ -1282,24 +1282,7 @@ public final class Beans {
     if (hasNoArgConstructor(cls) && !declaresConstructorWithParameters(cls)) {
       throw new IllegalStateException(onlyPrivateFieldsMessage(cls));
     }
-    throw new IllegalStateException(
-      "No name-based write strategy for " +
-        cls.getName() +
-        " — needs a static builder(), a no-arg constructor with setters, or exactly one public" +
-        " constructor whose arity matches the" +
-        " property count (" +
-        props.length +
-        "), whose parameter names are known, and whose parameter names line up with the" +
-        " getter-derived properties. Primary fix: compile the target class with javac" +
-        " -parameters or -g so its constructor arguments can be matched by name; inside a" +
-        " native image only -parameters keeps them. The" +
-        " writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is an" +
-        " escape hatch. It matches arguments by name when -parameters or -g keeps the names" +
-        " and every one names a property, refuses a constructor only some of whose names are" +
-        " properties, and otherwise falls back to POSITIONAL argument matching, in" +
-        " getter-discovery order (not a stable, user-defined canonical order), so the hint" +
-        " should still be paired with -parameters or -g to be safe."
-    );
+    throw new IllegalStateException(PairingMessages.noNameBasedWriteStrategy(cls.getName(), props.length));
   }
 
   /** The JLS default of a primitive type, boxed: {@code 0}, {@code false} or {@code '\0'}. */
@@ -1332,20 +1315,7 @@ public final class Beans {
         member == null ? declaresInstanceField(cls, property) : !builderMemberAccepts(member, cls, property);
       if (lost) missing.add(property);
     }
-    return (
-      "Cannot write " +
-      cls.getName() +
-      ": its builder " +
-      builderType.getName() +
-      " has no member that takes " +
-      missing +
-      ", and the class offers no constructor or setters to write them instead. Building through" +
-      " the builder would drop those values. Add a builder member for each, a public all-args" +
-      " constructor (compiled with -parameters or -g), or setters; or supply an explicit Mapping row" +
-      " that produces " +
-      cls.getSimpleName() +
-      "."
-    );
+    return PairingMessages.builderCannotCarry(cls.getName(), builderType.getName(), missing, cls.getSimpleName());
   }
 
   /**
@@ -1373,15 +1343,7 @@ public final class Beans {
    * no other constructor, no public setter, and no static {@code builder()}.
    */
   private static String onlyPrivateFieldsMessage(final Class<?> cls) {
-    return (
-      "Cannot write " +
-      cls.getName() +
-      ": it has a no-arg constructor but no public setters, no static builder(), and no all-args" +
-      " constructor, and telescope does not write private fields. Add public setters, an" +
-      " all-args constructor (compiled with -parameters or -g), or a static builder() to " +
-      cls.getSimpleName() +
-      ", or supply an explicit Mapping row that produces it."
-    );
+    return PairingMessages.onlyPrivateFields(cls.getName(), cls.getSimpleName());
   }
 
   /**
