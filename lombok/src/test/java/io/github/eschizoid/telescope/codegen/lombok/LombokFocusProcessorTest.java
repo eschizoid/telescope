@@ -76,17 +76,13 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a same-module consumer can reference the emitted <X>Telescope by direct import")
+    @DisplayName("a same-module consumer can declare a field of the emitted <X>Telescope type")
     void sameRoundConsumerCanReferenceEmittedPath() {
       // SameRoundConsumer is in src/test/java alongside DataUser, both compiled in one javac pass
-      // with LombokFocusProcessor on the annotation-processor classpath, and it references
-      // DataUserTelescope by direct import rather than by name. Loading this class at all proves
-      // the consumer compiled, so the navigator symbol resolved during its binding phase and the
-      // generated surface is usable through the typed API rather than only reflectively.
-      //
-      // This does NOT gate emission order: a consumer compiled in the same pass resolves a
-      // navigator emitted in the final round just as well, so deferring every target to
-      // processingOver() leaves this green.
+      // with LombokFocusProcessor on the annotation-processor classpath, and it declares a field of
+      // type DataUserTelescope. javac resolves a field's type before it has entered the files the
+      // final round writes, so the source set compiles only when the navigator is emitted before
+      // then; this call then runs the generated surface through the typed API.
       final var result = SameRoundConsumer.shoutEmail(new DataUser("u-1", "alice@example.com"));
       assertEquals("u-1", result.getId());
       assertEquals("ALICE@EXAMPLE.COM", result.getEmail());

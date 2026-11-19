@@ -263,9 +263,9 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       return;
     }
     // The bridge is never imported. A bridge for a Lombok-annotated source is created in the last
-    // processing round, and a class created then can be named but not imported. In the mapper's own
-    // package its simple name resolves with no import at all, as the navigators already rely on.
-    // Anywhere else it is named in full.
+    // processing round, and javac resolves a class created then from a method body but not from a
+    // single-type import. In the mapper's own package its simple name resolves with no import at
+    // all, as the navigators already rely on. Anywhere else it is named in full.
     final var bridgeName =
       bridgeClass == null
         ? null

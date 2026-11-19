@@ -896,13 +896,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Whether the navigator of {@code element}, a type a navigator would descend into, is written in
-   * time to be named from the navigator being written now. javac does not resolve a name in an
-   * earlier round's file against a file written in the final round, so before the final round only
-   * a navigator written before it qualifies; in the final round any navigator written at all does.
-   * A class carrying a Lombok annotation is written by telescope-lombok's processor when that
-   * processor has taken the class as a target, and otherwise by the {@code @BeanFocus} processor in
-   * the final round, if it carries {@code @BeanFocus}. Every other navigator is written in the
-   * round its type appears.
+   * time to be named from the navigator being written now, whose hop to it returns that navigator.
+   * javac resolves a method's return type while the rounds run, and in the final round reports one
+   * naming a file written in that round as missing, so before the final round only a navigator
+   * written before it qualifies; in the final round any navigator written at all does, since every
+   * file written then is entered with the others. A class carrying a Lombok annotation is written
+   * by telescope-lombok's processor when that processor has taken the class as a target, and
+   * otherwise by the {@code @BeanFocus} processor in the final round, if it carries
+   * {@code @BeanFocus}. Every other navigator is written in the round its type appears.
    */
   protected final boolean navigatorWrittenInTime(final Element element) {
     if (element.getKind() != ElementKind.CLASS || !carriesLombokTrigger(element)) return true;

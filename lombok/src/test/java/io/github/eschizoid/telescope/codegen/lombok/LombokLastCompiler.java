@@ -76,15 +76,39 @@ final class LombokLastCompiler {
    * error diagnostics' messages, failing when the compilation succeeds.
    */
   static String errors(final Path dir, final String simpleName, final String code) throws IOException {
-    final var diagnostics = run(dir, simpleName, code, true, List.of(), new ArrayList<>());
+    return errors(dir, simpleName, code, true, List.of());
+  }
+
+  /** {@link #errors(Path, String, String)} with the processor path and javac options chosen. */
+  static String errors(
+    final Path dir,
+    final String simpleName,
+    final String code,
+    final boolean keepTelescopeLombok,
+    final List<String> extraOptions
+  ) throws IOException {
+    final var diagnostics = run(dir, simpleName, code, keepTelescopeLombok, extraOptions, new ArrayList<>());
     assertNotNull(diagnostics, "the compilation should fail");
     return diagnostics;
   }
 
   /**
-   * Runs the compilation; {@code null} when it succeeds, else its error messages, one per line.
-   * Each warning reported in a generated file is added to {@code generatedWarnings}.
+   * Compiles {@code code} as {@link #compile(Path, String, String, boolean, List)} does and returns
+   * the message of every warning javac reported, in any file or in none.
    */
+  static List<String> warnings(
+    final Path dir,
+    final String simpleName,
+    final String code,
+    final boolean keepTelescopeLombok,
+    final List<String> extraOptions
+  ) throws IOException {
+    final var warnings = new ArrayList<String>();
+    final var diagnostics = run(dir, simpleName, code, keepTelescopeLombok, extraOptions, new ArrayList<>(), warnings);
+    assertTrue(diagnostics == null, () -> "compilation failed: " + diagnostics);
+    return warnings;
+  }
+
   private static String run(
     final Path dir,
     final String simpleName,
@@ -92,6 +116,23 @@ final class LombokLastCompiler {
     final boolean keepTelescopeLombok,
     final List<String> extraOptions,
     final List<String> generatedWarnings
+  ) throws IOException {
+    return run(dir, simpleName, code, keepTelescopeLombok, extraOptions, generatedWarnings, new ArrayList<>());
+  }
+
+  /**
+   * Runs the compilation; {@code null} when it succeeds, else its errors, one per line, each as
+   * {@code file:line: message}. Each warning reported in a generated file is added to {@code
+   * generatedWarnings}, and every warning's message to {@code allWarnings}.
+   */
+  private static String run(
+    final Path dir,
+    final String simpleName,
+    final String code,
+    final boolean keepTelescopeLombok,
+    final List<String> extraOptions,
+    final List<String> generatedWarnings,
+    final List<String> allWarnings
   ) throws IOException {
     final var source = dir.resolve("src/demo/" + simpleName + ".java");
     Files.createDirectories(source.getParent());
@@ -138,13 +179,17 @@ final class LombokLastCompiler {
       final var generatedRoot = generated.toRealPath();
       for (final var d : diagnostics.getDiagnostics()) {
         if (d.getKind() != Diagnostic.Kind.WARNING && d.getKind() != Diagnostic.Kind.MANDATORY_WARNING) continue;
+        allWarnings.add(d.getMessage(Locale.ROOT));
         if (d.getSource() == null || !Path.of(d.getSource().toUri()).toRealPath().startsWith(generatedRoot)) continue;
         generatedWarnings.add(d.getSource().getName() + ":" + d.getLineNumber() + ": " + d.getMessage(Locale.ROOT));
       }
       if (ok) return null;
       final var errors = new StringBuilder();
       for (final var d : diagnostics.getDiagnostics()) {
-        if (d.getKind() == Diagnostic.Kind.ERROR) errors.append(d.getMessage(Locale.ROOT)).append('\n');
+        if (d.getKind() != Diagnostic.Kind.ERROR) continue;
+        final var file = d.getSource() == null ? "" : Path.of(d.getSource().toUri()).getFileName().toString();
+        errors.append(file).append(':').append(d.getLineNumber()).append(": ");
+        errors.append(d.getMessage(Locale.ROOT)).append('\n');
       }
       return errors.toString();
     }

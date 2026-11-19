@@ -4908,11 +4908,12 @@ class BridgeProcessorTest {
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
-      assertFalse(compilation.success(), "a bridge only the final round writes cannot be named here");
+      assertFalse(compilation.success(), "no processing round sees a bridge only the final round writes");
       assertTrue(
         compilation.hasError(
           "converts through demo.AddressToAddressDtoBridge, a bridge written only in the final round because a side" +
-            " of its pair carries a Lombok annotation"
+            " of its pair carries a Lombok annotation; no processing round sees a bridge written then, and this" +
+            " field's bridge is planned from the members of the bridge it calls"
         ),
         () -> "expected the final-round reason, saw: " + compilation.errorMessages()
       );

@@ -40,8 +40,13 @@ import javax.lang.model.util.ElementFilter;
  * visible. A target still unreadable when processing ends is run through the emit path on {@link
  * RoundEnvironment#processingOver} anyway, where the empty property list surfaces as a <em>no
  * readable properties</em> diagnostic rather than as silence. Deferring every target to that final
- * round would be simpler and is wrong: a navigator emitted only then does not exist yet when
- * same-module main code is resolved.
+ * round would be simpler and is wrong. javac compiles a final-round file with the rest, so a method
+ * body could still call the navigator, from another package by its full name or through an
+ * on-demand import. In a source entered before the final round, though, javac resolves single-type
+ * imports and the types in signatures before that file exists: no such class could name the
+ * navigator through a single-type import or declare a field or a method of its type, a navigator
+ * written earlier could not hop into it, and javac's warning that the file was created in the last
+ * round would fail a {@code -Werror} build that does not also pass {@code -nowarn}.
  */
 @SupportedAnnotationTypes({ "lombok.Data", "lombok.Value", "lombok.Builder" })
 public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
@@ -74,11 +79,11 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
         markWrittenByLombok((TypeElement) element);
       }
     }
-    // Emit on EVERY round that has fresh @Data/@Value/@Builder targets, so the navigator exists in
-    // time for same-module main code to bind against it. Lombok's patches resolve later, when the
-    // *generated* sources are themselves compiled, by which point Lombok has long finished. A
-    // round where Lombok has not yet run emits nothing useful and a later round retries: the
-    // `beanProperties()` query on an un-patched @Data returns empty, which
+    // Emit each target in the first round its bean surface reads complete, so the navigator is
+    // written before the final round and resolves wherever a type can be named. Lombok's patches
+    // resolve later, when the *generated* sources are themselves compiled, by which point Lombok
+    // has long finished. A round where Lombok has not yet run emits nothing useful and a later
+    // round retries: the `beanProperties()` query on an un-patched @Data returns empty, which
     // `emitBeanNavigatorIfReady` treats as not-ready.
     for (final var pojo : List.copyOf(pending)) {
       if (emitBeanNavigatorIfReady(pojo)) pending.remove(pojo);
