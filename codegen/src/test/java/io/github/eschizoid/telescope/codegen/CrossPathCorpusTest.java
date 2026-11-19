@@ -17610,6 +17610,331 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
   }
 
+  /** The row converting the merge cell's notes through a class written by hand. */
+  private static final String MERGE_NOTES_ROW = "via(%1$sSrc::notes, %1$sTgt::getNotes, %1$sNotes.class)";
+
+  /**
+   * A pair whose target holds collections of entities, written in place with telescope-jpa's
+   * container policy registered: the declarations, each taking {@code %1$s} as the row's prefix,
+   * the last of them the runtime row, and {@code %1$sDrive}, whose {@code run} writes a set of
+   * sources into targets it builds through the mapper it is handed and describes each outcome.
+   * {@code lines} and {@code tags} convert through nested pairs and are merged by identifier;
+   * {@code notes} convert through a {@code via} class, whose written properties are its own, and
+   * are cleared and refilled.
+   */
+  private static final List<String> MERGE_DECLARATIONS = List.of(
+    "public record %1$sSrc(String name, java.util.List<%1$sLineDto> lines, java.util.Set<%1$sTagDto> tags," +
+      " java.util.List<%1$sNoteDto> notes) {\n" +
+      "  public static %1$sSrc sample() {\n" +
+      "    return new %1$sSrc(\"s\", java.util.List.of(new %1$sLineDto(1L, \"a\", 1)),\n" +
+      "      java.util.Set.of(new %1$sTagDto(10L, \"red\")), java.util.List.of(new %1$sNoteDto(20L, \"n\")));\n" +
+      "  }\n}\n",
+    "public record %1$sLineDto(Long id, String sku, int quantity) {}\n",
+    "public record %1$sTagDto(Long id, String label) {}\n",
+    "public record %1$sNoteDto(Long id, String text) {}\n",
+    """
+    @jakarta.persistence.Entity
+    public class %1$sLine {
+      @jakarta.persistence.Id @jakarta.persistence.GeneratedValue private Long id;
+      private String sku;
+      private int quantity;
+      private String note = "kept";
+      public %1$sLine() {}
+      public Long getId() { return id; }
+      public void setId(final Long id) { this.id = id; }
+      public String getSku() { return sku; }
+      public void setSku(final String sku) { this.sku = sku; }
+      public int getQuantity() { return quantity; }
+      public void setQuantity(final int quantity) { this.quantity = quantity; }
+      public String note() { return note; }
+    }
+    """,
+    """
+    @jakarta.persistence.Entity
+    public class %1$sTag {
+      @jakarta.persistence.Id private Long id;
+      private String label;
+      public %1$sTag() {}
+      public Long getId() { return id; }
+      public void setId(final Long id) { this.id = id; }
+      public String getLabel() { return label; }
+      public void setLabel(final String label) { this.label = label; }
+      @Override public boolean equals(final Object other) {
+        return other instanceof %1$sTag tag && java.util.Objects.equals(label, tag.label);
+      }
+      @Override public int hashCode() { return java.util.Objects.hashCode(label); }
+    }
+    """,
+    """
+    @jakarta.persistence.Entity
+    public class %1$sNote {
+      @jakarta.persistence.Id @jakarta.persistence.GeneratedValue private Long id;
+      private String text;
+      public %1$sNote() {}
+      public Long getId() { return id; }
+      public void setId(final Long id) { this.id = id; }
+      public String getText() { return text; }
+      public void setText(final String text) { this.text = text; }
+    }
+    """,
+    """
+    public class %1$sNotes {
+      public static %1$sNote forward(final %1$sNoteDto dto) {
+        final var note = new %1$sNote();
+        note.setId(dto.id());
+        note.setText(dto.text());
+        return note;
+      }
+      public static %1$sNoteDto backward(final %1$sNote note) {
+        return new %1$sNoteDto(note.getId(), note.getText());
+      }
+    }
+    """,
+    """
+    public class %1$sTgt {
+      private String name;
+      private java.util.List<%1$sLine> lines = new java.util.ArrayList<>();
+      private java.util.Set<%1$sTag> tags = new java.util.HashSet<>();
+      private java.util.List<%1$sNote> notes = new java.util.ArrayList<>();
+      public %1$sTgt() {}
+      public String getName() { return name; }
+      public void setName(final String name) { this.name = name; }
+      public java.util.List<%1$sLine> getLines() { return lines; }
+      public void setLines(final java.util.List<%1$sLine> lines) { this.lines = lines; }
+      public java.util.Set<%1$sTag> getTags() { return tags; }
+      public void setTags(final java.util.Set<%1$sTag> tags) { this.tags = tags; }
+      public java.util.List<%1$sNote> getNotes() { return notes; }
+      public void setNotes(final java.util.List<%1$sNote> notes) { this.notes = notes; }
+      public static %1$sTgt sample() {
+        final var target = new %1$sTgt();
+        target.setName("t");
+        final var line = new %1$sLine();
+        line.setId(1L);
+        line.setSku("a");
+        line.setQuantity(1);
+        target.getLines().add(line);
+        final var tag = new %1$sTag();
+        tag.setId(10L);
+        tag.setLabel("red");
+        target.getTags().add(tag);
+        final var note = new %1$sNote();
+        note.setId(20L);
+        note.setText("n");
+        target.getNotes().add(note);
+        return target;
+      }
+    }
+    """,
+    fieldBridge("%1$sSrc", "%1$sTgt", MERGE_NOTES_ROW),
+    """
+    public class %1$sDrive {
+      @SuppressWarnings("unchecked")
+      public static String run(final Object given) {
+        final var mapper = (io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sTgt>) given;
+        final var out = new java.util.ArrayList<String>();
+        var target = held();
+        var lines = java.util.List.copyOf(target.getLines());
+        mapper.into(target, source(target, lines(target)));
+        out.add("unchanged: " + same(lines, target.getLines()) + " " + notes(target));
+        target = held();
+        lines = java.util.List.copyOf(target.getLines());
+        var sent = lines(target);
+        sent.set(1, new %1$sLineDto(2L, "b", 9));
+        mapper.into(target, source(target, sent));
+        out.add("changed: " + same(lines, target.getLines()) + " " + target.getLines().get(1).getQuantity() + " " +
+          notes(target));
+        target = held();
+        lines = java.util.List.copyOf(target.getLines());
+        sent = lines(target);
+        sent.removeFirst();
+        sent.add(new %1$sLineDto(null, "d", 4));
+        mapper.into(target, source(target, sent));
+        out.add("dropped and added: " + skus(target) + " " + same(lines.subList(1, 3), target.getLines().subList(0, 2)));
+        target = held();
+        lines = java.util.List.copyOf(target.getLines());
+        mapper.into(target, source(target, new java.util.ArrayList<>(lines(target).reversed())));
+        out.add("reordered: " + skus(target) + " " + same(lines.reversed(), target.getLines()));
+        target = held();
+        sent = lines(target);
+        sent.add(new %1$sLineDto(99L, "x", 1));
+        out.add("unknown: " + refusal(mapper, target, sent) + " " + target.getName() + " " + skus(target));
+        target = held();
+        sent = lines(target);
+        sent.add(new %1$sLineDto(1L, "a", 5));
+        out.add("twice: " + refusal(mapper, target, sent) + " " + target.getName());
+        target = held();
+        final var red = target.getTags().stream().filter(tag -> tag.getId() == 10L).findFirst().orElseThrow();
+        final var tags = new java.util.LinkedHashSet<%1$sTagDto>();
+        tags.add(new %1$sTagDto(10L, "crimson"));
+        tags.add(new %1$sTagDto(11L, "green"));
+        tags.add(new %1$sTagDto(12L, "blue"));
+        mapper.into(target, new %1$sSrc("held", lines(target), tags, notesOf(target)));
+        out.add("tags: " + target.getTags().contains(red) + " " + red.getLabel() + " " + target.getTags().size() + " " +
+          target.getTags().stream().anyMatch(tag -> tag == red));
+        target = held();
+        final var note = target.getNotes().getFirst();
+        mapper.into(target, source(target, lines(target)));
+        out.add("notes: " + (target.getNotes().getFirst() == note) + " " + target.getNotes().getFirst().getText());
+        return String.join("\\n", out);
+      }
+
+      private static String refusal(
+        final io.github.eschizoid.telescope.conversion.Mapper<%1$sSrc, %1$sTgt> mapper,
+        final %1$sTgt target,
+        final java.util.List<%1$sLineDto> sent
+      ) {
+        try {
+          mapper.into(target, new %1$sSrc("renamed", sent, tagsOf(target), notesOf(target)));
+          return "written";
+        } catch (final IllegalArgumentException refused) {
+          return refused.getMessage();
+        }
+      }
+
+      private static %1$sTgt held() {
+        final var target = new %1$sTgt();
+        target.setName("held");
+        for (var i = 0; i < 3; i++) {
+          final var line = new %1$sLine();
+          line.setId(i + 1L);
+          line.setSku(String.valueOf((char) ('a' + i)));
+          line.setQuantity(i + 1);
+          target.getLines().add(line);
+        }
+        final var red = new %1$sTag();
+        red.setId(10L);
+        red.setLabel("red");
+        final var green = new %1$sTag();
+        green.setId(11L);
+        green.setLabel("green");
+        target.getTags().add(red);
+        target.getTags().add(green);
+        final var note = new %1$sNote();
+        note.setId(20L);
+        note.setText("n");
+        target.getNotes().add(note);
+        return target;
+      }
+
+      private static %1$sSrc source(final %1$sTgt target, final java.util.List<%1$sLineDto> lines) {
+        return new %1$sSrc(target.getName(), lines, tagsOf(target), notesOf(target));
+      }
+
+      private static java.util.List<%1$sLineDto> lines(final %1$sTgt target) {
+        final var lines = new java.util.ArrayList<%1$sLineDto>();
+        for (final var line : target.getLines()) lines.add(new %1$sLineDto(line.getId(), line.getSku(), line.getQuantity()));
+        return lines;
+      }
+
+      private static java.util.Set<%1$sTagDto> tagsOf(final %1$sTgt target) {
+        final var tags = new java.util.LinkedHashSet<%1$sTagDto>();
+        for (final var tag : target.getTags()) tags.add(new %1$sTagDto(tag.getId(), tag.getLabel()));
+        return tags;
+      }
+
+      private static java.util.List<%1$sNoteDto> notesOf(final %1$sTgt target) {
+        final var notes = new java.util.ArrayList<%1$sNoteDto>();
+        for (final var note : target.getNotes()) notes.add(new %1$sNoteDto(note.getId(), note.getText()));
+        return notes;
+      }
+
+      private static String same(final java.util.List<%1$sLine> before, final java.util.List<%1$sLine> after) {
+        final var same = new java.util.ArrayList<Boolean>();
+        for (var i = 0; i < before.size(); i++) same.add(before.get(i) == after.get(i));
+        return same.toString();
+      }
+
+      private static String skus(final %1$sTgt target) {
+        return target.getLines().stream().map(%1$sLine::getSku).toList().toString();
+      }
+
+      private static String notes(final %1$sTgt target) {
+        return target.getLines().stream().map(%1$sLine::note).toList().toString();
+      }
+    }
+    """,
+    plainRuntime(false, MAPPING + MERGE_NOTES_ROW)
+  );
+
+  /**
+   * What both paths owe {@link #MERGE_DECLARATIONS}: an unchanged line and a changed one written in
+   * place, keeping what no form carries; a dropped line removed and a new one added after the kept
+   * ones; the converted order kept; an unknown generated identifier and an identifier sent twice
+   * refused by name before the name is written; a relabelled tag found again under its new hash
+   * beside a new one an assigned identifier names; and notes, converted by a class written by hand,
+   * refilled with new instances.
+   */
+  private static final String MERGE_OWED = String.join(
+    "\n",
+    "unchanged: [true, true, true] [kept, kept, kept]",
+    "changed: [true, true, true] 9 [kept, kept, kept]",
+    "dropped and added: [b, c, d] [true, true]",
+    "reordered: [c, b, a] [true, true, true]",
+    "unknown: Deep map %1$sSrc → %1$sTgt: into cannot write 'lines' of the %1$sTgt it is given. A converted element" +
+      " carries the identifier 99, which no element the collection holds has, and the identifier of %1$sLine is" +
+      " generated, so a new element cannot arrive with one. Send a new element without an identifier, or the" +
+      " identifier of an element the collection holds. held [a, b, c]",
+    "twice: Deep map %1$sSrc → %1$sTgt: into cannot write 'lines' of the %1$sTgt it is given. Two converted elements" +
+      " carry the identifier 1 of %1$sLine, and a held element can take the values of only one. Send each element" +
+      " once. held",
+    "tags: true crimson 3 true",
+    "notes: false n"
+  );
+
+  @Test
+  @DisplayName(
+    "a collection of entities into writes into a held one is merged by identifier the same way on both paths, its" +
+      " elements converted by a nested pair, by the element pair's own bridge or by a via row's mapper field, and one" +
+      " a hand-written class converts is refilled on both"
+  )
+  void aCollectionOfEntitiesMergesByIdentifierOnBothPaths() throws ReflectiveOperationException {
+    // The second shape gives the element pair a bridge of its own, which the runtime path then
+    // converts each line through, so its element write is that bridge's.
+    final var ownBridge = new ArrayList<>(MERGE_DECLARATIONS);
+    ownBridge.add(ownBridge.size() - 1, fieldBridge("%1$sLineDto", "%1$sLine"));
+    // The third converts the lines through a via row naming the line pair's own mapper field, the
+    // generated bridge of which the pair's bridge then converts each line through.
+    final var viaMapper = new ArrayList<>(ownBridge);
+    final var viaLines = "via(%1$sSrc::lines, %1$sTgt::getLines, %1$sLineDtoCarrier.MAPPER)";
+    viaMapper.set(
+      viaMapper.indexOf(fieldBridge("%1$sSrc", "%1$sTgt", MERGE_NOTES_ROW)),
+      fieldBridge("%1$sSrc", "%1$sTgt", MERGE_NOTES_ROW, viaLines)
+    );
+    viaMapper.set(viaMapper.size() - 1, plainRuntime(false, MAPPING + MERGE_NOTES_ROW, MAPPING + viaLines));
+    final var failures = new ArrayList<String>();
+    for (final var shape : List.of(
+      Map.entry("Mi", MERGE_DECLARATIONS),
+      Map.entry("Mo", List.copyOf(ownBridge)),
+      Map.entry("Mv", List.copyOf(viaMapper))
+    )) {
+      final var prefix = shape.getKey();
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = shape
+        .getValue()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      // Both mappers run from the classes the processor compiled, so the runtime mapper finds a
+      // bridge the element pair has of its own; the runtime row's pair has none, being no field's.
+      final var processed = bridged(all.toArray(JavaFileObject[]::new));
+      assertTrue(
+        processed.success(),
+        () -> prefix + ": the generated bridges should compile: " + processed.errorMessages()
+      );
+      final var loader = new ServicesLoader(processed);
+      final var owed = MERGE_OWED.formatted(prefix);
+      final var drive = loader.loadClass(PACKAGE + "." + prefix + "Drive").getMethod("run", Object.class);
+      final var field = loader.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      final var reflective = loader.loadClass(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var generatedGave = drive.invoke(null, field);
+      final var reflectiveGave = drive.invoke(null, reflective);
+      if (!owed.equals(generatedGave)) failures.add(prefix + ": generated gave\n" + generatedGave);
+      if (!owed.equals(reflectiveGave)) failures.add(prefix + ": reflective gave\n" + reflectiveGave);
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
+  }
+
   /**
    * What {@code mapper} gives {@code row}, whose classes {@code loader} holds: the {@link #shape}
    * of {@code forward(Src.sample())}, or of the target after {@code into} and whether the row's

@@ -36,7 +36,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.ObjDoubleConsumer;
+import java.util.function.ObjIntConsumer;
+import java.util.function.ObjLongConsumer;
 import java.util.function.Supplier;
+import java.util.function.ToDoubleFunction;
+import java.util.function.ToIntFunction;
+import java.util.function.ToLongFunction;
 
 /**
  * Reflection-based machinery for navigating and constructing JavaBeans-style POJOs. Powers {@code
@@ -461,6 +467,160 @@ public final class Beans {
     final var reader = GETTER_INVOKERS.get(beanClass).get(name);
     if (reader == null) throw new IllegalArgumentException(PairingMessages.noGetter(name, beanClass.getName()));
     return reader;
+  }
+
+  /**
+   * The copy of a primitive property {@code name} from a {@code readClass} value into a {@code
+   * writeClass} one that passes the value from getter to setter unboxed, or null where the caller
+   * is to read and write the value itself: either accessor is missing, the setter takes a type
+   * other than the getter returns, the setter cannot take a value of the property's type, or the
+   * property is a reference, which no boxing touches.
+   *
+   * <p>On the JVM the getter and setter are {@code LambdaMetafactory}-built functions of the JDK's
+   * primitive shapes, {@code ToIntFunction} and {@code ObjIntConsumer} and their {@code long} and
+   * {@code double} siblings, so the JIT inlines through them; a {@code boolean}, {@code byte},
+   * {@code short}, {@code char} or {@code float} property has no such shape and answers null, its
+   * value boxed by the caller's reader, to a cached instance for a {@code boolean} or a {@code
+   * byte}. Inside a native image, which spins no class, and where a member's module leaves no
+   * lookup to spin in, the two are one composed {@code MethodHandle} closure, as every accessor
+   * there is.
+   *
+   * @param readClass the class of the value read from
+   * @param writeClass the class of the value written into
+   * @param name the property
+   * @return the copy, taking the value written into and the value read from, or null
+   */
+  @SuppressWarnings("unchecked")
+  public static BiConsumer<Object, Object> capturedCopier(
+    final Class<?> readClass,
+    final Class<?> writeClass,
+    final String name
+  ) {
+    final var getter = GETTERS.get(readClass).get(name);
+    final var choice = setterChoice(writeClass, name);
+    if (getter == null || choice.method() == null || !choice.fit().reflects()) return null;
+    final var setter = choice.method();
+    final var type = getter.getReturnType();
+    if (!type.isPrimitive() || type != setter.getParameterTypes()[0]) return null;
+    try {
+      final var readLookup = privateLookupOrThrow(getter.getDeclaringClass(), readClass, "getter");
+      final var writeLookup = privateLookupOrThrow(setter.getDeclaringClass(), writeClass, "setter");
+      final var read = readLookup.unreflect(getter);
+      final var write = writeLookup.unreflect(setter);
+      final var readSpinner = ModuleAccess.spinner(readLookup, getter);
+      final var writeSpinner = ModuleAccess.spinner(writeLookup, setter);
+      if (readSpinner == null || writeSpinner == null) {
+        return MhAccessors.biConsumer(MethodHandles.filterArguments(write, 1, read));
+      }
+      final var reader = getter.getDeclaringClass();
+      final var writer = setter.getDeclaringClass();
+      if (type == int.class) {
+        final var get = (ToIntFunction<Object>) primitive(
+          readSpinner,
+          read,
+          ToIntFunction.class,
+          "applyAsInt",
+          int.class,
+          reader
+        );
+        final var set = (ObjIntConsumer<Object>) primitiveSetter(
+          writeSpinner,
+          write,
+          ObjIntConsumer.class,
+          int.class,
+          writer
+        );
+        return (target, from) -> set.accept(target, get.applyAsInt(from));
+      }
+      if (type == long.class) {
+        final var get = (ToLongFunction<Object>) primitive(
+          readSpinner,
+          read,
+          ToLongFunction.class,
+          "applyAsLong",
+          long.class,
+          reader
+        );
+        final var set = (ObjLongConsumer<Object>) primitiveSetter(
+          writeSpinner,
+          write,
+          ObjLongConsumer.class,
+          long.class,
+          writer
+        );
+        return (target, from) -> set.accept(target, get.applyAsLong(from));
+      }
+      if (type == double.class) {
+        final var get = (ToDoubleFunction<Object>) primitive(
+          readSpinner,
+          read,
+          ToDoubleFunction.class,
+          "applyAsDouble",
+          double.class,
+          reader
+        );
+        final var set = (ObjDoubleConsumer<Object>) primitiveSetter(
+          writeSpinner,
+          write,
+          ObjDoubleConsumer.class,
+          double.class,
+          writer
+        );
+        return (target, from) -> set.accept(target, get.applyAsDouble(from));
+      }
+      return null;
+    } catch (final IllegalStateException unreachable) {
+      return null;
+    } catch (final Throwable unbound) {
+      throw new IllegalStateException("Failed to bind the copy of '" + name + "' on " + writeClass.getName(), unbound);
+    }
+  }
+
+  /**
+   * A getter returning {@code primitive}, spun as the JDK's {@code shape}, whose method is {@code
+   * method}.
+   */
+  private static Object primitive(
+    final MethodHandles.Lookup spinner,
+    final MethodHandle handle,
+    final Class<?> shape,
+    final String method,
+    final Class<?> primitive,
+    final Class<?> declaring
+  ) throws Throwable {
+    return LambdaMetafactory.metafactory(
+      spinner,
+      method,
+      MethodType.methodType(shape),
+      MethodType.methodType(primitive, Object.class),
+      handle,
+      MethodType.methodType(primitive, declaring)
+    )
+      .getTarget()
+      .invoke();
+  }
+
+  /**
+   * A setter taking {@code primitive}, spun as the JDK's {@code shape}, whose method is {@code
+   * accept}.
+   */
+  private static Object primitiveSetter(
+    final MethodHandles.Lookup spinner,
+    final MethodHandle handle,
+    final Class<?> shape,
+    final Class<?> primitive,
+    final Class<?> declaring
+  ) throws Throwable {
+    return LambdaMetafactory.metafactory(
+      spinner,
+      "accept",
+      MethodType.methodType(shape),
+      MethodType.methodType(void.class, Object.class, primitive),
+      handle,
+      MethodType.methodType(void.class, declaring, primitive)
+    )
+      .getTarget()
+      .invoke();
   }
 
   /**

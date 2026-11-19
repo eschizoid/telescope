@@ -1,6 +1,6 @@
 # ADR-0017: `telescope-jpa` — persistence-aware container copies and proxy handling
 
-**Status:** Accepted, amended · **Date:** 2026-10-08 · **Accepted:** 2026-11-11 · **Amended:** 2026-11-12
+**Status:** Accepted, amended · **Date:** 2026-10-08 · **Accepted:** 2026-11-11 · **Amended:** 2026-11-12, 2026-11-19
 
 ## Context
 
@@ -78,9 +78,7 @@ live concurrent view or a very large container on a hot path.
 ## Not decided here
 
 Merging a managed collection by `@Id`, so a matching element is updated in place instead of the collection being cleared
-and refilled, is a later step with its own amendment. It plugs into the same `ContainerCopy` hook, but how the DTO
-side's identifier is found, how new elements and removals are ordered, and how hash-based sets and list order behave are
-not settled by this record.
+and refilled, is decided by the second amendment below.
 
 ## Open questions
 
@@ -102,3 +100,110 @@ Decisions 1, 3 and 4 shipped as written. Two parts of the record are changed.
   managed instance, so keeping a collection's identity there protects nothing the provider tracks, and refilling the
   base's collections would change the base `patch` documents it leaves as it was. The check this record asked for found
   that `patch` does not refill, and that is kept.
+
+## Amendment (2026-11-19): merging a managed collection by `@Id`
+
+With this module active, `into` and `patchInto` merge a collection of entities by identifier instead of clearing and
+refilling it: a converted element whose identifier matches an element the owner holds is written into that element in
+place, a new one is added, and a held element nothing matches is removed. Clear-and-refill keeps the collection's
+identity but not its elements'. Measured against Hibernate, with its statistics, on a loaded `orphanRemoval`
+`@OneToMany` of three elements:
+
+- refilling it with two elements that carry no identifier issues three DELETEs and two INSERTs, the INSERTs first;
+- refilling it with elements that carry the held identifiers fails at flush with "detached entity passed to persist",
+  since each converted element is a new instance carrying the identifier of a managed one;
+- writing the same values into the held elements in place issues no statement, and changing one property of one element
+  issues exactly one UPDATE.
+
+So the merge differs from clear-and-refill only where an element is matched, which today fails at flush on a managed
+owner, and, on a detached owner later passed to `EntityManager.merge`, resets every property the conversion does not
+write to a new instance's default. Where no element is matched, the merge removes every held element and adds every
+converted one, which is what clear-and-refill does.
+
+1. **The identifier is read from the converted element.** The DTO element is never inspected. Whatever the element
+   conversion writes into the entity's identifier, by name, through a `to` row or through a nested mapper, is what is
+   matched, so the pairing is the element conversion's own and both paths read the same value. The identifier is the
+   property annotated `jakarta.persistence.Id` or `EmbeddedId`, on a field or a getter of the element's class or of a
+   superclass, read through its getter; several `@Id` properties, as an `@IdClass` declares, match on all their values
+   together, and values match by `equals`. A conversion that writes nothing into the identifier leaves it as a new
+   instance of the entity holds it, so every converted element is new. Matching is scoped to the collection the owner
+   holds, so a converted element can only ever update an element of that owner's. A collection whose element class is
+   not an `@Entity`, whose identifier has no getter, and a `Map` are refilled as before; an `@ElementCollection` of
+   embeddables has no identity to merge by.
+2. **New elements, and what an identifier's value says.** A converted element whose identifier is null is new. So is one
+   whose identifier is a single property of a primitive type holding that type's default, such as a `long` holding 0,
+   which is how the provider reads an instance no row carries yet; a DTO sending a primitive `long` into a boxed `Long`
+   identifier therefore sends 0 for a new element, and a converted `Long` of 0 is an identifier like any other, since
+   null is how a boxed identifier says an element is new. A new element is added as the conversion built it, through the
+   owner's adder where the write goes through one. A non-null identifier that matches nothing is new where the
+   identifier is assigned, and refused by the property's name where it is generated: the provider assigns a new row's
+   generated identifier, and an instance arriving with one is a detached instance it refuses at flush. An identifier is
+   generated where its property is `@GeneratedValue`, or carries an annotation that Hibernate's
+   `org.hibernate.annotations.IdGeneratorType` marks, such as `@UuidGenerator`, found by name and never linked; a
+   generator another provider declares in an annotation of its own, with no `@GeneratedValue`, is not seen, and its
+   identifier is taken for an assigned one.
+3. **Refusals, made before anything is written.** Two converted elements carrying one identifier are refused by name. So
+   are two sent elements carrying different identifiers that a converted set kept one of, because they converted into
+   equal values: written as it stands, the held element the dropped one names would be removed. To read those
+   identifiers, every sent element is converted a second time, which only a set holding fewer elements than were sent
+   costs; a conversion that is not pure, a `compute` row or a converter with an effect of its own, then runs twice for
+   each of them. A dropped element that carries no identifier is not refused: it is a new element equal to another sent
+   one, and the set keeps one of the two, dropping the other silently, as `forward` drops it with or without this
+   module. Every refusal is made in a read-only check the policy runs in the pass that already refuses a container
+   nothing can write, and the check follows each matched element into its own collections, so a refusal two levels down
+   is made before the first element of the top level is written. A held collection the provider reports not loaded,
+   through `PersistenceUtil.isLoaded`, is loaded by the check, which costs no query the refill would not issue reading
+   it, so its refusals come before the first write too and no elements are put back into a collection of a versioned
+   owner. Outside its session that load fails with Hibernate's `LazyInitializationException`, matched by class name and
+   never linked; that property is then written through its setter, or refused by name where there is none, as without
+   the module. Anything else the load throws, such as a database error, reaches the caller.
+4. **Write order.** In memory, matched elements are written first, then the held collection drops what nothing matched
+   before it takes a new element, so a set never holds a new element beside the one it replaces. The order statements
+   reach the database is the provider's: Hibernate flushes an insert before an orphan deletion, so a new element that
+   takes a unique key from a removed one conflicts, exactly as it does under clear-and-refill; an element that keeps its
+   identifier is matched and updated, and conflicts with nothing.
+5. **Sets.** Writing an element in place can change the `hashCode` or the comparator position a set files it under, and
+   a set no longer finds an element filed under a stale one. After the writes, a set whose membership changed, or that
+   no longer finds every merged element, is cleared and given the merged elements again, the held instances themselves,
+   which files each under its current position. A set that ends with fewer elements than the merge produced, because two
+   held elements became equal in their writes, is refused by the property's name, with its elements put back.
+6. **List order.** A list ends in the order of the converted collection, the order `forward` gives it and clear-and-
+   refill gave it. A list that already holds the merged elements in that order is not touched. One that does not is
+   cleared and given the merged elements in that order, the held instances themselves.
+7. **What a changed collection costs.** A collection left untouched leaves its owner clean, and a versioned owner keeps
+   its version. A collection the merge clears and refills is dirty to the provider whatever it ends up holding, so on an
+   owner with a `@Version` property a reordered list or a rehashed set costs one UPDATE of the owner, the version's,
+   beside the elements' own. Measured against Hibernate, the refill adds no statement on a bag, inverse or not; on an
+   `@OrderColumn` list it updates the positions that moved; and on a set the owner maps through a join column,
+   Hibernate's snapshot of the set holds a rehashed element under its old hash, so the flush writes its join column
+   again, one UPDATE more, which any set that finds the element again costs. On an inverse (`mappedBy`) set the rehash
+   adds nothing beyond the element's own UPDATE.
+8. **The merge needs a conversion that can write in place.** Writing a converted element into a held one means writing
+   the properties the element conversion writes and no others, so telescope has to know them: a nested pair the mapper
+   converts property by property, or the mapper of a `via(..., Mapper)` row. Elements converted by a `via` converter
+   class or method pair, whose written properties are the hand-written code's own, or handed across unchanged, are
+   cleared and refilled exactly as without the module, matched or not, and so are elements of a pair whose rows write
+   through a path or whose element class the mapper builds through adders. Refusing a matched element there would break
+   two writes that work today, `into` on entities outside any persistence context and on a detached owner later passed
+   to `EntityManager.merge`, to prevent one, a managed owner, that fails at flush; that owner keeps today's behavior.
+9. **No opt-in.** The merge is automatic wherever the module is active and the element class is an entity with a
+   readable identifier, because it differs from clear-and-refill only where clear-and-refill fails or resets state. No
+   row selects it; the policy is still one active `ContainerCopy.Policy`, and `Policy.refill` is still its one hook for
+   writing a container. Each container write hands the policy the source's container it was converted from and, where
+   the elements convert through a conversion that can write in place, a `ContainerCopy.Elements`: the conversion of one
+   sent element, the check of one element's write, its own containers included, and that write. `ContainerCopy.Refill`
+   also gains a way to put a held element back without running the owner's adder on it, and a refusal by the property's
+   name that core throws on with the held collection put back. `Policy` gains the read-only `check`, whose result is
+   handed back to the refill of the same write, so the elements are matched once; whatever the check throws reaches the
+   caller.
+10. **The generated bridge does the same.** Both paths write a property into an existing target as "convert, then write
+    the converted value's properties", so an element's write is that second half for the element pair. The runtime
+    mapper takes it from the element pair it resolved: a nested pair, the pair's own bridge, or the mapper of a `via`
+    row. Every generated bridge declares its own as `INTO_ELEMENTS` and `PATCH_INTO_ELEMENTS`, and a bridge converting a
+    collection through a nested pair's bridge, or through the bridge of the `@Bridge` field a `via` row names, hands
+    that bridge's to `ContainerCopy`. Where the element pair has no in-place write on one path, it has none on the
+    other. The decision is the policy's, made once for both, and `CrossPathCorpusTest` holds the two paths to it. No
+    difference between the paths is introduced, so nothing is added to ADR-0019's registers.
+11. **Without the module.** Core's standard refill never uses the element conversion, so `into` clears and refills as
+    before, and an application without telescope-jpa sees no change. `testWithoutTheModule` counts the statements the
+    same write issues there.

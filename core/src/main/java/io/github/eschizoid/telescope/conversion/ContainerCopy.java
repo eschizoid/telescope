@@ -61,7 +61,10 @@ import java.util.function.Supplier;
  * <p>Both decisions go through one {@link Policy}. The standard policy is the behavior described
  * above. A module that knows more about a container, such as whether a persistence provider has
  * loaded it, replaces the policy as a whole by registering one implementation of {@link Policy}
- * through {@link ServiceLoader}; every mapper and every generated bridge then takes it.
+ * through {@link ServiceLoader}; every mapper and every generated bridge then takes it. Where the
+ * elements of a collection convert through a conversion that can write one element into another in
+ * place, the write hands the policy that element write too, so a policy can update a held element
+ * rather than replace it; the standard policy never uses it.
  *
  * <p>Public so generated code in any package can call it; not meant to be called directly.
  */
@@ -94,12 +97,34 @@ public final class ContainerCopy {
 
     /**
      * Writes {@link Refill#incoming()} into the container a target already holds, or through the
-     * target's adder. The standard behavior is {@link Refill#standard}.
+     * target's adder. The standard behavior is {@link Refill#standard}. A refusal the policy throws
+     * from {@link Refill#refused} is thrown on to the caller with the held container put back;
+     * anything else it throws is taken for the held container refusing the write.
      *
      * @param refill the write, with the target, its property and both containers
      */
     default void refill(final Refill refill) {
       refill.standard();
+    }
+
+    /**
+     * Looks at a write {@link #refill} is about to make, before {@code into} or {@code patchInto}
+     * writes anything to the target, and refuses it by throwing what {@link Refill#refused}
+     * returns, which leaves the target as it was. Called with every container property the call
+     * refills, the containers as they are before any write. The refill handed here only reads:
+     * {@link Refill#add}, {@link Refill#keep}, {@link Refill#writeElement} and {@link
+     * Refill#standard} throw {@link IllegalStateException}. Whatever it throws reaches the caller.
+     * The standard behavior refuses nothing.
+     *
+     * <p>What it returns is handed back to {@link #refill} for the same write, as {@link
+     * Refill#prepared()}, so work the check did, such as matching elements, need not be done twice.
+     * The containers are not changed between the two calls.
+     *
+     * @param refill the write about to be made
+     * @return what the refill of the same write is handed, or null
+     */
+    default Object check(final Refill refill) {
+      return null;
     }
 
     /**
@@ -115,30 +140,100 @@ public final class ContainerCopy {
   }
 
   /**
+   * The conversion of a collection's elements where it can write one converted element into another
+   * in place: a nested pair of a mapper, or the mapper of a {@code via} row, whose written
+   * properties are known and each have a setter. A write hands it to the policy, as {@link
+   * Refill#writeElement} and its siblings call it, so the policy can update a held element rather
+   * than replace it.
+   *
+   * <p>Codegen-support seam: a generated bridge declares one for its pair and hands it on; not
+   * meant to be implemented by hand.
+   */
+  public interface Elements {
+    /**
+     * {@code sent}, an element of the collection the source holds, converted as the conversion
+     * converts each element.
+     *
+     * @param sent the source's element
+     * @return the converted element
+     */
+    Object convert(Object sent);
+
+    /**
+     * Refuses, by throwing, what writing {@code converted} into {@code held} would refuse: a
+     * container property of the element nothing can write, or a write of one the policy refuses, at
+     * every depth, writing nothing.
+     *
+     * @param held the element written into
+     * @param converted the converted element written from
+     * @param sent the source's element {@code converted} was converted from, or null where it is
+     *     not known
+     */
+    void check(Object held, Object converted, Object sent);
+
+    /**
+     * Writes into {@code held} every property the conversion writes, the value {@code converted}
+     * holds for it, as {@code into} writes them: through each property's setter, and a container
+     * property through this same policy. Properties the conversion does not write keep the values
+     * {@code held} has.
+     *
+     * @param held the element written into
+     * @param converted the converted element written from
+     * @param sent the source's element {@code converted} was converted from, or null where it is
+     *     not known
+     */
+    void write(Object held, Object converted, Object sent);
+  }
+
+  /**
    * One container property {@code into} writes into an existing target, or the adders strategy
-   * fills: the target that holds it, its name, the container the target holds and the converted
-   * container whose elements it is to hold.
+   * fills: the target that holds it, its name, the container the target holds, the converted
+   * container whose elements it is to hold and the source's container it was converted from, and,
+   * where the elements convert through a conversion that can write one element into another in
+   * place, that conversion.
    */
   public static final class Refill {
 
+    private final String source;
+    private final String target;
     private final Object owner;
     private final String property;
     private final Object held;
     private final Object incoming;
     private final BiConsumer<Object, Object> adder;
+    private final boolean throughAdder;
+    private final Elements elements;
+    private final Object sent;
+    private final boolean writes;
+    private final Object prepared;
 
     private Refill(
-      final Object owner,
-      final String property,
-      final Object held,
+      final Write write,
       final Object incoming,
-      final BiConsumer<Object, Object> adder
+      final BiConsumer<Object, Object> adder,
+      final boolean writes,
+      final Object prepared
     ) {
-      this.owner = owner;
-      this.property = property;
-      this.held = held;
+      this.source = write.source;
+      this.target = write.target;
+      this.owner = write.owner;
+      this.property = write.property;
+      this.held = write.held;
       this.incoming = incoming;
       this.adder = adder;
+      this.throughAdder = write.adder;
+      this.elements = write.elements;
+      this.sent = write.sent;
+      this.writes = writes;
+      this.prepared = prepared;
+    }
+
+    /**
+     * What {@link Policy#check} returned for this write, or null in the check itself and where it
+     * returned nothing.
+     */
+    public Object prepared() {
+      return prepared;
     }
 
     /** The object whose property is written. */
@@ -168,16 +263,126 @@ public final class ContainerCopy {
       return incoming;
     }
 
+    /**
+     * The container of the source {@link #incoming()} was converted from, or null where it is not
+     * known: an element written in place whose own source element is not known. A converted set can
+     * hold fewer elements than it, where two elements converted equal.
+     */
+    public Object sent() {
+      return sent;
+    }
+
     /** Whether each element is added through the owner's adder rather than to {@link #held()}. */
     public boolean throughAdder() {
-      return adder != null;
+      return throughAdder;
+    }
+
+    /**
+     * Whether the elements convert through a conversion that can write one element into another in
+     * place, which {@link #writeElement}, {@link #checkElement} and {@link #convertSent} call: a
+     * nested pair of the mapper or the mapper of a {@code via} row. False for elements handed
+     * across unchanged or converted by a class or methods written by hand.
+     */
+    public boolean writesElements() {
+      return elements != null;
+    }
+
+    /**
+     * {@code element}, one of {@link #sent()}, converted as the elements convert.
+     *
+     * @param element the source's element
+     * @return the converted element
+     * @throws IllegalStateException if {@link #writesElements()} is false
+     */
+    public Object convertSent(final Object element) {
+      return conversion().convert(element);
+    }
+
+    /**
+     * Refuses, by throwing, what writing {@code converted} into {@code held} would refuse at any
+     * depth, writing nothing, as {@link Elements#check} does.
+     *
+     * @param held an element of {@link #held()}
+     * @param converted an element of {@link #incoming()}
+     * @param sentElement the element of {@link #sent()} {@code converted} was converted from, or
+     *     null where it is not known
+     * @throws IllegalStateException if {@link #writesElements()} is false
+     */
+    public void checkElement(final Object held, final Object converted, final Object sentElement) {
+      final var conversion = conversion();
+      if (!writes) {
+        conversion.check(held, converted, sentElement);
+        return;
+      }
+      try {
+        conversion.check(held, converted, sentElement);
+      } catch (final Refused refused) {
+        throw refused;
+      } catch (final RuntimeException rejected) {
+        throw new PassedOn(rejected);
+      }
+    }
+
+    /**
+     * Writes {@code converted} into {@code held} in place, as {@link Elements#write} does. What it
+     * throws reaches the caller once the held container has its elements back, never past it to the
+     * setter.
+     *
+     * @param held an element of {@link #held()}
+     * @param converted an element of {@link #incoming()}
+     * @param sentElement the element of {@link #sent()} {@code converted} was converted from, or
+     *     null where it is not known
+     * @throws IllegalStateException if {@link #writesElements()} is false, or this refill only
+     *     reads
+     */
+    public void writeElement(final Object held, final Object converted, final Object sentElement) {
+      writing();
+      final var conversion = conversion();
+      try {
+        conversion.write(held, converted, sentElement);
+      } catch (final Refused refused) {
+        throw refused;
+      } catch (final RuntimeException rejected) {
+        throw new PassedOn(rejected);
+      }
+    }
+
+    private Elements conversion() {
+      if (elements == null) throw new IllegalStateException(
+        "the elements of '" + property + "' are not written in place"
+      );
+      return elements;
     }
 
     /** Adds one element as this write adds it: through the owner's adder, or to {@link #held()}. */
     @SuppressWarnings("unchecked")
     public void add(final Object element) {
+      writing();
       if (adder != null) adder.accept(owner, element);
       else ((Collection<Object>) held).add(element);
+    }
+
+    /**
+     * Puts {@code element}, one {@link #held()} held before this write, back into it directly,
+     * never through the owner's adder, which a new element is added through.
+     */
+    @SuppressWarnings("unchecked")
+    public void keep(final Object element) {
+      writing();
+      ((Collection<Object>) held).add(element);
+    }
+
+    /**
+     * The refusal of this write, by the property's name, for {@code reason}, for the policy to
+     * throw. Thrown from {@link Policy#check}, it leaves the target as it was; thrown from {@link
+     * Policy#refill}, it reaches the caller with the held container's elements put back, whether or
+     * not the property has a setter.
+     *
+     * @param reason why the write is refused, a sentence of its own
+     * @return the exception to throw
+     */
+    public IllegalArgumentException refused(final String reason) {
+      return new Refused(PairingMessages.intoElementsRefused(source, target, beanOf(owner), property, reason));
     }
 
     /**
@@ -185,7 +390,38 @@ public final class ContainerCopy {
      * through the adder where there is one, and puts every entry where the property is a map.
      */
     public void standard() {
+      writing();
       standardRefill(owner, held, incoming, adder);
+    }
+
+    private void writing() {
+      if (!writes) throw new IllegalStateException("a refill handed to Policy.check only reads");
+    }
+  }
+
+  /**
+   * What one container write names before the policy is asked: the mapper's two classes, the owner,
+   * the property, the container the owner holds, whether an adder fills it, the conversion of its
+   * elements and the source's container.
+   */
+  private record Write(
+    String source,
+    String target,
+    Object owner,
+    String property,
+    Object held,
+    boolean adder,
+    Elements elements,
+    Object sent
+  ) {}
+
+  /** A refusal a {@link Policy} makes of a write, which reaches the caller as it is. */
+  private static final class Refused extends IllegalArgumentException {
+
+    private static final long serialVersionUID = 1L;
+
+    Refused(final String message) {
+      super(message);
     }
   }
 
@@ -230,8 +466,10 @@ public final class ContainerCopy {
    * Refuses, by name, a container property {@code into} cannot write at all, as {@link
    * CollectionWrites#intoWrite} decides it from what is known before anything is written: the
    * target holds no container, or an unmodifiable JDK one, and has no setter, and no adder fills
-   * it. Called for every container property before {@code into} writes anything, so a call refused
-   * here leaves the target as it was.
+   * it. A property the call refills is then shown to the registered {@link Policy}'s {@link
+   * Policy#check}, which may refuse it too; whatever the check throws reaches the caller. Called
+   * for every container property before {@code into} writes anything, so a call refused here leaves
+   * the target as it was.
    *
    * @param held the container the target holds for {@code property}, or null
    * @param incoming the container converted from the source, or null
@@ -241,9 +479,17 @@ public final class ContainerCopy {
    * @param target the simple name of the mapper's target class
    * @param bean the simple name of the target's class
    * @param property the name of the property
-   * @throws IllegalArgumentException if nothing can write {@code property}
+   * @param owner the target whose property is written
+   * @param elements the conversion of the elements where it can write one into another in place, or
+   *     null
+   * @param sent the source's container {@code incoming} was converted from, or null where it is not
+   *     known
+   * @return what the policy's check prepared for the refill of this property, to be handed to
+   *     {@link #refill} or {@link #fill}; null where it prepared nothing
+   * @throws IllegalArgumentException if nothing can write {@code property}, or the policy refuses
+   *     the write
    */
-  public static void refuseUnwritable(
+  public static Object refuseUnwritable(
     final Object held,
     final Object incoming,
     final boolean setter,
@@ -251,10 +497,16 @@ public final class ContainerCopy {
     final String source,
     final String target,
     final String bean,
-    final String property
+    final String property,
+    final Object owner,
+    final Elements elements,
+    final Object sent
   ) {
     final var write = CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder);
     if (write == CollectionWrites.IntoWrite.REFUSE) throw unwritable(source, target, bean, property, held, null);
+    if (write != CollectionWrites.IntoWrite.REFILL || POLICY == STANDARD) return null;
+    final var named = new Write(source, target, owner, property, held, adder, elements, sent);
+    return POLICY.check(new Refill(named, incoming, null, false, null));
   }
 
   /**
@@ -266,7 +518,8 @@ public final class ContainerCopy {
    * container, holds one that cannot be changed, or {@code incoming} is null. A held container
    * whose refill throws, as one that cannot change throws {@link UnsupportedOperationException} and
    * a sorted set handed a null throws {@link NullPointerException}, has its elements put back and
-   * is treated as one that cannot be changed.
+   * is treated as one that cannot be changed. What an element write throws, and a refusal the
+   * policy makes, are thrown on once the held container has its elements back.
    *
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
@@ -275,9 +528,14 @@ public final class ContainerCopy {
    * @param held the container {@code owner} holds, or null
    * @param incoming the container converted from the source, or null
    * @param setter whether the target class has a setter for {@code property}
+   * @param elements the conversion of the elements where it can write one into another in place, or
+   *     null
+   * @param sent the source's container {@code incoming} was converted from, or null where it is not
+   *     known
+   * @param prepared what {@link #refuseUnwritable} returned for this property
    * @return whether the property is written; false where the caller writes it through the setter
    * @throws IllegalArgumentException if the property has no setter and the held container cannot be
-   *     changed
+   *     changed, or the policy refuses the write
    */
   public static boolean refill(
     final String source,
@@ -286,9 +544,13 @@ public final class ContainerCopy {
     final String property,
     final Object held,
     final Object incoming,
-    final boolean setter
+    final boolean setter,
+    final Elements elements,
+    final Object sent,
+    final Object prepared
   ) {
-    return write(source, target, owner, property, held, incoming, null, setter);
+    final var named = new Write(source, target, owner, property, held, false, elements, sent);
+    return write(named, incoming, null, setter, prepared);
   }
 
   /**
@@ -297,8 +559,9 @@ public final class ContainerCopy {
    * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
    * the registered {@link Policy} decides. A null {@code incoming} adds nothing. Answers false
    * where the held collection itself cannot be changed and the caller is to write {@code incoming}
-   * through the setter instead. An exception the adder throws, rejecting an element, is thrown on
-   * as it is once the held collection has its elements back, setter or not.
+   * through the setter instead. An exception the adder or an element write throws, rejecting an
+   * element, is thrown on as it is once the held collection has its elements back, setter or not,
+   * and so is a refusal the policy makes.
    *
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
@@ -308,11 +571,16 @@ public final class ContainerCopy {
    * @param incoming the collection converted from the source, or null
    * @param adder the target's adder for the property
    * @param setter whether the target class has a setter for {@code property}
+   * @param elements the conversion of the elements where it can write one into another in place, or
+   *     null
+   * @param sent the source's container {@code incoming} was converted from, or null where it is not
+   *     known
+   * @param prepared what {@link #refuseUnwritable} returned for this property
    * @param <O> the target's type
    * @param <E> the element type
    * @return whether the property is written; false where the caller writes it through the setter
    * @throws IllegalArgumentException if the property has no setter and the held collection cannot
-   *     be changed
+   *     be changed, or the policy refuses the write
    */
   @SuppressWarnings("unchecked")
   public static <O, E> boolean fill(
@@ -323,95 +591,118 @@ public final class ContainerCopy {
     final Object held,
     final Collection<? extends E> incoming,
     final BiConsumer<? super O, ? super E> adder,
-    final boolean setter
+    final boolean setter,
+    final Elements elements,
+    final Object sent,
+    final Object prepared
   ) {
-    return write(source, target, owner, property, held, incoming, (BiConsumer<Object, Object>) adder, setter);
+    final var named = new Write(source, target, owner, property, held, true, elements, sent);
+    return write(named, incoming, (BiConsumer<Object, Object>) adder, setter, prepared);
   }
 
   private static boolean write(
-    final String source,
-    final String target,
-    final Object owner,
-    final String property,
-    final Object held,
+    final Write write,
     final Object incoming,
     final BiConsumer<Object, Object> adder,
-    final boolean setter
+    final boolean setter,
+    final Object prepared
   ) {
+    final var held = write.held();
     return switch (
       CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder != null)
     ) {
       case SET -> false;
-      case REFUSE -> throw unwritable(source, target, beanOf(owner), property, held, null);
-      case REFILL -> refillHeld(source, target, owner, property, held, incoming, adder, setter);
+      case REFUSE -> throw unwritable(
+        write.source(),
+        write.target(),
+        beanOf(write.owner()),
+        write.property(),
+        held,
+        null
+      );
+      case REFILL -> refillHeld(write, incoming, adder, setter, prepared);
     };
   }
 
   /**
-   * Refills {@code held} with {@code incoming} through the registered {@link Policy}. A refill that
-   * fails first has the elements {@code held} had put back, so whoever else holds it sees it as it
-   * was wherever it takes its elements back; then {@link CollectionWrites#afterFailedRefill}
-   * decides. An exception the adder throws is the adder rejecting an element and goes to the caller
-   * as it was thrown, never past the adder to the setter. One the container throws, such as {@code
+   * Refills the held container with {@code incoming} through the registered {@link Policy}. A
+   * refill that fails first has the elements the held container had put back, so whoever else holds
+   * it sees it as it was wherever it takes its elements back; then {@link
+   * CollectionWrites#afterFailedRefill} decides. An exception the adder or an element write throws
+   * is that call rejecting an element and goes to the caller as it was thrown, never past it to the
+   * setter, as does a refusal the policy makes. One the container throws, such as {@code
    * UnsupportedOperationException} from a container that cannot change or {@code
    * NullPointerException} from a sorted set handed a null, answers false where a setter can write
    * the property instead, and refuses the call by name, with the failure as its cause, where none
    * can.
    */
   private static boolean refillHeld(
-    final String source,
-    final String target,
-    final Object owner,
-    final String property,
-    final Object held,
+    final Write write,
     final Object incoming,
     final BiConsumer<Object, Object> adder,
-    final boolean setter
+    final boolean setter,
+    final Object prepared
   ) {
+    final var held = write.held();
     if (held == incoming && adder == null) return true;
     // A held container that cannot even be read, such as a provider's lazy collection outside its
     // session, fails in the snapshot before anything is changed, and is treated as one that cannot
     // change.
     Object kept = null;
-    Object elements = null;
+    Object detached = null;
     // What the adder throws is told apart from what the container throws.
-    final BiConsumer<Object, Object> adds =
-      adder == null
-        ? null
-        : (bean, element) -> {
-            try {
-              adder.accept(bean, element);
-            } catch (final RuntimeException rejected) {
-              throw new AdderRejected(rejected);
-            }
-          };
+    final BiConsumer<Object, Object> adds = adder == null ? null : passingOn(adder);
     try {
       kept = snapshot(held);
       // The elements are taken before the held container is cleared, so an incoming container that
       // reads through to the held one, such as the held list itself or an unmodifiable view of it,
       // still fills it.
-      elements = detached(held, incoming);
-      if (POLICY == STANDARD) standardRefill(owner, held, elements, adds);
-      else POLICY.refill(new Refill(owner, property, held, elements, adds));
+      detached = detached(held, incoming);
+      if (POLICY == STANDARD) standardRefill(write.owner(), held, detached, adds);
+      else POLICY.refill(new Refill(write, detached, adds, true, prepared));
+    } catch (final Refused refused) {
+      restore(held, kept, refused);
+      throw refused;
     } catch (final RuntimeException failed) {
-      final var adderThrew = failed instanceof AdderRejected;
-      final var cause = adderThrew ? (RuntimeException) failed.getCause() : failed;
+      final var passedOn = failed instanceof PassedOn;
+      final var cause = passedOn ? (RuntimeException) failed.getCause() : failed;
       restore(held, kept, cause);
-      return switch (CollectionWrites.afterFailedRefill(adderThrew, setter)) {
+      return switch (CollectionWrites.afterFailedRefill(passedOn, setter)) {
         case SET -> false;
-        case REFUSE -> throw unwritable(source, target, beanOf(owner), property, held, cause);
+        case REFUSE -> throw unwritable(
+          write.source(),
+          write.target(),
+          beanOf(write.owner()),
+          write.property(),
+          held,
+          cause
+        );
         case RETHROW -> throw cause;
       };
     }
     return true;
   }
 
-  /** Carries what an adder threw out of a refill, so it is not taken for the container's own. */
-  private static final class AdderRejected extends RuntimeException {
+  /** {@code call}, with what it throws carried out of a refill as a {@link PassedOn}. */
+  private static BiConsumer<Object, Object> passingOn(final BiConsumer<Object, Object> call) {
+    return (first, second) -> {
+      try {
+        call.accept(first, second);
+      } catch (final RuntimeException rejected) {
+        throw new PassedOn(rejected);
+      }
+    };
+  }
+
+  /**
+   * Carries what an adder or an element write threw out of a refill, so it is not taken for the
+   * container's own.
+   */
+  private static final class PassedOn extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
-    AdderRejected(final RuntimeException rejected) {
+    PassedOn(final RuntimeException rejected) {
       super(null, rejected, false, false);
     }
   }

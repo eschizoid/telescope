@@ -15,6 +15,7 @@ module io.github.eschizoid.telescope.benchmarks {
   requires io.github.eschizoid.telescope.jackson;
   requires tools.jackson.databind;
   requires jmh.core;
+  requires static jakarta.persistence;
 
   exports io.github.eschizoid.telescope.benchmarks;
 
@@ -37,5 +38,6 @@ module io.github.eschizoid.telescope.benchmarks {
       io.github.eschizoid.telescope.benchmarks.IntoFieldSrcToIntoNarrowBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.IntoFieldWideSrcToIntoWideBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.IntoListSrcToIntoListTgtBridgeProvider,
-      io.github.eschizoid.telescope.benchmarks.PatchIntoEntityToPatchIntoChangesBridgeProvider;
+      io.github.eschizoid.telescope.benchmarks.PatchIntoEntityToPatchIntoChangesBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.MbOrderFormToMbOrderBridgeProvider;
 }

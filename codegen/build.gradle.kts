@@ -78,6 +78,10 @@ dependencies {
     // sources that carry Jackson's annotations.
     testImplementation(project(":jackson"))
     testImplementation(libs.jacksonDatabind)
+    // The cross-path corpus holds both paths to telescope-jpa's merge of a collection of entities,
+    // over sources that carry the persistence annotations, with the module's policy registered.
+    testImplementation(libs.jakartaPersistenceApi)
+    testRuntimeOnly(project(":jpa"))
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)

@@ -198,4 +198,28 @@ public interface BridgeFn<A, B> {
   default Set<String> unwalkedTargetProperties() {
     return Set.of();
   }
+
+  /**
+   * Codegen-support seam: the conversion of one {@code A} into one {@code B} as a container policy
+   * writes an element in place, this bridge's {@code forward} and the check and write its {@code
+   * into} makes after it, or null where the bridge writes none in place. A runtime mapper
+   * converting the elements of a collection through this bridge hands it to the container policy,
+   * as a generated bridge does. Null by default.
+   *
+   * @return the conversion, or null
+   */
+  default ContainerCopy.Elements targetWrite() {
+    return null;
+  }
+
+  /**
+   * Codegen-support seam: the mirror of {@link #targetWrite()} for {@code patchInto}, this bridge's
+   * {@code backward} and the check and write of every property its {@code patch} overlays, or null
+   * where the bridge writes none in place. Null by default.
+   *
+   * @return the conversion, or null
+   */
+  default ContainerCopy.Elements sourceWrite() {
+    return null;
+  }
 }
