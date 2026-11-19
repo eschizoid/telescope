@@ -24,34 +24,32 @@ method references, the compiler checks every field it names, and an annotation p
 runs in the time of hand-written code.
 
 ```java
-public record Invoice(String id, Customer customer, long totalCents, String internalNote) {
-  @Bridge
-  static final ForwardMapper<Invoice, InvoiceDto> DTO = mapperForward(
-    Invoice.class,
-    InvoiceDto.class,
-    // a renamed field
-    to(Invoice::id, InvoiceDto::number),
-    // a field read through a nested object
-    to(path(Invoice::customer, Customer::email), InvoiceDto::billTo),
-    // a field built from the whole invoice
-    compute(InvoiceDto::total, Money::format),
-    // a field left out on purpose
-    drop(Invoice::internalNote)
-  );
+// PATCH /orders/SO-1001   {"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}
 
-  public InvoiceDto toDto() {
-    return DTO.forward(this);
-  }
+@TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the client receives an OrderDto
+Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
+  final var order = orders.get(number); // the entity JPA manages
+  EDITS.patchInto(order, changes); // writes only the fields the client sent
+  return order;
 }
 
-InvoiceDto dto = invoice.toDto();
+@Bridge
+static final Mapper<Order, OrderChanges> EDITS = mapper(
+  Order.class,
+  OrderChanges.class,
+  writeBean(Order.class, ADDERS), // lines go through order.addLine(...), which sets the back-reference
+  via(Order::getLines, OrderChanges::lines, LineEdits.class), // each new line is priced from the catalog
+  drop(Order::getId), // a client may never change these
+  drop(Order::getStatus),
+  drop(Order::getPayment)
+);
 ```
 
-Every field in that mapper is a method reference, so a typo is a compile error and an IDE rename updates the mapper
-along with everything else. Fields with the same name on both sides map without a row, nested records included. The
-`telescope-codegen` processor reads the expression and generates the conversion, which calls `id()`,
-`customer().email()` and `Money.format(invoice)` directly, with no reflection. Leave the processor off the build and the
-same field runs the same rows at run time instead, with the same result.
+That is a whole PATCH endpoint. The delivery and the lines change, and the discount code and tags the client left out
+keep their values. The `@OneToMany` list the entity holds is refilled in place, so Hibernate keeps tracking it. The
+response is the public DTO, built without loading a lazy collection it doesn't show. Every field is a method reference,
+so a typo is a compile error, and a field added to `Order` later fails the build until someone decides whether a PATCH
+may change it. The `telescope-codegen` processor compiles the mapper into plain Java with no reflection.
 
 ## What you stop writing
 
@@ -96,22 +94,10 @@ value by its path and position, as in `'lines[0].quantity' got 2, not a String, 
 
 ### Through: the service changes the managed entity in place
 
-One mapper says how an `Order` and an `OrderChanges` relate, and which fields a PATCH may never touch.
+The `EDITS` mapper at the top says how an `Order` and an `OrderChanges` relate, and which fields a PATCH may never
+touch. The service checks its rules and makes one call.
 
 ```java
-@Bridge
-public static final Mapper<Order, OrderChanges> EDITS = mapper(
-  Order.class,
-  OrderChanges.class,
-  writeBean(Order.class, ADDERS),
-  via(Order::getLines, OrderChanges::lines, LineEdits.class),
-  drop(Order::getId),
-  drop(Order::getNumber),
-  drop(Order::getStatus),
-  drop(Order::getPayment)
-  // and the other fields a client may not change
-);
-
 public Order change(String number, OrderChanges changes) {
   final var order = get(number);
   require(order, OrderStatus.PLACED, "change");
@@ -166,10 +152,9 @@ lines, the recomputed total, and the discount code and tags the order kept.
  "total":40.50,"discountCode":"WELCOME10","tags":["gift"], ...}
 ```
 
-The code above comes from [`examples/demo/`](examples/demo/README.md), an order service that runs on Spring Boot, on
-Quarkus and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an
-older API version the mobile app still calls, a partner feed where every value is text, and an invoice built from
-several objects.
+The code comes from [`examples/demo/`](examples/demo/README.md), an order service that runs on Spring Boot, on Quarkus
+and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an older API
+version the mobile app still calls, a partner feed where every value is text, and an invoice built from several objects.
 
 | Hop                       | What telescope does there                                                                       | Guide                                                                                                                      |
 | ------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -179,7 +164,37 @@ several objects.
 
 ## A mapper names only what differs
 
-Fields with the same name map by themselves. Each kind of difference between the two types has one row.
+A mapper is a `static final` field on any class, often the type it converts.
+
+```java
+public record Invoice(String id, Customer customer, long totalCents, String internalNote) {
+  @Bridge
+  static final ForwardMapper<Invoice, InvoiceDto> DTO = mapperForward(
+    Invoice.class,
+    InvoiceDto.class,
+    // a renamed field
+    to(Invoice::id, InvoiceDto::number),
+    // a field read through a nested object
+    to(path(Invoice::customer, Customer::email), InvoiceDto::billTo),
+    // a field built from the whole invoice
+    compute(InvoiceDto::total, Money::format),
+    // a field left out on purpose
+    drop(Invoice::internalNote)
+  );
+
+  public InvoiceDto toDto() {
+    return DTO.forward(this);
+  }
+}
+
+InvoiceDto dto = invoice.toDto();
+```
+
+Fields with the same name on both sides map without a row, nested records included. The generated conversion calls
+`id()`, `customer().email()` and `Money.format(invoice)` directly. Leave the processor off the build and the same field
+runs the same rows at run time instead, with the same result.
+
+Each kind of difference between the two types has one row.
 
 | What differs                                | Row                                                              |
 | ------------------------------------------- | ---------------------------------------------------------------- |
