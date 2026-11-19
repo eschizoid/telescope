@@ -12,9 +12,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Names generated navigators directly, from the compilation that generates them. A navigator
- * emitted only in the final round does not exist yet when these sources are resolved, so this class
- * fails to compile unless each fixture's navigator is emitted as soon as its bean is ready.
+ * Names generated navigators directly, from the compilation that generates them. This class names
+ * them through single-type imports from the fixtures' package, and javac resolves no single-type
+ * import in a source entered before the final round against a file written in that round, so this
+ * class fails to compile unless each fixture's navigator is emitted before then, as soon as its
+ * bean is ready.
  */
 class LombokSameCompilationTest {
 

@@ -174,7 +174,12 @@ generates the navigator for the class and the `@BeanFocus` processor skips the c
 `@BeanFocus`.
 
 Without `telescope-lombok`, the `@BeanFocus` processor waits until the final processing round to generate the navigator
-for a Lombok class. Main code in the same module then can't refer to that navigator.
+for a Lombok class. Main code in the same module can still call that navigator from a method body, in another package by
+its full name or through `import pkg.*;`, since javac compiles the final round's files with everything else. It can't be
+named through a single-type or static import, or in a signature: the type of a field, a parameter or a method's result,
+a `throws` clause, a supertype, a type-parameter bound, an annotation value on a declaration or an annotation member's
+default. javac also warns that the file was created in the last round, which fails a build compiled with `-Werror`
+unless `-nowarn` is passed too, as Gradle does for `options.isWarnings = false`.
 
 ## Choosing a module
 

@@ -18,10 +18,11 @@ import org.junit.jupiter.api.Test;
 
 /**
  * A {@code @BeanFocus} navigator ends its hop at a child whose navigator is written only in the
- * final round, since a navigator written earlier cannot name it. Without telescope-lombok's
- * processor, as in this module's tests, a {@code @BeanFocus} child carrying a Lombok annotation is
- * written by the {@code @BeanFocus} processor in the final round. The Lombok annotations are
- * stand-ins declared in source: the processors recognise Lombok by the annotation's name alone.
+ * final round, since javac does not resolve a return type in a navigator written earlier against a
+ * file written in the final round. Without telescope-lombok's processor, as in this module's tests,
+ * a {@code @BeanFocus} child carrying a Lombok annotation is written by the {@code @BeanFocus}
+ * processor in the final round. The Lombok annotations are stand-ins declared in source: the
+ * processors recognise Lombok by the annotation's name alone.
  */
 class FinalRoundChildHopTest {
 

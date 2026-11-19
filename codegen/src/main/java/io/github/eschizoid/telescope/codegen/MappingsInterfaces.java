@@ -38,7 +38,8 @@ import javax.tools.JavaFileObject;
  * field and makes one call, so it costs what calling the field costs. A type that wants the call
  * form names the interface in its {@code implements} clause, which javac resolves once a round has
  * written it; the interface is therefore written in the round its fields are first seen, never in
- * the final one, whose output the types compiled with it cannot name.
+ * the final one, since javac resolves no {@code implements} clause in a source entered before the
+ * final round against a file written in it.
  *
  * <p>The method is left out where the type declares or inherits a method of that name taking
  * nothing, which then is what the call means; a type naming the interface in its {@code implements}
@@ -123,7 +124,8 @@ final class MappingsInterfaces {
 
   /**
    * Writes every interface not yet written, unless a field still waits on a class a later round
-   * writes, or this is the final round, whose output the types compiled with it cannot name.
+   * writes, or this is the final round, against whose output javac resolves no {@code implements}
+   * clause in a source entered before it.
    */
   void write(final boolean finalRound) {
     if (finalRound || !unresolved.isEmpty()) return;

@@ -387,8 +387,12 @@ The verifier needs javac's tree API. On another compiler it prints one note and 
 A class annotated with Lombok's `@Data`, `@Value` or `@Builder` gets its navigator from
 [`telescope-lombok`](../lombok/README.md), with no `@BeanFocus` needed. telescope-lombok writes the navigator as soon as
 Lombok has added the class's members, so code in the same module can use it. Without `telescope-lombok`, `@BeanFocus` on
-a Lombok class also works, but its navigator is written in the last processing round and cannot be named from main code
-in the same module.
+a Lombok class also works, but its navigator is written in the last processing round. Main code in the same module can
+call it from a method body, in another package by its full name or through `import pkg.*;`. It can't be named through a
+single-type or static import, or in a signature: the type of a field, a parameter or a method's result, a `throws`
+clause, a supertype, a type-parameter bound, an annotation value on a declaration or an annotation member's default.
+javac also warns that the file was created in the last round, which fails a build compiled with `-Werror` unless
+`-nowarn` is passed too, as Gradle does for `options.isWarnings = false`.
 
 ## Performance
 

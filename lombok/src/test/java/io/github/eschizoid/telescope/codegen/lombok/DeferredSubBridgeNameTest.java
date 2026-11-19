@@ -33,9 +33,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Every fixture here is compiled by Gradle's {@code compileTestJava} with Lombok on the
  * processor path, so a parent naming a class nothing writes fails the build before any test runs.
- * The tests then pin which name each case takes and that the parent converts through it. Bridges
- * written in the final round cannot be named from this source set, so they are reached
- * reflectively.
+ * The tests then pin which name each case takes and that the parent converts through it. A bridge
+ * written in the final round can be named from this class, which sits in another package, only by
+ * its full name or through an on-demand import, since javac resolves no single-type import against
+ * it; code here names no class by its full name inline and imports no package on demand, so the
+ * bridges are reached reflectively.
  */
 class DeferredSubBridgeNameTest {
 

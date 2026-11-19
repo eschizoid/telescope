@@ -263,7 +263,12 @@ Lombok and the telescope processors can sit in any order on the processor path. 
 once Lombok has added the class's members, and `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` wait until
 the final round for a Lombok class. A class counts as a Lombok class when it, or one of its fields, carries a Lombok
 annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsConstructor`. The full set is
-`LOMBOK_SYNTHESIZING_ANNOTATIONS` in `AbstractTelescopeProcessor`.
+`LOMBOK_SYNTHESIZING_ANNOTATIONS` in `AbstractTelescopeProcessor`. A class written in the final round can be called from
+a method body anywhere in the module, in another package by its full name or through `import pkg.*;`. It can't be named
+through a single-type or static import, or in a signature: the type of a field, a parameter or a method's result, a
+`throws` clause, a supertype, a type-parameter bound, an annotation value on a declaration or an annotation member's
+default. javac also warns that the file was created in the last round, which fails a build compiled with `-Werror`
+unless `-nowarn` is passed too, as Gradle does for `options.isWarnings = false`.
 
 ```xml
 <annotationProcessorPaths>

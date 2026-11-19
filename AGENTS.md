@@ -412,28 +412,48 @@ string FQN and emits the same `<X>Telescope<R>` navigator shape as `:codegen`.
 patch class declarations on traversal. Round 1's `Elements.getAllMembers()` on a `@Data` class sees the un-patched
 member list (no synthesised getters / setters / builder) → "no readable properties" error.
 
-Two shapes handle it, and which one a processor needs depends on whether its output has to be resolvable from
-same-module main code. `LombokFocusProcessor` retries every round and emits as soon as the bean surface reads complete
+Two shapes handle it. `LombokFocusProcessor` retries every round and emits as soon as the bean surface reads complete
 (`emitBeanNavigatorIfReady`), using `processingOver()` only to turn a target that never became readable into a
-diagnostic rather than silence — nothing is emitted there. Deferring emission itself to that round is what breaks **for
-this processor**: a navigator emitted only then does not exist yet when same-module main code is resolved.
-`BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` defer only the targets carrying a Lombok trigger, to
-`processingOver()`. For `BeanFocusProcessor` the readable-properties check `LombokFocusProcessor` retries on is not
-enough: hand-written getters read complete in round one while the builder or constructor Lombok adds, which decides the
-rebuild strategy, is still missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitted in the
-final round and cannot be named from same-module main code. The exception is a class `LombokFocusProcessor` has taken as
-a target, which it records per class: that processor writes the same navigator and holder as soon as the class is ready,
-so `BeanFocusProcessor` leaves the class to it and writes every other one in the final round as usual. A navigator
-written before the final round cannot name one written in it, so its hop to a child or bridge target whose navigator
-only the final round writes ends there (`Telescope<R, Child>`) instead of descending; a parent whose child or bridge
-target telescope-lombok may still take is held back one round, until that is settled. Both processors treat `@BeanFocus`
-and, with telescope-lombok on the path, the Lombok bean annotations as marking a child type that has its own navigator,
-so the navigator is the same whichever writes it. **Any future processor reading synthesised members of Lombok-annotated
-types must do one or the other; reading them in round one gets an un-patched view.**
+diagnostic rather than silence; nothing is emitted there. `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor`
+defer only the targets carrying a Lombok trigger, to `processingOver()`. For `BeanFocusProcessor` the
+readable-properties check `LombokFocusProcessor` retries on is not enough: hand-written getters read complete in round
+one while the builder or constructor Lombok adds, which decides the rebuild strategy, is still missing. **Any future
+processor reading synthesised members of Lombok-annotated types must do one or the other; reading them in round one gets
+an un-patched view.**
 
-The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce this — Lombok's javac hooks don't install in
-the in-process `JavaCompiler.CompilationTask` flow. Lombok integration tests must use Gradle's standard
-`compileTestJava` pipeline.
+The shape decides where the output can be named. javac parses a file written in the final round and enters it with every
+other source before it attributes method bodies and initializers, so code there resolves it, declarations local to a
+body (a local variable, a local or anonymous class, a local record) included, in hand-written and generated code alike.
+In a source entered before the final round, javac resolves everything else that names a type while the rounds run, and
+in the final round it reports each name it could not resolve instead of retrying it. So no such source can name a
+final-round class in a single-type or static import, a supertype, a type-parameter bound, the type of a field, a
+method's return, parameter or thrown types, an annotation value on a declaration or an annotation member's default. An
+on-demand import (`import pkg.*;`) does serve the bodies when the package already holds another class, as a navigator's
+package always does, since it shares the bean's. Another file written in the final round can name the class in its
+signatures, since all of them are entered together. javac reports a reference it cannot resolve as
+`package X does not exist` when the final-round class is alone in its package, and as `cannot find symbol` otherwise. It
+also warns that the file was created in the last round, which `-Xlint:-processing` does not silence, so a `-Werror`
+build fails on it unless `-nowarn` is passed too (Gradle passes it for `options.isWarnings = false`); and no processor
+reads a final-round file. `FinalRoundNamingTest` in `:codegen` pins the resolution and the warning against javac.
+
+`LombokFocusProcessor` emits early for those reasons: its navigators can be imported and named in a signature, a
+navigator written earlier can hop into them, and they compile under `-Werror`. A `@BeanFocus` navigator on a
+Lombok-annotated class is written in the final round, so same-module main code can call it from a method body, from
+another package by its full name or through `import pkg.*;`, but cannot name it through a single-type import or in a
+signature. The exception is a class `LombokFocusProcessor` has taken as a target, which it records per class: that
+processor writes the same navigator and holder as soon as the class is ready, so `BeanFocusProcessor` leaves the class
+to it rather than write a second file of the same name, and writes every other one in the final round as usual. A hop is
+a method whose return type is the child's or bridge target's navigator, so a navigator written before the final round
+cannot hop into one written in it: its hop to a child or bridge target whose navigator only the final round writes ends
+there (`Telescope<R, Child>`) instead of descending. A parent whose child or bridge target telescope-lombok may still
+take is held back one round, until that is settled, so the hop descends whenever the child's navigator is written early.
+Both processors treat `@BeanFocus` and, with telescope-lombok on the path, the Lombok bean annotations as marking a
+child type that has its own navigator, so the navigator is the same whichever writes it.
+
+The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce the Lombok side: Lombok's javac hooks don't
+install in its in-process `JavaCompiler.CompilationTask` flow. Lombok integration tests use Gradle's standard
+`compileTestJava` pipeline, or `LombokLastCompiler` in telescope-lombok's tests, which runs javac over files on disk
+with Lombok loaded from a processor path.
 
 ---
 
@@ -743,10 +763,12 @@ See `docs/adr/0004-runtime-and-codegen-strategy-separate.md`.
 ### Reading Lombok-synthesised members
 
 A processor must not read them in round one, before Lombok's lazy AST patches have fired. `LombokFocusProcessor` retries
-every round and emits as soon as the bean surface reads complete, because output emitted only in the final round is
-unresolvable from same-module main code; `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` defer only their
-Lombok-triggered targets to `processingOver()`. Detailed in the `:lombok` section above; applies to any future processor
-that reads synthesised members.
+every round and emits as soon as the bean surface reads complete, so its navigators are written before the final round;
+`BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` defer only their Lombok-triggered targets to
+`processingOver()`. What they write then can be called from a method body, from another package by its full name or
+through `import pkg.*;`, but no source entered before the final round can name it through a single-type import or in a
+signature, and it draws javac's last-round warning. Detailed in the `:lombok` section above; applies to any future
+processor that reads synthesised members.
 
 ### Bridge constants emit in the source's package
 
@@ -889,6 +911,12 @@ Each of these is a property of the platform or of this codebase that reads the o
   lookup returns an un-patched view. Retry every round and emit once the surface reads complete
   (`LombokFocusProcessor`), or defer the Lombok-triggered targets to `processingOver()` (`BridgeProcessor`,
   `FromMapProcessor`, `BeanFocusProcessor`).
+- **A class a processor writes in the final round can be called from a body, but not named in a signature.** javac
+  compiles it with the rest, so a method body or an initializer resolves it. In a source entered before the final round,
+  hand-written or generated, a single-type import of it or a signature naming it does not resolve; an on-demand import
+  of its package serves the bodies when the package holds another class. The "created in the last round" warning fails a
+  `-Werror` build unless `-nowarn` is passed too. A navigator's hop is a return type, which is why a hop from an earlier
+  navigator into a final-round one ends instead of descending.
 - **Every runtime `LambdaMetafactory` site needs the `NativeImage.IN_IMAGE` branch** to its `MhAccessors` equivalent, or
   the native-image workflow goes red.
 - **No Jackson object in a static field of a telescope class.** telescope-core's `native-image.properties` initializes

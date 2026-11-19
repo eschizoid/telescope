@@ -1222,11 +1222,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * Refuses each field of the final round whose rows convert through a bridge no round wrote, by
    * why that bridge is missing. The bridge of a field whose pair has a side carrying a Lombok
-   * annotation is written in the final round, too late for another bridge to call. Any other bridge
-   * a field of this compilation declares is written in a round after that field is read, and javac
-   * starts no further round once a round has reported an error, so such a bridge is missing when
-   * its field is refused or when an error anywhere in the compilation ended the rounds first. The
-   * processor cannot tell those two apart, so the refusal names both.
+   * annotation is written in the final round, and a bridge calling another is written only once
+   * that one exists in a processing round, which a file written in the final round never does. Any
+   * other bridge a field of this compilation declares is written in a round after that field is
+   * read, and javac starts no further round once a round has reported an error, so such a bridge is
+   * missing when its field is refused or when an error anywhere in the compilation ended the rounds
+   * first. The processor cannot tell those two apart, so the refusal names both.
    */
   private void refuseFinalRoundAwaits() {
     final var elements = processingEnv.getElementUtils();
@@ -1249,8 +1250,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             " converts through " +
             String.join(", ", entry.getValue()) +
             ", a bridge written only in the final round because a side of its pair carries a Lombok" +
-            " annotation, and a bridge written then cannot be called from another; declare this field's" +
-            " rows without that via(...), or give both pairs Lombok-free sides"
+            " annotation; no processing round sees a bridge written then, and this field's bridge is planned" +
+            " from the members of the bridge it calls; declare this field's rows without that via(...), or" +
+            " give both pairs Lombok-free sides"
         );
       } else {
         error(
