@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.quarkus.deployment;
 
 import io.github.eschizoid.telescope.quarkus.rest.runtime.ValueShape;
 import java.util.List;
+import org.jboss.jandex.MethodInfo;
 
 /**
  * One mapped body the build found, with every type named by its binary name. The runtime receives
@@ -21,6 +22,7 @@ import java.util.List;
  * @param validated whether the body is validated as read
  * @param validationPath the property path a violation of a request body as read starts with, as
  *     Quarkus names a parameter of a resource method, or {@code null} for a response
+ * @param method the resource method the annotation sits on
  */
 public record MappedBody(
   List<String> methodIds,
@@ -34,5 +36,6 @@ public record MappedBody(
   boolean holder,
   boolean required,
   boolean validated,
-  String validationPath
+  String validationPath,
+  MethodInfo method
 ) {}

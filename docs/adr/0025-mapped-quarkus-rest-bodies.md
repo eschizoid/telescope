@@ -81,11 +81,44 @@ public RestResponse<Order> place(@TelescopeRequestBody(from = PlaceOrderV2.class
    declares each `@Bridge` field, whose rows the mapper reads to check its bridge, and every projection and
    transformation the application declares, whose rows and paths are method references. Without them a `@Bridge` field
    whose class the image initializes at run time runs its runtime mapper there.
-8. **OpenAPI is left to a follow-up (#804).** SmallRye OpenAPI builds a schema only for a type its annotation scanner
-   reaches through a resource signature or an annotation in the index, it has no public API that builds one for a given
-   type, and Quarkus gives an extension no way to add annotations to the index it scans. Documenting the wire type would
-   take SmallRye's internal data-object scanner or a second, synthetic scan, so this decision builds neither. Until then
-   an application documents a mapped endpoint with MicroProfile OpenAPI's own `@APIResponse` and `@RequestBody`.
+8. **With SmallRye OpenAPI present, a mapped body is documented as its wire type.** SmallRye OpenAPI builds a schema
+   only for a type its annotation scanner reaches, it has no public API that builds one for a given type, and Quarkus
+   gives an extension no way to add annotations to the index it scans. The deployment therefore generates, at build time
+   and in memory, one resource class per mapped method, whose single method carries an `@APIResponse` and a
+   `@RequestBody` with `@Schema(implementation = Wire.class)`, an array of it for a `List` or `Collection` body and an
+   array of unique items for a `Set`, and the body's `required`. Each generated method has its own name and an operation
+   id no Java method name can spell, so no operation id strategy makes two operations share one. An `OASFilter` it
+   registers through `AddToOpenAPIDefinitionBuildItem` runs a second scan for each document through SmallRye's public
+   `SmallRyeOpenAPI.builder()`. That scan reads the application's index with the generated classes added, but finds
+   resources only among the generated classes, the classes that declare or route a mapped method, and the classes whose
+   sub-resource locators lead to one. A class the application's own `mp.openapi.scan.*` include and exclude settings
+   leave out, decided by SmallRye's rule for them, is left out of it too, along with its mapped methods' generated
+   operations. The scan costs little, and a resource the application keeps out of its document is not scanned again.
+
+   An `OperationHandler` marks every operation of that scan with the ids Quarkus REST keys its resource method by, so a
+   mapped method's operation is found under each path and HTTP method SmallRye gives it: on a resource class, on an
+   interface whose `@Path` it takes, or on a sub-resource under every locator that returns it. The scan resolves the
+   context root as Quarkus resolves it for its own document, from `quarkus.http.root-path` and either `@ApplicationPath`
+   or `quarkus.rest.path`, and reads the application's configuration without the keys that narrow what is scanned, the
+   class and package filters and the operation profiles, so the two documents' paths agree and the generated operations
+   are always read. Quarkus hands no public way to read the configuration a named document sees, so the scan reads it as
+   the default document does; a schema setting only a named document makes is not applied to the wire schemas there.
+
+   The filter then gives every success response of a matched operation, and its request body, the generated method's
+   schema in each of their media types, and the request body its `required`, and brings in the component schemas the
+   wire schemas name. Two scans number classes sharing a simple name in the order each meets them, so a component is
+   matched to the document's by content as well as name. A document component named as SmallRye could have named the
+   wire component's class, by its own name or that name followed by a duplicate number, describes the same thing when
+   its content is equal once references are set aside and its references lead, position by position, to components that
+   describe the same thing in turn; its name is used and nothing is added. Any other component keeps its name where the
+   document has none of it, and otherwise takes its whole name followed by the next free number, as SmallRye numbers a
+   duplicate, every reference among the copied schemas following it. Digits a class's own name ends in, as in `OrderV2`,
+   are never taken for a duplicate number. A value shape that unwraps, `Optional`, `RestResponse`, `Uni`,
+   `CompletionStage` or `CompletableFuture`, documents the wire type itself. A mapped method that names a schema for
+   that body in its own `@APIResponse`, `@APIResponses`, `@APIResponseSchema`, `@RequestBody` or `@RequestBodySchema`
+   keeps it. Only SmallRye's `io.smallrye.openapi.api` package and MicroProfile OpenAPI's API are used, and no private
+   extension of either. The step that produces the build item runs only when the SmallRye OpenAPI extension consumes it,
+   so an application without that extension builds and runs as before.
 
 ## Consequences
 
@@ -111,6 +144,9 @@ public RestResponse<Order> place(@TelescopeRequestBody(from = PlaceOrderV2.class
   hold, and registers the two records its refused-import trace reads through a runtime `fromMap` mapper, which is the
   application's own reflection.
 - The element mapping is a `Function<Object, Object>`, the same erased step at the framework boundary as ADR-0020's.
+- With SmallRye OpenAPI, the build scans the resources holding mapped methods a second time for each document, which
+  costs build time in proportion to them and nothing at run time. A wire type is described from the index as every other
+  type of the document is, so one in a module that carries no index needs it indexed.
 
 ## Alternatives considered
 
@@ -123,3 +159,11 @@ public RestResponse<Order> place(@TelescopeRequestBody(from = PlaceOrderV2.class
 - **A `MessageBodyWriter` or a `WriterInterceptor` for responses.** Rejected: both run once a writer has been chosen for
   the declared type, so the JSON writer would see the domain type's writer choice.
 - **Validating the mapped value only.** Rejected, as in ADR-0021: constraints live on the wire type.
+- **A Quarkus build item that adds annotations, or types to scan as schemas, to the OpenAPI index.** It would let the
+  deployment annotate each mapped method in place and leave SmallRye one scan. No such item exists in Quarkus 3.40; the
+  second scan is what stands in for it.
+- **SmallRye's internal data-object scanner, called from a filter.** The smallest change, and one that breaks whenever
+  the scanner's internals change. Rejected for the public builder.
+- **Documenting the workaround alone:** MicroProfile OpenAPI's `@APIResponse` and `@RequestBody` on each mapped method.
+  Rejected: it repeats on every endpoint the type the telescope annotation already names, and the filter writes the wire
+  schema over the schema such an annotation names.

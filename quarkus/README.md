@@ -140,9 +140,22 @@ Quarkus native image finds only when registered, and the method references a `@B
 pair with no projection or mapper bean maps through `Telescope.mapperForward`, as on the Spring side, and at startup
 each such body logs at DEBUG, under `io.github.eschizoid.telescope.quarkus.rest`, whether a generated bridge's provider
 is registered for its pair. Quarkus walks a registered type's nested records through its Jandex index, so DTOs in a
-module that carries no index need it indexed, for example with `quarkus.index-dependency`, as any registration does. The
-mapped bodies are not documented by SmallRye OpenAPI yet: annotate such a method with MicroProfile OpenAPI's
-`@APIResponse` and `@RequestBody` to document the wire type.
+module that carries no index need it indexed, for example with `quarkus.index-dependency`, as any registration does.
+
+With `quarkus-smallrye-openapi` in the application, `/q/openapi` documents each mapped endpoint with the type the client
+sees: the success response with the response's wire type, and the request body with the type it is read as, the
+`TelescopeRequest` first type argument included. A `List`, `Collection` or `Set` body is an array of it, a `Set` one of
+unique items, and `Optional`, `RestResponse`, `Uni`, `CompletionStage` and `CompletableFuture` document the wire type
+itself, and a body `required = false` names is documented as not required. The wire type's schema is added to the
+document's components, under the document's own name where it already describes the type, and otherwise under a name of
+its own where another class of the same simple name already has one. The build finds each operation by its resource
+method, so a method declared on an interface, on a sub-resource under each of its locators, or under `quarkus.rest.path`
+is documented too, whatever classes or profiles the application's own scan is narrowed to. A method that names a schema
+for its body itself, in `@APIResponse`, `@APIResponses`, `@APIResponseSchema`, `@RequestBody` or `@RequestBodySchema`,
+keeps it, and a method in a class the application's `mp.openapi.scan.*` settings leave out of its document stays out. To
+build the wire schemas the build scans the resource classes holding mapped methods a second time, which costs build time
+only, reading the configuration the default document reads: a schema setting only a named additional document makes is
+not applied to its wire schemas. An application without SmallRye OpenAPI is unaffected.
 
 ## What the module contains
 

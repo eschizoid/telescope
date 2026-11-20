@@ -26,6 +26,7 @@ dependencies {
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-rest-jackson")
     implementation("io.quarkus:quarkus-hibernate-validator")
+    implementation("io.quarkus:quarkus-smallrye-openapi")
 
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
