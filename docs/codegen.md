@@ -98,8 +98,8 @@ or annotate the target with its own `@Bridge`.
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:2.2.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0")
+implementation("io.github.eschizoid:telescope-core:2.3.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:2.3.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
@@ -224,8 +224,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:2.2.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:2.2.0")
+    implementation("io.github.eschizoid:telescope-core:2.3.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.3.0")
 }
 ```
 
@@ -235,7 +235,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>2.2.0</version>
+  <version>2.3.0</version>
 </dependency>
 
 <build>
@@ -248,7 +248,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>2.2.0</version>
+            <version>2.3.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -280,7 +280,7 @@ unless `-nowarn` is passed too, as Gradle does for `options.isWarnings = false`.
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>2.2.0</version>
+    <version>2.3.0</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -288,7 +288,7 @@ unless `-nowarn` is passed too, as Gradle does for `options.isWarnings = false`.
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.48")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:2.2.0")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:2.3.0")
 }
 ```
 
