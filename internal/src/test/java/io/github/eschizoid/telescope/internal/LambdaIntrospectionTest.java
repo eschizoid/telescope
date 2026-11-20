@@ -529,4 +529,38 @@ class LambdaIntrospectionTest {
       assertThrows(IllegalArgumentException.class, () -> LambdaIntrospection.instantiatedReceiverOf(lambda));
     }
   }
+
+  // Named as a native image names a method reference's class, which the refusal reads its capturing
+  // class from. It has no writeReplace, as a method reference whose class an image did not register
+  // for lambda serialization has none.
+  static final class Ref$$Lambda7 implements SerFn<User, String> {
+
+    private static final long serialVersionUID = 1L;
+
+    @Override
+    public String apply(final User user) {
+      return user.name();
+    }
+  }
+
+  @Test
+  @DisplayName("a value with no writeReplace is refused, and inside an image the refusal names the class to register")
+  void anUnreadableReferenceNamesItsCapturingClass() {
+    final var ex = assertThrows(IllegalArgumentException.class, () ->
+      LambdaIntrospection.methodNameOf(new Ref$$Lambda7())
+    );
+    final var capturing = LambdaIntrospectionTest.class.getName() + "$Ref";
+    if (NativeImage.IN_IMAGE) assertEquals(
+      "Cannot read the method reference " +
+        Ref$$Lambda7.class.getName() +
+        " in a native image: register " +
+        capturing +
+        " for lambda serialization, as a lambdaCapturingTypes entry of its serialization-config.json or with" +
+        " @RegisterForReflection(lambdaCapturingTypes = \"" +
+        capturing +
+        "\").",
+      ex.getMessage()
+    );
+    else assertEquals("Expected a method reference to a record component / bean property accessor", ex.getMessage());
+  }
 }

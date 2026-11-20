@@ -3131,4 +3131,64 @@ public final class PairingMessages {
       " converts it to."
     );
   }
+
+  /**
+   * More than one mapper converts the pair a mapped REST endpoint maps, and its annotation names
+   * none of them. {@code candidates} labels each one, projections first.
+   */
+  public static String endpointMapperAmbiguous(
+    final Class<?> source,
+    final Class<?> target,
+    final List<String> candidates,
+    final String annotationName
+  ) {
+    return (
+      candidates.size() +
+      " mappers for " +
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      ": " +
+      String.join(", ", candidates) +
+      ". Add using = ... to " +
+      annotationName +
+      " to choose one."
+    );
+  }
+
+  /**
+   * A projection named by {@code using} whose {@code TelescopeProjection} type arguments are
+   * unknown.
+   */
+  public static String endpointProjectionUnresolved(final String projection) {
+    return (
+      projection +
+      " does not resolve its TelescopeProjection type arguments. Declare both, as in" +
+      " TelescopeProjection<Source, Target>."
+    );
+  }
+
+  /** A projection named by {@code using} that reads another type than the endpoint supplies. */
+  public static String endpointProjectionSource(
+    final String projection,
+    final Class<?> pairSource,
+    final String sourceRole,
+    final Class<?> source
+  ) {
+    return projection + " maps " + typeName(pairSource) + ", but " + sourceRole + " " + typeName(source);
+  }
+
+  /** A projection named by {@code using} that writes another type than the endpoint expects. */
+  public static String endpointProjectionTarget(
+    final String projection,
+    final Class<?> pairTarget,
+    final String targetRole,
+    final Class<?> target
+  ) {
+    return projection + " maps to " + typeName(pairTarget) + ", but " + targetRole + " " + typeName(target);
+  }
+
+  private static String typeName(final Class<?> type) {
+    return type == null ? "an unresolved type" : type.getSimpleName();
+  }
 }

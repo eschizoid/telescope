@@ -46,6 +46,52 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-options", "-parameters"))
 }
 
+// The Quarkus REST and Hibernate Validator jars carry no module name, so Gradle puts them on the
+// class path. The classes of the mapped REST bodies compile against them by reading the unnamed
+// module; a Quarkus application runs on the class path, where the module descriptor is not read.
+val readsUnnamed = listOf("--add-reads", "io.github.eschizoid.telescope.quarkus=ALL-UNNAMED")
+tasks.compileJava {
+    options.compilerArgs.addAll(readsUnnamed)
+}
+
+// The runtime jar's extension descriptor names the deployment artifact, which Quarkus resolves at
+// build time to run the build steps of the mapped REST bodies. Inside this build, the Quarkus
+// application plugin finds the deployment project instead through an extension named
+// quarkusExtension, read by these getter names. The Quarkus extension plugin that adds both cannot
+// be stored in the configuration cache, so this build declares them itself.
+interface LocalQuarkusExtension {
+    val deploymentModule: Property<String>
+    val conditionalDependencies: ListProperty<String>
+    val conditionalDevDependencies: ListProperty<String>
+    val dependencyConditions: ListProperty<String>
+}
+
+extensions.create<LocalQuarkusExtension>("quarkusExtension").deploymentModule.set(":telescope-quarkus-deployment")
+
+val extensionDescriptorDir: Provider<Directory> = layout.buildDirectory.dir("generated/extension-descriptor")
+
+val extensionDescriptor by tasks.registering {
+    description = "Generate META-INF/quarkus-extension.properties naming the deployment artifact"
+    group = "build"
+
+    val coordinates = "io.github.eschizoid:telescope-quarkus-deployment:${project.version}"
+    val descriptor: Provider<RegularFile> =
+        extensionDescriptorDir.map { it.file("META-INF/quarkus-extension.properties") }
+    inputs.property("coordinates", coordinates)
+    outputs.file(descriptor)
+
+    doLast {
+        val out = descriptor.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText("deployment-artifact=" + coordinates.replace(":", "\\:") + "\n")
+    }
+}
+
+tasks.jar {
+    dependsOn(extensionDescriptor)
+    from(extensionDescriptorDir)
+}
+
 // Telescope-quarkus is also consumable as a JPMS module via Automatic-Module-Name for downstream
 // projects that bring their own non-modular transitive graph; the strict module-info.java published
 // in this artifact still wins for consumers on a clean modular classpath.
@@ -104,6 +150,10 @@ tasks.jacocoTestReport {
     // jacocoTestReport classpath input. Gradle's strict task validation refuses to assume the
     // order — declare it explicitly.
     mustRunAfter(jandex)
+    // The mapped REST bodies run inside the Quarkus applications :telescope-quarkus-tests boots, so
+    // that module's test execution data counts toward this module's classes too.
+    dependsOn(":telescope-quarkus-tests:test")
+    executionData(file("tests/build/jacoco/test.exec"))
     // TelescopeMapperProcessor lives in :codegen, and only this module's tests compile and run the
     // CDI beans it writes against the real CDI and ArC APIs. A report covers only the classes it
     // lists, so it is listed here too, and the lines these tests execute count toward it beside the
@@ -127,6 +177,7 @@ tasks.withType<Javadoc>().configureEach {
     mustRunAfter(jandex)
     (options as StandardJavadocDocletOptions).apply {
         addStringOption("Xdoclint:all,-missing", "-quiet")
+        addStringOption("-add-reads", "io.github.eschizoid.telescope.quarkus=ALL-UNNAMED")
     }
 }
 
@@ -139,6 +190,10 @@ dependencies {
     // jakarta.persistence is on the class path, so an application with JPA gets it with no setup.
     runtimeOnly(project(":jpa"))
     api("io.quarkus:quarkus-arc")
+    // Mapped REST bodies: present only in an application that uses Quarkus REST, and validated
+    // only in one that uses Hibernate Validator.
+    compileOnly("io.quarkus:quarkus-rest")
+    compileOnly("io.quarkus:quarkus-hibernate-validator")
 
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)

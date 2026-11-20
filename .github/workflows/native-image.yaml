@@ -23,6 +23,8 @@ on:
     paths:
       - "examples/demo/domain/**"
       - "examples/demo/native/**"
+      - "examples/demo/quarkus/**"
+      - "quarkus/**"
       - "core/**"
       - "internal/**"
       - "codegen/**"
@@ -74,4 +76,39 @@ jobs:
           path: |
             examples/demo/native/build/native/nativeCompile/
             examples/demo/native/build/reports/
+          retention-days: 14
+
+  # The Quarkus order service built as a native executable, with every OrderApiTest call made on it.
+  # Its mapped bodies are written and read as types no resource signature names, and each finds its
+  # generated bridge through ServiceLoader at startup and logs it, so the calls pass, and the log
+  # names the bridge, only when the telescope extension's build steps registered them.
+  quarkus-native-verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up GraalVM (native-image)
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "25"
+          distribution: graalvm
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: "true"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build the Quarkus order service as a native executable and run its API tests against it
+        run: ./gradlew :examples:demo:quarkus:testNative -Dquarkus.native.enabled=true -Dquarkus.package.jar.enabled=false --no-daemon --stacktrace
+
+      - name: Upload the Quarkus native build reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: quarkus-native-reports
+          path: |
+            examples/demo/quarkus/build/*-native-image-source-jar/
+            examples/demo/quarkus/build/reports/
           retention-days: 14

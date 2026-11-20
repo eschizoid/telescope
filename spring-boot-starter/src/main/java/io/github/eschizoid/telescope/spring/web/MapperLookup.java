@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
+import io.github.eschizoid.telescope.internal.pairing.EndpointMappers;
 import io.github.eschizoid.telescope.spring.TelescopeMapperRegistry;
 import java.util.ArrayList;
 import java.util.function.Function;
@@ -16,8 +17,10 @@ import org.springframework.util.ClassUtils;
  * Finds the mapper for a {@code (source, target)} pair the way every mapped endpoint does: a {@link
  * TelescopeProjection} bean for the pair, then a {@code Mapper} bean in the registry, then {@code
  * Telescope.mapperForward}, which takes a generated {@code @Bridge} or the same-name forward
- * mapping. Every refusal is an {@code IllegalArgumentException} whose message the caller prefixes
- * with the handler it was resolving.
+ * mapping. {@link EndpointMappers} decides between the candidates and words those refusals, the
+ * same way for every container; this class finds the candidates in the bean factory. Every refusal
+ * is an {@code IllegalArgumentException} whose message the caller prefixes with the handler it was
+ * resolving.
  */
 final class MapperLookup {
 
@@ -54,16 +57,14 @@ final class MapperLookup {
     final String targetRole
   ) {
     final var pair = pairOf(projectionType);
-    if (pair[0] == null || pair[1] == null) throw new IllegalArgumentException(
-      projectionType.getSimpleName() +
-        " does not resolve its TelescopeProjection type arguments. Declare both, as in" +
-        " TelescopeProjection<Source, Target>."
-    );
-    if (pair[0] != source) throw new IllegalArgumentException(
-      projectionType.getSimpleName() + " maps " + name(pair[0]) + ", but " + sourceRole + " " + name(source)
-    );
-    if (target != null && pair[1] != target) throw new IllegalArgumentException(
-      projectionType.getSimpleName() + " maps to " + name(pair[1]) + ", but " + targetRole + " " + name(target)
+    EndpointMappers.checkProjection(
+      projectionType.getSimpleName(),
+      pair[0],
+      pair[1],
+      source,
+      sourceRole,
+      target,
+      targetRole
     );
     return bean(projectionType);
   }
@@ -96,36 +97,25 @@ final class MapperLookup {
     );
     final var registered = registry.getIfAvailable();
     final var mapper = registered == null ? null : registered.find(source, target).orElse(null);
-    final var candidates = new ArrayList<String>();
-    for (final var projection : projections) candidates.add(label(projection));
-    if (mapper != null) candidates.add("a Mapper<" + source.getSimpleName() + ", " + target.getSimpleName() + "> bean");
-    if (candidates.size() > 1) throw new IllegalArgumentException(
-      candidates.size() +
-        " mappers for " +
-        source.getSimpleName() +
-        " -> " +
-        target.getSimpleName() +
-        ": " +
-        String.join(", ", candidates) +
-        ". Add using = ... to " +
-        annotationName +
-        " to choose one."
-    );
-    if (projections.length == 1) return projectionMapping(
-      beanFactory.getBean(projections[0], TelescopeProjection.class)
-    );
-    if (mapper != null) {
-      @SuppressWarnings("unchecked")
-      final var typed = (Mapper<Object, Object>) mapper;
-      return typed::forward;
-    }
-    @SuppressWarnings("unchecked")
-    final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
-    return forward::forward;
+    final var labels = new ArrayList<String>(projections.length);
+    for (final var projection : projections) labels.add(label(projection));
+    return switch (EndpointMappers.route(source, target, labels, mapper != null, annotationName)) {
+      case PROJECTION -> projectionMapping(beanFactory.getBean(projections[0], TelescopeProjection.class));
+      case MAPPER -> registeredMapping(mapper);
+      case FORWARD -> forwardMapping(source, target);
+    };
   }
 
-  static String name(final Class<?> type) {
-    return type == null ? "an unresolved type" : type.getSimpleName();
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> registeredMapping(final Mapper<?, ?> mapper) {
+    final var typed = (Mapper<Object, Object>) mapper;
+    return typed::forward;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> forwardMapping(final Class<?> source, final Class<?> target) {
+    final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
+    return forward::forward;
   }
 
   private String label(final String beanName) {

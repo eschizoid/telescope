@@ -1,5 +1,5 @@
 name: "Telescope"
-description: "Telescope optics DSL — Mapper<A,B> bean registry + CDI producer for the runtime extension"
+description: "Telescope mappers on Quarkus — a Mapper<A,B> bean registry, mapped request and response bodies on Quarkus REST, and the native-image registrations telescope's generated bridges need"
 metadata:
   keywords:
     - "telescope"

@@ -97,11 +97,28 @@ public final class LambdaIntrospection {
         serialized.getCapturedArgCount()
       );
     } catch (final ReflectiveOperationException e) {
-      throw new IllegalArgumentException(
-        "Expected a method reference to a record component / bean property accessor",
-        e
-      );
+      throw new IllegalArgumentException(unreadable(lambda), e);
     }
+  }
+
+  // Inside a native image a method reference reads as one only when the class that wrote it is
+  // registered for lambda serialization; without it the reference has no writeReplace, as a value
+  // that is not a method reference has none.
+  static String unreadable(final Serializable lambda) {
+    if (!NativeImage.IN_IMAGE) return "Expected a method reference to a record component / bean property accessor";
+    final var name = lambda.getClass().getName();
+    final var cut = name.indexOf("$$Lambda");
+    final var capturing = cut < 0 ? name : name.substring(0, cut);
+    return (
+      "Cannot read the method reference " +
+      name +
+      " in a native image: register " +
+      capturing +
+      " for lambda serialization, as a lambdaCapturingTypes entry of its serialization-config.json or with" +
+      " @RegisterForReflection(lambdaCapturingTypes = \"" +
+      capturing +
+      "\")."
+    );
   }
 
   /** The {@code SerializedLambda} a Serializable lambda or method reference writes itself as. */

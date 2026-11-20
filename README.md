@@ -87,10 +87,22 @@ Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
 }
 ```
 
-When the wire type differs from the type the service works with, `@TelescopeRequestBody(from = PlaceOrderV2.class)`
-reads and validates the body as the wire type and maps it before the handler runs. When JSON comes from outside and has
-to be checked strictly, `@FromJson` generates a binder that reads the text straight into a record and refuses a wrong
-value by its path and position, as in `'lines[0].quantity' got 2, not a String, at line 1, column 74`.
+On Quarkus REST the resource method is the same, with `@TelescopeResponse` beside the JAX-RS annotations:
+
+```java
+@PATCH
+@Path("/{number}")
+@TelescopeResponse(to = OrderDto.class)
+public Order change(@PathParam("number") String number, OrderChanges changes) {
+  return desk.change(number, changes);
+}
+```
+
+When the wire type differs from the type the service works with, `@TelescopeRequestBody(from = PlaceOrderV2.class)`, on
+either framework, reads and validates the body as the wire type and maps it before the handler runs. When JSON comes
+from outside and has to be checked strictly, `@FromJson` generates a binder that reads the text straight into a record
+and refuses a wrong value by its path and position, as in
+`'lines[0].quantity' got 2, not a String, at line 1, column 74`.
 
 ### Through: the service changes the managed entity in place
 
@@ -156,11 +168,11 @@ The code comes from [`examples/demo/`](examples/demo/README.md), an order servic
 and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an older API
 version the mobile app still calls, a partner feed where every value is text, and an invoice built from several objects.
 
-| Hop                       | What telescope does there                                                                       | Guide                                                                                                                      |
-| ------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| REST endpoint and service | maps response and request bodies, binds JSON to a type, registers mappers as Jackson converters | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md), [telescope-jackson](jackson/README.md) |
-| Inside the service        | typed rows on a mapper field, run as `forward`, `backward`, `patch` or `into`                   | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md)                                     |
-| Service and entity        | `into` and `patchInto` update a managed entity in place, without loading what is lazy           | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                                                             |
+| Hop                       | What telescope does there                                                                                                      | Guide                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| REST endpoint and service | maps response and request bodies on Spring MVC and Quarkus REST, binds JSON to a type, registers mappers as Jackson converters | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md), [telescope-jackson](jackson/README.md) |
+| Inside the service        | typed rows on a mapper field, run as `forward`, `backward`, `patch` or `into`                                                  | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md)                                     |
+| Service and entity        | `into` and `patchInto` update a managed entity in place, without loading what is lazy                                          | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                                                             |
 
 ## A mapper names only what differs
 
@@ -319,15 +331,15 @@ On Maven, the processor goes in the compiler plugin's `annotationProcessorPaths`
 that setup. Everything is on Maven Central under `io.github.eschizoid`, and you add a module for each layer you want
 telescope to reach.
 
-| Artifact                        | Add it for                                                                                   | Guide                                  |
-| ------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `telescope-core`                | mappers, typed paths and the annotations; the one dependency you always add                  | [docs/](docs/type-conversion.md)       |
-| `telescope-codegen`             | the annotation processor behind `@Bridge`, `@FromJson`, `@FromMap` and the mapper verifier   | [docs/codegen.md](docs/codegen.md)     |
-| `telescope-spring-boot-starter` | mapped responses and request bodies on Spring MVC, a mapper registry, generated mapper beans | [guide](spring-boot-starter/README.md) |
-| `telescope-quarkus`             | the mapper registry and generated mapper beans on Quarkus                                    | [guide](quarkus/README.md)             |
-| `telescope-jackson`             | JSON read straight into a type, and mappers as Jackson 3 converters                          | [guide](jackson/README.md)             |
-| `telescope-jpa`                 | lazy collections and proxies on JPA entities; both starters bring it                         | [guide](jpa/README.md)                 |
-| `telescope-lombok`              | typed navigators for Lombok `@Data`, `@Value` and `@Builder` classes                         | [guide](lombok/README.md)              |
+| Artifact                        | Add it for                                                                                                                               | Guide                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `telescope-core`                | mappers, typed paths and the annotations; the one dependency you always add                                                              | [docs/](docs/type-conversion.md)       |
+| `telescope-codegen`             | the annotation processor behind `@Bridge`, `@FromJson`, `@FromMap` and the mapper verifier                                               | [docs/codegen.md](docs/codegen.md)     |
+| `telescope-spring-boot-starter` | mapped responses and request bodies on Spring MVC, a mapper registry, generated mapper beans                                             | [guide](spring-boot-starter/README.md) |
+| `telescope-quarkus`             | mapped responses and request bodies on Quarkus REST, a mapper registry, generated mapper beans; it brings `telescope-quarkus-deployment` | [guide](quarkus/README.md)             |
+| `telescope-jackson`             | JSON read straight into a type, and mappers as Jackson 3 converters                                                                      | [guide](jackson/README.md)             |
+| `telescope-jpa`                 | lazy collections and proxies on JPA entities; both starters bring it                                                                     | [guide](jpa/README.md)                 |
+| `telescope-lombok`              | typed navigators for Lombok `@Data`, `@Value` and `@Builder` classes                                                                     | [guide](lombok/README.md)              |
 
 `telescope-jackson`, `telescope-jpa`, `patchInto` and `@FromJson` arrive with the release after 2.2.0. Everything runs
 in a GraalVM native image, and generated mappers and binders need no reflection configuration there;
