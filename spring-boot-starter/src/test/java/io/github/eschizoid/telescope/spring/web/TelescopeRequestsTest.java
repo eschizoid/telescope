@@ -8,10 +8,12 @@ import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.CreateUserRequest;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUser;
+import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUserView;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.plain.NewUserProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.shout.ShoutingNewUserProjection;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.context.annotation.ComponentScan;
@@ -115,6 +117,26 @@ class TelescopeRequestsTest {
 
     @PostMapping("/both")
     NewUser create(@TelescopeRequestBody(from = CreateUserRequest.class) @RequestBody final NewUser user) {
+      return user;
+    }
+  }
+
+  // No component of NewUser is named like a component of CreateUserRequest.
+  @RestController
+  static class UnpairedController {
+
+    @PostMapping("/unpaired")
+    NewUser create(@TelescopeRequestBody(from = CreateUserRequest.class) final NewUser user) {
+      return user;
+    }
+  }
+
+  // NewUser pairs name with NewUserView and leaves email at its default.
+  @RestController
+  static class PartialController {
+
+    @PostMapping("/partial")
+    NewUser create(@TelescopeRequestBody(from = NewUserView.class) final NewUser user) {
       return user;
     }
   }
@@ -229,6 +251,36 @@ class TelescopeRequestsTest {
       OpenUsingController.class,
       "OpenUsingController#create(user): OpenProjection does not resolve its TelescopeProjection type arguments"
     );
+  }
+
+  @Test
+  @DisplayName("a body with no mapper whose same-name mapping pairs no component fails startup, naming both sides")
+  void bodyThatPairsNothingFailsStartup() {
+    runner()
+      .withUserConfiguration(UnpairedController.class)
+      .run(context ->
+        assertThat(context)
+          .hasFailed()
+          .getFailure()
+          .hasStackTraceContaining(
+            "UnpairedController#create(user): CreateUserRequest -> NewUser pairs nothing: no field of NewUser" +
+              " (name, email) is named like a field of CreateUserRequest (displayName, emailAddress), so the" +
+              " mapping would leave each at its default."
+          )
+      );
+  }
+
+  @Test
+  @DisplayName("a body some of whose components pair by name boots and leaves the others at their default")
+  void partialBodyBoots() {
+    runner()
+      .withUserConfiguration(PartialController.class)
+      .run(context -> {
+        final var mvc = MockMvcBuilders.webAppContextSetup(context.getSourceApplicationContext()).build();
+        mvc
+          .perform(post("/partial").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Ada\"}"))
+          .andExpect(content().json("{\"name\":\"Ada\",\"email\":null}", true));
+      });
   }
 
   private static WebApplicationContextRunner runner() {

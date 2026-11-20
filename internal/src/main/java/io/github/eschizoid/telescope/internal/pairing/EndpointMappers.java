@@ -1,17 +1,25 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
+import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
+import io.github.eschizoid.telescope.internal.Reflective;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Which mapper a mapped REST endpoint converts its body through, decided the same way by every
  * container integration. A projection the annotation names through {@code using} is taken as it is,
  * once its type arguments fit the endpoint. Otherwise the candidates for the pair are the
  * projection beans that map it and the {@code Mapper} bean registered for it; one candidate is
- * taken, none falls back to {@code Telescope.mapperForward}, and two or more are refused. The
- * container finds the candidates; this class decides between them and words every refusal.
+ * taken, none falls back to {@code Telescope.mapperForward}, and two or more are refused. A pair
+ * the fallback would map by name alone is refused when no property of the target pairs with one of
+ * the source. The container finds the candidates; this class decides between them and words every
+ * refusal.
  */
 public final class EndpointMappers {
+
+  private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
 
   private EndpointMappers() {}
 
@@ -74,6 +82,32 @@ public final class EndpointMappers {
     );
     if (target != null && pairTarget != target) throw new IllegalArgumentException(
       PairingMessages.endpointProjectionTarget(projection, pairTarget, targetRole, target)
+    );
+  }
+
+  /**
+   * Checks that {@code Telescope.mapperForward}, on a pair with no projection or {@code Mapper}
+   * bean, fills some property of {@code target}. A generated bridge for the pair, held beside the
+   * source or registered by a provider, maps it as its rows say and is not checked; neither is a
+   * pair of two sealed interfaces, which the runtime mapper converts case by case. Every other pair
+   * the runtime mapper walks by property, a non-sealed interface source by its getters, so its two
+   * sides' properties are paired by name as the runtime mapper matches a pair no row configures,
+   * and a pair where no target property pairs with a source property is refused: the mapping would
+   * leave every property of each value at its default. A pair where some property pairs is taken,
+   * whatever the others hold.
+   *
+   * @param registeredBridge whether a provider registers a generated bridge for the pair
+   * @throws IllegalArgumentException when no property of {@code target} pairs with one of {@code
+   *     source}
+   */
+  public static void checkForwardPairs(final Class<?> source, final Class<?> target, final boolean registeredBridge) {
+    if (registeredBridge || BridgeHolderProbe.probeFor(source, target).isPresent()) return;
+    if (RULES.decidePair(source, target, "", true) instanceof PairDecision.DispatchCases) return;
+    final var sourceNames = List.of(Reflective.of(source).names(source));
+    final var targetNames = List.of(Reflective.of(target).names(target));
+    final var match = PairingRules.matchFields(sourceNames, targetNames, Set.of(), Set.of());
+    if (match.matched().isEmpty() && !match.unmatchedTargets().isEmpty()) throw new IllegalArgumentException(
+      PairingMessages.endpointNothingPairs(source, sourceNames, target, targetNames)
     );
   }
 }

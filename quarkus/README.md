@@ -122,7 +122,9 @@ public RestResponse<Order> place(@TelescopeRequestBody(from = PlaceOrderV2.class
 The mapper for each pair is found the way the Spring starter finds it: the projection `using` names, else the one
 `TelescopeProjection` bean for the pair, else the `Mapper` bean the registry holds for it, else
 `Telescope.mapperForward`, which takes a generated `@Bridge` or the same-name forward mapping. Two candidates are
-refused unless `using` picks one.
+refused unless `using` picks one. So is a same-name forward mapping where no property of the target is named like a
+property of the source, since every body would carry only defaults; a pair where some property pairs maps, and leaves
+the others at their defaults.
 
 The build reads the annotations from the Jandex index and refuses a misconfigured method with the method named, for
 example a bare `Response`, which names no entity type (return `RestResponse<S>`), or a `Multi`, whose elements are
