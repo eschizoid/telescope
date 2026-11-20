@@ -53,12 +53,11 @@ public class OrderLine {
   @ManyToOne private Order order;
 }
 
-public record OrderChanges(Delivery delivery, List<NewLine> lines) {} // a field the client leaves out is null
-public record NewLine(String sku, int quantity) {}
+public record OrderChanges(Delivery delivery, List<LineDto> lines) {} // a field the client leaves out is null
 
 public record OrderDto(String number, String customerName, Delivery delivery,
-                       List<OrderLineDto> lines, BigDecimal total) {}
-public record OrderLineDto(String sku, int quantity, BigDecimal unitPrice) {}
+                       List<LineDto> lines, BigDecimal total) {}
+public record LineDto(String sku, int quantity, BigDecimal unitPrice) {} // a line on the wire, both ways
 ```
 
 Two mapper fields say how those types relate, and the PATCH handler uses them:
@@ -94,15 +93,15 @@ public final class OrderMappers {
   );
 }
 
-// Converts each line of a PATCH; a new line is priced from the catalog, never by the client.
+// Converts each line of a PATCH. A new line is priced from the catalog, and a unitPrice the client sends is ignored.
 final class LineEdits {
 
-  static OrderLine backward(NewLine line) {
+  static OrderLine backward(LineDto line) {
     return Catalog.line(line.sku(), line.quantity());
   }
 
-  static NewLine forward(OrderLine line) {
-    return new NewLine(line.getSku(), line.getQuantity());
+  static LineDto forward(OrderLine line) {
+    return new LineDto(line.getSku(), line.getQuantity(), line.getUnitPrice());
   }
 }
 
