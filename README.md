@@ -25,118 +25,102 @@ into plain Java that runs in the time of hand-written code. That one definition 
 converts in both directions, applies a partial update, updates a managed entity in place, maps the REST request and
 response, and documents the API.
 
-The example is a small order service. The order is a JPA entity with a lazy customer and a list of lines it owns, the
-client sends a PATCH body whose fields are all optional, and it receives a public DTO without the shop's cost price or
-internal notes.
+The example is a small order service: two JPA entities written with Lombok, the body a PATCH sends, and the DTO the
+client receives.
 
+<!-- prettier-ignore -->
 ```java
-@Entity
+@Entity @Getter @Setter
 public class Order {
-
-  @Id
-  @GeneratedValue
-  private Long id;
-
+  @Id @GeneratedValue private Long id;
   private String number;
-
-  @ManyToOne(fetch = FetchType.LAZY)
-  private Customer customer;
-
-  private OrderStatus status;
+  @ManyToOne(fetch = FetchType.LAZY) private Customer customer;
   private Delivery delivery;
-  private boolean giftWrap;
-  private String discountCode;
   private String internalNotes; // stays inside the service
-  private Payment payment;
-
-  @ElementCollection
-  private List<String> tags = new ArrayList<>();
-
   @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
-  private final List<OrderLine> lines = new ArrayList<>();
+  private List<OrderLine> lines = new ArrayList<>();
 
-  public void addLine(OrderLine line) {
-    line.setOrder(this); // the back-reference Hibernate needs
-    lines.add(line);
-  }
-  // getters and setters
+  public void addLine(OrderLine line) { line.setOrder(this); lines.add(line); } // sets the back-reference
 }
 
-@Entity
+@Entity @Getter @Setter
 public class OrderLine {
-
-  @Id
-  @GeneratedValue
-  private Long id;
-
+  @Id @GeneratedValue private Long id;
   private String sku;
   private int quantity;
   private BigDecimal unitPrice;
   private BigDecimal costPrice; // what the shop paid, stays inside the service
-
-  @ManyToOne
-  private Order order;
-  // getters and setters
+  @ManyToOne private Order order;
 }
 
-// What a PATCH sends. A field the client leaves out arrives as null.
-public record OrderChanges(
-  String discountCode,
-  Delivery delivery,
-  Boolean giftWrap,
-  List<String> tags,
-  List<NewLine> lines
-) {}
-
+public record OrderChanges(Delivery delivery, List<NewLine> lines) {} // a field the client leaves out is null
 public record NewLine(String sku, int quantity) {}
 
-// What the client receives (abridged).
-public record OrderDto(
-  String number,
-  String customerName,
-  OrderStatus status,
-  Delivery delivery,
-  List<OrderLineDto> lines,
-  BigDecimal total,
-  String discountCode,
-  List<String> tags
-) {}
-
-public record OrderLineDto(String sku, String name, int quantity, BigDecimal unitPrice) {}
+public record OrderDto(String number, String customerName, Delivery delivery,
+                       List<OrderLineDto> lines, BigDecimal total) {}
+public record OrderLineDto(String sku, int quantity, BigDecimal unitPrice) {}
 ```
 
-The whole PATCH endpoint over those types:
+Two mapper fields say how those types relate, and the PATCH handler uses them:
 
 ```java
-// PATCH /orders/SO-1001   {"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}
+import static io.github.eschizoid.telescope.Telescope.*; // mapper, mapperForward, path
+import static io.github.eschizoid.telescope.mapping.Mapping.*; // to, via, compute, drop
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+
+public final class OrderMappers {
+
+  // A PATCH: how an OrderChanges is written into an Order.
+  @Bridge
+  public static final Mapper<Order, OrderChanges> EDITS = mapper(
+    Order.class,
+    OrderChanges.class,
+    writeBean(Order.class, ADDERS), // write collections through the entity's adders, here addLine
+    via(Order::getLines, OrderChanges::lines, LineEdits.class),
+    drop(Order::getId), // the fields a client may never change
+    drop(Order::getNumber),
+    drop(Order::getCustomer),
+    drop(Order::getInternalNotes)
+  );
+
+  // The response: what a client sees of an Order.
+  @Bridge
+  public static final ForwardMapper<Order, OrderDto> DTO = mapperForward(
+    Order.class,
+    OrderDto.class,
+    to(path(Order::getCustomer, Customer::getName), OrderDto::customerName),
+    compute(OrderDto::total, Pricing::total) // Pricing.total(order) sums the lines
+  );
+}
+
+// Converts each line of a PATCH; a new line is priced from the catalog, never by the client.
+final class LineEdits {
+
+  static OrderLine backward(NewLine line) {
+    return Catalog.line(line.sku(), line.quantity());
+  }
+
+  static NewLine forward(OrderLine line) {
+    return new NewLine(line.getSku(), line.getQuantity());
+  }
+}
 
 @TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the client receives an OrderDto
 Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
-  final var order = orders.get(number); // the entity JPA manages
-  EDITS.patchInto(order, changes); // writes only the fields the client sent
+  final var order = orders.findByNumber(number); // the entity JPA manages
+  OrderMappers.EDITS.patchInto(order, changes); // writes only the fields the client sent
   return order;
 }
-
-@Bridge
-static final Mapper<Order, OrderChanges> EDITS = mapper(
-  Order.class,
-  OrderChanges.class,
-  writeBean(Order.class, ADDERS), // lines go through order.addLine(...), which sets the back-reference
-  via(Order::getLines, OrderChanges::lines, LineEdits.class), // each new line is priced from the catalog
-  drop(Order::getId), // a client may never change these
-  drop(Order::getNumber),
-  drop(Order::getCustomer),
-  drop(Order::getStatus),
-  drop(Order::getInternalNotes),
-  drop(Order::getPayment)
-);
 ```
 
-That is a whole PATCH endpoint. The delivery and the lines change, and the discount code and tags the client left out
-keep their values. The `@OneToMany` list the entity holds is refilled in place, so Hibernate keeps tracking it. The
-response is the public DTO, built without loading a lazy collection it doesn't show. Every field is a method reference,
-so a typo is a compile error, and a field added to `Order` later fails the build until someone decides whether a PATCH
-may change it. The `telescope-codegen` processor compiles the mapper into plain Java with no reflection.
+That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name. The delivery and the lines
+change, and a field the client left out keeps its value. The new lines go through `order.addLine(...)` into the
+`@OneToMany` list the entity already holds, so Hibernate keeps tracking it and each line gets its back-reference. The
+response is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the
+internal notes. Every field is a method reference, so a typo is a compile error, and a field added to `Order` later
+fails the build until someone decides whether a PATCH may change it. The `telescope-codegen` processor compiles both
+mappers into plain Java with no reflection.
 
 ## What you stop writing
 
@@ -183,22 +167,14 @@ curl -X PATCH localhost:8080/orders/SO-1001 -H 'Content-Type: application/json' 
   -d '{"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}'
 ```
 
-The request crosses the REST layer, the service and the entity, and the response crosses them again on the way out.
-Telescope does the mapping at each crossing, and the handler and the service hold no conversion code.
+The request crosses the REST layer, the service and the entity, and the response crosses them again on the way out. The
+code at the top does all three, and this section takes them one at a time.
 
 ### In: the handler takes the type the service works with
 
-The body is read into `OrderChanges`, a record whose fields are all optional, so a field the client left out arrives as
-null. The handler returns the entity, and the annotation names the type the client receives.
-
-```java
-@TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class)
-Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
-  return orders.change(number, changes);
-}
-```
-
-On Quarkus REST the resource method is the same, with `@TelescopeResponse` beside the JAX-RS annotations:
+Spring's Jackson reads the body into `OrderChanges`. The handler returns the entity, and `@TelescopePatchMapping` names
+the type the client receives. On Quarkus REST the resource method is the same, with `@TelescopeResponse` beside the
+JAX-RS annotations:
 
 ```java
 @PATCH
@@ -212,82 +188,64 @@ public Order change(@PathParam("number") String number, OrderChanges changes) {
 Every mapped method is resolved when the application starts. Two mappers for one pair, a mapper that cannot be resolved,
 or a DTO that shares no property name with the type it maps fails startup with the method named. With springdoc or
 SmallRye OpenAPI on the classpath, the API document shows `OrderDto`, the type the client receives, and not the entity.
-
 When the wire type differs from the type the service works with, `@TelescopeRequestBody(from = PlaceOrderV2.class)`, on
-either framework, reads and validates the body as the wire type and maps it before the handler runs. When JSON comes
-from outside and has to be checked strictly, `@FromJson` generates a binder that reads the text straight into a record
-and refuses a wrong value by its path and position, as in
-`'lines[0].quantity' got 2, not a String, at line 1, column 74`.
+either framework, reads and validates the body as the wire type and maps it before the handler runs.
+
+[`telescope-jackson`](jackson/README.md) works inside Jackson in both directions. `@FromJson` generates a binder for
+JSON that comes from outside and has to be checked strictly: it reads the text straight into a record with no
+reflection, honours Jackson's own annotations, and refuses a wrong value by its path and position. `TelescopeModule`
+makes Jackson read and write a domain type in its wire shape, through a mapper you name.
+
+```java
+@FromJson
+public record ImportedOrder(@JsonProperty("customer_email") String customerEmail, List<ImportedLine> lines) {}
+
+public record ImportedLine(String sku, String quantity) {} // the feed sends every value as text
+
+ImportedOrder imported = ImportedOrderFromJson.BINDER.read(body);
+
+// a quantity sent as a number: 'lines[0].quantity' got 2, not a String, at line 1, column 74
+
+JsonMapper json = JsonMapper.builder().addModule(TelescopeModule.of(CustomerCards.CARDS)).build();
+// json.writeValueAsString(customer) writes the customer as its CustomerCard
+```
 
 ### Through: the service changes the managed entity in place
 
-The `EDITS` mapper at the top says how an `Order` and an `OrderChanges` relate, and which fields a PATCH may never
-touch. The service checks its rules and makes one call.
-
-```java
-public Order change(String number, OrderChanges changes) {
-  final var order = get(number);
-  require(order, OrderStatus.PLACED, "change");
-  OrderMappers.EDITS.patchInto(order, changes);
-  return orders.save(order);
-}
-```
-
-That one `patchInto` call stands in for the code every service writes by hand:
+`EDITS.patchInto(order, changes)` stands in for the code every service writes by hand:
 
 ```java
 if (changes.delivery() != null) order.setDelivery(changes.delivery());
-if (changes.discountCode() != null) order.setDiscountCode(changes.discountCode());
-if (changes.giftWrap() != null) order.setGiftWrap(changes.giftWrap());
 if (changes.lines() != null) {
   order.getLines().clear(); // never setLines(...): Hibernate tracks this list
-  for (final var item : changes.lines()) order.addLine(LineEdits.backward(item));
+  for (final var line : changes.lines()) order.addLine(LineEdits.backward(line));
 }
 // and one more branch for each field anyone adds later, if they remember
 ```
-
-`patchInto` writes only the fields the client sent into the `Order` the persistence context manages. A field left out
-keeps the entity's value. The new lines go through `order.addLine(...)` into the `@OneToMany` list the entity already
-holds, so the list keeps its identity, Hibernate deletes the old rows, and each new line gets its back-reference. A
-field added to `Order` later fails the build until someone decides whether a PATCH may change it.
 
 With `telescope-jpa` on the classpath, mapping an entity never loads a lazy collection and never throws
 `LazyInitializationException` for one, and a lazy Hibernate proxy is read as the entity it stands for. Both starters
 bring it.
 
-The demo's lines carry no id, so a PATCH replaces them. When the elements a client sends do carry their `@Id`,
+The lines in this example carry no id, so a PATCH replaces them. When the elements a client sends do carry their `@Id`,
 `telescope-jpa` merges the collection: an element that did not change issues no SQL, a changed one issues exactly one
 UPDATE, and only a removed or a new element costs a DELETE or an INSERT. A repeated id, or a generated id the entity
 does not hold, is refused before anything is written.
 
 ### Out: the entity leaves as the public DTO
 
-The entity holds what the shop paid for each item, the card token and the warehouse's notes. The public DTO shows none
-of them, takes the customer's name from another entity, and carries a total that no column stores.
-
-```java
-@Bridge
-public static final ForwardMapper<Order, OrderDto> DTO = mapperForward(
-  Order.class,
-  OrderDto.class,
-  to(path(Order::getCustomer, Customer::getName), OrderDto::customerName),
-  compute(OrderDto::total, Pricing::total),
-  drop(Order::getInternalNotes)
-);
-```
-
-The starter maps the entity the handler returned where Spring MVC writes the body, and the client receives the new
-lines, the recomputed total, and the discount code and tags the order kept.
+The starter maps the entity the handler returned through `DTO`, where Spring MVC writes the body. The client receives
+the new lines and the recomputed total, with the customer's name read from another entity:
 
 ```text
-{"number":"SO-1001","delivery":"EXPRESS","lines":[{"sku":"BAG-04","name":"Tote bag","quantity":3,"unitPrice":15.00}],
- "total":40.50,"discountCode":"WELCOME10","tags":["gift"], ...}
+{"number":"SO-1001","customerName":"Ada Lovelace","delivery":"EXPRESS",
+ "lines":[{"sku":"BAG-04","quantity":3,"unitPrice":15.00}],"total":45.00}
 ```
 
-The code comes from [`examples/demo/`](examples/demo/README.md), an order service that runs on Spring Boot, on Quarkus
-and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an older API
-version the mobile app still calls, a partner feed where every value is text, and an invoice built from several objects.
-To try it, run `./gradlew :examples:demo:spring:bootRun` and send the PATCH above.
+The code is condensed from [`examples/demo/`](examples/demo/README.md), an order service that runs on Spring Boot, on
+Quarkus and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an
+older API version the mobile app still calls, a partner feed where every value is text, and an invoice built from
+several objects. To try it, run `./gradlew :examples:demo:spring:bootRun` and send the PATCH above.
 
 | Hop                       | What telescope does there                                                                                                                                          | Guide                                                                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
