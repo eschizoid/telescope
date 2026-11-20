@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/logo.png" alt="telescope, an optics-based DSL for Java records and POJOs" width="320" />
+  <img src="img/logo.png" alt="telescope, the typed mapping layer for Java services" width="320" />
 </p>
 
 # telescope
@@ -19,9 +19,11 @@ wire with its own annotations. A mapper generator covers DTOs, with field names 
 rest, so every team writes it by hand: the PATCH that must change only what the client sent, the entity update that must
 not replace a managed collection, the response that must not load a lazy one.
 
-Telescope covers all three crossings with one model. You write each mapping as an ordinary Java expression made of
-method references, the compiler checks every field it names, and an annotation processor turns it into plain Java that
-runs in the time of hand-written code.
+Telescope covers all three crossings with one model. You write the relation between two types once, as an ordinary Java
+expression made of method references. The compiler checks every field it names, and an annotation processor turns it
+into plain Java that runs in the time of hand-written code. That one definition then does every job the pair needs: it
+converts in both directions, applies a partial update, updates a managed entity in place, maps the REST request and
+response, and documents the API.
 
 ```java
 // PATCH /orders/SO-1001   {"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}
@@ -53,14 +55,38 @@ may change it. The `telescope-codegen` processor compiles the mapper into plain 
 
 ## What you stop writing
 
-| Today, by hand or with a second tool                                    | With telescope                                                                |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| a PATCH handler full of `if (x != null) entity.setX(x)`                 | `EDITS.patchInto(entity, changes)`                                            |
-| clearing and refilling a `@OneToMany` list, setting each back-reference | the same call, through the entity's own `addLine`                             |
-| a `LazyInitializationException` when a mapper touches a lazy collection | an unloaded collection is never read                                          |
-| a controller that converts every return value to a DTO                  | `@TelescopeGetMapping(to = OrderDto.class)` on a handler returning the entity |
-| field names as strings in mapper annotations                            | method references the compiler checks and the IDE renames                     |
-| a reflective mapper for convenience, a generated one for speed          | one mapper that runs both ways, tested to give the same result                |
+| Today, by hand or with a second tool                                    | With telescope                                                                          |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| a PATCH handler full of `if (x != null) entity.setX(x)`                 | `EDITS.patchInto(entity, changes)`                                                      |
+| clearing and refilling a `@OneToMany` list, setting each back-reference | the same call, through the entity's own `addLine`                                       |
+| a `LazyInitializationException` when a mapper touches a lazy collection | an unloaded collection is never read                                                    |
+| deleting and reinserting every child row to change one of them          | with ids on the elements, the changed row gets one UPDATE and the others are left alone |
+| a controller that converts every return value to a DTO                  | `@TelescopeGetMapping(to = OrderDto.class)` on a handler returning the entity           |
+| a 200 full of nulls because an annotation names the wrong DTO           | the application fails at startup, with the method named                                 |
+| field names as strings in mapper annotations                            | method references the compiler checks and the IDE renames                               |
+| a reflective mapper for convenience, a generated one for speed          | one mapper that runs both ways, tested to give the same result                          |
+
+## What one mapper gives you
+
+A hand-written converter does one thing, which is to turn an `Order` into an `OrderDto`. A generated mapper method does
+the same. When the service later needs the reverse direction, a PATCH, an update of the entity it already holds, or the
+same conversion at the REST layer, each one is more code, and each copy has to be kept in step with the others by hand.
+
+A telescope mapper is a list of typed rows that the library can read, so one field answers every question a service asks
+about that pair of types.
+
+| From one mapper field                                            | You get                                                                                                                          |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `forward` and `backward`                                         | both directions from the same rows, so there is no second mapper to keep in step                                                 |
+| `patch` and `patchInto`                                          | a partial update that writes only what the client sent                                                                           |
+| `into`                                                           | an update of the entity JPA already manages, with its collections refilled in place or merged by `@Id`                           |
+| `@TelescopeGetMapping(to = ...)`, `@TelescopeResponse(to = ...)` | request and response bodies mapped on Spring MVC and Quarkus REST, and the wire type in the OpenAPI document                     |
+| `TelescopeModule`                                                | Jackson reading and writing the domain type in its wire shape                                                                    |
+| the processor and the verifier                                   | plain Java with no reflection, and a build that fails when a two-way mapper's type gains a field and nobody has said how it maps |
+| `explain()` and `trace(input)`                                   | the mapper's own account of which fields it pairs, converts or skips                                                             |
+
+All of them read the same rows, so they cannot drift apart. When you rename a field in the IDE, the conversion, the
+partial update and the response body follow, or the build fails.
 
 ## One request, three hops
 
@@ -97,6 +123,10 @@ public Order change(@PathParam("number") String number, OrderChanges changes) {
   return desk.change(number, changes);
 }
 ```
+
+Every mapped method is resolved when the application starts. Two mappers for one pair, a mapper that cannot be resolved,
+or a DTO that shares no property name with the type it maps fails startup with the method named. With springdoc or
+SmallRye OpenAPI on the classpath, the API document shows `OrderDto`, the type the client receives, and not the entity.
 
 When the wire type differs from the type the service works with, `@TelescopeRequestBody(from = PlaceOrderV2.class)`, on
 either framework, reads and validates the body as the wire type and maps it before the handler runs. When JSON comes
@@ -140,6 +170,11 @@ With `telescope-jpa` on the classpath, mapping an entity never loads a lazy coll
 `LazyInitializationException` for one, and a lazy Hibernate proxy is read as the entity it stands for. Both starters
 bring it.
 
+The demo's lines carry no id, so a PATCH replaces them. When the elements a client sends do carry their `@Id`,
+`telescope-jpa` merges the collection: an element that did not change issues no SQL, a changed one issues exactly one
+UPDATE, and only a removed or a new element costs a DELETE or an INSERT. A repeated id, or a generated id the entity
+does not hold, is refused before anything is written.
+
 ### Out: the entity leaves as the public DTO
 
 The entity holds what the shop paid for each item, the card token and the warehouse's notes. The public DTO shows none
@@ -167,12 +202,13 @@ lines, the recomputed total, and the discount code and tags the order kept.
 The code comes from [`examples/demo/`](examples/demo/README.md), an order service that runs on Spring Boot, on Quarkus
 and as a GraalVM native image from the same mappers. Its README walks the rest of the service the same way: an older API
 version the mobile app still calls, a partner feed where every value is text, and an invoice built from several objects.
+To try it, run `./gradlew :examples:demo:spring:bootRun` and send the PATCH above.
 
-| Hop                       | What telescope does there                                                                                                      | Guide                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| REST endpoint and service | maps response and request bodies on Spring MVC and Quarkus REST, binds JSON to a type, registers mappers as Jackson converters | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md), [telescope-jackson](jackson/README.md) |
-| Inside the service        | typed rows on a mapper field, run as `forward`, `backward`, `patch` or `into`                                                  | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md)                                     |
-| Service and entity        | `into` and `patchInto` update a managed entity in place, without loading what is lazy                                          | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                                                             |
+| Hop                       | What telescope does there                                                                                                                                          | Guide                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| REST endpoint and service | maps response and request bodies on Spring MVC and Quarkus REST, documents the wire type in OpenAPI, binds JSON to a type, registers mappers as Jackson converters | [Spring Boot starter](spring-boot-starter/README.md), [Quarkus](quarkus/README.md), [telescope-jackson](jackson/README.md) |
+| Inside the service        | typed rows on a mapper field, run as `forward`, `backward`, `patch` or `into`                                                                                      | [docs/type-conversion.md](docs/type-conversion.md), [docs/codegen.md](docs/codegen.md)                                     |
+| Service and entity        | `into` and `patchInto` update a managed entity in place, merge its collections by `@Id`, and never load what is lazy                                               | [docs/pojos.md](docs/pojos.md), [telescope-jpa](jpa/README.md)                                                             |
 
 ## A mapper names only what differs
 
@@ -338,12 +374,12 @@ telescope to reach.
 | `telescope-spring-boot-starter` | mapped responses and request bodies on Spring MVC, a mapper registry, generated mapper beans                                             | [guide](spring-boot-starter/README.md) |
 | `telescope-quarkus`             | mapped responses and request bodies on Quarkus REST, a mapper registry, generated mapper beans; it brings `telescope-quarkus-deployment` | [guide](quarkus/README.md)             |
 | `telescope-jackson`             | JSON read straight into a type, and mappers as Jackson 3 converters                                                                      | [guide](jackson/README.md)             |
-| `telescope-jpa`                 | lazy collections and proxies on JPA entities; both starters bring it                                                                     | [guide](jpa/README.md)                 |
+| `telescope-jpa`                 | lazy collections, proxies and merge by `@Id` on JPA entities; both starters bring it                                                     | [guide](jpa/README.md)                 |
 | `telescope-lombok`              | typed navigators for Lombok `@Data`, `@Value` and `@Builder` classes                                                                     | [guide](lombok/README.md)              |
 
-`telescope-jackson`, `telescope-jpa`, `patchInto` and `@FromJson` arrive with the release after 2.2.0. Everything runs
-in a GraalVM native image, and generated mappers and binders need no reflection configuration there;
-[docs/native-image.md](docs/native-image.md) has the details.
+The startup refusal of an endpoint whose types share no property name, and the OpenAPI document on Quarkus REST, arrive
+with the release after 2.3.0. Everything runs in a GraalVM native image, and generated mappers and binders need no
+reflection configuration there; [docs/native-image.md](docs/native-image.md) has the details.
 
 ## Typed paths, the part underneath
 
@@ -380,23 +416,23 @@ run an update inside a `CompletableFuture`, `Optional`, `Either` or `Validated` 
 
 ## Documentation
 
-| Layer                     | Guide                                                                  | Covers                                                                 |
-| ------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| REST endpoint and service | [spring-boot-starter/README.md](spring-boot-starter/README.md)         | mapped responses and request bodies, springdoc, the registry and beans |
-|                           | [quarkus/README.md](quarkus/README.md)                                 | the mapper registry and generated beans on Quarkus                     |
-|                           | [jackson/README.md](jackson/README.md)                                 | JSON straight into a type, `@FromJson`, mappers as Jackson converters  |
-| Inside the service        | [docs/type-conversion.md](docs/type-conversion.md)                     | mappers, rows and structural conversion                                |
-|                           | [docs/codegen.md](docs/codegen.md)                                     | `@Bridge`, `<Type>Mappings`, `@FromMap`, navigators, Lombok and JPMS   |
-|                           | [docs/introspection.md](docs/introspection.md)                         | `explain()`, `trace()` and logging                                     |
-|                           | [docs/navigation.md](docs/navigation.md)                               | every path operation, containers, sealed cases, filters and multi-edit |
-|                           | [docs/effects.md](docs/effects.md)                                     | updates inside async, validated, either and optional results           |
-| Service and entity        | [docs/pojos.md](docs/pojos.md)                                         | beans, write strategies, `into` and `ADDERS`                           |
-|                           | [jpa/README.md](jpa/README.md)                                         | lazy collections and proxies on JPA entities                           |
-| Coming from MapStruct     | [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md)           | the two tools side by side                                             |
-|                           | [docs/mapstruct-migration.md](docs/mapstruct-migration.md)             | moving one mapper at a time, and running both together                 |
-|                           | [docs/mapstruct-parity.md](docs/mapstruct-parity.md)                   | every MapStruct feature and its telescope equivalent                   |
-| Running it                | [docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) | benchmark method, environment and every result                         |
-|                           | [docs/native-image.md](docs/native-image.md)                           | what a GraalVM native image needs                                      |
+| Layer                     | Guide                                                                  | Covers                                                                        |
+| ------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| REST endpoint and service | [spring-boot-starter/README.md](spring-boot-starter/README.md)         | mapped responses and request bodies, springdoc, the registry and beans        |
+|                           | [quarkus/README.md](quarkus/README.md)                                 | mapped responses and request bodies, SmallRye OpenAPI, the registry and beans |
+|                           | [jackson/README.md](jackson/README.md)                                 | JSON straight into a type, `@FromJson`, mappers as Jackson converters         |
+| Inside the service        | [docs/type-conversion.md](docs/type-conversion.md)                     | mappers, rows and structural conversion                                       |
+|                           | [docs/codegen.md](docs/codegen.md)                                     | `@Bridge`, `<Type>Mappings`, `@FromMap`, navigators, Lombok and JPMS          |
+|                           | [docs/introspection.md](docs/introspection.md)                         | `explain()`, `trace()` and logging                                            |
+|                           | [docs/navigation.md](docs/navigation.md)                               | every path operation, containers, sealed cases, filters and multi-edit        |
+|                           | [docs/effects.md](docs/effects.md)                                     | updates inside async, validated, either and optional results                  |
+| Service and entity        | [docs/pojos.md](docs/pojos.md)                                         | beans, write strategies, `into` and `ADDERS`                                  |
+|                           | [jpa/README.md](jpa/README.md)                                         | lazy collections, proxies and merge by `@Id` on JPA entities                  |
+| Coming from MapStruct     | [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md)           | the two tools side by side                                                    |
+|                           | [docs/mapstruct-migration.md](docs/mapstruct-migration.md)             | moving one mapper at a time, and running both together                        |
+|                           | [docs/mapstruct-parity.md](docs/mapstruct-parity.md)                   | every MapStruct feature and its telescope equivalent                          |
+| Running it                | [docs/perf-mapstruct-comparison.md](docs/perf-mapstruct-comparison.md) | benchmark method, environment and every result                                |
+|                           | [docs/native-image.md](docs/native-image.md)                           | what a GraalVM native image needs                                             |
 
 The design decisions are recorded in [docs/adr/](docs/adr/).
 
