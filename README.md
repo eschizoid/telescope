@@ -25,6 +25,88 @@ into plain Java that runs in the time of hand-written code. That one definition 
 converts in both directions, applies a partial update, updates a managed entity in place, maps the REST request and
 response, and documents the API.
 
+The example is a small order service. The order is a JPA entity with a lazy customer and a list of lines it owns, the
+client sends a PATCH body whose fields are all optional, and it receives a public DTO without the shop's cost price or
+internal notes.
+
+```java
+@Entity
+public class Order {
+
+  @Id
+  @GeneratedValue
+  private Long id;
+
+  private String number;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  private Customer customer;
+
+  private OrderStatus status;
+  private Delivery delivery;
+  private boolean giftWrap;
+  private String discountCode;
+  private String internalNotes; // stays inside the service
+  private Payment payment;
+
+  @ElementCollection
+  private List<String> tags = new ArrayList<>();
+
+  @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+  private final List<OrderLine> lines = new ArrayList<>();
+
+  public void addLine(OrderLine line) {
+    line.setOrder(this); // the back-reference Hibernate needs
+    lines.add(line);
+  }
+  // getters and setters
+}
+
+@Entity
+public class OrderLine {
+
+  @Id
+  @GeneratedValue
+  private Long id;
+
+  private String sku;
+  private int quantity;
+  private BigDecimal unitPrice;
+  private BigDecimal costPrice; // what the shop paid, stays inside the service
+
+  @ManyToOne
+  private Order order;
+  // getters and setters
+}
+
+// What a PATCH sends. A field the client leaves out arrives as null.
+public record OrderChanges(
+  String discountCode,
+  Delivery delivery,
+  Boolean giftWrap,
+  List<String> tags,
+  List<NewLine> lines
+) {}
+
+public record NewLine(String sku, int quantity) {}
+
+// What the client receives (abridged).
+public record OrderDto(
+  String number,
+  String customerName,
+  OrderStatus status,
+  Delivery delivery,
+  List<OrderLineDto> lines,
+  BigDecimal total,
+  String discountCode,
+  List<String> tags
+) {}
+
+public record OrderLineDto(String sku, String name, int quantity, BigDecimal unitPrice) {}
+```
+
+The whole PATCH endpoint over those types:
+
 ```java
 // PATCH /orders/SO-1001   {"delivery":"EXPRESS","lines":[{"sku":"BAG-04","quantity":3}]}
 
@@ -42,7 +124,10 @@ static final Mapper<Order, OrderChanges> EDITS = mapper(
   writeBean(Order.class, ADDERS), // lines go through order.addLine(...), which sets the back-reference
   via(Order::getLines, OrderChanges::lines, LineEdits.class), // each new line is priced from the catalog
   drop(Order::getId), // a client may never change these
+  drop(Order::getNumber),
+  drop(Order::getCustomer),
   drop(Order::getStatus),
+  drop(Order::getInternalNotes),
   drop(Order::getPayment)
 );
 ```
