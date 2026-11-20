@@ -539,10 +539,11 @@ with the same names and attributes as the Spring ones. The deployment's `Telesco
 `@TelescopeResponse` and `TelescopeRequestBodyReader` only when some method needs them, keeps projection beans and the
 registry unremovable, registers each wire type for reflection, and records the bodies through `TelescopeRestRecorder`.
 At startup `TelescopeRestEndpoints` finds each body's mapper through `EndpointMappers` and fails the application with
-the method named. The runtime classes live in the unexported `quarkus.rest.runtime` package; they compile against
-Quarkus REST and Hibernate Validator, whose jars carry no module name, by reading the unnamed module. Inside this build
-telescope-core is a local project, which Quarkus loads with the application while it loads the extension with the
-dependencies, so the demo loads core and internal parent first.
+the method named, also when the same-name forward mapping a pair falls back to pairs no property. The runtime classes
+live in the unexported `quarkus.rest.runtime` package; they compile against Quarkus REST and Hibernate Validator, whose
+jars carry no module name, by reading the unnamed module. Inside this build telescope-core is a local project, which
+Quarkus loads with the application while it loads the extension with the dependencies, so the demo loads core and
+internal parent first.
 
 **Spring specifics.** `TelescopeAutoConfiguration` is `@AutoConfiguration` registered via
 `META-INF/spring/...AutoConfiguration.imports`. Injects a raw `Collection<Mapper>` and narrows it internally — Spring's
@@ -885,7 +886,8 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     difference is a defect with an issue. Runtime-only features are decided in their own ADRs.
 20. **0020 — Mapped Spring MVC responses.** (Accepted, shipped.) `@TelescopeGetMapping` and its siblings: the handler
     declares the type it returns and the annotation names the response type; the value is mapped where Spring MVC writes
-    the body, never in the Java call. Resolved at startup; a fixed set of return shapes.
+    the body, never in the Java call. Resolved at startup; a fixed set of return shapes. Amended: a pair whose same-name
+    fallback pairs no property is refused at startup, on both starters.
 21. **0021 — Mapped Spring MVC request bodies.** (Accepted, shipped.) `@TelescopeRequestBody(from = Wire.class)` or a
     `TelescopeRequest<S, T>` parameter: the body is read and validated as the wire type by Spring's own `@RequestBody`
     processor, then mapped before the handler runs.
@@ -911,7 +913,7 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     artifact resolves the shapes at build time and registers the wire types for reflection; mappers are resolved at
     startup. In every application the extension also registers telescope's `ServiceLoader` providers and the method
     references `@Bridge` rows and generated beans decode, so a native image runs the generated bridges. OpenAPI is left
-    to a follow-up.
+    to a follow-up. Amended: a same-name fallback that pairs no property is refused at startup, as on Spring.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

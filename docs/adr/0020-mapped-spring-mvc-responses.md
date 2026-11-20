@@ -1,6 +1,20 @@
 # ADR-0020: Mapped Spring MVC responses through composed mapping annotations
 
-**Status:** Accepted · **Date:** 2026-10-11
+**Status:** Accepted · **Date:** 2026-10-11 (amended 2026-11-20)
+
+> **Amendment (2026-11-20, a pair that pairs nothing).** The same-name forward mapping the lookup falls back to is
+> refused at startup when no property of the response type pairs with a property of the type the method returns, with
+> the method, the pair and the properties of each side named. `Telescope.mapperForward` is lenient, so such a pair used
+> to boot and write a body of defaults for every value, which on an endpoint means the annotation names the wrong type
+> or the DTO's properties were renamed. What counts as paired is the runtime mapper's own same-name match for a pair no
+> row configures, so a property paired through a built-in conversion counts, and a pair where some property pairs boots
+> as before, with its other properties left at their defaults. A pair mapped by a projection, a `Mapper` bean, `using`
+> or a generated bridge, beside the source or registered by a provider, is the mapper the application chose and is not
+> checked, and neither is a pair of two sealed interfaces, which converts case by case. A non-sealed interface source,
+> such as a Spring Data projection, is paired by its getters, as the runtime mapper reads it. Request bodies (ADR-0021)
+> take the same rule, from the wire type to the parameter's type. The rule and its wording live in `EndpointMappers`, so
+> the Quarkus starter refuses the same pairs in the same words (ADR-0025). `mapperForward` itself is unchanged for every
+> other caller.
 
 ## Context
 

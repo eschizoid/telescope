@@ -490,8 +490,9 @@ The mapper for the pair is found once, at startup, in this order:
 3. a generated `@Bridge`, or else a same-name forward mapping.
 
 A response DTO whose components match the source by name needs no mapper at all. A source component the DTO leaves out
-is ignored. A DTO component with no source counterpart is `null` in the last step, so give a renamed component a
-projection:
+is ignored. A DTO component with no source counterpart is `null` in the last step, and a DTO none of whose components
+has one fails startup there, naming the method, the pair and the components on each side, because every body would hold
+only defaults. Give a renamed component a projection:
 
 ```java
 @TelescopeMapper
@@ -599,7 +600,9 @@ These fail startup with the parameter named:
 - a `TelescopeRequest` without two concrete type arguments;
 - a parameter type other than `T`, `List<T>`, `Collection<T>` or `Set<T>`;
 - `@RequestBody` next to `@TelescopeRequestBody`;
-- a `using` projection that does not map the wire type to the parameter's type, and two mappers without `using`.
+- a `using` projection that does not map the wire type to the parameter's type, and two mappers without `using`;
+- a pair with no mapper or generated bridge where no component of the parameter's type is named like one of the wire
+  type.
 
 With springdoc on the classpath, the operation's request body shows the wire type, and no query parameter is derived
 from the handler's argument.

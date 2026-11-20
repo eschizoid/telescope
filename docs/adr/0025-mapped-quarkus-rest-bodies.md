@@ -1,6 +1,12 @@
 # ADR-0025: Mapped request and response bodies on Quarkus REST
 
-**Status:** Accepted · **Date:** 2026-11-19
+**Status:** Accepted · **Date:** 2026-11-19 (amended 2026-11-20)
+
+> **Amendment (2026-11-20, a pair that pairs nothing).** A body whose pair falls back to `Telescope.mapperForward`, has
+> no generated bridge, and pairs no property of the target with a property of the source by name fails startup with the
+> method, the pair and the properties of each side named, in the words ADR-0020's amendment gives the Spring starter:
+> both starters take the rule from `EndpointMappers`. A pair where some property pairs maps as before, and a pair a
+> projection, a `Mapper` bean, `using` or a generated bridge maps is never checked.
 
 ## Context
 

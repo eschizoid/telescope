@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.spring.web;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
@@ -17,10 +18,10 @@ import org.springframework.util.ClassUtils;
  * Finds the mapper for a {@code (source, target)} pair the way every mapped endpoint does: a {@link
  * TelescopeProjection} bean for the pair, then a {@code Mapper} bean in the registry, then {@code
  * Telescope.mapperForward}, which takes a generated {@code @Bridge} or the same-name forward
- * mapping. {@link EndpointMappers} decides between the candidates and words those refusals, the
- * same way for every container; this class finds the candidates in the bean factory. Every refusal
- * is an {@code IllegalArgumentException} whose message the caller prefixes with the handler it was
- * resolving.
+ * mapping. {@link EndpointMappers} decides between the candidates, refuses a same-name forward
+ * mapping that pairs no property, and words those refusals, the same way for every container; this
+ * class finds the candidates in the bean factory. Every refusal is an {@code
+ * IllegalArgumentException} whose message the caller prefixes with the handler it was resolving.
  */
 final class MapperLookup {
 
@@ -114,6 +115,11 @@ final class MapperLookup {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> forwardMapping(final Class<?> source, final Class<?> target) {
+    EndpointMappers.checkForwardPairs(
+      source,
+      target,
+      BridgeRegistry.find(source, target, source.getClassLoader()).isPresent()
+    );
     final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
     return forward::forward;
   }

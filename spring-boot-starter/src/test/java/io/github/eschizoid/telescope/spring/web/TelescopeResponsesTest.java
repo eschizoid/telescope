@@ -1,23 +1,33 @@
 package io.github.eschizoid.telescope.spring.web;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.PlainProjection;
 import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.UpperMapperBean;
 import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.UpperProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.Account;
 import io.github.eschizoid.telescope.spring.web.fixtures.AccountView;
+import io.github.eschizoid.telescope.spring.web.fixtures.CityRecord;
+import io.github.eschizoid.telescope.spring.web.fixtures.CityView;
 import io.github.eschizoid.telescope.spring.web.fixtures.Ledger;
 import io.github.eschizoid.telescope.spring.web.fixtures.LedgerView;
+import io.github.eschizoid.telescope.spring.web.fixtures.Unrelated;
 import io.github.eschizoid.telescope.spring.web.fixtures.User;
+import io.github.eschizoid.telescope.spring.web.fixtures.UserCard;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserView;
 import io.github.eschizoid.telescope.spring.web.fixtures.plain.PlainUserDtoProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.upper.UpperUserDtoProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.upper.UpperUserDtoProjectionImpl;
 import java.util.Map;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.assertj.AssertableWebApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
@@ -120,6 +130,83 @@ class TelescopeResponsesTest {
     @TelescopeGetMapping(value = "/ledgers/{id}", to = LedgerView.class)
     Ledger ledger(@PathVariable final String id) {
       return new Ledger(id, "a,b");
+    }
+  }
+
+  // No component of Unrelated is named like a component of User.
+  @RestController
+  static class UnrelatedController {
+
+    @TelescopeGetMapping(value = "/unrelated/{id}", to = Unrelated.class)
+    User user(@PathVariable final String id) {
+      return ADA;
+    }
+  }
+
+  // UserCard pairs id with User and leaves nickname at its default.
+  @RestController
+  static class CardController {
+
+    @TelescopeGetMapping(value = "/cards/{id}", to = UserCard.class)
+    User user(@PathVariable final String id) {
+      return ADA;
+    }
+  }
+
+  // Account -> Unrelated pairs nothing by name, and maps through the bridge holder beside Account.
+  @RestController
+  static class BridgedController {
+
+    @TelescopeGetMapping(value = "/bridged/{id}", to = Unrelated.class)
+    Account user(@PathVariable final String id) {
+      return new Account(id, "Ada", "hash");
+    }
+  }
+
+  // Ledger -> Unrelated pairs nothing by name, and maps through the bridge a @Bridge field in
+  // another package generates, which only its provider registers.
+  @RestController
+  static class ProvidedController {
+
+    @TelescopeGetMapping(value = "/provided/{id}", to = Unrelated.class)
+    Ledger user(@PathVariable final String id) {
+      return new Ledger(id, "a,b");
+    }
+  }
+
+  private static final CityView KYIV = () -> "Kyiv";
+
+  // CityView is read by its getters, none named like a component of Unrelated.
+  @RestController
+  static class UnrelatedCityController {
+
+    @TelescopeGetMapping(value = "/unrelated-cities/{id}", to = Unrelated.class)
+    CityView user(@PathVariable final String id) {
+      return KYIV;
+    }
+  }
+
+  // CityRecord pairs city with CityView's getter.
+  @RestController
+  static class CityController {
+
+    @TelescopeGetMapping(value = "/cities/{id}", to = CityRecord.class)
+    CityView user(@PathVariable final String id) {
+      return KYIV;
+    }
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class UnrelatedMapperBean {
+
+    @Bean
+    Mapper<User, Unrelated> unrelated() {
+      return Telescope.mapper(
+        User.class,
+        Unrelated.class,
+        to(User::id, Unrelated::zzz),
+        to(User::name, Unrelated::yyy, String::length, String::valueOf)
+      );
     }
   }
 
@@ -314,6 +401,93 @@ class TelescopeResponsesTest {
           .getFailure()
           .hasStackTraceContaining("LedgerController#ledger: Deep map: component 'entries' has incompatible")
           .hasStackTraceContaining("add a to(src, tgt, forward, backward) row")
+      );
+  }
+
+  @Test
+  @DisplayName("a pair with no mapper whose same-name mapping pairs no component fails startup, naming both sides")
+  void pairThatPairsNothingFailsStartup() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(UnrelatedController.class)
+      .run(context ->
+        assertThat(context)
+          .hasFailed()
+          .getFailure()
+          .hasStackTraceContaining(
+            "UnrelatedController#user: User -> Unrelated pairs nothing: no field of Unrelated (zzz, yyy) is named" +
+              " like a field of User (id, name), so the mapping would leave each at its default. Check the type" +
+              " the endpoint names, or map the pair with a TelescopeProjection, a Mapper bean or a @Bridge."
+          )
+      );
+  }
+
+  @Test
+  @DisplayName("a target some of whose components pair by name boots and leaves the others at their default")
+  void partialTargetBoots() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(CardController.class)
+      .run(context ->
+        assertThat(response(context, CardController.class).apply(ADA)).isEqualTo(new UserCard("1", null))
+      );
+  }
+
+  @Test
+  @DisplayName("a Mapper bean for a pair that pairs nothing by name is the mapper the endpoint takes")
+  void mapperBeanForAPairThatPairsNothingBoots() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(UnrelatedMapperBean.class, UnrelatedController.class)
+      .run(context ->
+        assertThat(response(context, UnrelatedController.class).apply(ADA)).isEqualTo(new Unrelated("1", 3))
+      );
+  }
+
+  @Test
+  @DisplayName("a generated bridge for a pair that pairs nothing by name is the mapper the endpoint takes")
+  void bridgeForAPairThatPairsNothingBoots() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(BridgedController.class)
+      .run(context ->
+        assertThat(response(context, BridgedController.class).apply(new Account("7", "Ada", "hash"))).isEqualTo(
+          new Unrelated("7", 3)
+        )
+      );
+  }
+
+  @Test
+  @DisplayName("a bridge its provider registers for a pair that pairs nothing by name is the mapper the endpoint takes")
+  void providedBridgeForAPairThatPairsNothingBoots() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(ProvidedController.class)
+      .run(context ->
+        assertThat(response(context, ProvidedController.class).apply(new Ledger("7", "a,b"))).isEqualTo(
+          new Unrelated("7", 0)
+        )
+      );
+  }
+
+  @Test
+  @DisplayName("an interface source whose getters pair with no component fails startup, naming both sides")
+  void interfaceSourceThatPairsNothingFailsStartup() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(UnrelatedCityController.class)
+      .run(context ->
+        assertThat(context)
+          .hasFailed()
+          .getFailure()
+          .hasStackTraceContaining(
+            "UnrelatedCityController#user: CityView -> Unrelated pairs nothing: no field of Unrelated (zzz, yyy) is" +
+              " named like a property of CityView (city), so the mapping would leave each at its default."
+          )
+      );
+  }
+
+  @Test
+  @DisplayName("an interface source one of whose getters pairs by name boots and maps through it")
+  void interfaceSourceThatPairsBoots() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(CityController.class)
+      .run(context ->
+        assertThat(response(context, CityController.class).apply(KYIV)).isEqualTo(new CityRecord("Kyiv"))
       );
   }
 

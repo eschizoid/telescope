@@ -3188,6 +3188,38 @@ public final class PairingMessages {
     return projection + " maps to " + typeName(pairTarget) + ", but " + targetRole + " " + typeName(target);
   }
 
+  /**
+   * A mapped REST endpoint whose pair falls back to the forward mapping by name, where no property
+   * of {@code target} is named like a property of {@code source}. Each side's properties are listed
+   * in declaration order, a record's called fields and a bean's properties.
+   */
+  public static String endpointNothingPairs(
+    final Class<?> source,
+    final List<String> sourceNames,
+    final Class<?> target,
+    final List<String> targetNames
+  ) {
+    return (
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      " pairs nothing: no " +
+      (target.isRecord() ? "field" : "property") +
+      " of " +
+      target.getSimpleName() +
+      " (" +
+      String.join(", ", targetNames) +
+      ") is named like a " +
+      (source.isRecord() ? "field" : "property") +
+      " of " +
+      source.getSimpleName() +
+      " (" +
+      (sourceNames.isEmpty() ? "none" : String.join(", ", sourceNames)) +
+      "), so the mapping would leave each at its default. Check the type the endpoint names, or map" +
+      " the pair with a TelescopeProjection, a Mapper bean or a @Bridge."
+    );
+  }
+
   private static String typeName(final Class<?> type) {
     return type == null ? "an unresolved type" : type.getSimpleName();
   }

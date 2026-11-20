@@ -27,7 +27,8 @@ import java.util.function.Function;
  * way the Spring starter finds one: the {@code using} projection, else the one {@link
  * TelescopeProjection} bean for the pair, else the {@code Mapper} bean the {@link
  * TelescopeMapperRegistry} holds for it, else {@code Telescope.mapperForward}. A body whose mapper
- * cannot be resolved, or resolves to more than one candidate, fails startup with the method named.
+ * cannot be resolved, resolves to more than one candidate, or falls back to a same-name forward
+ * mapping that pairs no property, fails startup with the method named.
  */
 public class TelescopeRestEndpoints {
 
@@ -243,16 +244,17 @@ public class TelescopeRestEndpoints {
 
   // Telescope.mapperForward, as the Spring starter maps a pair with no projection or mapper bean:
   // the bridge holder beside the source, then a bridge a provider registers for the pair, then
-  // the same-name runtime mapping. Whether ServiceLoader finds a provider for the pair is logged
-  // at DEBUG, so a native image that holds none says so.
+  // the same-name runtime mapping, refused when it pairs no property. Whether ServiceLoader finds a
+  // provider for the pair is logged at DEBUG, so a native image that holds none says so.
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> forwardMapping(
     final Class<?> source,
     final Class<?> target,
     final String where
   ) {
-    final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
     final var provided = BridgeRegistry.find(source, target, source.getClassLoader()).isPresent();
+    EndpointMappers.checkForwardPairs(source, target, provided);
+    final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
     LOGGER.log(
       Level.DEBUG,
       () ->
