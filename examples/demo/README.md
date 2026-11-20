@@ -114,6 +114,16 @@ List<Order> list() {
 }
 ```
 
+On Quarkus, `@TelescopeResponse` beside `@GET` does the same where Quarkus REST writes the body:
+
+```java
+@GET
+@TelescopeResponse(to = OrderSummary.class)
+public List<Order> list() {
+  return desk.list();
+}
+```
+
 **The mobile app speaks version 2, and phones that never update keep calling it.** The app calls the customer the
 `buyer` and a discount code a `coupon`, which it expects never to be null. It reads JSON numbers as floating point,
 which would round a price, so version 2 sends money as text; it shows the date as it arrives, so the date is text in the
@@ -155,6 +165,14 @@ On Spring the handler takes the service's type, and `@TelescopeRequestBody` name
 ```java
 @TelescopePostMapping(value = "/v2/orders", to = OrderV2Dto.class)
 ResponseEntity<Order> placeV2(@TelescopeRequestBody(from = PlaceOrderV2.class) final PlaceOrder command)
+```
+
+On Quarkus the annotation has the same name and the same `from`, and the resource method returns a `RestResponse`:
+
+```java
+@POST
+@TelescopeResponse(to = OrderV2Dto.class)
+public RestResponse<Order> place(@TelescopeRequestBody(from = PlaceOrderV2.class) final PlaceOrder command)
 ```
 
 **Support signs customers up and looks them up as cards.** A `Customer` is an entity, and the support tool works with a
@@ -364,5 +382,6 @@ fails naming `buyerEmail`.
 | `explain()`                                                            | `OrderDeskTest`, `OrderRun`                                             |
 | `@TelescopeMapper`, `@TelescopeTransformer`                            | both apps' `OrderApiTest`                                               |
 | `@TelescopeGetMapping`, `@TelescopeRequestBody`                        | the Spring app's `OrderApiTest`                                         |
+| `@TelescopeResponse`, `@TelescopeRequestBody` on Quarkus REST          | the Quarkus app's `OrderApiTest`, and `OrderApiIT` on a native build    |
 | a runtime mapper over a lazy Hibernate proxy                           | the Spring app's `CustomerProxyTest`                                    |
 | the compile-time verifier                                              | `VerifierTest`                                                          |

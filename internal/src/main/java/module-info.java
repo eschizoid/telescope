@@ -2,7 +2,7 @@
  * Internal substrate of the telescope optics DSL — qualified-exported to {@code
  * io.github.eschizoid.telescope} (the public {@code telescope-core} module), its reflection helpers
  * also to {@code telescope-jpa} and {@code telescope-jackson}, and its pairing spec also to {@code
- * telescope-codegen} and {@code telescope-jackson}.
+ * telescope-codegen}, {@code telescope-jackson} and the two container starters.
  *
  * <p>External consumers of telescope add {@code telescope-core} to their build and get the public
  * surface. The {@code telescope-internal} artifact comes along transitively but its packages are
@@ -45,10 +45,16 @@ module io.github.eschizoid.telescope.internal {
     to io.github.eschizoid.telescope, io.github.eschizoid.telescope.jpa, io.github.eschizoid.telescope.jackson;
   exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.internal.optics.collections to io.github.eschizoid.telescope;
-  // The shared pairing decision spec: the runtime (:core), the compile-time verifier (:codegen) and
-  // the JSON binder (telescope-jackson) consume one rule set, so their diagnostics cannot drift.
+  // The shared pairing decision spec: the runtime (:core), the compile-time verifier (:codegen),
+  // the JSON binder (telescope-jackson) and the mapped REST bodies of both starters consume one
+  // rule set, so their diagnostics cannot drift.
   exports io.github.eschizoid.telescope.internal.pairing
-    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.codegen, io.github.eschizoid.telescope.jackson;
+    to
+      io.github.eschizoid.telescope,
+      io.github.eschizoid.telescope.codegen,
+      io.github.eschizoid.telescope.jackson,
+      io.github.eschizoid.telescope.spring,
+      io.github.eschizoid.telescope.quarkus;
 
   // telescope-core provides the one implementation, which consults the proxy resolvers registered
   // through its public SPI; this module holds no provider-specific code.

@@ -245,7 +245,9 @@ does not check the order, so a real image's order is not verified. It matters on
 2. **Framework hints — the route for the starter users.** Both frameworks telescope ships starters for generate this
    metadata themselves; if you're on one, use its mechanism and skip the JSON entirely:
    - **Quarkus**: `@RegisterForReflection(targets = { User.class, UserView.class })` on any class in the app (or
-     `classNames` for types you can't reference). Quarkus emits the config during the native build.
+     `classNames` for types you can't reference). Quarkus emits the config during the native build. The
+     `telescope-quarkus` extension registers telescope's own needs itself: its service providers, the method references
+     of `@Bridge` field rows and of the generated beans, and the types its mapped REST bodies are read and written as.
    - **Spring Boot (AOT)**: `@RegisterReflectionForBinding(User.class)` on a `@Configuration` class, or a
      `RuntimeHintsRegistrar` that loops your model package and calls `hints.reflection().registerType(...)` per type.
      Spring's AOT engine writes the config during `bootBuildImage`.

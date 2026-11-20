@@ -208,6 +208,17 @@ class OrderApiTest {
   }
 
   @Test
+  @DisplayName(
+    "a shipped order's label names the customer, which only the warehouse mapper's row fills, and the tracking number"
+  )
+  void aShippedOrdersLabelNamesTheCustomer() {
+    final var json = given().get("/orders/SO-1002/label").then().statusCode(200).extract().jsonPath();
+    assertThat(json.getString("number")).isEqualTo("SO-1002");
+    assertThat(json.getString("recipient")).isEqualTo("Grace Hopper");
+    assertThat(json.getString("trackingNumber")).isEqualTo("TRK-1002");
+  }
+
+  @Test
   @DisplayName("an order is paid, shipped and then shows its tracking number; the rules refuse the rest with a 409")
   void anOrderGoesThroughItsLifecycle() {
     final var placed = given()

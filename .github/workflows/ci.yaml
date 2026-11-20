@@ -87,6 +87,7 @@ jobs:
             :codegen:javadoc \
             :lombok:javadoc \
             :quarkus:javadoc \
+            :telescope-quarkus-deployment:javadoc \
             :spring-boot-starter:javadoc
 
       - name: Jacoco
@@ -98,7 +99,8 @@ jobs:
             :codegen:jacocoTestReport \
             :lombok:jacocoTestReport \
             :spring-boot-starter:jacocoTestReport \
-            :quarkus:jacocoTestReport
+            :quarkus:jacocoTestReport \
+            :telescope-quarkus-deployment:jacocoTestReport
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
@@ -114,6 +116,7 @@ jobs:
             ./lombok/build/reports/jacoco/test/jacocoTestReport.xml
             ./spring-boot-starter/build/reports/jacoco/test/jacocoTestReport.xml
             ./quarkus/build/reports/jacoco/test/jacocoTestReport.xml
+            ./quarkus/deployment/build/reports/jacoco/test/jacocoTestReport.xml
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
