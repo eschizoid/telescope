@@ -54,6 +54,10 @@ dependencies {
     api(platform("io.quarkus.platform:quarkus-bom:$quarkusVersion"))
     api("io.quarkus:quarkus-arc-deployment")
     implementation("io.quarkus:quarkus-rest-spi-deployment")
+    // The build item that adds an OASFilter to the SmallRye OpenAPI document. Only the SmallRye
+    // OpenAPI extension consumes it, so an application without that extension never runs the step
+    // that produces it.
+    implementation("io.quarkus:quarkus-smallrye-openapi-spi")
     annotationProcessor(platform("io.quarkus.platform:quarkus-bom:$quarkusVersion"))
     annotationProcessor("io.quarkus:quarkus-extension-processor")
 }

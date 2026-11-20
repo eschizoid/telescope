@@ -140,7 +140,8 @@ final class MappedBodies {
         false,
         false,
         false,
-        null
+        null,
+        method
       );
     } catch (final IllegalArgumentException e) {
       throw new IllegalStateException(where + ": " + e.getMessage(), e);
@@ -210,7 +211,8 @@ final class MappedBodies {
           true,
           required,
           validated,
-          method.name() + "." + name + ".original"
+          method.name() + "." + name + ".original",
+          method
         );
       }
       final var shape = parameterShape(index, type);
@@ -227,7 +229,8 @@ final class MappedBodies {
         false,
         required,
         validated,
-        method.name() + "." + name
+        method.name() + "." + name,
+        method
       );
     } catch (final IllegalArgumentException e) {
       throw new IllegalStateException(where + ": " + e.getMessage(), e);
@@ -313,7 +316,7 @@ final class MappedBodies {
 
   // Whether Quarkus REST routes the method: it carries one of the JAX-RS HTTP method annotations,
   // or an annotation that is itself annotated with @HttpMethod.
-  private static boolean routed(final IndexView index, final MethodInfo method) {
+  static boolean routed(final IndexView index, final MethodInfo method) {
     for (final var each : method.declaredAnnotations()) {
       if (each.target().kind() != AnnotationTarget.Kind.METHOD) continue;
       if (HTTP_METHODS.contains(each.name().toString())) return true;
@@ -343,22 +346,34 @@ final class MappedBodies {
   // The method's id for each resource class that routes it: the class declaring it when concrete,
   // and every concrete class that inherits it.
   private static List<String> methodIds(final IndexView index, final MethodInfo method) {
-    final var declaring = method.declaringClass();
+    return methodIds(index, method.declaringClass(), method);
+  }
+
+  /**
+   * The id of {@code method} for each resource class that routes it as a member of {@code
+   * resource}: {@code resource} when concrete, and every concrete class that inherits from it.
+   */
+  static List<String> methodIds(final IndexView index, final ClassInfo resource, final MethodInfo method) {
     final var classes = new ArrayList<ClassInfo>();
-    classes.add(declaring);
-    if (declaring.isInterface()) classes.addAll(index.getAllKnownImplementations(declaring.name()));
-    else classes.addAll(index.getAllKnownSubclasses(declaring.name()));
+    classes.add(resource);
+    if (resource.isInterface()) classes.addAll(index.getAllKnownImplementations(resource.name()));
+    else classes.addAll(index.getAllKnownSubclasses(resource.name()));
+    final var ids = new ArrayList<String>();
+    for (final var routing : classes) {
+      if (routing.isInterface() || Modifier.isAbstract(routing.flags())) continue;
+      ids.add(methodId(index, routing, method));
+    }
+    return ids;
+  }
+
+  /** The id Quarkus REST keys {@code method} by when {@code resource} routes it. */
+  static String methodId(final IndexView index, final ClassInfo resource, final MethodInfo method) {
     final var parameters = new String[method.parametersCount()];
     for (var position = 0; position < parameters.length; position++) parameters[position] = erasure(
       index,
       method.parameterType(position)
     );
-    final var ids = new ArrayList<String>();
-    for (final var resource : classes) {
-      if (resource.isInterface() || Modifier.isAbstract(resource.flags())) continue;
-      ids.add(resource.name() + "#" + method.name() + "(" + Arrays.toString(parameters) + ")");
-    }
-    return ids;
+    return resource.name() + "#" + method.name() + "(" + Arrays.toString(parameters) + ")";
   }
 
   // The binary name of a parameter type's erasure, as Class.getName spells it.

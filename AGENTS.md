@@ -545,6 +545,19 @@ jars carry no module name, by reading the unnamed module. Inside this build tele
 Quarkus loads with the application while it loads the extension with the dependencies, so the demo loads core and
 internal parent first.
 
+With `quarkus-smallrye-openapi` present, `TelescopeOpenApiProcessor` documents the mapped bodies with their wire types.
+`WireResources` generates, in memory, one resource class per mapped method whose method carries `@APIResponse` and
+`@RequestBody` naming the wire types, and `WireDocumentation`, the `OASFilter` the step registers through
+`AddToOpenAPIDefinitionBuildItem`, scans the application's index with those classes through `SmallRyeOpenAPI.builder()`
+for each document. `ResourceScope` limits the resources that scan finds to the classes holding mapped methods and their
+locator parents, less those `ScanFilter`, SmallRye's include and exclude rule over the application's settings, leaves
+out. Its `OperationHandler` marks each operation with the Quarkus REST method ids, which is how a mapped operation is
+matched, and `EveryClassConfig` hides the scan's class, package and profile filters. `WireComponents` matches each wire
+component to a document component of its name, or its name with a duplicate number, that describes the same thing,
+references followed, and copies the rest under its name with the next free number. Only SmallRye's
+`io.smallrye.openapi.api` package is used. The deployment depends on `quarkus-smallrye-openapi-spi`; the step runs only
+when the SmallRye OpenAPI extension consumes its build item.
+
 **Spring specifics.** `TelescopeAutoConfiguration` is `@AutoConfiguration` registered via
 `META-INF/spring/...AutoConfiguration.imports`. Injects a raw `Collection<Mapper>` and narrows it internally — Spring's
 autowiring will not match `Collection<Mapper<?, ?>>` against parametric beans, which is why this side differs from
@@ -608,12 +621,13 @@ Boot's `ImportCandidates`. They are what catch a `@Bean` method or a configurati
 package is exported but not opened. Keep the configuration classes, their constructors, their nested `@Configuration`
 classes and their bean methods public. The Quarkus REST bodies are covered by `QuarkusUnitTest` applications in
 `:telescope-quarkus-tests`, a module that applies the Quarkus application plugin because the harness boots from the
-application model it writes: one per return shape and request form, one per lookup route, and one per refusal. Their
-execution data counts toward the runtime and the deployment module's reports. The demo's `@QuarkusTest` `OrderApiTest`
-covers the annotated endpoints, and `OrderApiIT` makes the same calls on the native executable in the native-image
-workflow, including the shipping label, whose `@Bridge` field sits in the demo's `shop.warehouse` package, outside the
-telescope packages an image initializes at build time, so its recipient is filled only when ServiceLoader finds the
-generated bridge's provider in the image.
+application model it writes: one per return shape and request form, one per lookup route, and one per refusal. SmallRye
+OpenAPI is on that module's class path, so each of them builds its document too, and two read `/q/openapi`; the demo
+application has no OpenAPI, so its tests cover an application without it. Their execution data counts toward the runtime
+and the deployment module's reports. The demo's `@QuarkusTest` `OrderApiTest` covers the annotated endpoints, and
+`OrderApiIT` makes the same calls on the native executable in the native-image workflow, including the shipping label,
+whose `@Bridge` field sits in the demo's `shop.warehouse` package, outside the telescope packages an image initializes
+at build time, so its recipient is filled only when ServiceLoader finds the generated bridge's provider in the image.
 
 ---
 
@@ -912,8 +926,10 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     Spring starter's lookup, shared as `EndpointMappers`. `telescope-quarkus` becomes an extension whose deployment
     artifact resolves the shapes at build time and registers the wire types for reflection; mappers are resolved at
     startup. In every application the extension also registers telescope's `ServiceLoader` providers and the method
-    references `@Bridge` rows and generated beans decode, so a native image runs the generated bridges. OpenAPI is left
-    to a follow-up. Amended: a same-name fallback that pairs no property is refused at startup, as on Spring.
+    references `@Bridge` rows and generated beans decode, so a native image runs the generated bridges. With SmallRye
+    OpenAPI, a generated resource class per mapped method and a second scan through SmallRye's public builder document
+    each body as its wire type. Amended: a same-name fallback that pairs no property is refused at startup, as on
+    Spring.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
