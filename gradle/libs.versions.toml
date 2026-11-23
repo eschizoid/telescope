@@ -12,7 +12,7 @@ jreleaser = "1.19.0"
 jgit = "6.10.0.202406032230-r"
 lombok = "1.18.48"
 jakartaPersistence = "3.2.0"
-hibernate = "7.4.15.Final"
+hibernate = "7.4.17.Final"
 h2 = "2.5.252"
 jackson = "3.3.0"
 
