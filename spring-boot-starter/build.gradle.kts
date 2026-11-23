@@ -61,7 +61,7 @@ tasks.withType<Javadoc>().configureEach {
     }
 }
 
-val springBootVersion = "4.1.2"
+val springBootVersion = "4.2.0"
 val springdocVersion = "3.2.0"
 
 dependencies {
