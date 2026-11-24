@@ -1,7 +1,7 @@
 plugins {
     java
     jacoco
-    id("io.quarkus") version "3.40.1.2"
+    id("io.quarkus") version "4.0.0"
 }
 
 description = "telescope-quarkus tests — Quarkus applications that exercise the extension's build steps and runtime"
