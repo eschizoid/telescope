@@ -16,9 +16,13 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 2. **Zero reflection unless unavoidable.** Reach for the cached `LambdaMetafactory`-built `Function` / `BiConsumer` /
    `Supplier` substrate first (see `:internal/Beans.java`, `:internal/Records.java`). Only fall through to raw
    `Method.invoke` / `Constructor.newInstance` when the LMF path genuinely doesn't apply.
-3. **Respect the optics lattice.** Any new feature that converts / composes / lifts / transforms between types must
-   route through `Iso` / `Lens` / `Prism` / `Affine` / `Traversal` in `:internal/optics/`. NO hand-rolled
-   `Function<Object, Object>` plumbing. See the "Lattice-first" decision below for the full contract.
+3. **Respect the optics lattice.** Navigating, converting and composing immutable values goes through `Iso` / `Lens` /
+   `Prism` / `Affine` / `Traversal` in `:internal/optics/`, with no hand-rolled `Function<Object, Object>` plumbing.
+   Writing into an object the caller holds (`into`, edits, the collections of a managed entity) is not an optic and does
+   not pretend to be one: it goes through the shared write machinery (`ContainerCopy`, the bean writers, the pairing
+   spec), is held to the same answer on both paths by `CrossPathCorpusTest`, and is shaped by the job a user has, not by
+   an optic's direction. When an optic's shape and the call site disagree, the call site wins; the lattice stays
+   internal. See the "Lattice-first" decision below for the full contract.
 4. **North star: dethrone MapStruct, then own the hops.** Every feature decision should keep telescope a credible
    drop-in replacement for the MapStruct user (codegen at MapStruct's speed, runtime competitive for non-hot loops).
    Beyond that, telescope is the mapping layer between the REST, service and entity layers: new work is weighed by which
@@ -743,9 +747,10 @@ behavior.
 
 ### Lattice-first: use the internal optics, don't reinvent
 
-Any new feature that converts / composes / lifts / transforms between types routes through the lattice (`Iso` / `Lens` /
-`Prism` / `Affine` / `Traversal` in `internal/optics/`). No hand-rolled `Function<Object, Object>` plumbing. Composition
-laws are pinned by `OpticLawsTest`; container lifting belongs next to `Iso`/`Traversal` in `internal/optics/`.
+Any new feature that navigates, converts, composes, lifts or transforms immutable values routes through the lattice
+(`Iso` / `Lens` / `Prism` / `Affine` / `Traversal` in `internal/optics/`). No hand-rolled `Function<Object, Object>`
+plumbing. Composition laws are pinned by `OpticLawsTest`; container lifting belongs next to `Iso`/`Traversal` in
+`internal/optics/`.
 
 - **Bidirectional structural conversion** (deep mapping, bridge generation, record-pair recursion) → cache + compose
   `Iso<X, Y>` per type pair; assemble record-level `Iso<S, T>` by walking components. Reference: `DeepMap.java`.
@@ -754,6 +759,14 @@ laws are pinned by `OpticLawsTest`; container lifting belongs next to `Iso`/`Tra
 - **Container-shape lifting** lives as static `Iso.lift*` helpers in `internal/optics/Iso.java`.
 - **Effectful traversal** for new effects → add an `Applicative<F>` witness + a `update*` method calling
   `Traversal#modifyF`.
+
+- **Writing into an object the caller holds** (`Mapper.into`, edits, a managed entity's collections) is not an optic. An
+  optic describes a view of an immutable value and its rebuild; a JPA entity is mutable, has an identity and belongs to
+  a persistence context, so modelling a write into it as an optic's `backward` gives rows that must invert and a call
+  site that reads in the wrong direction. These writes go through `ContainerCopy`, the `Beans` writers and the pairing
+  spec's decisions, with the runtime and generated paths held to the same answer by `CrossPathCorpusTest` and, for
+  entities, by the Hibernate-statistics tests, in place of the optic laws. Their public shape follows the job (an edit
+  is written in the direction it flows), and the plumbing ban below applies to them as to everything else.
 
 A `Function<Object, Object>` field that could have been an `Iso<X, Y>` is a smell. Object-typed plumbing is only
 acceptable at the final `Records` / `Beans` / `Reflective` assembly floor where erasure is unavoidable (plus the
