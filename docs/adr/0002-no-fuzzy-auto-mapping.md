@@ -37,6 +37,27 @@
 > written into, as a wrapper does. These are what MapStruct converts without being asked, minus the lossy and
 > format-dependent ones, so they move the generated path toward ADR-0018's parity without adding a heuristic.
 
+> **Amendment (2026-11-26, how a collection is written).** A mapper derives how each element of a collection is tied to
+> its owner from what the classes declare, with no row, and never from a property's type alone. The owner's adder and
+> remover are its public methods whose names start with `add` and `remove`, that take the element class, and that return
+> nothing, the owner or, for a remover, a `boolean`. The prefix is a fixed filter, not a match by name. Only the method
+> named for the collection, by the property's name made singular (`addLine` for `lines`), may take a wider class than
+> `Object` the element can be passed as, since a method taking an interface the element happens to implement can fill
+> another collection. Between several such methods the most specific parameter type decides, then the name, and nothing
+> further.
+>
+> The back-reference is a property something declares: the owner's adder sets it, a `backReference(Element::getOwner)`
+> row names it, or `@OneToMany(mappedBy)` names it with telescope-jpa. An element's property of the owner's type that
+> none of the three names is left as the element's conversion builds it, since the type does not say the property points
+> at the owner holding the element rather than at another one. Where the declarations leave the choice open and a guess
+> would change what is written, nothing is guessed: two candidate adders or removers that neither the type nor the name
+> settles are both left unused, and the collection is written as one without them, with a warning naming them, the same
+> words on the runtime and the generated path. Only a collection with no setter, which an adder is then the one way
+> into, is refused when the mapper is built, with them named. Mutable beans a same-typed collection hands across
+> unconverted go through no adder or remover and are never pointed back; values (records, enums, `String`, boxed
+> primitives and JDK value types) go through the adder, which cannot re-point them. The `ADDERS` write strategy, which
+> made the adder an opt-in found by name alone, is removed.
+
 ## Context
 
 Auto-mapping libraries that match fields by fuzzy heuristics at runtime (ModelMapper, Orika, Dozer) have been tried for

@@ -326,7 +326,7 @@ class OwnBridgeAgreementTest {
             inner("String name, @@Part part", "to(@@Inner::part, @@InnerDto::part, @@PartFn.class)") +
             holder(
               "Telescope.mapperForward(@@Outer.class, @@OuterDto.class, to(@@Part::v, @@PartDto::v), " +
-                "WriteHint.writeBeans(WriteHint.WriteStrategy.SETTERS))"
+                "writeBeans(SETTERS))"
             )
         )
       );

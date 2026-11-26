@@ -37,7 +37,7 @@ class DefaultStrategyReachTest {
     "    public Builder value(final String v) { value = v; return this; }\n" +
     "    public %1$sTgt build() { return new %1$sTgt(value); }\n  }\n}\n";
 
-  private static final String STRATEGY = "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.";
+  private static final String STRATEGY = "io.github.eschizoid.telescope.mapping.WriteStrategy.";
 
   /** A carrier whose {@code @Bridge} field converts {@code <prefix>Src} to {@code <prefix>Tgt}. */
   private static String carrier(final String prefix, final String hints) {
@@ -77,7 +77,7 @@ class DefaultStrategyReachTest {
     final var compiled = bridged(
       "Dc",
       PRIVATE_CONSTRUCTOR,
-      "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" + STRATEGY + "CONSTRUCTOR)"
+      "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(" + STRATEGY + "CONSTRUCTOR)"
     );
     assertFalse(compiled.success(), "a private constructor compiled into the bridge");
     assertTrue(compiled.hasError("no constructor the bridge's package can call"), compiled::errorMessages);
@@ -93,9 +93,9 @@ class DefaultStrategyReachTest {
     final var compiled = bridged(
       "Dk",
       BUILDER_ONLY,
-      "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
+      "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(" +
         STRATEGY +
-        "BUILDER), io.github.eschizoid.telescope.mapping.WriteHint.writeBean(DkTgt.class, " +
+        "BUILDER), io.github.eschizoid.telescope.mapping.Mapping.writeBean(DkTgt.class, " +
         STRATEGY +
         "SETTERS)"
     );
@@ -110,7 +110,7 @@ class DefaultStrategyReachTest {
     final var compiled = bridged(
       "Dn",
       BUILDER_ONLY,
-      "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(DnTgt.class, " + STRATEGY + "SETTERS)"
+      "io.github.eschizoid.telescope.mapping.Mapping.writeBean(DnTgt.class, " + STRATEGY + "SETTERS)"
     );
     assertFalse(compiled.success(), "a SETTERS hint on a class with no no-argument constructor compiled");
     assertTrue(compiled.hasError("writeStrategy = SETTERS on"), compiled::errorMessages);

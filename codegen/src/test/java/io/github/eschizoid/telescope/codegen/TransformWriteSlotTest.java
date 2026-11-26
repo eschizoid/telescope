@@ -60,11 +60,11 @@ class TransformWriteSlotTest {
           """
           package demo;
           import static io.github.eschizoid.telescope.mapping.Mapping.to;
-          import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+          import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
           import io.github.eschizoid.telescope.Telescope;
           import io.github.eschizoid.telescope.annotations.Bridge;
           import io.github.eschizoid.telescope.conversion.Mapper;
-          import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+          import io.github.eschizoid.telescope.mapping.WriteStrategy;
           public record Src(String v) {
             @Bridge
             public static final Mapper<Src, Tgt> MAPPER = Telescope.mapper(Src.class, Tgt.class,

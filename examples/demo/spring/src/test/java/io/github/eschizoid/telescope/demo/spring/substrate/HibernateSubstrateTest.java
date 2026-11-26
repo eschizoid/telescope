@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.demo.spring.substrate;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.eschizoid.telescope.Telescope;

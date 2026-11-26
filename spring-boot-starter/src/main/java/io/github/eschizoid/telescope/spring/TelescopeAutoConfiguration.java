@@ -6,6 +6,7 @@ import java.util.Collection;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.context.properties.ConfigurationPropertiesBinding;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
@@ -38,6 +39,18 @@ public class TelescopeAutoConfiguration {
 
   /** Default constructor invoked by Spring's bean factory. */
   public TelescopeAutoConfiguration() {}
+
+  /**
+   * Reads {@code telescope.default-write-strategy}, refusing {@code ADDERS} at startup with the
+   * reason. Static, so the binder can use it before this configuration is built.
+   *
+   * @return the converter
+   */
+  @Bean
+  @ConfigurationPropertiesBinding
+  public static WriteStrategyConverter telescopeWriteStrategyConverter() {
+    return new WriteStrategyConverter();
+  }
 
   /**
    * Build the {@link TelescopeMapperRegistry} from every {@link Mapper} bean the context can

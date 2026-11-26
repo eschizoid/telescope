@@ -10,8 +10,11 @@ import java.util.ServiceLoader;
  * copies it. A collection of entities {@code into} or {@code patchInto} writes into one the target
  * holds is merged by identifier: a converted element matching a held one by identifier is written
  * into it in place, a new one is added and a held one nothing matches is removed, so a row that did
- * not change is not written. Every mapper and every generated bridge copies and writes through
- * {@link ContainerCopy}, so the runtime and generated paths take this policy alike.
+ * not change is not written. The back-reference of a collection's elements is the property
+ * {@code @OneToMany(mappedBy)} names on it, which a write sets to the owner where no adder does and
+ * clears on an element it takes out where the owner has no remover. Every mapper and every
+ * generated bridge copies and writes through {@link ContainerCopy}, so the runtime and generated
+ * paths take this policy alike.
  *
  * <p>A shared container is the provider's own. Reading it after its session has closed throws, as
  * reading the entity's property would: the policy changes when a collection loads, not whether
@@ -45,6 +48,11 @@ public final class LoadedContainers implements ContainerCopy.Policy {
   @Override
   public Object check(final ContainerCopy.Refill refill) {
     return IdMerge.check(refill);
+  }
+
+  @Override
+  public String backReference(final Class<?> owner, final String property) {
+    return MappedBy.of(owner, property);
   }
 
   @Override

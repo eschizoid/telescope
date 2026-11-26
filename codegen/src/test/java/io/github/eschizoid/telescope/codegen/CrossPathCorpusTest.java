@@ -15,10 +15,9 @@ import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
-import io.github.eschizoid.telescope.mapping.WriteHint;
-import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.lang.invoke.MethodHandles;
@@ -3179,7 +3178,7 @@ class CrossPathCorpusTest {
       final var reflective = built(() ->
         (construction.strategy().equals("AUTO")
           ? Telescope.mapper(src, tgt)
-          : Telescope.mapper(src, tgt, WriteHint.writeBean(tgt, WriteStrategy.valueOf(construction.strategy())))
+          : Telescope.mapper(src, tgt, Mapping.writeBean(tgt, WriteStrategy.valueOf(construction.strategy())))
         ).forward(source)
       );
       final var forward = processed.success()
@@ -11586,11 +11585,11 @@ class CrossPathCorpusTest {
 
   private static final String MAPPING = "io.github.eschizoid.telescope.mapping.Mapping.";
   private static final String SETTERS_FOR_INTER =
-    "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sInter.class," +
-    " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)";
+    "io.github.eschizoid.telescope.mapping.Mapping.writeBean(%1$sInter.class," +
+    " io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)";
   private static final String SETTERS_FOR_EVERY_BEAN =
-    "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
-    "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)";
+    "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(" +
+    "io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)";
 
   /**
    * A bean built by its builder unless a hint names its setters: the builder leaves {@code n} at
@@ -14409,15 +14408,15 @@ class CrossPathCorpusTest {
         plainField(
           false,
           MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
-          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
-            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+          "io.github.eschizoid.telescope.mapping.Mapping.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)"
         ),
         "public record %1$sTgt(String id, String city) {}\n",
         plainRuntime(
           false,
           MAPPING + "to(" + pathOf("of", "%1$sSrc", "%1$sSrc::c", "%1$sHb::getCity") + ", %1$sTgt::city)",
-          "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sHb.class," +
-            " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+          "io.github.eschizoid.telescope.mapping.Mapping.writeBean(%1$sHb.class," +
+            " io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)"
         )
       ),
       PairingMessages.pathIntermediateUnwritable("%1$sSrc", "%1$sTgt", "c.city", "%1$sHb", "city", "SETTERS"),
@@ -14516,9 +14515,9 @@ class CrossPathCorpusTest {
   /** A {@code writeBean} hint naming the setters of {@code %1$s<bean>}. */
   private static String settersFor(final String bean) {
     return (
-      "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$s" +
+      "io.github.eschizoid.telescope.mapping.Mapping.writeBean(%1$s" +
       bean +
-      ".class, io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)"
+      ".class, io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)"
     );
   }
 
@@ -14814,8 +14813,8 @@ class CrossPathCorpusTest {
   /** A {@code writeBeans} default naming {@code strategy} for every bean the mapper builds. */
   private static String everyBeanBy(final String strategy) {
     return (
-      "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
-      "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy." +
+      "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(" +
+      "io.github.eschizoid.telescope.mapping.WriteStrategy." +
       strategy +
       ")"
     );
@@ -16552,9 +16551,13 @@ class CrossPathCorpusTest {
   /** What starts the owed text of a row both paths refuse before anything converts. */
   private static final String NOT_BUILT = "not built: ";
 
-  private static final String ADDERS_FOR_TGT =
-    "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(%1$sTgt.class," +
-    " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS)";
+  /**
+   * The row building {@code %1$sTgt} through its setters, for a bean with no setter of its own,
+   * which the shared order passes over; its collections still go through their adders.
+   */
+  private static final String SETTERS_FOR_TGT =
+    "io.github.eschizoid.telescope.mapping.Mapping.writeBean(%1$sTgt.class," +
+    " io.github.eschizoid.telescope.mapping.Mapping.SETTERS)";
 
   /** A record {@code %1$sSrc} with a name and a list of tags. */
   private static String taggedSource(final String tags) {
@@ -16651,9 +16654,62 @@ class CrossPathCorpusTest {
   private static List<String> addersPair(final String target, final String... more) {
     final var all = new ArrayList<>(List.of(LINED_SOURCE.get(0), LINED_SOURCE.get(1), TARGET_LINE, target));
     all.addAll(List.of(more));
-    all.add(plainField(false, ADDERS_FOR_TGT));
-    all.add(plainRuntime(false, ADDERS_FOR_TGT));
+    all.add(plainField(false));
+    all.add(plainRuntime(false));
     return all;
+  }
+
+  /** A bean {@code %1$sTgtLine} with a sku and a setter for the {@code %1$sTgt} it belongs to. */
+  private static final String OWNER_TYPED_LINE = sampledBean(
+    "%1$sTgtLine",
+    "return new %1$sTgtLine();",
+    "String sku",
+    "%1$sTgt order"
+  );
+
+  /** As {@link #OWNER_TYPED_LINE}, with a second property of the {@code %1$sTgt} type. */
+  private static final String TWO_OWNER_TYPED_LINE = sampledBean(
+    "%1$sTgtLine",
+    "return new %1$sTgtLine();",
+    "String sku",
+    "%1$sTgt order",
+    "%1$sTgt previous"
+  );
+
+  /**
+   * A bean {@code %1$sTgt} with an id and a list of lines, with a setter and no adder, whose sample
+   * holds one stale line pointing back at it, which a getter of its own keeps in sight once the
+   * list no longer holds it.
+   */
+  private static final String STALE_TARGET =
+    "public class %1$sTgt {\n  private String id;\n" +
+    "  private java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+    "  private %1$sTgtLine stale;\n  public %1$sTgt() {}\n" +
+    "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+    "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+    "  public void setLines(final java.util.List<%1$sTgtLine> v) { lines = v; }\n" +
+    "  public %1$sTgtLine getStale() { return stale; }\n" +
+    "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
+    "    t.stale = new %1$sTgtLine(); t.stale.setSku(\"stale\"); t.stale.setOrder(t); t.lines.add(t.stale);\n" +
+    "    return t;\n  }\n}\n";
+
+  /** The row naming {@code order} as the back-reference of each {@code %1$sTgtLine}. */
+  private static final String BACK_TO_ORDER =
+    "io.github.eschizoid.telescope.mapping.Mapping.backReference(%1$sTgtLine::getOrder)";
+
+  /**
+   * The declarations of a lined pair whose target line is {@code line} and target {@code target},
+   * with {@code rows} on the field and the runtime mapper alike.
+   */
+  private static List<String> backPair(final String line, final String target, final String... rows) {
+    return List.of(
+      LINED_SOURCE.get(0),
+      LINED_SOURCE.get(1),
+      line,
+      target,
+      plainField(false, rows),
+      plainRuntime(false, rows)
+    );
   }
 
   private static final String WIRED = "#0(id=\"o\", lines=[#1(order=@0, sku=\"a\"), #2(order=@0, sku=\"b\")])";
@@ -16918,8 +16974,8 @@ class CrossPathCorpusTest {
           "  public void addNote(final String note) { notes.add(note); }\n" +
           "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
           "    final var s = new %1$sTgtLine(); s.setSku(\"stale\"); t.addLine(s); return t;\n  }\n}\n",
-        plainField(false, ADDERS_FOR_TGT),
-        plainRuntime(false, ADDERS_FOR_TGT)
+        plainField(false),
+        plainRuntime(false)
       ),
       "lines",
       Call.INTO,
@@ -16955,19 +17011,140 @@ class CrossPathCorpusTest {
       REFUSED + "rejected b" + LEFT + "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")])"
     ),
     new ContainerRow(
-      "a collection with no adder under the adders strategy",
+      "a collection with no adder, written through its setter",
       addersPair(sampledBean("%1$sTgt", "return new %1$sTgt();", "String id", "java.util.List<%1$sTgtLine> lines")),
       "lines",
       Call.FORWARD,
-      NOT_BUILT + PairingMessages.adderMissing("%1$sTgt", "lines", "%1$sTgtLine", CollectionWrites.adderNames("lines"))
+      "#0(id=\"o\", lines=[#1(order=null, sku=\"a\"), #2(order=null, sku=\"b\")])"
+    ),
+    new ContainerRow(
+      "an adder named for no collection, taken by the one element class it takes",
+      addersPair(adderTarget("List", "new java.util.ArrayList<>()", WIRING_ADDER).replace("addLine(", "addEntry(")),
+      "lines",
+      Call.FORWARD,
+      WIRED
+    ),
+    new ContainerRow(
+      "two adders taking a line, neither named for the lines, left unused and the lines set through the setter",
+      addersPair(
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void setLines(final java.util.List<%1$sTgtLine> v) { lines = v; }\n" +
+          "  public void addSample(final %1$sTgtLine line) { " +
+          WIRING_ADDER +
+          " }\n" +
+          "  public void addGift(final %1$sTgtLine line) { " +
+          WIRING_ADDER +
+          " }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n"
+      ),
+      "lines",
+      Call.FORWARD,
+      "#0(id=\"o\", lines=[#1(order=null, sku=\"a\"), #2(order=null, sku=\"b\")])"
+    ),
+    new ContainerRow(
+      "two adders taking a line, neither named for the lines, on a list with no setter, refused by name",
+      addersPair(
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addSample(final %1$sTgtLine line) { lines.add(line); }\n" +
+          "  public void addGift(final %1$sTgtLine line) { lines.add(line); }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n"
+      ),
+      "lines",
+      Call.FORWARD,
+      NOT_BUILT +
+        PairingMessages.collectionMemberUndecided(
+          "%1$sTgt",
+          "lines",
+          "%1$sTgtLine",
+          "adder",
+          List.of("addGift(%1$sTgtLine)", "addSample(%1$sTgtLine)"),
+          "addLine"
+        )
+    ),
+    new ContainerRow(
+      "into a held list with no adder, each new line pointed at the target the row names and the one taken out cleared",
+      backPair(OWNER_TYPED_LINE, STALE_TARGET, BACK_TO_ORDER),
+      "lines",
+      Call.INTO,
+      "#0(id=\"o\", lines=[#1(order=@0, sku=\"a\"), #2(order=@0, sku=\"b\")], stale=#3(order=null, sku=\"stale\"))" +
+        KEPT
+    ),
+    new ContainerRow(
+      "into a held list whose owner has a remover, each line taken out going through it",
+      backPair(
+        OWNER_TYPED_LINE,
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+          "  private final java.util.List<String> dropped = new java.util.ArrayList<>();\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { line.setOrder(this); lines.add(line); }\n" +
+          "  public void removeLine(final %1$sTgtLine line) { lines.remove(line); dropped.add(line.getSku()); }\n" +
+          "  public java.util.List<String> getDropped() { return dropped; }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setId(\"old\");\n" +
+          "    final var s = new %1$sTgtLine(); s.setSku(\"stale\"); t.addLine(s); return t;\n  }\n}\n"
+      ),
+      "lines",
+      Call.INTO,
+      "#0(dropped=[\"stale\"], id=\"o\", lines=[#1(order=@0, sku=\"a\"), #2(order=@0, sku=\"b\")])" + KEPT
+    ),
+    new ContainerRow(
+      "a backReference row naming one of two properties of the target's type",
+      backPair(
+        TWO_OWNER_TYPED_LINE,
+        sampledBean("%1$sTgt", "return new %1$sTgt();", "String id", "java.util.List<%1$sTgtLine> lines"),
+        BACK_TO_ORDER
+      ),
+      "lines",
+      Call.FORWARD,
+      "#0(id=\"o\", lines=[#1(order=@0, previous=null, sku=\"a\"), #2(order=@0, previous=null, sku=\"b\")])"
+    ),
+    new ContainerRow(
+      "mappedBy on the target's list naming one of two properties of the target's type",
+      backPair(
+        TWO_OWNER_TYPED_LINE,
+        "public class %1$sTgt {\n  private String id;\n" +
+          "  @jakarta.persistence.OneToMany(mappedBy = \"order\")\n" +
+          "  private java.util.List<%1$sTgtLine> lines;\n  public %1$sTgt() {}\n" +
+          "  public String getId() { return id; }\n  public void setId(final String v) { id = v; }\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void setLines(final java.util.List<%1$sTgtLine> v) { lines = v; }\n" +
+          "  public static %1$sTgt sample() { return new %1$sTgt(); }\n}\n"
+      ),
+      "lines",
+      Call.FORWARD,
+      "#0(id=\"o\", lines=[#1(order=@0, previous=null, sku=\"a\"), #2(order=@0, previous=null, sku=\"b\")])"
+    ),
+    new ContainerRow(
+      "a backReference row on an element of no collection the mapper converts, refused by name",
+      List.of(
+        LINED_SOURCE.get(0),
+        LINED_SOURCE.get(1),
+        OWNER_TYPED_LINE,
+        sampledBean("%1$sTgt", "return new %1$sTgt();", "String id", "java.util.List<%1$sTgtLine> lines"),
+        "public class %1$sOther {\n  private %1$sTgt order;\n" +
+          "  public %1$sTgt getOrder() { return order; }\n  public void setOrder(final %1$sTgt v) { order = v; }\n}\n",
+        plainField(false, "io.github.eschizoid.telescope.mapping.Mapping.backReference(%1$sOther::getOrder)"),
+        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Mapping.backReference(%1$sOther::getOrder)")
+      ),
+      "lines",
+      Call.FORWARD,
+      NOT_BUILT + PairingMessages.backReferenceRowUnused("%1$sSrc", "%1$sTgt", "%1$sOther", "getOrder")
     )
   );
 
   @Test
   @DisplayName(
     "into refills a container the target holds where it can change, replaces one it cannot through the setter and" +
-      " refuses one nothing can write, and the adders strategy fills a collection through its adder once per" +
-      " element or refuses a class with none, on both paths"
+      " refuses one nothing can write, and a collection goes through the owner's adder once per element, has its" +
+      " elements pointed back at the owner and its removed ones untied, or is refused where the owner's methods" +
+      " leave that undecided, on both paths"
   )
   void containerWritesAgreeOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
@@ -17153,7 +17330,7 @@ class CrossPathCorpusTest {
           "  public void addTag(final String tag) { tags.add(tag); }\n" +
           "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.addTag(\"stale\"); return s; }\n}\n",
         sampled("%1$sTgt", "java.util.List<String> tags", "new %1$sTgt(java.util.List.of(\"x\"))"),
-        ADDERS_FOR_TGT.replace("Tgt.class", "Src.class")
+        SETTERS_FOR_TGT.replace("Tgt.class", "Src.class")
       ),
       "tags",
       Call.PATCH,
@@ -17300,7 +17477,7 @@ class CrossPathCorpusTest {
           "  public void addTag(final String tag) { tags.add(tag + \"!\"); }\n" +
           "  public static %1$sSrc sample() { final var s = new %1$sSrc(); s.getTags().add(\"stale\"); return s; }\n}\n",
         sampled("%1$sTgt", "java.util.List<String> tags", "new %1$sTgt(java.util.List.of(\"x\"))"),
-        ADDERS_FOR_TGT.replace("Tgt.class", "Src.class")
+        SETTERS_FOR_TGT.replace("Tgt.class", "Src.class")
       ),
       "tags",
       Call.PATCH_INTO,
@@ -17474,9 +17651,10 @@ class CrossPathCorpusTest {
    */
   private record AddersOnceRow(String name, List<String> declarations, String owed) {}
 
-  private static final String WRITE_BEAN = "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(";
+  private static final String WRITE_BEAN = "io.github.eschizoid.telescope.mapping.Mapping.writeBean(";
 
-  private static final String ADDERS_HINT = ", io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS)";
+  /** The end of a row building a bean with no setter of its own through its setters and adders. */
+  private static final String ADDERS_HINT = ", io.github.eschizoid.telescope.mapping.Mapping.SETTERS)";
 
   private static final List<AddersOnceRow> ADDERS_ONCE_ROWS = List.of(
     new AddersOnceRow(

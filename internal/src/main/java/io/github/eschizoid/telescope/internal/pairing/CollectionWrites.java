@@ -1,20 +1,14 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Function;
 
 /**
  * How a container property is written when the write does not hand the bean a container of its own:
- * by {@code into}, which refills the container an existing target holds, and by the {@link
- * BeanWriteStrategy#ADDERS} strategy, which adds each element through a method of the bean. One
- * decision for both worlds: the runtime binds what it answers to accessors, the processor to the
- * text of calls, and the verifier reports what it refuses.
- *
- * <p>The facts are the world's to answer: what a declared type is and which methods a bean has.
- * Which properties are refilled, which are filled through an adder, what the adder is called and
- * which of a bean's methods is the adder are decided here.
+ * by {@code into} and {@code patchInto}, which refill the container an existing target holds, and
+ * by a collection filled through its owner's adder. One decision for both worlds: the runtime binds
+ * what it answers to accessors, the processor to the text of calls, and the verifier reports what
+ * it refuses. Which method is the adder, and how each element is tied to its owner, is {@link
+ * CollectionLinks}'s to decide.
  *
  * @param <T> the world's type handle
  */
@@ -116,11 +110,11 @@ public final class CollectionWrites<T> {
   }
 
   /**
-   * Whether {@link BeanWriteStrategy#ADDERS} fills a property declared as {@code declared} through
-   * an adder: a {@code Collection}. A map has no single element to add and is written as any other
-   * property is.
+   * Whether a property declared as {@code declared} can be tied to its owner element by element,
+   * through an adder, a remover or a back-reference: a {@code Collection}. A map has no single
+   * element to add and is written as any other container is.
    */
-  public boolean filledByAdder(final T declared) {
+  public boolean linked(final T declared) {
     return props.isSubtypeOf(props.rawType(declared), WellKnown.COLLECTION);
   }
 
@@ -137,62 +131,5 @@ public final class CollectionWrites<T> {
     if (bound == null) return null;
     final var erased = props.erasure(bound);
     return props.typeName(erased).equals("java.lang.Object") ? null : erased;
-  }
-
-  /**
-   * The adder of {@code property}, a collection of {@code element} as {@link #elementOf} gives it,
-   * among the public instance methods of one parameter that {@code named} lists for each name, in
-   * the order {@link #adderNames} gives the names. A method whose parameter is the element's class
-   * is taken first; otherwise the one method of that name whose parameter the element is assignable
-   * to. Null when no name has either, or a name has several of the second kind and none of the
-   * first.
-   *
-   * @param named the world's public instance methods of one parameter with a given name
-   * @param parameter the type a method's one parameter is declared as
-   * @param <M> the world's method handle
-   */
-  public <M> M adderFor(
-    final String property,
-    final T element,
-    final Function<String, List<M>> named,
-    final Function<M, T> parameter
-  ) {
-    for (final var name : adderNames(property)) {
-      M assignable = null;
-      var assignableCount = 0;
-      for (final var candidate : named.apply(name)) {
-        final var taken = props.erasure(parameter.apply(candidate));
-        if (props.isPrimitive(taken)) continue;
-        if (element != null && props.sameType(taken, element)) return candidate;
-        if (element == null || props.isAssignable(element, taken)) {
-          assignable = candidate;
-          assignableCount++;
-        }
-      }
-      if (assignableCount == 1) return assignable;
-    }
-    return null;
-  }
-
-  /**
-   * The names an adder of {@code property} is looked for under, in order: {@code add} followed by
-   * the property's name made singular, where it ends in {@code ies}, {@code s} or {@code es}, and
-   * then by the name as it is. {@code lines} gives {@code addLine}, {@code categories} gives {@code
-   * addCategory} and {@code addresses} gives {@code addAddress}.
-   */
-  public static List<String> adderNames(final String property) {
-    final var stems = new ArrayList<String>(4);
-    if (property.length() > 3 && property.endsWith("ies")) {
-      stems.add(property.substring(0, property.length() - 3) + "y");
-    }
-    if (property.length() > 1 && property.endsWith("s")) stems.add(property.substring(0, property.length() - 1));
-    if (property.length() > 2 && property.endsWith("es")) stems.add(property.substring(0, property.length() - 2));
-    stems.add(property);
-    final var names = new ArrayList<String>(stems.size());
-    for (final var stem : stems) {
-      final var name = "add" + Character.toUpperCase(stem.charAt(0)) + stem.substring(1);
-      if (!names.contains(name)) names.add(name);
-    }
-    return List.copyOf(names);
   }
 }

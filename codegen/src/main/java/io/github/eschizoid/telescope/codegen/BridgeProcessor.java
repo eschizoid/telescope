@@ -405,7 +405,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // qualified name, and the one its writeBeans row names, or null: a path builds an object it
     // steps through by the one its class takes.
     Map<String, String> pathStrategies,
-    String pathDefault
+    String pathDefault,
+    // For a field's bridge, the property each backReference row names, and the class its getter
+    // returns, both by the qualified name of the element class the row is keyed to.
+    Map<String, String> backReferences,
+    Map<String, String> backReferenceTypes
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -430,7 +434,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       Map.of(),
       Map.of(),
-      null
+      null,
+      Map.of(),
+      Map.of()
     );
 
     /**
@@ -462,7 +468,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Map.of(),
         Map.of(),
         Map.of(),
-        null
+        null,
+        Map.of(),
+        Map.of()
       );
     }
   }
@@ -497,6 +505,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // this set is refused where an enum pair below it converts forward only
   // (refuseStrictReferencesToLenientPairs).
   private final Set<TypePair> lenientPairs = new HashSet<>();
+
+  // By element pair, the properties of the target's, and of the source's, elements whose type is
+  // exactly the class of the owner of a collection a bridge converts them for, where the owner's
+  // adder or a declared back-reference sets them: the pointer at the owner, which the element pair
+  // asks no counterpart for.
+  private final Map<TypePair, Set<String>> pointerTargets = new HashMap<>();
+  private final Map<TypePair, Set<String>> pointerSources = new HashMap<>();
 
   /**
    * The {@code writeBeans} default of each pair a {@code @Bridge} field declares with one. The
@@ -892,7 +907,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           Map.of(),
           Map.of(),
           Map.of(),
-          null
+          null,
+          Map.of(),
+          Map.of()
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
@@ -955,6 +972,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       multiTargetSources.clear();
       configsByPair.clear();
       lenientPairs.clear();
+      pointerTargets.clear();
+      pointerSources.clear();
       writeDefaults.clear();
       bridgeProviders.clear();
       bridgeNameOwner.clear();
@@ -1206,7 +1225,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.copyOf(parsed.gatedTargets()),
       Map.copyOf(parsed.gatedPaths()),
       Map.copyOf(parsed.beanStrategies()),
-      parsed.defaultStrategy()
+      parsed.defaultStrategy(),
+      Map.copyOf(parsed.backReferences()),
+      Map.copyOf(parsed.backReferenceTypes())
     );
     if (
       !roundEnv.processingOver() && (carriesLombokTrigger(parsed.source()) || carriesLombokTrigger(parsed.target()))
@@ -2755,6 +2776,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
+    // A pair converting the elements of a collection, with no @Bridge of its own, leaves a pointer
+    // at the owner that nothing pairs with at its default, as the runtime mapper leaves a nested
+    // pair's, where the owner's adder or a declared back-reference sets it; into leaves it as the
+    // element holds it. Every other unpaired property is refused as at any pair.
+    final var pointedTargets = new HashSet<String>();
+    final var ownConfig = configsByPair.containsKey(thisPair);
+    if (!lenient && !ownConfig) {
+      for (final var name : pointerTargets.getOrDefault(thisPair, Set.of())) {
+        if (
+          !hasField(targetFields, name) ||
+          injectedTargetFields.contains(name) ||
+          renames.containsValue(name) ||
+          hasField(sourceFields, name) ||
+          noWriteMember(target, name)
+        ) {
+          continue;
+        }
+        parsedConstants.put(name, defaultLiteralFor(fieldByName(targetFields, name).type()));
+        injectedTargetFields.add(name);
+        pointedTargets.add(name);
+      }
+      for (final var name : pointerSources.getOrDefault(thisPair, Set.of())) {
+        if (!hasField(sourceFields, name) || hasField(targetFields, renames.getOrDefault(name, name))) continue;
+        if (!noWriteMember(source, name)) effectiveDrops.add(name);
+      }
+    }
+
     // A strict bridge refuses a kept property a rename took the target of, as the strict runtime
     // mapper does, by the property's name.
     if (!lenient && !refusedTaken.isEmpty()) {
@@ -3379,13 +3427,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(source, sourceUnbuilt);
       return;
     }
+    // How each collection either direction writes is tied to its owner, decided once for the
+    // rebuilds, into and patchInto, as the runtime mapper decides it.
+    final var linked = pairLinks(
+      source,
+      target,
+      sourceFields,
+      targetFields,
+      renames,
+      drops,
+      viaMappers,
+      cfg,
+      lenient,
+      targetRebuild,
+      sourceRebuild
+    );
+    if (linked == null) return;
     final var builtForward = buildExpr(
       target,
       readForward,
       targetFields,
       writeStrategy,
       source,
-      targetRebuild,
+      targetRebuild.withAdders(PairLinks.adders(linked.target())),
       pkg,
       forwardWritten,
       forwardResults,
@@ -3400,7 +3464,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceFields,
       sourceWriteStrategy,
       source,
-      sourceRebuild,
+      sourceRebuild.withAdders(PairLinks.adders(linked.source())),
       pkg,
       backwardWritten,
       backwardResults,
@@ -3409,8 +3473,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       writesSource
     );
     if (builtBackward == null) return;
-    final var forwardBody = withPrelude(forwardLocals, builtForward);
-    final var backwardBody = withPrelude(backwardLocals, builtBackward);
+    final var forwardBody = pointingBack(withPrelude(forwardLocals, builtForward), linked.forwardPointBack());
+    final var backwardBody = pointingBack(withPrelude(backwardLocals, builtBackward), linked.backwardPointBack());
     // Patch emits a sparse overlay: for each source field, read from `partial` (the user's
     // partially-populated target) when the target's component is non-null, else fall back to the
     // corresponding read on `base`. Primitive target components are always treated as
@@ -3570,7 +3634,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       sourceFields,
       sourceWriteStrategy,
       source,
-      sourceRebuild,
+      sourceRebuild.withAdders(PairLinks.adders(linked.source())),
       null,
       patchCasts.keySet(),
       patchCasts,
@@ -3654,7 +3718,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The target properties the bridge writes, which into updates: every one but a derived getter
     // nothing fills. A strict bridge updates a target in place itself where generated code can.
     final var intoNames = new ArrayList<String>();
-    for (final var f : targetFields) if (!unwritten.targets().contains(f.name())) intoNames.add(f.name());
+    for (final var f : targetFields) {
+      if (!unwritten.targets().contains(f.name()) && !pointedTargets.contains(f.name())) intoNames.add(f.name());
+    }
     // A collection whose elements convert through a generated bridge, a nested pair's or the one a
     // via row's mapper field declares, is handed that bridge's conversion of one element for the
     // container policy, and the source's container its value was converted from.
@@ -3690,7 +3756,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           target,
           targetFields,
           intoNames,
-          targetRebuild.adders(),
+          linked.target(),
+          linked.targetConstants(),
+          true,
           "forward(source)",
           null,
           intoElements,
@@ -3701,10 +3769,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // element: the check before it writes and the write, which a bridge whose pair converts the
     // elements of a collection hands the container policy. None where into or patchInto has none,
     // a write goes through adders, or a row writes through a path.
-    final var writesInPlace = !(lenient || hasPathRows || targetRebuild.adders());
+    final var writesInPlace = !(lenient || hasPathRows || !PairLinks.adders(linked.target()).isEmpty());
     final var writesBackInPlace = !(lenient ||
       hasPathRows ||
-      sourceRebuild.adders() ||
+      !PairLinks.adders(linked.source()).isEmpty() ||
       sourceRebuild.kind() == Rebuild.Kind.RECORD ||
       sourceRebuild.kind() == Rebuild.Kind.NONE);
     final var backNames = new ArrayList<>(patchSent.keySet());
@@ -3716,6 +3784,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           target,
           targetFields,
           intoNames,
+          linked.target(),
+          linked.targetConstants(),
           false,
           "produced",
           null,
@@ -3731,6 +3801,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           target,
           targetFields,
           intoNames,
+          linked.target(),
+          linked.targetConstants(),
           false,
           "produced",
           null,
@@ -3746,6 +3818,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           sourceFields,
           backNames,
+          linked.source(),
+          linked.sourceConstants(),
           false,
           "produced",
           null,
@@ -3761,6 +3835,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           sourceFields,
           backNames,
+          linked.source(),
+          linked.sourceConstants(),
           false,
           "produced",
           null,
@@ -3780,7 +3856,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             source,
             sourceFields,
             new ArrayList<>(patchSent.keySet()),
-            sourceRebuild.adders(),
+            linked.source(),
+            linked.sourceConstants(),
+            true,
             "__overlaid(target, partial, __sent)",
             sentFlags,
             patchIntoElements,
@@ -3945,6 +4023,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           targetFq,
           intoStatements
         );
+        for (final var declaration : linked.declarations()) out.println(declaration);
+        if (!linked.declarations().isEmpty()) out.println();
         emitElementConversion(
           out,
           target.getTypeParameters().isEmpty() && source.getTypeParameters().isEmpty()
@@ -3976,7 +4056,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           patchIntoStatements == null ? null : new ArrayList<>(patchSent.keySet()),
           !lenient && hasPathRows && sourceRebuild.kind() != Rebuild.Kind.RECORD
             ? PairingMessages.patchIntoThroughPath(source.getSimpleName().toString())
-            : null
+            : null,
+          linked.collections()
         );
         for (final var writer : pathWriters) out.print(writer);
         // Each when(...) predicate is tested through a Predicate, as the runtime tests it, and
@@ -4971,7 +5052,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       unwalkedTarget,
       false,
       null,
-      null
+      null,
+      false
     );
   }
 
@@ -4992,7 +5074,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<String> unwalkedTarget,
     final boolean takesPath,
     final List<String> patchIntoNames,
-    final String patchIntoRefusal
+    final String patchIntoRefusal,
+    final boolean collections
   ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
@@ -5022,6 +5105,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".PATCH_INTO_ELEMENTS;");
     out.println("    }");
     out.println();
+    if (collections) {
+      out.println("    @Override");
+      out.println(
+        "    public java.util.List<io.github.eschizoid.telescope.introspection.OpticNode> collectionWrites() {"
+      );
+      out.println("      return " + bridgeName + ".COLLECTIONS;");
+      out.println("    }");
+      out.println();
+    }
     if (patchIntoNames != null || patchIntoRefusal != null) {
       out.println("    @Override");
       out.println(
@@ -10287,17 +10379,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * member the emission never writes through, which either refuses a row that would have compiled
    * or accepts one that will not.
    */
-  private record Rebuild(Kind kind, ExecutableElement constructor, TypeElement builderType, boolean adders) {
+  private record Rebuild(
+    Kind kind,
+    ExecutableElement constructor,
+    TypeElement builderType,
+    Map<String, ExecutableElement> adders
+  ) {
     private Rebuild(final Kind kind, final ExecutableElement constructor, final TypeElement builderType) {
-      this(kind, constructor, builderType, false);
+      this(kind, constructor, builderType, Map.of());
+    }
+
+    /**
+     * This rebuild, filling each collection {@code adders} names through that adder where it is a
+     * setters rebuild; any other rebuild takes each collection whole.
+     */
+    Rebuild withAdders(final Map<String, ExecutableElement> chosen) {
+      return kind != Kind.SETTERS || chosen.isEmpty() ? this : new Rebuild(kind, constructor, builderType, chosen);
     }
 
     private enum Kind {
       RECORD,
       CONSTRUCTOR,
       BUILDER,
-      // A no-arg constructor and setters; with adders, a collection a field of its name stores is
-      // filled through its adder instead of its setter.
+      // A no-arg constructor and setters; a collection is filled through the owner's adder, where
+      // the rebuild names one.
       SETTERS,
       NONE,
     }
@@ -10337,7 +10442,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case "CONSTRUCTOR" -> constructor != null ? BeanWriteStrategy.CONSTRUCTOR : null;
       case "BUILDER" -> builderType != null ? BeanWriteStrategy.BUILDER : null;
       case "SETTERS" -> hasNoArgConstructor ? BeanWriteStrategy.SETTERS : null;
-      case "ADDERS" -> hasNoArgConstructor ? BeanWriteStrategy.ADDERS : null;
       default -> autoBeanStrategy(
         to,
         names,
@@ -10350,7 +10454,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case BUILDER -> new Rebuild(Rebuild.Kind.BUILDER, null, builderType);
       case CONSTRUCTOR -> new Rebuild(Rebuild.Kind.CONSTRUCTOR, constructor, null);
       case SETTERS -> new Rebuild(Rebuild.Kind.SETTERS, null, null);
-      case ADDERS -> new Rebuild(Rebuild.Kind.SETTERS, null, null, true);
     };
   }
 
@@ -10500,9 +10603,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // for a property it writes would drop the value. That is refused as the runtime refuses it,
     // before whether the bridge's package can call the no-argument constructor.
     final var heldToSetters =
-      pairTarget != null &&
-      ("SETTERS".equals(writeStrategy) || "ADDERS".equals(writeStrategy)) &&
-      to.getKind() != ElementKind.RECORD;
+      pairTarget != null && "SETTERS".equals(writeStrategy) && to.getKind() != ElementKind.RECORD;
     if (
       heldToSetters &&
       rebuild.kind() == Rebuild.Kind.NONE &&
@@ -10579,17 +10680,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return sb.append(".build()").toString();
       }
       case SETTERS -> {
-        // Under the adders strategy each collection a field of its name stores is filled through
-        // its adder, and a class with such a collection and no adder for it is refused by name,
-        // as the runtime writer refuses it.
-        final var adders = rebuild.adders() ? addersOf(to, toFields) : null;
-        if (adders != null && adders.refusal() != null) {
-          error(annotationSite, adders.refusal());
-          return null;
-        }
+        // A collection is filled through the owner's adder, where the rebuild names one, as the
+        // runtime writer fills it.
+        final var adders = rebuild.adders();
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
-          final var adder = adders == null ? null : adders.bound().get(f.name());
+          final var adder = adders.get(f.name());
           if (adder != null) {
             if (!written.contains(f.name())) continue;
             // Through ContainerCopy.add, which into defers while it builds the value it reads from,
@@ -10782,6 +10878,388 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * How the collections of one bridge's pair are tied to their owners: {@code target} the links of
+   * the target's collections, which forward and {@code into} write, and {@code source} those of the
+   * source's, which backward and {@code patchInto} write, by property; the constant each side's
+   * writes hand {@code ContainerCopy}, by property; the declarations of those constants; and the
+   * constant each direction points the elements of a value it builds back through, or null where it
+   * points none.
+   */
+  private record PairLinks(
+    Map<String, MirrorLinks.Link> target,
+    Map<String, MirrorLinks.Link> source,
+    Map<String, String> targetConstants,
+    Map<String, String> sourceConstants,
+    List<String> declarations,
+    String forwardPointBack,
+    String backwardPointBack,
+    boolean collections
+  ) {
+    /** The adder each collection of a side is filled through, by property. */
+    static Map<String, ExecutableElement> adders(final Map<String, MirrorLinks.Link> links) {
+      final var adders = new LinkedHashMap<String, ExecutableElement>();
+      for (final var link : links.values()) if (link.adder() != null) adders.put(link.property(), link.adder());
+      return adders;
+    }
+  }
+
+  /**
+   * The {@link PairLinks} of the pair {@code source → target}, as the runtime mapper over the same
+   * classes decides them, or null where a refusal was reported: an adder or remover the owner's
+   * methods leave undecided, or a {@code backReference} row no collection of the pair takes, that
+   * names a property of no owner's type, a property the element's conversion writes, or one with no
+   * setter that takes the owner.
+   */
+  private PairLinks pairLinks(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames,
+    final Set<String> drops,
+    final Map<String, String> viaMappers,
+    final BridgeConfig cfg,
+    final boolean lenient,
+    final Rebuild targetRebuild,
+    final Rebuild sourceRebuild
+  ) {
+    final var forward = new LinkedHashMap<String, TypeMirror>();
+    final var backward = new LinkedHashMap<String, TypeMirror>();
+    final var viaTargets = new HashSet<String>();
+    for (final var sf : sourceFields) {
+      if (drops.contains(sf.name())) continue;
+      final var targetName = renames.getOrDefault(sf.name(), sf.name());
+      if (!hasField(targetFields, targetName)) continue;
+      final var tf = fieldByName(targetFields, targetName);
+      forward.put(targetName, sf.type());
+      backward.put(sf.name(), tf.type());
+      if (viaMappers.containsKey(sf.name())) viaTargets.add(targetName);
+    }
+    final var links = mirrorLinks();
+    final var rows = cfg.backReferences();
+    final var rowTypes = cfg.backReferenceTypes();
+    final var targetLinks = links.of(target, forward, viaTargets, rows, rowTypes);
+    final Map<String, MirrorLinks.Link> sourceLinks = lenient
+      ? Map.of()
+      : links.of(source, backward, viaMappers.keySet(), rows, rowTypes);
+    for (final var side : List.of(targetLinks, sourceLinks)) {
+      for (final var link : side.values()) {
+        if (link.refusal() == null) continue;
+        error(source, link.refusal());
+        return null;
+      }
+    }
+    // An adder or remover the owner's methods leave undecided is not used, in the runtime mapper's
+    // words, once where both directions write the same collection.
+    final var warned = new LinkedHashSet<String>();
+    for (final var side : List.of(targetLinks, sourceLinks)) {
+      for (final var link : side.values()) warned.addAll(link.warnings());
+    }
+    for (final var warning : warned) processingEnv.getMessager().printMessage(Diagnostic.Kind.WARNING, warning, source);
+    for (final var link : targetLinks.values()) {
+      final var pointers = pointersAt(target, link);
+      if (pointers.isEmpty()) continue;
+      pointerTargets
+        .computeIfAbsent(
+          new TypePair(link.sent().getQualifiedName().toString(), link.element().getQualifiedName().toString()),
+          ignored -> new LinkedHashSet<>()
+        )
+        .addAll(pointers);
+    }
+    for (final var link : sourceLinks.values()) {
+      final var pointers = pointersAt(source, link);
+      if (pointers.isEmpty()) continue;
+      pointerSources
+        .computeIfAbsent(
+          new TypePair(link.element().getQualifiedName().toString(), link.sent().getQualifiedName().toString()),
+          ignored -> new LinkedHashSet<>()
+        )
+        .addAll(pointers);
+    }
+    final var sourceName = source.getSimpleName().toString();
+    final var targetName = target.getSimpleName().toString();
+    for (final var row : rows.entrySet()) {
+      final var owners = new LinkedHashSet<String>();
+      var taken = false;
+      for (final var entry : List.of(Map.entry(target, targetLinks), Map.entry(source, sourceLinks))) {
+        for (final var link : entry.getValue().values()) {
+          if (!link.converted() || !link.element().getQualifiedName().contentEquals(row.getKey())) continue;
+          owners.add(entry.getKey().getSimpleName().toString());
+          if (!entry.getKey().getQualifiedName().contentEquals(rowTypes.get(row.getKey()))) continue;
+          taken = true;
+          final var element = link.element().getSimpleName().toString();
+          final var getter = "get" + capitalize(row.getValue());
+          if (links.fills(link.sent(), row.getValue())) {
+            error(source, PairingMessages.backReferenceRowFilled(sourceName, targetName, element, getter));
+            return null;
+          }
+          if (!links.setterTakes(link.element(), row.getValue(), entry.getKey())) {
+            error(source, PairingMessages.backReferenceRowUnwritable(sourceName, targetName, element, getter));
+            return null;
+          }
+        }
+      }
+      if (taken) continue;
+      final var element = row.getKey().substring(row.getKey().lastIndexOf('.') + 1);
+      final var getter = "get" + capitalize(row.getValue());
+      final var type = rowTypes.get(row.getKey());
+      error(
+        source,
+        owners.isEmpty()
+          ? PairingMessages.backReferenceRowUnused(sourceName, targetName, element, getter)
+          : PairingMessages.backReferenceRowNotOwner(
+              sourceName,
+              targetName,
+              element,
+              getter,
+              type.substring(type.lastIndexOf('.') + 1),
+              List.copyOf(owners)
+            )
+      );
+      return null;
+    }
+    final var declarations = new ArrayList<String>();
+    final var targetConstants = constants(target, targetLinks, "INTO_LINKS_", declarations);
+    final var sourceConstants = constants(source, sourceLinks, "PATCH_INTO_LINKS_", declarations);
+    final var forwardPointBack = pointBack(targetLinks, targetConstants, targetRebuild, "FORWARD_LINKS", declarations);
+    final var backwardPointBack = lenient
+      ? null
+      : pointBack(sourceLinks, sourceConstants, sourceRebuild, "BACKWARD_LINKS", declarations);
+    // What explain() reports for each collection, as the runtime mapper over the same rows reports
+    // it: once where both directions write the same collection of the same class.
+    final var nodes = new LinkedHashSet<String>();
+    for (final var side : List.of(Map.entry(target, targetLinks), Map.entry(source, sourceLinks))) {
+      for (final var link : side.getValue().values()) nodes.add(collectionNode(side.getKey(), link));
+    }
+    if (!nodes.isEmpty()) declarations.add(
+      "  static final java.util.List<io.github.eschizoid.telescope.introspection.OpticNode> COLLECTIONS =" +
+        " java.util.List.of(" +
+        String.join(", ", nodes) +
+        ");"
+    );
+    return new PairLinks(
+      targetLinks,
+      sourceLinks,
+      targetConstants,
+      sourceConstants,
+      declarations,
+      forwardPointBack,
+      backwardPointBack,
+      !nodes.isEmpty()
+    );
+  }
+
+  /**
+   * The expression building the {@code OpticNode.CollectionWrite} {@code explain()} reports for
+   * {@code link}, a collection of {@code owner}: with the {@code mappedBy} back-reference only
+   * where the runtime's policy answers it, as the runtime mapper reports it.
+   */
+  private String collectionNode(final TypeElement owner, final MirrorLinks.Link link) {
+    final var types = processingEnv.getTypeUtils();
+    final var ownerFq = types.erasure(owner.asType()).toString();
+    final var head =
+      "new io.github.eschizoid.telescope.introspection.OpticNode.CollectionWrite(" +
+      ownerFq +
+      ".class, " +
+      literal(link.property()) +
+      ", " +
+      types.erasure(link.element().asType()) +
+      ".class, " +
+      (link.adderSignature() == null ? "null" : literal(link.adderSignature())) +
+      ", " +
+      (link.removerSignature() == null ? "null" : literal(link.removerSignature())) +
+      ", ";
+    final var back = link.backReference();
+    final var unused = ", " + (link.unused() == null ? "null" : literal(link.unused())) + ")";
+    if (back.property() == null) return head + "null, null" + unused;
+    final var with = head + literal(back.property()) + ", " + literal(back.source().name()) + unused;
+    if (link.mappedBy() == null) return with;
+    return (
+      "(" +
+      literal(link.mappedBy()) +
+      ".equals(" +
+      CONTAINER_COPY +
+      ".backReference(" +
+      ownerFq +
+      ".class, " +
+      literal(link.property()) +
+      ")) ? " +
+      with +
+      " : " +
+      head +
+      "null, null" +
+      unused +
+      ")"
+    );
+  }
+
+  /**
+   * Declares in {@code declarations} a {@code ContainerCopy.Links} constant, named {@code prefix}
+   * and the property, for each collection of {@code owner} whose elements {@code links} tie to it,
+   * and answers the constants by property.
+   */
+  private Map<String, String> constants(
+    final TypeElement owner,
+    final Map<String, MirrorLinks.Link> links,
+    final String prefix,
+    final List<String> declarations
+  ) {
+    final var constants = new LinkedHashMap<String, String>();
+    final var types = processingEnv.getTypeUtils();
+    final var ownerFq = types.erasure(owner.asType()).toString();
+    for (final var link : links.values()) {
+      if (!link.ties()) continue;
+      final var name = prefix + link.property().toUpperCase(Locale.ROOT);
+      final var elementFq = types.erasure(link.element().asType()).toString();
+      final var held = ownerFq + "::" + getterName(owner, link.property(), propertyMember(owner, link.property()));
+      final var adder = link.adder() == null ? "null" : ownerFq + "::" + link.adder().getSimpleName();
+      final var remover = link.remover() == null ? "null" : ownerFq + "::" + link.remover().getSimpleName();
+      final var back = link.backReference().property();
+      final String expression;
+      if (link.mappedBy() != null) {
+        expression =
+          CONTAINER_COPY +
+          ".<" +
+          ownerFq +
+          ", " +
+          elementFq +
+          ">links(" +
+          ownerFq +
+          ".class, " +
+          literal(link.property()) +
+          ", " +
+          literal(link.mappedBy()) +
+          ", " +
+          held +
+          ", " +
+          adder +
+          ", " +
+          remover +
+          ", " +
+          backRead(elementFq, link.mappedBy()) +
+          ", " +
+          backWrite(elementFq, link.mappedBy()) +
+          ", null, null)";
+      } else {
+        expression =
+          CONTAINER_COPY +
+          ".<" +
+          ownerFq +
+          ", " +
+          elementFq +
+          ">links(" +
+          held +
+          ", " +
+          adder +
+          ", " +
+          remover +
+          ", " +
+          (back == null ? "null" : backRead(elementFq, back)) +
+          ", " +
+          (back == null ? "null" : backWrite(elementFq, back)) +
+          ")";
+      }
+      declarations.add("  private static final " + CONTAINER_COPY + ".Links " + name + " = " + expression + ";");
+      constants.put(link.property(), name);
+    }
+    return constants;
+  }
+
+  /**
+   * Declares the {@code ContainerCopy.Links[]} constant {@code name} a direction points the
+   * elements of each value it builds back through: each collection of the side with a
+   * back-reference that no adder of the rebuild sets. Null where there is none.
+   */
+  private static String pointBack(
+    final Map<String, MirrorLinks.Link> links,
+    final Map<String, String> constants,
+    final Rebuild rebuild,
+    final String name,
+    final List<String> declarations
+  ) {
+    final var pointed = new ArrayList<String>();
+    for (final var link : links.values()) {
+      final var points = link.backReference().property() != null;
+      final var adderSets = link.adder() != null && rebuild.kind() == Rebuild.Kind.SETTERS;
+      if (points && !adderSets) pointed.add(constants.get(link.property()) + ".withoutAdder()");
+    }
+    if (pointed.isEmpty()) return null;
+    declarations.add(
+      "  private static final " +
+        CONTAINER_COPY +
+        ".Links[] " +
+        name +
+        " = new " +
+        CONTAINER_COPY +
+        ".Links[] { " +
+        String.join(", ", pointed) +
+        " };"
+    );
+    return name;
+  }
+
+  private static String backRead(final String elementFq, final String property) {
+    return elementFq + "::get" + capitalize(property);
+  }
+
+  private static String backWrite(final String elementFq, final String property) {
+    return elementFq + "::set" + capitalize(property);
+  }
+
+  /**
+   * The properties of {@code link}'s converted elements whose type is exactly {@code owner}'s
+   * class, where the owner's adder or a declared back-reference points them at the owner; empty
+   * otherwise.
+   */
+  private List<String> pointersAt(final TypeElement owner, final MirrorLinks.Link link) {
+    if (!link.converted() || link.sent() == null) return List.of();
+    if (link.adder() == null && link.backReference().property() == null) return List.of();
+    final var types = processingEnv.getTypeUtils();
+    final var ownerType = types.erasure(owner.asType());
+    final var found = new ArrayList<String>();
+    for (final var property : mirrorProps().properties(link.element().asType())) {
+      if (types.isSameType(types.erasure(property.member()), ownerType)) found.add(property.name());
+    }
+    return found;
+  }
+
+  /** The collection links of this processing environment's classes. */
+  private MirrorLinks mirrorLinks() {
+    return new MirrorLinks(processingEnv.getElementUtils(), processingEnv.getTypeUtils(), mirrorProps());
+  }
+
+  /** The type property {@code name} of {@code owner} is declared as, as a member of it. */
+  private TypeMirror propertyMember(final TypeElement owner, final String name) {
+    for (final var property : mirrorProps().properties(owner.asType())) {
+      if (property.name().equals(name)) return property.member();
+    }
+    return null;
+  }
+
+  /**
+   * {@code body}, a forward or backward method body, returning its value once {@code ContainerCopy}
+   * has pointed the elements of each collection {@code links} names back at it; {@code body} as it
+   * is where {@code links} is null.
+   */
+  private static String pointingBack(final String body, final String links) {
+    if (links == null) return body;
+    final var call = CONTAINER_COPY + ".pointedBack(";
+    if (!body.startsWith("{")) return call + body + ", " + links + ")";
+    final var at = body.lastIndexOf("return ");
+    final var end = body.lastIndexOf(';');
+    return (
+      body.substring(0, at) +
+      "return " +
+      call +
+      body.substring(at + "return ".length(), end) +
+      ", " +
+      links +
+      ")" +
+      body.substring(end)
+    );
+  }
+
+  /**
    * The statements of the bridge's {@code into(target, source)}, which update {@code target} in
    * place as {@code Mapper.into} does, or null where generated code cannot: a property in {@code
    * names} other than a container has no setter that the runtime writer chooses from the property's
@@ -10796,12 +11274,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * name before the first write too, by {@code ContainerCopy.refuseUnwritable}. A container
    * property is written by {@code ContainerCopy.refill}, which refills the container the target
    * holds where that can be changed and otherwise answers that the setter writes it, the rule
-   * {@code CollectionWrites.intoWrite} decides for both paths. Where {@code adders} is true, the
-   * target is built through its adders: the value is built by {@code ContainerCopy.deferAdders},
-   * which runs no adder on it and hands back what each adder was to be handed, and each collection
-   * a field of its name stores is filled through its adder by {@code ContainerCopy.fill}. Container
-   * properties are written first, those with no setter before those with one, and every other
-   * property after them.
+   * {@code CollectionWrites.intoWrite} decides for both paths. {@code links} gives, by property,
+   * how each collection's elements are tied to the target, and {@code linkConstants} the constant
+   * holding those links, which each container write hands {@code ContainerCopy}: a collection with
+   * an adder is filled through it. Where {@code produceAdds} is true, {@code produce} builds its
+   * value through those adders, so it is built by {@code ContainerCopy.deferAdders}, which runs no
+   * adder on it and hands back what each adder was to be handed. Container properties are written
+   * first, those with no setter before those with one, and every other property after them.
    *
    * <p>Every other property is written through the setter the property's type chooses, the rule the
    * runtime writer applies; where the name has overloads the value is first assigned to a local of
@@ -10822,15 +11301,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement target,
     final List<Field> targetFields,
     final List<String> names,
-    final boolean adders,
+    final Map<String, MirrorLinks.Link> links,
+    final Map<String, String> linkConstants,
+    final boolean produceAdds,
     final String produce,
     final Map<String, String> sentFlags,
     final Map<String, String> elementWrites,
     final Map<String, String> sentReads,
     final boolean checkOnly
   ) {
-    final var bound = adders ? addersOf(target, targetFields) : null;
-    if (bound != null && bound.refusal() != null) return null;
     final var reads = new ArrayList<String>();
     final var checks = new ArrayList<String>();
     final var unset = new ArrayList<String>();
@@ -10842,7 +11321,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       literal(pairTarget.getSimpleName().toString())
     );
     final var targetFq = processingEnv.getTypeUtils().erasure(target.asType()).toString();
-    final var defers = bound != null && names.stream().anyMatch(bound.bound()::containsKey);
+    final var defers =
+      produceAdds && names.stream().anyMatch(name -> links.containsKey(name) && links.get(name).adder() != null);
     if (defers) {
       reads.add(
         "final var __deferred = " + CONTAINER_COPY + ".deferAdders(" + targetFq + ".class, () -> " + produce + ");"
@@ -10855,12 +11335,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     var index = 0;
     for (final var name : names) {
       final var field = fieldByName(targetFields, name);
-      final var adder = bound == null ? null : bound.bound().get(name);
+      final var link = links.get(name);
+      final var adder = link == null ? null : link.adder();
+      final var tied = linkConstants.getOrDefault(name, "null");
       final var local = "__in" + index;
       final var held = "__held" + index++;
       final var container = adder != null || writes.refilledInPlace(field.type());
       reads.add(
-        adder != null
+        adder != null && defers
           ? "final " + field.type() + " " + local + " = __deferred.elements(" + literal(name) + ");"
           : "final var " + local + " = " + readExpr(target, "__produced", field) + ";"
       );
@@ -10918,7 +11400,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             ", " +
             hasSetter +
             ", " +
-            (adder != null) +
+            tied +
             ", " +
             named +
             ", " +
@@ -10934,7 +11416,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
       final var call =
         CONTAINER_COPY +
-        (adder != null ? ".fill(" : ".refill(") +
+        ".refill(" +
         named +
         ", target, " +
         literal(name) +
@@ -10942,9 +11424,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         held +
         ", " +
         local +
-        (adder != null ? ", " + targetFq + "::" + adder.getSimpleName() : "") +
         ", " +
         hasSetter +
+        ", " +
+        tied +
         ", " +
         elements +
         ", " +
@@ -10983,22 +11466,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "{ final " + choice.argumentType() + " __arg = " + local + "; target." + setter + "(__arg); }";
     final var guarded = choice.argument().getKind().isPrimitive() && !field.type().getKind().isPrimitive();
     return guarded ? "if (" + local + " != null) " + write : write;
-  }
-
-  /**
-   * The adders of bean {@code to}, whose properties are {@code toFields}, as the runtime writer
-   * finds them on the loaded class.
-   */
-  private MirrorAdders.Adders addersOf(final TypeElement to, final List<Field> toFields) {
-    final var properties = new LinkedHashMap<String, TypeMirror>();
-    for (final var f : toFields) properties.put(f.name(), f.type());
-    return MirrorAdders.of(
-      processingEnv.getElementUtils(),
-      processingEnv.getTypeUtils(),
-      mirrorProps(),
-      to,
-      properties
-    );
   }
 
   /**
@@ -11551,7 +12018,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The builder() the ladder takes is public, so no rung for BUILDER means no builder the runtime
     // takes either; a constructor can be there and out of the bridge's reach.
     final var present = switch (cfg.pathDefault()) {
-      case "SETTERS", "ADDERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
+      case "SETTERS" -> constructors.stream().anyMatch(c -> c.getParameters().isEmpty());
       case "CONSTRUCTOR" -> constructors.stream().anyMatch(c -> c.getParameters().size() == sideFields.size());
       default -> false;
     };
@@ -11592,7 +12059,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       toFq +
       "): no no-arg constructor the bridge's package can call. Switch to AUTO," +
       " CONSTRUCTOR, or BUILDER, or add a public no-arg constructor.";
-      case "ADDERS" -> PairingMessages.addersNeedNoArgConstructor(toFq.substring(toFq.lastIndexOf('.') + 1));
       default -> "@Bridge: " +
       toFq +
       " has no usable construction strategy — needs a record canonical constructor, a" +

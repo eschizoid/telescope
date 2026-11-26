@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.introspection;
 
 import static java.util.stream.Collectors.joining;
 
+import io.github.eschizoid.telescope.introspection.OpticNode.CollectionWrite;
 import io.github.eschizoid.telescope.introspection.OpticNode.Declared;
 import io.github.eschizoid.telescope.introspection.OpticNode.Dispatched;
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
@@ -90,6 +91,11 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(Declared.class::isInstance).map(Declared.class::cast).findFirst();
   }
 
+  /** How each collection the mapper writes is tied to its owner, in trail order. */
+  public List<CollectionWrite> collections() {
+    return nodes.stream().filter(CollectionWrite.class::isInstance).map(CollectionWrite.class::cast).toList();
+  }
+
   /** The navigation steps of a path, in trail order. */
   public List<Hop> hops() {
     return nodes.stream().filter(Hop.class::isInstance).map(Hop.class::cast).toList();
@@ -143,6 +149,7 @@ public record OpticReport(List<OpticNode> nodes) {
     );
     section(blocks, "Unused sources", unused, u -> row("•", u.field(), leftWidth, ""));
     section(blocks, "Cases", dispatched, d -> row("•", caseCell(d), leftWidth, "→ " + d.targetCase().getSimpleName()));
+    section(blocks, "Collections", collections(), c -> "  • " + c);
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
     final var hops = hops();
     if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));

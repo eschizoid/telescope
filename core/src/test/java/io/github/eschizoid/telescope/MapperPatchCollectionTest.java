@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -131,7 +131,8 @@ class MapperPatchCollectionTest {
   @Test
   @DisplayName("a collection the rebuild fills through its adders goes into the new bean's own, and the base keeps its")
   void leavesAnAdderFilledCollectionAlone() {
-    final var mapper = Telescope.mapper(AddedShelf.class, TagsPatch.class, writeBean(AddedShelf.class, ADDERS));
+    // A bean with no setter offers no strategy the shared order takes, so the row names SETTERS.
+    final var mapper = Telescope.mapper(AddedShelf.class, TagsPatch.class, writeBean(AddedShelf.class, SETTERS));
     final var base = new AddedShelf();
     base.addTag("stale");
     final var patched = mapper.patch(base, new TagsPatch(List.of("x")));

@@ -2,7 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 /**
  * Override for the POJO construction strategy that {@link Bridge} codegen chooses when emitting
- * forward/backward bodies. Mirrors the runtime {@code WriteHint.writeBean(cls, strategy)} hint.
+ * forward/backward bodies. Mirrors the runtime {@code Mapping.writeBean(cls, strategy)} row.
  *
  * <p>Records always use their canonical constructor and ignore this setting. For POJOs, the default
  * {@link #AUTO} runs the priority ladder: static {@code builder()} method → name-matched
@@ -43,18 +43,8 @@ public enum WriteStrategy {
    * the generated bridge can call (public, or not private and declared in the package the bridge is
    * emitted into) and a public {@code setX(...)} per bridge field. The canonical JavaBeans /
    * Hibernate entity shape, and the way to keep setter writes on a POJO that also offers a builder
-   * or a name-matched constructor, which {@link #AUTO} would prefer.
+   * or a name-matched constructor, which {@link #AUTO} would prefer. A collection whose elements
+   * the bridge converts goes through the POJO's adder instead, where it has one.
    */
   SETTERS,
-
-  /**
-   * As {@link #SETTERS}, except that each collection property a field of its name stores is filled
-   * one element at a time through its adder, a public instance method taking the collection's
-   * element: {@code addLine} for {@code lines}. The collection needs no setter, which is the shape
-   * of an entity that wires the back-reference of a bidirectional association in its adder. A
-   * target with such a collection and no adder for it is a compile error naming the property, and
-   * the generated {@code into} fills the collection the target holds through the adder too, after
-   * clearing it. Mirrors the runtime {@code WriteHint.writeBean(cls, ADDERS)}.
-   */
-  ADDERS,
 }

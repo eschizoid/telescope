@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
@@ -221,5 +222,15 @@ public interface BridgeFn<A, B> {
    */
   default ContainerCopy.Elements sourceWrite() {
     return null;
+  }
+
+  /**
+   * Codegen-support seam: how the bridge writes each collection of its pair, as the nodes {@code
+   * explain()} reports for a mapper over the same rows. Empty by default.
+   *
+   * @return the nodes, one per collection
+   */
+  default List<OpticNode> collectionWrites() {
+    return List.of();
   }
 }

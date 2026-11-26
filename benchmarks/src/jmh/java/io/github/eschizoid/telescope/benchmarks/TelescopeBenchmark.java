@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.benchmarks;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.concurrent.TimeUnit;

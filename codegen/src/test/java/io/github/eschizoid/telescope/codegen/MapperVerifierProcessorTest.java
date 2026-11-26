@@ -1569,8 +1569,8 @@ class MapperVerifierProcessorTest {
       final var compilation = verify(
         """
         package demo;
-        import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-        import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+        import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
+        import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.conversion.Mapper;
         record Src(String a) {}

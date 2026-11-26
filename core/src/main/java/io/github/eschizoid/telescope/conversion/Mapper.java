@@ -5,7 +5,6 @@ import io.github.eschizoid.telescope.internal.AdderCalls;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
-import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
@@ -14,7 +13,6 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -59,6 +57,10 @@ public class Mapper<A, B> {
    * for the source property {@link #patchInto} writes. Either is null, or gives null, where the
    * elements are not written in place. Each is asked every time its property is written, so one
    * that builds the conversion remembers what it built.
+   *
+   * <p>{@code intoTie} and {@code patchIntoTie} say, for a collection, how its elements are tied to
+   * the owner {@link #into} and {@link #patchInto} write them into; null where the mapper decided
+   * nothing for it.
    */
   public record PatchEntry(
     String sourceField,
@@ -66,13 +68,24 @@ public class Mapper<A, B> {
     BiFunction<Object, Object, Object> overlay,
     Function<Object, Object> read,
     Supplier<ContainerCopy.Elements> intoElements,
-    Supplier<ContainerCopy.Elements> patchIntoElements
+    Supplier<ContainerCopy.Elements> patchIntoElements,
+    Tie intoTie,
+    Tie patchIntoTie
   ) {
     /** An entry whose value only ever converts into {@code sourceField}. */
     public PatchEntry(final String sourceField, final Function<Object, Object> backward) {
-      this(sourceField, backward, null, null, null, null);
+      this(sourceField, backward, null, null, null, null, null, null);
     }
   }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> How the elements of one collection property are
+   * tied to the owner a write puts them into: whether they go through the owner's adder and
+   * remover, found for the class written into, which elements the conversion builds and values do,
+   * and the element's back-reference the mapper decided for them, read and written. Mutable beans
+   * handed across as the source holds them go through neither.
+   */
+  public record Tie(boolean throughMembers, Function<Object, Object> backRead, BiConsumer<Object, Object> backWrite) {}
 
   /**
    * <b>Module-internal seam — NOT public API.</b> One case of a mapper between two sealed
@@ -100,6 +113,9 @@ public class Mapper<A, B> {
   // The accessors patchInto writes each property of one target class through, bound the first time
   // a partial sends the property.
   private volatile PatchIntoPlan patchIntoPlan;
+  // Whether into, and patchInto, fill a collection of each class written into through its adder.
+  private final Map<Class<?>, Boolean> intoAdds = new ConcurrentHashMap<>();
+  private final Map<Class<?>, Boolean> patchIntoAdds = new ConcurrentHashMap<>();
   private final Map<String, PatchEntry> patchByTargetField;
   // Non-null for a mapper between two sealed interfaces, one entry per case of the source: patch
   // and into hand a value to the mapper of the case it belongs to.
@@ -804,21 +820,15 @@ public class Mapper<A, B> {
         sourceClass.getName() +
         " is an enum or a class no write strategy can build."
     );
-    final var adders = patchIntoPlan(Beans.persistentClassOf(target)).adders();
     final var sent = new LinkedHashSet<String>();
     // The value read from is built with no adder of the target class run on it, so each adder runs
     // once per element, on the target, as into does.
-    final Object produced;
-    final Map<String, Object> deferred;
-    if (adders.isEmpty()) {
-      produced = overlaid(target, partial, sent);
-      deferred = null;
-    } else {
-      final var built = AdderCalls.deferring(sourceClass, () -> overlaid(target, partial, sent));
-      produced = built.value();
-      deferred = built.elements();
+    if (!addsThroughAdders(Beans.persistentClassOf(target), true)) {
+      writeSent(target, sent, overlaid(target, partial, sent), null, partial);
+      return target;
     }
-    writeSent(target, sent, produced, deferred, partial);
+    final var built = AdderCalls.deferring(sourceClass, () -> overlaid(target, partial, sent));
+    writeSent(target, sent, built.value(), built.elements(), partial);
     return target;
   }
 
@@ -826,7 +836,7 @@ public class Mapper<A, B> {
   private PatchIntoPlan patchIntoPlan(final Class<?> writeClass) {
     final var known = patchIntoPlan;
     if (known != null && known.writeClass() == writeClass) return known;
-    final var plan = new PatchIntoPlan(writeClass, patchIntoAdders(writeClass), new ConcurrentHashMap<>());
+    final var plan = new PatchIntoPlan(writeClass, new ConcurrentHashMap<>());
     patchIntoPlan = plan;
     return plan;
   }
@@ -847,7 +857,6 @@ public class Mapper<A, B> {
     if (sent.isEmpty()) return;
     final var writeClass = Beans.persistentClassOf(target);
     final var plan = patchIntoPlan(writeClass);
-    final var adders = plan.adders();
     final var readClass = Beans.persistentClassOf(produced);
     final var slots = new IntoSlot[sent.size()];
     final var staged = new Object[slots.length];
@@ -857,12 +866,13 @@ public class Mapper<A, B> {
       // that sends the property, and never on one that leaves it out.
       final var slot =
         readClass == writeClass
-          ? plan
-              .slots()
-              .computeIfAbsent(name, n -> intoSlot(Beans.capturedReader(readClass, n), writeClass, n, adders, true))
-          : intoSlot(Beans.capturedReader(readClass, name), writeClass, name, adders, true);
+          ? plan.slots().computeIfAbsent(name, n -> intoSlot(Beans.capturedReader(readClass, n), writeClass, n, true))
+          : intoSlot(Beans.capturedReader(readClass, name), writeClass, name, true);
       slots[i] = slot;
-      staged[i] = slot.adder() != null && deferred != null ? deferred.get(name) : slot.read().apply(produced);
+      staged[i] =
+        slot.adds() && deferred != null && deferred.containsKey(name)
+          ? deferred.get(name)
+          : slot.read().apply(produced);
       i++;
     }
     writeSlots(target, writeClass, slots, staged, from);
@@ -876,17 +886,6 @@ public class Mapper<A, B> {
         PairingMessages.className(written)
       )
     );
-  }
-
-  /**
-   * The adder each collection property of a {@code writeClass} target of {@link #patchInto} is
-   * filled through, where the mapper builds {@code A} through the adders strategy, and none
-   * otherwise.
-   */
-  private Map<String, BiConsumer<Object, Object>> patchIntoAdders(final Class<?> writeClass) {
-    final var writer = sourceRefl.writerFor(sourceClass);
-    if (writer == null || Beans.strategyOf(writer) != BeanWriteStrategy.ADDERS) return Map.of();
-    return Beans.adders(writeClass);
   }
 
   /**
@@ -987,14 +986,22 @@ public class Mapper<A, B> {
    * so a refused call leaves the target's other properties as they were. The refill goes through
    * {@link ContainerCopy}, whose {@link ContainerCopy.Policy} a module can replace.
    *
-   * <p><b>Adders.</b> Where the mapper builds the target class through {@code writeBean(...,
-   * ADDERS)} or {@code writeBeans(ADDERS)}, each collection a field of its name stores is cleared
-   * and then filled one element at a time through its adder ({@code addLine} for {@code lines}),
-   * which needs no setter for it. The value {@code forward} builds for {@code into} to read from
-   * runs none of its adders, so each adder runs exactly once per element, on {@code target}, and an
-   * adder that changes or drops an element leaves {@code target} as {@code forward} would build it.
-   * An adder that rejects an element by throwing has its exception thrown on, once the collection
-   * the target holds has its elements back; the setter never writes the collection past it.
+   * <p><b>Adders, removers and back-references.</b> A collection is cleared and then filled one
+   * element at a time through the target's adder where it has one: a public method whose name
+   * starts with {@code add}, taking the element class, or a wider class than {@code Object} where
+   * it is named for the collection, and returning nothing or the owner, which needs no setter for
+   * the collection. Mutable beans a same-typed collection hands across unconverted go through no
+   * adder or remover and are never pointed back; values, such as strings, records and enums, do go
+   * through them. The value {@code forward} builds for {@code into} to read from runs none of its
+   * adders, so each adder runs exactly once per element, on {@code target}, and an adder that
+   * changes or drops an element leaves {@code target} as {@code forward} would build it. An adder
+   * that rejects an element by throwing has its exception thrown on, once the collection the target
+   * holds has its elements back; the setter never writes the collection past it. Where no adder
+   * sets it, every element the target holds afterwards has its back-reference set to {@code
+   * target}: the property a {@code backReference} row names, else the one
+   * {@code @OneToMany(mappedBy)} names with {@code telescope-jpa}, else none. Each element the
+   * write takes out goes through the target's remover where it has one, and otherwise has that
+   * back-reference cleared where it still points at {@code target}.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
@@ -1029,7 +1036,7 @@ public class Mapper<A, B> {
     // builds, so each adder runs once per element, on the target. Between two sealed interfaces
     // the mapper that writes the target is its case's.
     final var writer = writerOf(target);
-    if (writer != null && !writer.intoAdders(Beans.persistentClassOf(target)).isEmpty()) {
+    if (writer != null && writer.addsThroughAdders(Beans.persistentClassOf(target), false)) {
       final var deferred = AdderCalls.deferring(writer.targetClass, () -> forward(source));
       return writeInto(target, deferred.value(), deferred.elements(), source);
     }
@@ -1108,17 +1115,19 @@ public class Mapper<A, B> {
       // every mapped property rather than failing. Readers are never bound here: there is nothing
       // to read from.
       final var names = intoNames();
-      final var adders = intoAdders(writeClass);
       final var slots = new IntoSlot[names.size()];
       var i = 0;
-      for (final var name : names) slots[i++] = intoSlot(null, writeClass, name, adders);
+      for (final var name : names) slots[i++] = intoSlot(null, writeClass, name, false);
       return writeSlots(target, writeClass, slots, new Object[slots.length], from);
     }
     final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
     final var staged = new Object[slots.length];
     for (var i = 0; i < slots.length; i++) {
       final var slot = slots[i];
-      staged[i] = slot.adder() != null && deferred != null ? deferred.get(slot.name()) : slot.read().apply(produced);
+      staged[i] =
+        slot.adds() && deferred != null && deferred.containsKey(slot.name())
+          ? deferred.get(slot.name())
+          : slot.read().apply(produced);
     }
     return writeSlots(target, writeClass, slots, staged, from);
   }
@@ -1127,12 +1136,13 @@ public class Mapper<A, B> {
    * Write each of {@code staged}, the values {@code forward} gave the properties {@code slots}
    * name, into {@code target}, a container property as {@link ContainerCopy} decides for both
    * paths: refilled in the container the target holds where that can be changed, so it keeps its
-   * identity, through the adder under the adders strategy, and otherwise written through the
-   * setter. Every container the target holds is read, and one nothing can write refused by name,
-   * before the first write. Container properties are written before every other property, those
-   * with no setter first, so a container found unchangeable only when it is written leaves every
-   * other property as it was. {@code from} is the value whose containers {@code staged}'s were
-   * converted from, or null where it is not known.
+   * identity, through the owner's adder where it has one, and otherwise written through the setter,
+   * each collection's elements tied to the target as its links say. Every container the target
+   * holds is read, and one nothing can write refused by name, before the first write. Container
+   * properties are written before every other property, those with no setter first, so a container
+   * found unchangeable only when it is written leaves every other property as it was. {@code from}
+   * is the value whose containers {@code staged}'s were converted from, or null where it is not
+   * known.
    */
   @SuppressWarnings("unchecked")
   private <T> T writeSlots(
@@ -1160,7 +1170,7 @@ public class Mapper<A, B> {
         held[i],
         staged[i],
         slot.write() != null,
-        slot.adder() != null,
+        slot.links(),
         source,
         targetName,
         PairingMessages.className(writeClass),
@@ -1179,33 +1189,19 @@ public class Mapper<A, B> {
           slot.write().accept(target, staged[i]);
           continue;
         }
-        final var written =
-          slot.adder() != null
-            ? ContainerCopy.fill(
-                source,
-                targetName,
-                target,
-                slot.name(),
-                held[i],
-                (Collection<Object>) staged[i],
-                slot.adder(),
-                slot.write() != null,
-                slot.elements(),
-                slot.sentFrom(from),
-                prepared[i]
-              )
-            : ContainerCopy.refill(
-                source,
-                targetName,
-                target,
-                slot.name(),
-                held[i],
-                staged[i],
-                slot.write() != null,
-                slot.elements(),
-                slot.sentFrom(from),
-                prepared[i]
-              );
+        final var written = ContainerCopy.refill(
+          source,
+          targetName,
+          target,
+          slot.name(),
+          held[i],
+          staged[i],
+          slot.write() != null,
+          slot.links(),
+          slot.elements(),
+          slot.sentFrom(from),
+          prepared[i]
+        );
         if (!written) slot.write().accept(target, staged[i]);
       }
     }
@@ -1340,7 +1336,7 @@ public class Mapper<A, B> {
           slot.held().apply(target),
           slot.read().apply(produced),
           slot.write() != null,
-          false,
+          slot.links(),
           sourceClass.getSimpleName(),
           targetClass.getSimpleName(),
           PairingMessages.className(writeClass),
@@ -1380,7 +1376,7 @@ public class Mapper<A, B> {
     final var built = new IntoSlot[names.size()];
     var i = 0;
     for (final var name : names)
-      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, Map.of(), true).copying(
+      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, true).copying(
         readClass,
         writeClass
       );
@@ -1396,7 +1392,7 @@ public class Mapper<A, B> {
    */
   private boolean writesConverted() {
     if (patchByTargetField == null || cases != null || targetClass.isRecord()) return false;
-    if (!intoAdders(targetClass).isEmpty()) return false;
+    if (addsThroughAdders(targetClass, false)) return false;
     try {
       intoSlots(targetClass, targetClass);
       return true;
@@ -1411,7 +1407,7 @@ public class Mapper<A, B> {
    */
   private boolean writesConvertedBack() {
     if (patchByTargetField == null || cases != null || sourceClass.isRecord()) return false;
-    if (!patchIntoAdders(sourceClass).isEmpty()) return false;
+    if (addsThroughAdders(sourceClass, true)) return false;
     for (final var entry : patchByTargetField.values()) if (entry.overlay() != null) return false;
     try {
       backSlots(sourceClass, sourceClass);
@@ -1422,44 +1418,81 @@ public class Mapper<A, B> {
   }
 
   /**
-   * The adder each collection property of a {@code writeClass} target is filled through, where the
-   * mapper builds its target class through the adders strategy, and none otherwise.
+   * Whether {@link #into}, or where {@code patchInto} is true {@link #patchInto}, fills a
+   * collection of a {@code writeClass} target through its adder, so the value it reads from is
+   * built with none of that class's adders run on it.
    */
-  private Map<String, BiConsumer<Object, Object>> intoAdders(final Class<?> writeClass) {
-    final var writer = targetRefl.writerFor(targetClass);
-    if (writer == null || Beans.strategyOf(writer) != BeanWriteStrategy.ADDERS) return Map.of();
-    return Beans.adders(writeClass);
+  private boolean addsThroughAdders(final Class<?> writeClass, final boolean patchInto) {
+    if (patchByTargetField == null) return false;
+    final var known = patchInto ? patchIntoAdds : intoAdds;
+    final var cached = known.get(writeClass);
+    if (cached != null) return cached;
+    var adds = false;
+    for (final var entry : patchByTargetField.entrySet()) {
+      final var name = patchInto ? entry.getValue().sourceField() : entry.getKey();
+      if (name == null || (!patchInto && entry.getValue().read() != null)) continue;
+      final var tie = patchInto ? entry.getValue().patchIntoTie() : entry.getValue().intoTie();
+      if ((tie == null || tie.throughMembers()) && Beans.collectionMembers(writeClass, name).adder() != null) adds =
+        true;
+    }
+    known.put(writeClass, adds);
+    return adds;
+  }
+
+  /**
+   * The {@link Tie} of collection property {@code name}: of the target, which {@link #into} writes,
+   * or, where {@code patchInto} is true, of the source, which {@link #patchInto} writes.
+   */
+  private Tie tieOf(final String name, final boolean patchInto) {
+    if (patchByTargetField == null) return null;
+    if (!patchInto) {
+      final var entry = patchByTargetField.get(name);
+      return entry == null ? null : entry.intoTie();
+    }
+    for (final var entry : patchByTargetField.values())
+      if (name.equals(entry.sourceField()) && entry.patchIntoTie() != null) return entry.patchIntoTie();
+    return null;
+  }
+
+  /**
+   * How the elements of collection property {@code name} of a {@code writeClass} target are tied to
+   * it: the class's adder and remover, for elements the conversion builds and for values, each
+   * refused by name where the class's methods leave it undecided, and the back-reference the mapper
+   * decided. Null for a property that is no collection, and where nothing ties its elements.
+   */
+  private ContainerCopy.Links linksOf(final Class<?> writeClass, final String name, final boolean patchInto) {
+    if (Beans.collectionElement(writeClass, name) == null) return null;
+    final var tie = tieOf(name, patchInto);
+    final var members =
+      tie == null || tie.throughMembers() ? Beans.collectionMembers(writeClass, name) : Beans.Members.NONE;
+    if (members.refusal() != null) throw new IllegalArgumentException(members.refusal());
+    final var adder = members.adder();
+    final var backRead = tie == null ? null : tie.backRead();
+    final var backWrite = tie == null ? null : tie.backWrite();
+    if (adder == null && members.remover() == null && backWrite == null) return null;
+    return ContainerCopy.links(Beans.capturedReader(writeClass, name), adder, members.remover(), backRead, backWrite);
   }
 
   /**
    * The accessors {@link #into} writes property {@code name} of a {@code writeClass} target with:
-   * for a container it refills in place, its getter, its adder where {@code adders} has one, and
-   * its setter where the class has one; for any other property its setter, which it has to have.
+   * for a container it refills in place, its getter, how its elements are tied to the target, and
+   * its setter where the class has one; for any other property its setter, which it has to have. A
+   * property with no setter is refused in {@link #patchInto}'s words where {@code patchInto} is
+   * true.
    */
   private IntoSlot intoSlot(
     final Function<Object, Object> read,
     final Class<?> writeClass,
     final String name,
-    final Map<String, BiConsumer<Object, Object>> adders
-  ) {
-    return intoSlot(read, writeClass, name, adders, false);
-  }
-
-  /** As above, refusing a property with no setter in {@link #patchInto}'s words where it writes. */
-  private IntoSlot intoSlot(
-    final Function<Object, Object> read,
-    final Class<?> writeClass,
-    final String name,
-    final Map<String, BiConsumer<Object, Object>> adders,
     final boolean patchInto
   ) {
-    final var adder = adders.get(name);
-    if (adder != null || Beans.refilledInPlace(writeClass, name)) return new IntoSlot(
+    final var links = linksOf(writeClass, name, patchInto);
+    if ((links != null && links.throughAdder()) || Beans.refilledInPlace(writeClass, name)) return new IntoSlot(
       name,
       read,
       Beans.capturedWriter(writeClass, name),
       Beans.capturedReader(writeClass, name),
-      adder,
+      links,
       elementsOf(name, patchInto),
       sentReaderOf(name, patchInto),
       null
@@ -1486,16 +1519,17 @@ public class Mapper<A, B> {
   /**
    * One target property's bound accessors, resolved once per mapper: the reader of {@code
    * forward}'s result, the setter, and for a container {@code into} refills in place the reader of
-   * the container the target holds. A container may have no setter, and under the adders strategy a
-   * collection has its adder. A container has the conversion of its elements where they are written
-   * in place, and the reader of the source's container its value was converted from.
+   * the container the target holds. A container may have no setter, and a collection has the links
+   * that tie its elements to the target: its adder, its remover and their back-reference. A
+   * container has the conversion of its elements where they are written in place, and the reader of
+   * the source's container its value was converted from.
    */
   private record IntoSlot(
     String name,
     Function<Object, Object> read,
     BiConsumer<Object, Object> write,
     Function<Object, Object> held,
-    BiConsumer<Object, Object> adder,
+    ContainerCopy.Links links,
     Supplier<ContainerCopy.Elements> elementsGiven,
     Function<Object, Object> sent,
     BiConsumer<Object, Object> copy
@@ -1510,6 +1544,11 @@ public class Mapper<A, B> {
       return copier == null ? this : new IntoSlot(name, read, write, null, null, null, null, copier);
     }
 
+    /** Whether each new element goes through the owner's adder. */
+    boolean adds() {
+      return links != null && links.throughAdder();
+    }
+
     /** The conversion of the elements where they are written in place, or null. */
     ContainerCopy.Elements elements() {
       return elementsGiven == null ? null : elementsGiven.get();
@@ -1521,12 +1560,8 @@ public class Mapper<A, B> {
     }
   }
 
-  /** The target class {@link #patchInto}'s bound slots and adders are valid for. */
-  private record PatchIntoPlan(
-    Class<?> writeClass,
-    Map<String, BiConsumer<Object, Object>> adders,
-    ConcurrentHashMap<String, IntoSlot> slots
-  ) {}
+  /** The target class {@link #patchInto}'s bound slots are valid for. */
+  private record PatchIntoPlan(Class<?> writeClass, ConcurrentHashMap<String, IntoSlot> slots) {}
 
   /** The class pair a bound slot array is valid for, alongside the array. */
   private record IntoPlan(Class<?> readClass, Class<?> writeClass, IntoSlot[] slots) {}
@@ -1567,11 +1602,10 @@ public class Mapper<A, B> {
     final var cached = intoPlan;
     if (cached != null && cached.readClass() == readClass && cached.writeClass() == writeClass) return cached.slots();
     final var names = intoNames();
-    final var adders = intoAdders(writeClass);
     final var built = new IntoSlot[names.size()];
     var i = 0;
     for (final var name : names)
-      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, adders).copying(
+      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, false).copying(
         readClass,
         writeClass
       );

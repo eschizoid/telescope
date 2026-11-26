@@ -1141,10 +1141,10 @@ public sealed class Telescope<
    *       transform
    *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)
    *       via(src, tgt, mapper)} — nested mapper
-   *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean(Class,
-   *       io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy) writeBean(target,
-   *       strategy)} — per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an
-   *       immutable all-args-only POJO that {@code Beans.autoWriter} refuses)
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#writeBean(Class,
+   *       io.github.eschizoid.telescope.mapping.WriteStrategy) writeBean(target, strategy)} —
+   *       per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an immutable
+   *       all-args-only POJO that {@code Beans.autoWriter} refuses)
    * </ul>
    *
    * @param source the source root class — record or POJO (root of the recursion)

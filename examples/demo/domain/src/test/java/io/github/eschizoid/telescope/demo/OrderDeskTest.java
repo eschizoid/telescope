@@ -136,6 +136,15 @@ class OrderDeskTest {
   }
 
   @Test
+  @DisplayName("a PATCH that sends a tag twice stores it once, through addTag, in the list the order holds")
+  void aPatchStoresEachTagOnce() {
+    final var order = desk.get("SO-1001");
+    final var heldTags = order.getTags();
+    desk.change("SO-1001", new OrderChanges(null, null, null, List.of("rush", "gift", "rush"), null));
+    assertThat(order.getTags()).isSameAs(heldTags).containsExactly("rush", "gift");
+  }
+
+  @Test
   @DisplayName("a version 2 request maps to the service's request, items converted by hand-written methods")
   void aVersionTwoRequestMapsToPlaceOrder() {
     final var placed = desk.place(

@@ -1,9 +1,9 @@
 package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.Telescope.path;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -204,7 +204,8 @@ class MapperPatchIntoTest {
   @Test
   @DisplayName("fills a collection through its adder, once per element")
   void fillsThroughTheAdder() {
-    final var mapper = Telescope.mapper(AddedShelf.class, TagChanges.class, writeBean(AddedShelf.class, ADDERS));
+    // A bean with no setter offers no strategy the shared order takes, so the row names SETTERS.
+    final var mapper = Telescope.mapper(AddedShelf.class, TagChanges.class, writeBean(AddedShelf.class, SETTERS));
     final var target = new AddedShelf();
     target.getTags().add("stale");
     mapper.patchInto(target, new TagChanges(List.of("x")));

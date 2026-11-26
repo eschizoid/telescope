@@ -3,8 +3,9 @@ package io.github.eschizoid.telescope.mapping;
 import io.github.eschizoid.telescope.Telescope;
 
 /**
- * Per-target write-strategy override consumed by {@link Telescope#map(Class, Class, MapStep...)}.
- * Tells the deep-mapping engine which {@code Beans.BeanWriter} strategy to use when constructing an
+ * Per-target write-strategy override consumed by {@link Telescope#map(Class, Class, MapStep...)},
+ * built by {@link Mapping#writeBean(Class, WriteStrategy)} and {@link Mapping#writeBeans}. Tells
+ * the deep-mapping engine which {@code Beans.BeanWriter} strategy to use when constructing an
  * instance of {@code B}, overriding the auto-detected strategy from {@code Beans.autoWriter}.
  *
  * <p>With no hint, a bean is built through the first of these it offers: a static {@code
@@ -18,9 +19,7 @@ import io.github.eschizoid.telescope.Telescope;
  * class that also has a builder).
  *
  * <pre>{@code
- * import static io.github.eschizoid.telescope.mapping.Mapping.to;
- * import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
- * import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+ * import static io.github.eschizoid.telescope.mapping.Mapping.*;
  *
  * final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
  *     OrderRecord.class, OrderPojo.class,
@@ -49,90 +48,22 @@ import io.github.eschizoid.telescope.Telescope;
  */
 public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWriteHint, WriteHint.DefaultWriteHint {
   /**
-   * The {@code Beans.BeanWriter} strategies available for explicit selection.
-   *
-   * <ul>
-   *   <li>{@link #BUILDER} — requires a static {@code builder()} method on the target
-   *   <li>{@link #SETTERS} — requires a no-arg constructor and public {@code setX(value)} setters
-   *   <li>{@link #CONSTRUCTOR} — uses the all-args constructor; matches arguments by parameter name
-   *       when the names are known, from {@code -parameters} or from {@code -g}, and every one
-   *       names a property; by position when the names are unknown or none names a property. A
-   *       constructor only some of whose known names are properties is refused when the mapper is
-   *       built. Inside a native image the names {@code -g} keeps cannot be read, so compile with
-   *       {@code -parameters} to get this check there
-   *   <li>{@link #ADDERS} — as {@link #SETTERS}, except that each collection property a field of
-   *       its name stores is filled one element at a time through its adder: {@code addLine} for
-   *       {@code lines}, {@code addCategory} for {@code categories}, {@code addAddress} for {@code
-   *       addresses}. The adder is a public instance method taking the collection's element, which
-   *       is how an entity wires the back-reference of a bidirectional association, and the
-   *       collection needs no setter. A target with such a collection and no adder for it is
-   *       refused by name when the mapper is built. {@code Mapper.into} fills the collection the
-   *       target holds through the adder too, after clearing it
-   * </ul>
-   */
-  enum WriteStrategy {
-    BUILDER,
-    SETTERS,
-    CONSTRUCTOR,
-    ADDERS,
-  }
-
-  /**
-   * Declare that {@code target} should be constructed via {@code strategy} during deep mapping,
-   * overriding the auto-detected choice.
-   */
-  static <B> WriteHint<B> writeBean(final Class<B> target, final WriteStrategy strategy) {
-    return new BeanWriteHint<>(target, strategy);
-  }
-
-  /**
-   * Declare a <em>default</em> write strategy applied to every bean target encountered during deep
-   * mapping that does not have a more specific {@link #writeBean(Class, WriteStrategy)} hint. One
-   * row replaces N per-class enumerations when every target shares the same strategy (e.g., pinning
-   * SETTERS across an entire JPA-entity tree so Hibernate's identity assignment fires on every
-   * level).
-   *
-   * <pre>{@code
-   * Telescope.mapper(
-   *     Order.class, OrderEntity.class,
-   *     writeBeans(SETTERS),                        // default for OrderEntity, CustomerEntity,
-   *                                                 // LineItemEntity, AddressEmbeddable, …
-   *     writeBean(CashRegisterEntity.class, BUILDER) // override on one specific target
-   * );
-   * }</pre>
-   *
-   * <p>At most one {@code writeBeans(...)} default may appear per {@code Telescope.map(...)} call.
-   * Per-class {@code writeBean(X.class, …)} rows always win for class {@code X}. A default strategy
-   * that cannot build a bean the mapper builds (e.g., {@code BUILDER} on a class with no static
-   * {@code builder()}) is refused when the mapper is built, as a {@code writeBean} hint naming one
-   * is. A bean the mapper never builds, such as the source of a mapper that converts forward only,
-   * is not held to it.
-   *
-   * <p>The default is a mapper-wide runtime-only setting. A mapper-wide runtime-only setting walks
-   * every pair, sealed cases included, so the settings of a nested pair's or a case's own bridge do
-   * not apply under it.
-   */
-  static WriteHint<?> writeBeans(final WriteStrategy strategy) {
-    return new DefaultWriteHint(strategy);
-  }
-
-  /**
    * The target class this hint applies to — used to key the per-class strategy lookup. {@code null}
-   * for a {@link #writeBeans(WriteStrategy)} default hint, which applies to every encountered bean
-   * target instead of one specific class.
+   * for a {@link Mapping#writeBeans(WriteStrategy)} default hint, which applies to every
+   * encountered bean target instead of one specific class.
    */
   Class<B> targetClass();
 
   /** The chosen write strategy for {@link #targetClass()}. */
   WriteStrategy strategy();
 
-  /** Package-private record impl; users construct via {@link #writeBean}. */
+  /** Package-private record impl; users construct via {@link Mapping#writeBean}. */
   record BeanWriteHint<B>(Class<B> targetClass, WriteStrategy strategy) implements WriteHint<B> {}
 
   /**
-   * Package-private record impl for {@link #writeBeans(WriteStrategy)}. Carries no target class
-   * (the strategy applies to every encountered bean target lacking a per-class override); {@link
-   * #targetClass()} returns {@code null} as the sentinel.
+   * Package-private record impl for {@link Mapping#writeBeans(WriteStrategy)}. Carries no target
+   * class (the strategy applies to every encountered bean target lacking a per-class override);
+   * {@link #targetClass()} returns {@code null} as the sentinel.
    */
   record DefaultWriteHint(WriteStrategy strategy) implements WriteHint<Object> {
     @Override

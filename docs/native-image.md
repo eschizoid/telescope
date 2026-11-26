@@ -22,7 +22,7 @@ native-image is what we verify. Each step prints `PASS` / `FAIL` and the process
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | Public view, summary, version 2 view       | `@Bridge` mapper fields found by `StackWalker` and `ServiceLoader`, the generated `OrderMappings`, sealed cases |
 | Version 2 request forward, backward, patch | a `@Bridge` field over records with no registration, its `via` methods called by name and never decoded         |
-| New order, PATCH                           | the generated bridge's adder calls under `ADDERS`, and its generated `into` refilling the held list             |
+| New order, PATCH                           | the generated bridge's adder calls, found by type, and its generated `into` refilling the held list             |
 | Partner import                             | the reflection-free generated `@FromMap` binder — the control (no LMF, no `SerializedLambda`)                   |
 | Import trace                               | a runtime `Telescope.fromMap(...)` finding each line's generated binder through its `ServiceLoader` entry       |
 | Partner JSON                               | the binder `@FromJson` generates, checked against the runtime `JsonBinder` building each record reflectively    |

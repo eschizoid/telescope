@@ -1,11 +1,11 @@
 package io.github.eschizoid.telescope.codegen.ctorbox;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 
 /** The runtime mapper from {@link CityMappers}'s rows, built where no provider answers for them. */
 public final class CityRuntime {

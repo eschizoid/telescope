@@ -1,17 +1,13 @@
 package io.github.eschizoid.telescope;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ContainerCopy;
-import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
-import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -157,7 +153,7 @@ class MapperIntoCollectionTest {
     @DisplayName("a source that hands the target's own collection across leaves it as it is")
     void theSameContainerOnBothSidesIsLeftAlone() {
       final var shared = new ArrayList<>(List.of("x"));
-      assertTrue(ContainerCopy.refill("S", "T", new Object(), "tags", shared, shared, true, null, null, null));
+      assertTrue(ContainerCopy.refill("S", "T", new Object(), "tags", shared, shared, true, null, null, null, null));
       assertEquals(List.of("x"), shared);
     }
   }
@@ -247,13 +243,13 @@ class MapperIntoCollectionTest {
   private static final Order ORDER = new Order("o", List.of(new Line("a"), new Line("b")));
 
   @Nested
-  @DisplayName("Adders — a collection filled one element at a time through its adder")
+  @DisplayName("Adders — a collection goes through the owner's adder wherever it has one")
   class Adders {
 
     @Test
-    @DisplayName("forward fills the collection through the adder, which wires each back-reference")
+    @DisplayName("forward fills the collection through the adder, with no row naming it, and each line points back")
     void forwardFillsThroughTheAdder() {
-      final var mapper = Telescope.mapper(Order.class, OrderEntity.class, writeBean(OrderEntity.class, ADDERS));
+      final var mapper = Telescope.mapper(Order.class, OrderEntity.class);
       final var entity = mapper.forward(ORDER);
       assertEquals(List.of("a", "b"), entity.getLines().stream().map(LineEntity::getSku).toList());
       for (final var line : entity.getLines()) assertSame(entity, line.getOrder());
@@ -262,7 +258,7 @@ class MapperIntoCollectionTest {
     @Test
     @DisplayName("into clears the collection the target holds and fills it through the adder")
     void intoFillsTheHeldCollectionThroughTheAdder() {
-      final var mapper = Telescope.mapper(Order.class, OrderEntity.class, writeBean(OrderEntity.class, ADDERS));
+      final var mapper = Telescope.mapper(Order.class, OrderEntity.class);
       final var entity = new OrderEntity();
       final var stale = new LineEntity();
       stale.setSku("stale");
@@ -276,44 +272,28 @@ class MapperIntoCollectionTest {
     }
 
     @Test
-    @DisplayName("a writeBeans default of adders fills the target's collection the same way")
-    void aDefaultOfAddersFillsThroughTheAdder() {
-      final var mapper = Telescope.mapper(Order.class, OrderEntity.class, writeBeans(ADDERS));
+    @DisplayName("a writeBeans default of setters fills the target's collection through the adder the same way")
+    void aSettersDefaultFillsThroughTheAdder() {
+      final var mapper = Telescope.mapper(Order.class, OrderEntity.class, writeBeans(SETTERS));
       final var entity = mapper.forward(ORDER);
       for (final var line : entity.getLines()) assertSame(entity, line.getOrder());
     }
 
     @Test
-    @DisplayName("a target whose collection has no adder is refused by name when the mapper is built")
-    void aMissingAdderIsRefusedWhenTheMapperIsBuilt() {
-      final var thrown = assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(Order.class, AdderlessEntity.class, writeBean(AdderlessEntity.class, ADDERS))
-      );
-      assertEquals(
-        PairingMessages.adderMissing("AdderlessEntity", "lines", "LineEntity", CollectionWrites.adderNames("lines")),
-        thrown.getMessage()
-      );
+    @DisplayName("a target whose collection has no adder is written through its setter, with nothing to refuse")
+    void aTargetWithNoAdderIsWrittenThroughItsSetter() {
+      final var entity = Telescope.mapper(Order.class, AdderlessEntity.class).forward(ORDER);
+      assertEquals(List.of("a", "b"), entity.getLines().stream().map(LineEntity::getSku).toList());
+      for (final var line : entity.getLines()) assertNull(line.getOrder());
     }
 
     @Test
-    @DisplayName("a writeBeans default of adders reaching a target with no adder is refused by name")
-    void aDefaultReachingAMissingAdderIsRefused() {
-      final var thrown = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.mapper(Order.class, AdderlessEntity.class, writeBeans(ADDERS))
-      );
+    @DisplayName("explain says the collection goes through the adder")
+    void explainNamesTheAdder() {
       assertEquals(
-        PairingMessages.adderMissing("AdderlessEntity", "lines", "LineEntity", CollectionWrites.adderNames("lines")),
-        thrown.getMessage()
+        List.of("OrderEntity.lines: through OrderEntity.addLine(LineEntity)"),
+        Telescope.mapper(Order.class, OrderEntity.class).explain().collections().stream().map(Object::toString).toList()
       );
-    }
-
-    @Test
-    @DisplayName("an adder is looked for under the property's name made singular")
-    void adderNamesSingularizeThePropertyName() {
-      assertEquals(List.of("addLine", "addLin", "addLines"), CollectionWrites.adderNames("lines"));
-      assertEquals("addCategory", CollectionWrites.adderNames("categories").getFirst());
-      assertTrue(CollectionWrites.adderNames("addresses").contains("addAddress"));
-      assertEquals(List.of("addData"), CollectionWrites.adderNames("data"));
     }
   }
 }

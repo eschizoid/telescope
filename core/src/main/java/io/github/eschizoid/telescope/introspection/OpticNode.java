@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.introspection;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+
 /**
  * One entry in an optic's introspection trail — the world-agnostic description of a single thing a
  * {@code Telescope}, {@code Mapper}, or {@code ForwardMapper} does, surfaced by {@code explain()}
@@ -13,8 +15,9 @@ package io.github.eschizoid.telescope.introspection;
  *       {@link Traverse}, {@link Filter}, {@link Narrow}, {@link Bridge}.
  *   <li>{@link Row} — a field correspondence of a conversion built by {@code map} / {@code mapper}
  *       / {@code mapperForward} / {@code fromMap}: {@link Mapped}, {@link Transformed}, {@link
- *       Extracted}, {@link Skipped}, {@link UnusedSource}, {@link Dispatched}, and {@link
- *       Declared}, which says which path runs a mapper a {@code @Bridge} field declares.
+ *       Extracted}, {@link Skipped}, {@link UnusedSource}, {@link Dispatched}, {@link
+ *       CollectionWrite}, which says how a collection's elements are tied to their owner, and
+ *       {@link Declared}, which says which path runs a mapper a {@code @Bridge} field declares.
  * </ul>
  *
  * <p>Every variant is a public record so a caller can assert on it directly ({@code
@@ -149,4 +152,45 @@ public sealed interface OpticNode {
    * mapper no field declares.
    */
   record Declared(String declaredBy, Runs runs, String why) implements Row {}
+
+  /**
+   * How a mapper writes collection {@code property} of {@code owner}, a collection of {@code
+   * element}: through the owner's adder where {@code adder} names it by its signature, and
+   * otherwise refilled in the collection {@code into} and {@code patchInto} find there, or written
+   * through the setter on an owner the mapper builds. {@code remover} names the owner's remover,
+   * which each element a write takes out goes through. {@code backReference} names the element's
+   * property that points back at the owner, set where no adder sets it and cleared on an element
+   * taken out where there is no remover, and {@code source} says what declared it: {@code ROW} for
+   * a {@code backReference} row, {@code MAPPED_BY} for {@code @OneToMany(mappedBy)}. Both are null
+   * where nothing declares one. {@code unused} names the methods that could each be the adder or
+   * the remover, none named for the property, which the write therefore leaves unused; null where
+   * there are none. The generated and the runtime mapper of the same rows report the same nodes.
+   *
+   * <p>{@link #toString()} is the line {@code explain()} prints for it, as in {@code Order.lines:
+   * through Order.addLine(OrderLine)}.
+   */
+  record CollectionWrite(
+    Class<?> owner,
+    String property,
+    Class<?> element,
+    String adder,
+    String remover,
+    String backReference,
+    String source,
+    String unused
+  ) implements Row {
+    @Override
+    public String toString() {
+      return PairingMessages.collectionWritten(
+        owner.getSimpleName(),
+        property,
+        element.getSimpleName(),
+        adder,
+        remover,
+        backReference,
+        source,
+        unused
+      );
+    }
+  }
 }

@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -43,7 +43,7 @@ import io.github.eschizoid.telescope.focus.WriteChainOuter;
 import io.github.eschizoid.telescope.focus.WriteChainRoot;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.mapping.Mapping;
-import io.github.eschizoid.telescope.mapping.WriteHint;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 import java.io.Serial;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -123,15 +123,13 @@ class MigrationRegressionTest {
       // Telescope.mapper() / mapperForward() because Beans.propertyOf(null) NPEs in the bean
       // auto-discovery path. The unit-level fix lives in Beans; this test pins the end-to-end
       // contract from the public API surface.
-      assertDoesNotThrow(() ->
-        Telescope.mapper(Order.class, OrderDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
-      );
+      assertDoesNotThrow(() -> Telescope.mapper(Order.class, OrderDto.class, writeBeans(WriteStrategy.SETTERS)));
     }
 
     @Test
     @DisplayName("forward(Order) on a populated source round-trips the boolean field correctly")
     void mapperRoundTripsBooleanField() {
-      final var mapper = Telescope.mapper(Order.class, OrderDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Order.class, OrderDto.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new Order();
       src.setShipped(true);
       src.setName("alice");
@@ -195,7 +193,7 @@ class MigrationRegressionTest {
             Telescope.ofBean(OrderWithCustomer.class).field(OrderWithCustomer::getCustomer).field(Customer::getEmail),
             FlatOrderDto::getCustomerEmail
           ),
-          writeBeans(WriteHint.WriteStrategy.SETTERS)
+          writeBeans(WriteStrategy.SETTERS)
         )
       );
     }
@@ -259,7 +257,7 @@ class MigrationRegressionTest {
           Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail),
           OrderDto::getCustomerEmail
         ),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new Order(); // customer left null
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
@@ -276,7 +274,7 @@ class MigrationRegressionTest {
           Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail),
           OrderDto::getCustomerEmail
         ),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var customer = new Customer();
       customer.setEmail("alice@example.com");
@@ -379,7 +377,7 @@ class MigrationRegressionTest {
       // After fix, nested pairs are lenient — unmatched target fields stay at JLS defaults,
       // unmatched source fields are silently dropped. Only the TOP-LEVEL pair (here: Parent →
       // ParentDto) enforces strictness.
-      final var mapper = Telescope.mapper(Parent.class, ParentDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Parent.class, ParentDto.class, writeBeans(WriteStrategy.SETTERS));
       final var inner = new ScoreResponse();
       inner.setFirstNameScore(80);
       inner.setLastNameScore(90);
@@ -399,7 +397,7 @@ class MigrationRegressionTest {
       // asked for this pair and a missing field is a real configuration mistake. Only nested
       // recursion auto-relaxes.
       assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(ScoreResponse.class, ScoreResponseDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+        Telescope.mapper(ScoreResponse.class, ScoreResponseDto.class, writeBeans(WriteStrategy.SETTERS))
       );
     }
   }
@@ -477,7 +475,7 @@ class MigrationRegressionTest {
       // target inverts them. DeepMap used to reject the pair at populateIso with
       // "incompatible source/target shapes — boolean vs java.lang.Boolean". MapStruct silently
       // autoboxes / unboxes; telescope should match.
-      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new Source();
       src.setActive(true);
       src.setCount(42);
@@ -493,7 +491,7 @@ class MigrationRegressionTest {
     void nullBoxedToPrimitiveUsesJlsDefault() {
       // Source.count is Integer null; target.count is int. The auto-iso must null-guard at the
       // boxing leaf, otherwise we get NullPointerException on intValue().
-      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new Source();
       src.setActive(false);
       // count left null
@@ -623,7 +621,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("all 6 remaining primitive ↔ wrapper pairs (long, double, char, short, byte, float) autobox")
     void allPrimitiveVariantsAutoBox() {
-      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new WideSrc();
       src.setL(99L);
       src.setD(2.5);
@@ -643,7 +641,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("null boxed source values to primitive targets use JLS defaults for every primitive variant")
     void nullBoxedToPrimitiveDefaultsForEveryPrimitive() {
-      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new WideSrc();
       // src.d, src.sh, src.f left null
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
@@ -717,11 +715,7 @@ class MigrationRegressionTest {
       // grant private lookup to application code. Fix: treat Collection/Map subtypes as
       // scalars (pass-through by reference), and skip inherited platform-module methods in
       // scanGetters as defence-in-depth.
-      final var mapper = Telescope.mapper(
-        DocumentData.class,
-        DocumentDataDto.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(DocumentData.class, DocumentDataDto.class, writeBeans(WriteStrategy.SETTERS));
       final var urls = new ImageUrls();
       final var u = new ImageUrl();
       u.setUrl("https://example.com/a.png");
@@ -781,7 +775,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(
         DocumentDataAlt.class,
         DocumentDataDtoAlt.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var urls = new ImageUrls();
       final var u = new ImageUrl();
@@ -841,11 +835,7 @@ class MigrationRegressionTest {
     void listSubtypeVsListSubtypeAccepted() {
       // Both StringList and StringLinkedList implement List — the same-kind gate accepts them.
       // Element order survives via List's contract.
-      final var mapper = Telescope.mapper(
-        HolderList.class,
-        HolderLinkedList.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(HolderList.class, HolderLinkedList.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new HolderList();
       src.setItems(new StringList());
       src.getItems().add("a");
@@ -903,7 +893,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(
         HolderTreeMap.class,
         HolderTreeMapAlt.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new HolderTreeMap();
       src.setItems(new StringTreeMap());
@@ -993,11 +983,7 @@ class MigrationRegressionTest {
       // to NPE when passing that null to `setCount(int)` (Integer-to-int unboxing on null).
       // Fix: null-guard primitive setters at construction time so primitives stay at their JLS
       // default (0 for int, false for boolean, etc.).
-      final var mapper = Telescope.mapper(
-        TopSource.class,
-        TopTarget.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(TopSource.class, TopTarget.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new TopSource();
       final var inner = new Source();
       inner.setName("alice");
@@ -1076,11 +1062,7 @@ class MigrationRegressionTest {
       // Even on matched-name boxed→boxed paths, the source value can legitimately be null and
       // the target setter must accept null gracefully. Pins the contract that the construct
       // loop doesn't choke on legitimately-null boxed values.
-      final var mapper = Telescope.mapper(
-        FlatSource.class,
-        FlatTarget.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(FlatSource.class, FlatTarget.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new FlatSource();
       src.setName("alice");
       // count and active left null
@@ -1143,7 +1125,7 @@ class MigrationRegressionTest {
     @DisplayName("a writeBeans SETTERS default is refused when it would drop a paired getter-only property")
     void aSettersDefaultRefusesAPairedGetterOnlyProperty() {
       final var refused = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.mapper(Source.class, OrderResponse.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+        Telescope.mapper(Source.class, OrderResponse.class, writeBeans(WriteStrategy.SETTERS))
       );
       assertEquals(
         PairingMessages.beanPropertyUnwritable("Source", "OrderResponse", "OrderResponse", "processed", "SETTERS"),
@@ -1157,7 +1139,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapperForward(
         Source.class,
         OrderResponse.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS),
+        writeBeans(WriteStrategy.SETTERS),
         Mapping.drop(Source::isProcessed)
       );
       final var src = new Source();
@@ -1238,7 +1220,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("Mapper.forward(null) returns null (beans)")
     void mapperForwardNullReturnsNullBeans() {
-      final var mapper = Telescope.mapper(SrcBean.class, TgtBean.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(SrcBean.class, TgtBean.class, writeBeans(WriteStrategy.SETTERS));
       assertNull(mapper.forward(null));
     }
 
@@ -1406,7 +1388,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("List<Inner> ↔ ArrayList<InnerDto> — common JPA-entity-to-DTO shape")
     void listInterfaceToArrayListConcreteWorks() {
-      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new Outer();
       src.setItems(List.of(new Inner("a"), new Inner("b")));
       src.setById(Map.of("k1", new Inner("v1")));
@@ -1421,7 +1403,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("backward — ArrayList target produces a List-side instance suitable for the List field")
     void backwardProducesSourceCompatibleList() {
-      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteStrategy.SETTERS));
       final var dto = new OuterDto();
       dto.setItems(new ArrayList<>(List.of(new InnerDto("a"), new InnerDto("b"))));
       dto.setById(new HashMap<>(Map.of("k1", new InnerDto("v1"))));
@@ -1465,7 +1447,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(
         HasSetInterface.class,
         HasHashSetConcrete.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new HasSetInterface();
       src.setTags(Set.of(new Inner("a"), new Inner("b")));
@@ -1512,11 +1494,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("user-defined List subclass ↔ ArrayList — allocator routes through intermediateAllocator")
     void userListSubclassToArrayListWorks() {
-      final var mapper = Telescope.mapper(
-        HasMyListSrc.class,
-        HasArrayListTgt.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(HasMyListSrc.class, HasArrayListTgt.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new HasMyListSrc();
       final var srcList = new MyList<Inner>();
       srcList.add(new Inner("a"));
@@ -1569,11 +1547,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("user-defined Map subclass ↔ HashMap — Map intermediateAllocator success path")
     void userMapSubclassToHashMapWorks() {
-      final var mapper = Telescope.mapper(
-        HasMyMapSrc.class,
-        HasHashMapTgt.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapper(HasMyMapSrc.class, HasHashMapTgt.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new HasMyMapSrc();
       final var srcMap = new MyMap<String, Inner>();
       srcMap.put("k1", new Inner("v1"));
@@ -1626,7 +1600,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(
         HasMapByRegionSrc.class,
         HasEnumMapTgt.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new HasMapByRegionSrc();
       final var byRegion = new LinkedHashMap<Region, Inner>();
@@ -1683,7 +1657,7 @@ class MigrationRegressionTest {
       // ContainerShape branch doesn't pick it up. The shape-mismatch IAE fires instead, which is
       // the correct outcome — pin that contract.
       final var ex = assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(HasListSrcForUnknown.class, HasSyncQueueTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+        Telescope.mapper(HasListSrcForUnknown.class, HasSyncQueueTgt.class, writeBeans(WriteStrategy.SETTERS))
       );
       assertTrue(ex.getMessage().contains("shapes"), "shape mismatch diagnostic");
     }
@@ -1719,11 +1693,7 @@ class MigrationRegressionTest {
     @DisplayName("user List subclass without no-arg ctor throws plan-time IAE naming the class")
     void userListSubclassWithoutNoArgCtorThrowsPlanTime() {
       final var ex = assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(
-          HasListSrcForUnknown.class,
-          HasNoCtorListTgt.class,
-          writeBeans(WriteHint.WriteStrategy.SETTERS)
-        )
+        Telescope.mapper(HasListSrcForUnknown.class, HasNoCtorListTgt.class, writeBeans(WriteStrategy.SETTERS))
       );
       assertTrue(ex.getMessage().contains("NoCtorList"), "names the offending class");
     }
@@ -1823,18 +1793,14 @@ class MigrationRegressionTest {
       // Adopter pain reproduction: pre-fix this required 5 constant() rows for the unmatched
       // target fields. Lenient default: it just works.
       assertDoesNotThrow(() ->
-        Telescope.mapperForward(SmallDto.class, LargeEntity.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+        Telescope.mapperForward(SmallDto.class, LargeEntity.class, writeBeans(WriteStrategy.SETTERS))
       );
     }
 
     @Test
     @DisplayName("forward(small) populates same-name fields; unmatched fields take JLS defaults")
     void forwardPopulatesSameNameFieldsAndJlsDefaultsTheRest() {
-      final var mapper = Telescope.mapperForward(
-        SmallDto.class,
-        LargeEntity.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapperForward(SmallDto.class, LargeEntity.class, writeBeans(WriteStrategy.SETTERS));
       final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
       // Matched fields carry through.
       assertEquals("o1", tgt.getId());
@@ -1869,7 +1835,7 @@ class MigrationRegressionTest {
       // Round-trip safety: Telescope.mapper (bidirectional) must keep throwing on unmatched
       // fields so callers know backward() won't silently lose data.
       assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(SmallDto.class, LargeEntity.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+        Telescope.mapper(SmallDto.class, LargeEntity.class, writeBeans(WriteStrategy.SETTERS))
       );
     }
 
@@ -1889,7 +1855,7 @@ class MigrationRegressionTest {
         SmallDto.class,
         LargeEntity.class,
         Mapping.to(SmallDto::name, LargeEntity::getName),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
       assertEquals("alice", tgt.getName());
@@ -1907,7 +1873,7 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapperForward(
         SmallDto.class,
         LargeEntity.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       ).afterForward(e -> {
         e.setCreatedBy("system");
         return e;
@@ -1983,7 +1949,7 @@ class MigrationRegressionTest {
             .field(InnerCustomer::getEmail),
           FlatTgt::getCustomerEmail
         ),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new HolderWithCustomer();
       final var c = new InnerCustomer();
@@ -2063,11 +2029,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("bean-source lenient — bean source + bean target with unmatched fields on both sides works")
     void beanSourceLenientForwardConstructsAndFires() {
-      final var mapper = Telescope.mapperForward(
-        SrcBean.class,
-        TgtBean.class,
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
-      );
+      final var mapper = Telescope.mapperForward(SrcBean.class, TgtBean.class, writeBeans(WriteStrategy.SETTERS));
       final var src = new SrcBean();
       src.setId("o1");
       src.setName("alice");
@@ -2171,7 +2133,7 @@ class MigrationRegressionTest {
         NullIntermediateInner.class,
         WriteChainOuter.class,
         Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new NullIntermediateInner();
       src.setName("alice");
@@ -2206,7 +2168,7 @@ class MigrationRegressionTest {
         NullIntermediateInner.class,
         WriteChainRoot.class,
         Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new NullIntermediateInner();
       src.setName("bob");
@@ -2257,7 +2219,7 @@ class MigrationRegressionTest {
         NullIntermediateInner.class,
         PlainChainOuter.class,
         Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new NullIntermediateInner();
       src.setName("carol");
@@ -2292,7 +2254,7 @@ class MigrationRegressionTest {
         NullIntermediateInner.class,
         MultiPropWriteOuter.class,
         Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new NullIntermediateInner();
       src.setName("springfield");
@@ -2413,7 +2375,7 @@ class MigrationRegressionTest {
         NullIntermediateInner.class,
         MultiPropDeepRoot.class,
         Mapping.to(srcLeaf, tgtLeaf),
-        writeBeans(WriteHint.WriteStrategy.SETTERS)
+        writeBeans(WriteStrategy.SETTERS)
       );
       final var src = new NullIntermediateInner();
       src.setName("metropolis");

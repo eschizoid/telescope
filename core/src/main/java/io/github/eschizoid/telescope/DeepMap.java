@@ -18,6 +18,7 @@ import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.ResultCheck;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.CollectionLinks;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
 import io.github.eschizoid.telescope.internal.pairing.KeptNames;
@@ -32,6 +33,7 @@ import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
 import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.mapping.BackReference;
 import io.github.eschizoid.telescope.mapping.Cases;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.ComputeFromSource;
@@ -52,6 +54,7 @@ import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.ViaClass;
 import io.github.eschizoid.telescope.mapping.ViaMethods;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
@@ -81,6 +84,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -361,13 +365,16 @@ public final class DeepMap {
         ".into, and a subclass of the target through the setters it looks up" +
         " at run time"
       : "; into writes through the setters it looks up at run time, since " + bridgeName + " has no into";
+    final var trail = new ArrayList<OpticNode>();
+    trail.add(new OpticNode.Declared(node.declaredBy(), node.runs(), node.why() + into));
+    trail.addAll(fn.collectionWrites());
     final var built = Mapper.ofGenerated(
       fn,
       source,
       target,
       Telescope.bridgePatch((Telescope) bridge),
       declaration.provider().targetProperties(),
-      List.of(new OpticNode.Declared(node.declaredBy(), node.runs(), node.why() + into))
+      trail
     );
     return (Mapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }
@@ -380,7 +387,10 @@ public final class DeepMap {
     final Class<B> target
   ) {
     final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(declaration.provider().bridge());
-    final var built = ForwardMapper.ofGenerated(fn, source, target, List.of(declaration.node()));
+    final var trail = new ArrayList<OpticNode>();
+    trail.add(declaration.node());
+    trail.addAll(fn.collectionWrites());
+    final var built = ForwardMapper.ofGenerated(fn, source, target, trail);
     return (ForwardMapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }
 
@@ -467,12 +477,14 @@ public final class DeepMap {
     final var hints = new ArrayList<WriteHint<?>>();
     final var nullHints = new ArrayList<NullHint>();
     final var caseRows = new ArrayList<Cases>();
+    final var backReferences = new ArrayList<BackReference<?, ?>>();
     for (final var step : steps) {
       switch (step) {
         case Mapping<?, ?> m -> overrides.add(m);
         case WriteHint<?> h -> hints.add(h);
         case NullHint nh -> nullHints.add(nh);
         case Cases c -> caseRows.add(c);
+        case BackReference<?, ?> b -> backReferences.add(b);
       }
     }
     final var nullStrategy = extractNullStrategy(nullHints);
@@ -491,7 +503,7 @@ public final class DeepMap {
             defaultWriterFactory
           );
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
-    final var cache = new PairCache(beanRefl);
+    final var cache = new PairCache(beanRefl, BackReferenceRows.of(backReferences, source, target));
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
@@ -554,6 +566,7 @@ public final class DeepMap {
       trail
     );
     validateAllHintsConsumed(hintMap, cache, overrides, source, target);
+    cache.backReferences.refuseUntaken();
     refuseUnwrittenPathObjects(beanRefl, hints, defaultStrategy, overrides, source, target, lenient);
     if (walked != null) {
       // Every pair that leaves the runtime walk open is one the build refuses, so a build that
@@ -563,14 +576,19 @@ public final class DeepMap {
     }
     sealedCases.refuseUntaken(source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
-    final var patchTable = patchTableOf(topSteps, source, cache);
+    final var patchTable = patchTableOf(topSteps, new TypePair(source, target), cache);
     final Iso<A, B> guarded = cyclicPairs.isEmpty()
       ? iso
       : Iso.of(
           value -> inInvocation(FORWARD_SEEN, ownBridges, source, target, value, iso::to),
           value -> inInvocation(BACKWARD_SEEN, ownBridges, target, source, value, iso::from)
         );
-    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), beanRefl);
+    // patch rebuilds the source, and its overlay, as backward does: through the owner's adders.
+    final var topTies = cache.tiesOf(new TypePair(source, target));
+    final var writers = new HashMap<Class<?>, Beans.BeanWriter<?>>();
+    if (topTies.forwardWriter() != null) writers.put(target, topTies.forwardWriter());
+    if (topTies.backwardWriter() != null) writers.put(source, topTies.backwardWriter());
+    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), beanRefl.withWriters(writers));
   }
 
   /**
@@ -588,9 +606,11 @@ public final class DeepMap {
   @SuppressWarnings("unchecked")
   private static Map<String, Mapper.PatchEntry> patchTableOf(
     final Map<String, FieldStep> steps,
-    final Class<?> source,
+    final TypePair pair,
     final Map<TypePair, Iso<?, ?>> cache
   ) {
+    final var source = pair.source();
+    final var ties = cache instanceof PairCache walked ? walked.tiesOf(pair) : PairTies.NONE;
     final var order = List.of((source.isRecord() ? Reflective.RECORDS : Reflective.BEANS).names(source));
     final var entries = new ArrayList<>(steps.entrySet());
     entries.sort(
@@ -613,7 +633,9 @@ public final class DeepMap {
           step.overlay,
           step.read,
           paired == null ? null : paired.intoWrite(step.elements),
-          paired == null ? null : paired.patchIntoWrite(step.elements)
+          paired == null ? null : paired.patchIntoWrite(step.elements),
+          ties.forward().get(entry.getKey()),
+          step.sourceName == null ? null : ties.backward().get(step.sourceName)
         )
       );
     }
@@ -662,14 +684,13 @@ public final class DeepMap {
   }
 
   /**
-   * Pull out the single optional {@link WriteHint#writeBeans(WriteHint.WriteStrategy)
-   * writeBeans(…)} default strategy. Returns {@code null} when no default is supplied; throws on
-   * duplicates.
+   * Pull out the single optional {@link WriteHint#writeBeans(WriteStrategy) writeBeans(…)} default
+   * strategy. Returns {@code null} when no default is supplied; throws on duplicates.
    */
-  private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
-    WriteHint.WriteStrategy defaultStrategy = null;
+  private static WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
+    WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
-      if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteHint.WriteStrategy strat))) continue;
+      if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteStrategy strat))) continue;
       if (defaultStrategy != null) throw new IllegalArgumentException(PairingMessages.duplicateWriteBeansDefault());
       defaultStrategy = strat;
     }
@@ -685,13 +706,12 @@ public final class DeepMap {
   }
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Beans.BeanWriter<?> writerFor(final Class<?> cls, final WriteHint.WriteStrategy strategy) {
+  private static Beans.BeanWriter<?> writerFor(final Class<?> cls, final WriteStrategy strategy) {
     final var raw = (Class) cls;
     return switch (strategy) {
       case BUILDER -> Beans.builderWriter(raw);
       case SETTERS -> Beans.settersWriter(raw);
       case CONSTRUCTOR -> Beans.constructorWriter(raw, Beans.propertyNames(raw).length);
-      case ADDERS -> Beans.addersWriter(raw);
     };
   }
 
@@ -700,9 +720,7 @@ public final class DeepMap {
    * lazily on first encounter with each unhinted target. Results are cached so the lookup is O(1)
    * after the first resolve. Returns {@code null} when no default was supplied.
    */
-  private static Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactoryFor(
-    final WriteHint.WriteStrategy defaultStrategy
-  ) {
+  private static Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactoryFor(final WriteStrategy defaultStrategy) {
     if (defaultStrategy == null) return null;
     final var cache = new ConcurrentHashMap<Class<?>, Beans.BeanWriter<?>>();
     return cls -> cache.computeIfAbsent(cls, c -> writerFor(c, defaultStrategy));
@@ -768,15 +786,15 @@ public final class DeepMap {
   private static void refuseUnwrittenPathObjects(
     final Reflective beanRefl,
     final List<WriteHint<?>> hints,
-    final WriteHint.WriteStrategy defaultStrategy,
+    final WriteStrategy defaultStrategy,
     final List<Mapping<?, ?>> rows,
     final Class<?> source,
     final Class<?> target,
     final boolean forwardOnly
   ) {
-    final var keyed = new HashMap<Class<?>, WriteHint.WriteStrategy>();
+    final var keyed = new HashMap<Class<?>, WriteStrategy>();
     for (final var hint : hints) {
-      if (hint instanceof WriteHint.BeanWriteHint<?>(final Class<?> cls, final WriteHint.WriteStrategy strategy)) {
+      if (hint instanceof WriteHint.BeanWriteHint<?>(final Class<?> cls, final WriteStrategy strategy)) {
         keyed.put(cls, strategy);
       }
     }
@@ -2192,9 +2210,44 @@ public final class DeepMap {
       // through cannot build it, or would not write a property the mapper writes: a strategy the
       // writeBeans default names that does not apply, a setter that cannot take a value of the
       // property's own type, and a setters strategy, hinted or taken, with no setter for it.
-      refuseUnwritableSetters(source, target, target, tgtRefl, byTargetName, telescopeWritesTgt, true);
-      if (!forwardOnly) refuseUnwritableSetters(source, target, source, srcRefl, bySourceName, pathWritesSrc, false);
-      final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
+      // How each collection a direction writes is tied to its owner: through the owner's adder,
+      // remover and the element's back-reference, decided once here for both directions.
+      final var ties = PairTies.of(
+        source,
+        target,
+        srcRefl,
+        tgtRefl,
+        byTargetName,
+        bySourceName,
+        forwardOnly,
+        overrides,
+        cache instanceof PairCache walked ? walked.backReferences : BackReferenceRows.NONE,
+        trailOut
+      );
+      refuseUnwritableSetters(
+        source,
+        target,
+        target,
+        tgtRefl,
+        byTargetName,
+        telescopeWritesTgt,
+        true,
+        ties.forwardWriter()
+      );
+      if (!forwardOnly) refuseUnwritableSetters(
+        source,
+        target,
+        source,
+        srcRefl,
+        bySourceName,
+        pathWritesSrc,
+        false,
+        ties.backwardWriter()
+      );
+      final Iso<S, T> baseIso = ties.pointingBack(
+        assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName, ties)
+      );
+      if (cache instanceof PairCache walked) walked.tied(key, ties);
       cache.put(
         key,
         telescopeFixups.isEmpty()
@@ -2445,7 +2498,7 @@ public final class DeepMap {
         (Iso) cache.get(pair),
         source,
         target,
-        patchTableOf(steps, source, cache),
+        patchTableOf(steps, pair, cache),
         List.of(),
         beanRefl
       );
@@ -3400,7 +3453,8 @@ public final class DeepMap {
     final Reflective srcRefl,
     final Reflective tgtRefl,
     final Map<String, FieldStep> byTargetName,
-    final Map<String, FieldStep> bySourceName
+    final Map<String, FieldStep> bySourceName,
+    final PairTies ties
   ) {
     // Pre-resolve the holder data on the :core side (Telescope is visible here) and pass into
     // Reflective.structuralIso so :internal stays compile-time-oblivious to :core — no callback,
@@ -3427,8 +3481,10 @@ public final class DeepMap {
     // strategy or the auto order — so the composed build and the array leaf build the same value.
     // The side a direction only reads asks nothing, so a forward-only mapper from a source no
     // composed build reproduces still composes its forward direction.
-    final var targetWriter = tgtRefl.writerFor(target);
-    final var sourceWriter = srcRefl.writerFor(source);
+    // A side built through setters fills each collection through the owner's adder, where it has
+    // one.
+    final var targetWriter = ties.forwardWriter() != null ? ties.forwardWriter() : tgtRefl.writerFor(target);
+    final var sourceWriter = ties.backwardWriter() != null ? ties.backwardWriter() : srcRefl.writerFor(source);
     final var composeForward = MhIso.composesBuild(source, target, targetWriter);
     final var composeBackward = MhIso.composesBuild(target, source, sourceWriter);
     final Iso<S, T> arrayLeaf =
@@ -3499,8 +3555,14 @@ public final class DeepMap {
     final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
     final var srcReaders = srcRefl.positionalReaders(source, srcHolderReaders);
     final var tgtReaders = tgtRefl.positionalReaders(target, tgtHolderReaders);
-    final var tgtBuilderFn = tgtRefl.positionalBuilder(target, tgtHolderReaders, tgtHolderConstructor);
-    final var srcBuilderFn = srcRefl.positionalBuilder(source, srcHolderReaders, srcHolderConstructor);
+    // A side whose writer fills a collection through an adder is built by that writer, which no
+    // holder's constructor stands in for.
+    final Function<Object[], T> tgtBuilderFn = Beans.fillsThroughAdders(targetWriter)
+      ? throughWriter(target, tgtNames, targetWriter)
+      : tgtRefl.positionalBuilder(target, tgtHolderReaders, tgtHolderConstructor);
+    final Function<Object[], S> srcBuilderFn = Beans.fillsThroughAdders(sourceWriter)
+      ? throughWriter(source, srcNames, sourceWriter)
+      : srcRefl.positionalBuilder(source, srcHolderReaders, srcHolderConstructor);
     return Iso.of(
       s -> {
         if (s == null) return null;
@@ -4062,6 +4124,365 @@ public final class DeepMap {
   }
 
   /**
+   * A bean side built from {@code arr} through {@code writer}, which fills some collection through
+   * an adder.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <X> Function<Object[], X> throughWriter(
+    final Class<X> cls,
+    final String[] names,
+    final Beans.BeanWriter<?> writer
+  ) {
+    final var index = new HashMap<String, Integer>(names.length * 2);
+    for (var i = 0; i < names.length; i++) index.put(names[i], i);
+    final var raw = (Beans.BeanWriter) writer;
+    return arr -> cls.cast(raw.construct(names, name -> arr[index.get(name)]));
+  }
+
+  /**
+   * How the collections of one pair are tied to the owner each direction writes them into, by
+   * property: {@code forward} for the target's collections, {@code backward} for the source's. The
+   * adders a side built through setters fills a collection through, the writer such a side is built
+   * with where the adders narrow it or offer it the setters strategy, null otherwise, and the links
+   * of each collection whose elements a direction points back at the owner once it has built one.
+   */
+  private record PairTies(
+    Map<String, Mapper.Tie> forward,
+    Map<String, Mapper.Tie> backward,
+    Map<String, BiConsumer<Object, Object>> forwardAdders,
+    Map<String, BiConsumer<Object, Object>> backwardAdders,
+    Beans.BeanWriter<?> forwardWriter,
+    Beans.BeanWriter<?> backwardWriter,
+    ContainerCopy.Links[] forwardPointBack,
+    ContainerCopy.Links[] backwardPointBack
+  ) {
+    static final PairTies NONE = new PairTies(
+      Map.of(),
+      Map.of(),
+      Map.of(),
+      Map.of(),
+      null,
+      null,
+      new ContainerCopy.Links[0],
+      new ContainerCopy.Links[0]
+    );
+
+    /**
+     * The ties of the pair {@code source → target}, whose steps are {@code byTargetName} and {@code
+     * bySourceName}: the target's collections forward, and the source's backward unless {@code
+     * forwardOnly}. A collection's adder or remover the owner's methods leave undecided is refused
+     * here, when the mapper is built. Where {@code trailOut} is non-null each collection's path is
+     * added to it, once where both directions write the same collection of the same class.
+     */
+    static PairTies of(
+      final Class<?> source,
+      final Class<?> target,
+      final Reflective srcRefl,
+      final Reflective tgtRefl,
+      final Map<String, FieldStep> byTargetName,
+      final Map<String, FieldStep> bySourceName,
+      final boolean forwardOnly,
+      final Map<TypePair, List<Mapping<?, ?>>> overrides,
+      final BackReferenceRows rows,
+      final List<OpticNode> trailOut
+    ) {
+      final var forward = new Side(target, source, tgtRefl, srcRefl, true);
+      forward.decide(byTargetName.values(), overrides, rows, trailOut);
+      final var backward = new Side(source, target, srcRefl, tgtRefl, false);
+      if (!forwardOnly) backward.decide(bySourceName.values(), overrides, rows, trailOut);
+      // An adder or remover the owner's methods leave undecided is not used, and the mapper says
+      // so once, where both directions write the same collection.
+      final var warned = new LinkedHashSet<String>(forward.warnings);
+      warned.addAll(backward.warnings);
+      for (final var warning : warned) LOGGER.log(Level.WARNING, warning);
+      if (forward.ties.isEmpty() && backward.ties.isEmpty()) return NONE;
+      return new PairTies(
+        Map.copyOf(forward.ties),
+        Map.copyOf(backward.ties),
+        Map.copyOf(forward.adders),
+        Map.copyOf(backward.adders),
+        forward.writer,
+        backward.writer,
+        forward.pointBack.toArray(ContainerCopy.Links[]::new),
+        backward.pointBack.toArray(ContainerCopy.Links[]::new)
+      );
+    }
+
+    /** {@code iso}, with each value it builds pointing its collections' elements back at it. */
+    <S, T> Iso<S, T> pointingBack(final Iso<S, T> iso) {
+      if (forwardPointBack.length == 0 && backwardPointBack.length == 0) return iso;
+      final var forwardLinks = forwardPointBack;
+      final var backwardLinks = backwardPointBack;
+      return Iso.of(
+        forwardLinks.length == 0 ? iso::to : value -> ContainerCopy.pointedBack(iso.to(value), forwardLinks),
+        backwardLinks.length == 0 ? iso::from : value -> ContainerCopy.pointedBack(iso.from(value), backwardLinks)
+      );
+    }
+
+    /** One collection a direction writes, as {@link Side#decide} finds it. */
+    private record Written(
+      String name,
+      Class<?> element,
+      Beans.Members members,
+      boolean converted,
+      Function<Object, Object> backRead,
+      BiConsumer<Object, Object> backWrite
+    ) {}
+
+    /** One direction's owner and the side its values come from, and what it decides. */
+    private static final class Side {
+
+      private final Class<?> owner;
+      private final Class<?> other;
+      private final Reflective ownerRefl;
+      private final Reflective otherRefl;
+      private final boolean ownerIsTarget;
+      private final Map<String, Mapper.Tie> ties = new LinkedHashMap<>();
+      private final List<String> warnings = new ArrayList<>();
+      private final Map<String, BiConsumer<Object, Object>> adders = new LinkedHashMap<>();
+      private final List<ContainerCopy.Links> pointBack = new ArrayList<>();
+      private Beans.BeanWriter<?> writer;
+
+      Side(
+        final Class<?> owner,
+        final Class<?> other,
+        final Reflective ownerRefl,
+        final Reflective otherRefl,
+        final boolean ownerIsTarget
+      ) {
+        this.owner = owner;
+        this.other = other;
+        this.ownerRefl = ownerRefl;
+        this.otherRefl = otherRefl;
+        this.ownerIsTarget = ownerIsTarget;
+      }
+
+      void decide(
+        final Collection<FieldStep> steps,
+        final Map<TypePair, List<Mapping<?, ?>>> overrides,
+        final BackReferenceRows rows,
+        final List<OpticNode> trailOut
+      ) {
+        if (owner.isRecord() || owner.isInterface() || owner.isEnum()) return;
+        final var written = new ArrayList<Written>();
+        for (final var step : steps) {
+          final var name = ownerIsTarget ? step.targetName() : step.sourceName();
+          final var from = ownerIsTarget ? step.sourceName() : step.targetName();
+          if (name == null || from == null || ties.containsKey(name)) continue;
+          final var element = Beans.collectionElement(owner, name);
+          if (element == null) continue;
+          final var sent = collectionElement(otherRefl.genericType(other, from));
+          // Elements handed across as the source holds them are the source's own: written as any
+          // container is, through no adder and no remover, and never pointed at the owner.
+          final var converted = step.elements() != null || (sent != null && sent != element);
+          // Values handed across still go through the adder and remover, which cannot point them
+          // at the owner and whose rules, such as keeping each value once, apply to them as to any.
+          final var throughMembers = converted || Beans.isValueElement(element);
+          final var members = throughMembers ? Beans.collectionMembers(owner, name) : Beans.Members.NONE;
+          if (members.refusal() != null) throw new IllegalArgumentException(members.refusal());
+          warnings.addAll(members.warnings());
+          final var row = rows.propertyFor(element, owner);
+          final var mappedBy = ContainerCopy.backReference(owner, name);
+          final Predicate<String> filled = property -> converted && fills(sent, element, property, overrides);
+          final var decided = CollectionLinks.backReference(
+            row,
+            mappedBy,
+            mappedBy != null && Beans.setterTakes(element, mappedBy, owner),
+            converted,
+            filled
+          );
+          if (row != null && converted) rows.taken(element, owner, filled.test(row), source(), target());
+          final var back = decided.property();
+          final var backRead = back == null ? null : Beans.capturedReader(element, back);
+          final var backWrite = back == null ? null : Beans.capturedWriter(element, back);
+          ties.put(name, new Mapper.Tie(throughMembers, backRead, backWrite));
+          written.add(new Written(name, element, members, converted, backRead, backWrite));
+          if (trailOut != null) {
+            final var node = new OpticNode.CollectionWrite(
+              owner,
+              name,
+              element,
+              members.adderSignature(),
+              members.removerSignature(),
+              back,
+              decided.source() == null ? null : decided.source().name(),
+              members.unused()
+            );
+            if (!trailOut.contains(node)) trailOut.add(node);
+          }
+        }
+        // A side the shared order builds through setters, or one it passes over for having no
+        // setter whose collections have adders, is filled through those adders.
+        final var chosen = ownerRefl.writerFor(owner);
+        final var offered = chosen == null && Beans.buildableThroughAdders(owner);
+        final var bySetters = chosen != null ? Beans.strategyOf(chosen) == BeanWriteStrategy.SETTERS : offered;
+        for (final var collection : written) {
+          final var adder = collection.members().adder();
+          if (adder != null && bySetters) adders.put(collection.name(), adder);
+          if (collection.backWrite() != null && (adder == null || !bySetters)) {
+            pointBack.add(
+              ContainerCopy.links(
+                Beans.capturedReader(owner, collection.name()),
+                null,
+                null,
+                collection.backRead(),
+                collection.backWrite()
+              )
+            );
+          }
+        }
+        if (!adders.isEmpty() || offered) {
+          final Beans.BeanWriter<?> base = chosen != null ? chosen : Beans.settersWriter(owner);
+          writer = Beans.throughAdders(base, adders);
+        }
+      }
+
+      private String source() {
+        return (ownerIsTarget ? other : owner).getSimpleName();
+      }
+
+      private String target() {
+        return (ownerIsTarget ? owner : other).getSimpleName();
+      }
+
+      /**
+       * Whether the conversion of each element writes {@code property} of {@code element}, the
+       * owner's element class, from {@code sent}, the other side's: by name, where {@code sent} has
+       * a property of that name no drop row leaves out, or through a row of the element pair that
+       * writes it.
+       */
+      private boolean fills(
+        final Class<?> sent,
+        final Class<?> element,
+        final String property,
+        final Map<TypePair, List<Mapping<?, ?>>> overrides
+      ) {
+        if (sent == null) return false;
+        final var pair = ownerIsTarget ? new TypePair(sent, element) : new TypePair(element, sent);
+        final var rowsOfPair = overrides.getOrDefault(pair, List.of());
+        var dropped = false;
+        for (final var row : rowsOfPair) {
+          if (row instanceof Drop<?, ?, ?>) {
+            if (property.equals(normalized(pair.source(), row.sourceField()))) dropped = true;
+            continue;
+          }
+          final var written = ownerIsTarget ? row.targetField() : row.sourceField();
+          if (written != null && property.equals(normalized(element, written))) return true;
+        }
+        if (dropped) return false;
+        for (final var name : Reflective.of(sent).names(sent)) if (name.equals(property)) return true;
+        return false;
+      }
+
+      private static String normalized(final Class<?> cls, final String field) {
+        return field == null ? null : Reflective.of(cls).normalize(field);
+      }
+    }
+  }
+
+  /**
+   * The {@code backReference} rows of one mapper, by element class, and which of them a collection
+   * the mapper writes took. Each is refused when the mapper is built where it names a property of
+   * no owner's type, names a property the element's conversion writes, has no setter that takes the
+   * owner, or is taken by no collection at all.
+   */
+  static final class BackReferenceRows {
+
+    static final BackReferenceRows NONE = new BackReferenceRows(Map.of(), "", "");
+
+    /** One row: the element's property, and the class its getter returns. */
+    private record Row(String property, Class<?> type) {}
+
+    private final Map<Class<?>, Row> rows;
+    private final String source;
+    private final String target;
+    private final Map<Class<?>, List<String>> owners = new ConcurrentHashMap<>();
+    private final Set<Class<?>> taken = ConcurrentHashMap.newKeySet();
+
+    private BackReferenceRows(final Map<Class<?>, Row> rows, final String source, final String target) {
+      this.rows = rows;
+      this.source = source;
+      this.target = target;
+    }
+
+    /** The rows of a mapper between {@code source} and {@code target}. */
+    static BackReferenceRows of(final List<BackReference<?, ?>> given, final Class<?> source, final Class<?> target) {
+      if (given.isEmpty()) return NONE;
+      final var rows = new HashMap<Class<?>, Row>();
+      for (final var row : given) {
+        final Class<?> element = LambdaIntrospection.receiverClassOf(row.property());
+        final var property = Reflective.of(element).normalize(LambdaIntrospection.methodNameOf(row.property()));
+        final var getter = Beans.propertyGetter(element, property);
+        final var type = getter == null ? Object.class : getter.getReturnType();
+        if (rows.put(element, new Row(property, type)) != null) {
+          throw new IllegalArgumentException(PairingMessages.duplicateBackReferenceRow(element.getSimpleName()));
+        }
+      }
+      return new BackReferenceRows(Map.copyOf(rows), source.getSimpleName(), target.getSimpleName());
+    }
+
+    /**
+     * The property the row for {@code element} names, where its type is exactly {@code owner}; null
+     * where there is no row or it names a property of another type.
+     */
+    String propertyFor(final Class<?> element, final Class<?> owner) {
+      final var row = rows.get(element);
+      if (row == null) return null;
+      owners.computeIfAbsent(element, ignored -> new ArrayList<>()).add(owner.getSimpleName());
+      return row.type() == owner ? row.property() : null;
+    }
+
+    /**
+     * Marks the row for {@code element} taken by a collection {@code owner} holds, refusing it
+     * where the element's conversion writes its property or no setter takes the owner.
+     */
+    void taken(
+      final Class<?> element,
+      final Class<?> owner,
+      final boolean filled,
+      final String pairSource,
+      final String pairTarget
+    ) {
+      final var row = rows.get(element);
+      if (filled) throw new IllegalArgumentException(
+        PairingMessages.backReferenceRowFilled(pairSource, pairTarget, element.getSimpleName(), getterOf(row))
+      );
+      if (!Beans.setterTakes(element, row.property(), owner)) throw new IllegalArgumentException(
+        PairingMessages.backReferenceRowUnwritable(pairSource, pairTarget, element.getSimpleName(), getterOf(row))
+      );
+      taken.add(element);
+    }
+
+    /** Refuses each row no collection the mapper writes took. */
+    void refuseUntaken() {
+      for (final var entry : rows.entrySet()) {
+        final var element = entry.getKey();
+        if (taken.contains(element)) continue;
+        final var row = entry.getValue();
+        final var seen = owners.get(element);
+        if (seen == null) throw new IllegalArgumentException(
+          PairingMessages.backReferenceRowUnused(source, target, element.getSimpleName(), getterOf(row))
+        );
+        throw new IllegalArgumentException(
+          PairingMessages.backReferenceRowNotOwner(
+            source,
+            target,
+            element.getSimpleName(),
+            getterOf(row),
+            row.type().getSimpleName(),
+            List.copyOf(new LinkedHashSet<>(seen))
+          )
+        );
+      }
+    }
+
+    private static String getterOf(final Row row) {
+      final var property = row.property();
+      return "get" + Character.toUpperCase(property.charAt(0)) + property.substring(1);
+    }
+  }
+
+  /**
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
   private record FieldStep(
@@ -4133,9 +4554,22 @@ public final class DeepMap {
     private final transient Reflective beanRefl;
     private final transient Map<TypePair, Map<String, FieldStep>> walked = new ConcurrentHashMap<>();
     private final transient Map<TypePair, Mapper<Object, Object>> mappers = new ConcurrentHashMap<>();
+    private final transient Map<TypePair, PairTies> ties = new ConcurrentHashMap<>();
+    final transient BackReferenceRows backReferences;
 
-    PairCache(final Reflective beanRefl) {
+    PairCache(final Reflective beanRefl, final BackReferenceRows backReferences) {
       this.beanRefl = beanRefl;
+      this.backReferences = backReferences;
+    }
+
+    /** Records how the collections of a walked pair are tied to their owners. */
+    void tied(final TypePair pair, final PairTies decided) {
+      ties.put(pair, decided);
+    }
+
+    /** How the collections of {@code pair} are tied to their owners; none for a pair not walked. */
+    PairTies tiesOf(final TypePair pair) {
+      return ties.getOrDefault(pair, PairTies.NONE);
     }
 
     /**
@@ -4188,7 +4622,7 @@ public final class DeepMap {
           (Iso) get(pair),
           (Class) pair.source(),
           (Class) pair.target(),
-          patchTableOf(steps, pair.source(), this),
+          patchTableOf(steps, pair, this),
           List.of(),
           beanRefl
         )
@@ -4240,14 +4674,13 @@ public final class DeepMap {
     final Reflective refl,
     final Map<String, FieldStep> steps,
     final Set<String> rowWritten,
-    final boolean isTarget
+    final boolean isTarget,
+    final Beans.BeanWriter<?> narrowed
   ) {
-    final var writer = refl.writerFor(cls);
+    final var writer = narrowed != null ? narrowed : refl.writerFor(cls);
     final var named = refl.namedStrategyFor(cls);
     if (writer == null) {
       if (named == null) return;
-      final var adderRefusal = named == BeanWriteStrategy.ADDERS ? Beans.adderRefusal(cls) : null;
-      if (adderRefusal != null) throw new IllegalArgumentException(adderRefusal);
       throw new IllegalArgumentException(
         PairingMessages.beanUnbuiltBy(
           source.getSimpleName(),
@@ -4267,8 +4700,7 @@ public final class DeepMap {
       written.add(name);
     }
     written.addAll(rowWritten);
-    final var strategy = Beans.strategyOf(writer);
-    if (strategy != BeanWriteStrategy.SETTERS && strategy != BeanWriteStrategy.ADDERS) return;
+    if (Beans.strategyOf(writer) != BeanWriteStrategy.SETTERS) return;
     for (final var name : written) {
       if (!writer.writes(name)) {
         throw new IllegalArgumentException(

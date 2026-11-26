@@ -45,10 +45,14 @@
  *       io.github.eschizoid.telescope.mapping.Mapping#compute Mapping.compute}, {@link
  *       io.github.eschizoid.telescope.mapping.Mapping#when Mapping.when} — the rest of the row
  *       factories. See {@link io.github.eschizoid.telescope.mapping.Mapping} for the full set.
- *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean WriteHint.writeBean(cls,
- *       strategy)} / {@link io.github.eschizoid.telescope.mapping.WriteHint#writeBeans
- *       WriteHint.writeBeans(strategy)} — per-target / default write-strategy hints for bean
- *       reconstruction ({@code SETTERS} / {@code BUILDER} / {@code CONSTRUCTOR}).
+ *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#writeBean Mapping.writeBean(cls,
+ *       strategy)} / {@link io.github.eschizoid.telescope.mapping.Mapping#writeBeans
+ *       Mapping.writeBeans(strategy)} — per-target / default write-strategy hints for bean
+ *       reconstruction ({@code SETTERS} / {@code BUILDER} / {@code CONSTRUCTOR}, which {@code
+ *       Mapping} declares too).
+ *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#backReference
+ *       Mapping.backReference(getter)} — the property through which the elements of a collection
+ *       point back at their owner, where the mapper cannot tell it from the types.
  *   <li>{@link io.github.eschizoid.telescope.mapping.NullHint} — null-handling strategy ({@code
  *       DEFAULT} substitutes JLS defaults via {@code NullDefaults}; otherwise null propagates).
  *   <li>{@link io.github.eschizoid.telescope.mapping.Cases#cases(Class, Class) Cases.cases(src,
@@ -65,8 +69,8 @@
  * io.github.eschizoid.telescope.mapping.Constant}, {@link
  * io.github.eschizoid.telescope.mapping.Compute}, {@link
  * io.github.eschizoid.telescope.mapping.ComputeFromSource}, {@code Conditional}); {@code MapStep}
- * also permits {@code WriteHint}, {@code NullHint} and {@code Cases}. Users never name those
- * directly — the static factories above return the sealed interface type.
+ * also permits {@code WriteHint}, {@code NullHint}, {@code Cases} and {@code BackReference}. Users
+ * never name those directly — the static factories above return the sealed interface type.
  *
  * <p>For untyped sources, {@link io.github.eschizoid.telescope.mapping.MapExtractStep} is the
  * sibling sealed interface backing {@link io.github.eschizoid.telescope.Telescope#fromMap} — {@code

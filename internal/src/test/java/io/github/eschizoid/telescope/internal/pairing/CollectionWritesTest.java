@@ -8,9 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Method;
 import java.lang.reflect.Type;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -22,9 +20,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * The shared decisions for writing a container into an existing target and for filling a collection
- * through an adder, over reflection handles: which properties are refilled, which an adder fills,
- * how {@code into} writes one, and which method is the adder.
+ * The shared decisions for writing a container into an existing target, over reflection handles:
+ * which properties are refilled, which are tied to their owner element by element, and how {@code
+ * into} writes one.
  */
 class CollectionWritesTest {
 
@@ -65,13 +63,13 @@ class CollectionWritesTest {
     }
 
     @Test
-    @DisplayName("an adder fills a collection, never a map, an optional or a value")
-    void anAdderFillsCollectionsOnly() throws NoSuchFieldException {
+    @DisplayName("a collection is tied to its owner element by element, never a map, an optional or a value")
+    void onlyACollectionIsLinked() throws NoSuchFieldException {
       for (final var field : List.of("strings", "integers", "numbers", "raw")) {
-        assertTrue(WRITES.filledByAdder(declared(field)), field);
+        assertTrue(WRITES.linked(declared(field)), field);
       }
       for (final var field : List.of("map", "sortedMap", "optional", "text")) {
-        assertFalse(WRITES.filledByAdder(declared(field)), field);
+        assertFalse(WRITES.linked(declared(field)), field);
       }
     }
 
@@ -150,88 +148,6 @@ class CollectionWritesTest {
     void aContainerRefusalGoesToTheSetterOrIsRefused() {
       assertEquals(CollectionWrites.AfterFailedRefill.SET, CollectionWrites.afterFailedRefill(false, true));
       assertEquals(CollectionWrites.AfterFailedRefill.REFUSE, CollectionWrites.afterFailedRefill(false, false));
-    }
-  }
-
-  @Nested
-  @DisplayName("Which method is the adder")
-  class Adders {
-
-    @Test
-    @DisplayName("an adder is looked for under the name made singular, then as it is, each name once")
-    void adderNamesMakeThePropertySingular() {
-      assertEquals(List.of("addLine", "addLin", "addLines"), CollectionWrites.adderNames("lines"));
-      assertEquals(
-        List.of("addCategory", "addCategorie", "addCategori", "addCategories"),
-        CollectionWrites.adderNames("categories")
-      );
-      assertEquals(List.of("addAddresse", "addAddress", "addAddresses"), CollectionWrites.adderNames("addresses"));
-      assertEquals(List.of("addData"), CollectionWrites.adderNames("data"));
-      assertEquals(List.of("addS"), CollectionWrites.adderNames("s"));
-      assertEquals(List.of("addE", "addEs"), CollectionWrites.adderNames("es"));
-    }
-
-    /** Candidate adders of every shape the choice tells apart. */
-    @SuppressWarnings("unused")
-    private static final class Candidates {
-
-      public void addLine(final String line) {}
-
-      public void addLine(final Object line) {}
-
-      public void addItem(final CharSequence item) {}
-
-      public void addItem(final Comparable<?> item) {}
-
-      public void addCount(final int count) {}
-
-      public void addCounts(final Number count) {}
-
-      public void addWide(final Object wide) {}
-    }
-
-    private static Method adderFor(final String property, final Type element) {
-      return WRITES.adderFor(
-        property,
-        element,
-        name ->
-          Arrays.stream(Candidates.class.getDeclaredMethods())
-            .filter(method -> method.getName().equals(name))
-            .toList(),
-        method -> method.getGenericParameterTypes()[0]
-      );
-    }
-
-    @Test
-    @DisplayName("a method taking exactly the element's class is taken over a wider one of the same name")
-    void theExactParameterWins() throws NoSuchMethodException {
-      assertEquals(Candidates.class.getMethod("addLine", String.class), adderFor("lines", String.class));
-    }
-
-    @Test
-    @DisplayName("two methods equally able to take the element, neither exactly, choose none")
-    void twoWiderMethodsChooseNone() {
-      assertNull(adderFor("items", String.class));
-    }
-
-    @Test
-    @DisplayName("a primitive parameter is passed over, and the next name is asked")
-    void aPrimitiveParameterIsPassedOver() throws NoSuchMethodException {
-      assertEquals(Candidates.class.getMethod("addCounts", Number.class), adderFor("counts", Integer.class));
-    }
-
-    @Test
-    @DisplayName("a method that cannot take the element is no adder")
-    void aMethodThatCannotTakeTheElementIsNone() {
-      assertNull(adderFor("counts", String.class));
-      assertNull(adderFor("missing", String.class));
-    }
-
-    @Test
-    @DisplayName("an element of no declared class is taken by the one reference parameter of the name")
-    void anUnknownElementTakesAnyReferenceParameter() throws NoSuchMethodException {
-      assertEquals(Candidates.class.getMethod("addWide", Object.class), adderFor("wides", null));
-      assertNull(adderFor("lines", null), "two reference parameters of one name are no single choice");
     }
   }
 }

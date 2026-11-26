@@ -22,9 +22,9 @@ nested POJOs recurse, and container hops auto-lift. The POJO mechanics this sect
 lever (`writeBean` / `writeBeans`) for when the auto-detect ladder can't pick a strategy.
 
 ```java
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 
 class LegacyUser {
   /* getId(), getEmail(), getName() + no-arg ctor + setters */
@@ -51,24 +51,24 @@ strategy keeps. Second, when a member named for any property cannot take a value
 `p(String...)` behind a `String` property, a `long` member behind a `Long` getter), since every write through the
 builder would then fail. A null bound to a primitive property ends at the type's default (`0`, `false`) whichever
 strategy builds the bean. The generated `@Bridge`, `@BeanFocus` and `@FromMap` code takes the same order, so a POJO
-offering several of these is built the same way on both paths. Pass an explicit `WriteHint.writeBean(target, strategy)`
-row to force one of `BUILDER` / `SETTERS` / `CONSTRUCTOR`, either to keep a different strategy than the order picks or
-for a class the auto path refuses because it offers a write path it will not guess at (immutable all-args-only POJOs
-compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by
-parameter name when the names are known, from `-parameters` or `-g`, and every one names a property. With no names, or
-with names none of which is a property, it binds by position. A constructor only some of whose known names are
-properties is refused when the mapper is built, whether a `writeBean` hint or a `writeBeans(...)` default names it,
-since by name the other parameters would have no value and by position one property's value could land in a parameter
-named after another: name every parameter after a property, or write the class through setters or a builder. Inside a
-native image the names `-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the
-constructor the order would pick anyway binds it the same way. A class whose only write path is its private fields — a
-no-arg constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add
-public setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
-Package-private setters do not count; neither path calls them.
+offering several of these is built the same way on both paths. Pass an explicit `writeBean(target, strategy)` row to
+force one of `BUILDER` / `SETTERS` / `CONSTRUCTOR`, either to keep a different strategy than the order picks or for a
+class the auto path refuses because it offers a write path it will not guess at (immutable all-args-only POJOs compiled
+with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by parameter
+name when the names are known, from `-parameters` or `-g`, and every one names a property. With no names, or with names
+none of which is a property, it binds by position. A constructor only some of whose known names are properties is
+refused when the mapper is built, whether a `writeBean` hint or a `writeBeans(...)` default names it, since by name the
+other parameters would have no value and by position one property's value could land in a parameter named after another:
+name every parameter after a property, or write the class through setters or a builder. Inside a native image the names
+`-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the constructor the order
+would pick anyway binds it the same way. A class whose only write path is its private fields — a no-arg constructor and
+no other constructor, no public setters and no static `builder()` — is refused outright: add public setters, an all-args
+constructor or a static `builder()`, or supply an explicit mapping row that produces it. Package-private setters do not
+count; neither path calls them.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
 
 // OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
 // refuse without -parameters or -g. The hint forces the CONSTRUCTOR strategy explicitly.
@@ -124,17 +124,51 @@ mapper.into(managed, dto);
 assert managed.getLines() == lines; // the same list, now holding dto's lines
 ```
 
-**`ADDERS` — fill a collection through its adder.** `writeBean(OrderEntity.class, ADDERS)` builds the class as `SETTERS`
-does, except that each collection property a field of its name stores is filled one element at a time through its adder:
-`addLine` for `lines`, `addCategory` for `categories`, `addAddress` for `addresses`. The adder is a public instance
-method taking the collection's element, which is how an entity wires the back-reference of a bidirectional association,
-and the collection needs no setter. `into` clears the collection the target holds and then calls the adder for each
-element. The value `forward` builds for `into` to read from runs none of its adders, so each adder runs once per
-element, on the target, and an adder that changes or drops an element gives the target what `forward` would. An adder
-that rejects an element by throwing has its exception thrown on, once the held collection has its elements back: the
-setter never writes the collection past the adder's check and wiring. A class with such a collection and no adder for it
-is refused by the property's name when the mapper is built, and at compile time on a `@Bridge` field and in the
-verifier.
+**Adders, removers and back-references.** No row says how a collection is written. A mapper writing a collection
+property of a bean, through `forward`, `backward`, `into` or `patchInto`, ties each converted element to the owner by
+the rule below, read from what the classes declare, and `patch` builds its result through the same adders. A property's
+type alone decides nothing. The same rule runs on the runtime and the generated path.
+
+| Step                                    | What decides it                                                                                                                                                                                                                                                                                                                                                               | What the write does                                                                                                                                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. The owner's adder                    | a public instance method whose name starts with `add`, taking the collection's element class and returning nothing or the owner; a method named for the collection (`addLine` for `lines`) may take a wider class than `Object` the element can be passed as; the most specific parameter type wins, then the name; a method named for another collection is left to that one | each element goes through it, wherever the owner is written member by member (a setters build, `into`, `patchInto`); the collection needs no setter                                                                                |
+| 2. The held collection or the setter    | no adder                                                                                                                                                                                                                                                                                                                                                                      | `into` and `patchInto` clear and refill the collection the owner holds where it can change, and otherwise write it through the setter, as described above                                                                          |
+| 3. The back-reference                   | a `backReference(OrderLine::getOrder)` row; else, with `telescope-jpa`, the property `@OneToMany(mappedBy)` names; else none                                                                                                                                                                                                                                                  | where no adder sets it, every element the owner holds after the write points back at it                                                                                                                                            |
+| 4. A property the element already fills | the element's conversion writes it, by name or by a row                                                                                                                                                                                                                                                                                                                       | it keeps its value and is not treated as a back-reference                                                                                                                                                                          |
+| 5. Removal                              | the owner's remover: a method whose name starts with `remove`, chosen as the adder is, which may also return a `boolean`                                                                                                                                                                                                                                                      | each element the write takes out goes through it; with no remover, its back-reference, where step 3 names one, is cleared if it still points at the owner                                                                          |
+| 6. Undecided                            | two candidate adders, or removers, that neither the parameter type nor the name can settle                                                                                                                                                                                                                                                                                    | none of them is used: the collection is written as in step 2, a warning names them, logged once when the mapper is built and printed at compile time on a `@Bridge` and by the verifier, and `explain()` lists them as left unused |
+| 7. Refused                              | an undecided adder of a collection with no setter, or no adder, writable collection or setter that can take the elements                                                                                                                                                                                                                                                      | the mapper is refused when it is built, and at compile time on every `@Bridge` and in the verifier, with the methods or the property named                                                                                         |
+
+Mutable beans handed across as the source holds them, a same-typed collection such as `Mapper<Order, Order>` copies, go
+through no adder or remover and are never pointed back: the write fills and refills the collection with the source's own
+elements, which keep the owner they point at. Values handed across, a record, an enum, a `String`, a boxed primitive or
+a JDK value type such as `LocalDate` or `UUID`, do go through the adder and remover, so an adder that keeps each tag
+once keeps it once on every write. Only the method named for a collection may take a wider class than its element: an
+`addAttachment(Serializable)` is no adder of a list of `Serializable` lines.
+
+A plain bean whose elements point back at their owner, with no adder setting the pointer and no `mappedBy`, names the
+property with a `backReference` row. The row also overrides `mappedBy` where you want to pin it, and is how a
+`telescope-jpa` entity whose `@OneToMany` has no `mappedBy` gets one set; without it, that entity's elements are left as
+their conversion builds them.
+
+```java
+final Mapper<Order, OrderEntity> mapper = Telescope.mapper(
+  Order.class,
+  OrderEntity.class,
+  backReference(LineEntity::getOrder)
+);
+```
+
+A `backReference` row is refused by name when the getter's type is not the owner class of a collection the mapper
+writes, when no collection the mapper writes converts elements of that class, when the element's conversion already
+writes the property, or when the element has no setter for it that takes the owner.
+
+An adder that rejects an element by throwing has its exception thrown on, once the held collection has its elements
+back: the setter never writes the collection past the adder's check and wiring. The value `forward` builds for `into` to
+read from runs none of its adders, so each adder runs once per element, on the target. Where the collection the owner
+holds after the write has an element equal to one taken out, the taken one has its back-reference cleared rather than
+going to the remover, since the remover's own `remove` would take out the equal element. With an adder and a remover and
+no declared back-reference, nothing says how to untie it, so the taken instance keeps pointing at the owner.
 
 ```java
 public class OrderEntity {
@@ -152,19 +186,32 @@ public class OrderEntity {
   // ...
 }
 
-final Mapper<Order, OrderEntity> mapper = Telescope.mapper(
-  Order.class,
-  OrderEntity.class,
-  writeBean(OrderEntity.class, ADDERS)
-);
+final Mapper<Order, OrderEntity> mapper = Telescope.mapper(Order.class, OrderEntity.class);
 ```
+
+`explain()` reports how each collection is written, one line each, under `Collections`, on the runtime and the generated
+mapper alike, and once for a pair of one class both ways:
+
+```text
+Collections
+  • OrderEntity.lines: through OrderEntity.addLine(LineEntity)
+  • Basket.items: refilled in place, back-reference Item.basket set by backReference and cleared on removal
+  • Order.lines: refilled in place, back-reference OrderLine.order set from mappedBy and cleared on removal
+  • Team.members: refilled in place
+```
+
+`refilled in place` is what `into` and `patchInto` do; a new owner `forward` builds gets the converted collection
+through its setter. With `-Atelescope.verify=warn` the verifier prints the same line for each collection as a
+compile-time note; a default build prints none.
+
+Coming from the `ADDERS` write strategy: delete the `writeBean(X.class, ADDERS)` row, since the adder is now found by
+its type. A bean with a no-argument constructor and an adder is built through its setters and adders with no row, also
+when it has no setter at all.
 
 On a `@Bridge` field's mapper, `into` is generated with the bridge when the target class has a setter for every property
 the bridge writes other than a container: plain setter and adder calls, no reflection, with the same result, for a
 target of exactly that class. A subclass, whose own setters may take a value differently, and a target class without
 such members are written by the runtime `into` above, and `explain()` says which of the two writes.
-`@Bridge(writeStrategy = ADDERS)` and a `writeBean(..., ADDERS)` row on the field's mapper both compile to the adder
-calls.
 
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one
@@ -172,10 +219,10 @@ construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibe
 `X`. At most one `writeBeans(...)` default per call.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.BUILDER;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 
 final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
   Order.class,
@@ -227,7 +274,7 @@ Telescope.of(Page.class)
 ```
 
 For a worked end-to-end demo, an order service whose PATCH writes into a managed JPA entity through `into` and fills its
-lines through `ADDERS`, see [`examples/demo/`](../examples/demo/README.md).
+lines through the entity's own adder, see [`examples/demo/`](../examples/demo/README.md).
 
 **`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
 the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a `Telescope<Source, Target>`

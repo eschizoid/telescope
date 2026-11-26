@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.ownbridge;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.DEFAULT;
 import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.PROPAGATE;
 import static io.github.eschizoid.telescope.mapping.NullHint.nullSourceValues;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
