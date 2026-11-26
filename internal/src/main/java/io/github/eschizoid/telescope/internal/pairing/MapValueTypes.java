@@ -209,6 +209,18 @@ public final class MapValueTypes {
     return Optional.ofNullable(STRING_BUILT.get(qualifiedName));
   }
 
+  /**
+   * Whether the class of this qualified name is a JDK value: {@code String}, a boxed primitive, or
+   * one of the types built from their {@code String} form.
+   */
+  public static boolean isValueClass(final String qualifiedName) {
+    return (
+      qualifiedName.equals("java.lang.String") ||
+      WRAPPERS.containsKey(qualifiedName) ||
+      STRING_BUILT.containsKey(qualifiedName)
+    );
+  }
+
   /** Whether a class of this qualified name belongs to the JDK, and so carries no binder. */
   public static boolean isJdk(final String qualifiedName) {
     return qualifiedName.startsWith("java.") || qualifiedName.startsWith("javax.");

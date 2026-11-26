@@ -102,7 +102,7 @@ public final class MhIso {
     return switch (writer) {
       // The setter fold calls one setter per property; an adder takes each element in turn, which
       // the array leaf's writer does.
-      case Beans.SettersWriter<?> setters -> !setters.throughAdders &&
+      case Beans.SettersWriter<?> setters -> setters.adders.isEmpty() &&
       Beans.isSetterConstructible(to, Beans.propertyNames(to));
       case Beans.ConstructorWriter<?> constructor -> argumentsAreProperties(to, constructor);
       case Beans.BuilderWriter<?> ignored -> true;

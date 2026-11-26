@@ -75,7 +75,7 @@ final class FieldRows {
   static final String SOURCE = "s";
 
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
-  private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
+  private static final Set<String> HINTS = Set.of("writeBean", "writeBeans");
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward", "merge");
   private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
@@ -97,7 +97,8 @@ final class FieldRows {
     "zip",
     "when",
     "writeBean",
-    "writeBeans"
+    "writeBeans",
+    "backReference"
   );
 
   /** What the reader found for a field. */
@@ -144,7 +145,9 @@ final class FieldRows {
    * methods each names, as {@code source>target}; the generated provider records both. {@code
    * beanStrategies} are the write strategies {@code writeBean} rows name, by the qualified name of
    * the class each is keyed to, and {@code defaultStrategy} the one a {@code writeBeans} row names,
-   * or null.
+   * or null. {@code backReferences} are the properties {@code backReference} rows name, by the
+   * qualified name of the element class each is keyed to, and {@code backReferenceTypes} the
+   * qualified name of the class each one's getter returns.
    */
   record Parsed(
     TypeElement source,
@@ -169,7 +172,9 @@ final class FieldRows {
     List<TargetPath> targetPaths,
     List<PathToPath> pathsToPaths,
     Map<String, Gate> gatedTargets,
-    Map<Integer, Gate> gatedPaths
+    Map<Integer, Gate> gatedPaths,
+    Map<String, String> backReferences,
+    Map<String, String> backReferenceTypes
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -960,8 +965,52 @@ final class FieldRows {
         targetPaths,
         pathsToPaths,
         gatedTargets,
-        gatedPaths
+        gatedPaths,
+        backReferences,
+        backReferenceTypes
       );
+    }
+
+    /** The property each {@code backReference} row names, by its element class. */
+    private final Map<String, String> backReferences = new LinkedHashMap<>();
+
+    /** The class each {@code backReference} row's getter returns, by its element class. */
+    private final Map<String, String> backReferenceTypes = new LinkedHashMap<>();
+
+    /**
+     * A {@code backReference(Element::getOwner)} row: the element class it is keyed to and the
+     * property it names. Whether a collection of the pair takes it is decided once the bridge plans
+     * its collections.
+     */
+    private Refused backReference(final MethodInvocationTree row) {
+      final var arg = row.getArguments().getFirst();
+      if (!(arg instanceof MemberReferenceTree reference)) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper compiles a backReference row whose argument is a getter written as a method" +
+            " reference, such as OrderLine::getOrder"
+        );
+      }
+      final var qualifier = trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
+      if (
+        !(elementAt(unit, arg) instanceof ExecutableElement getter) ||
+        !getter.getParameters().isEmpty() ||
+        !(qualifier instanceof DeclaredType declared)
+      ) {
+        return new Refused(arg, "the processor cannot resolve this accessor");
+      }
+      final var element = (TypeElement) declared.asElement();
+      final var returned = env.getTypeUtils().erasure(getter.getReturnType());
+      final var key = element.getQualifiedName().toString();
+      if (backReferences.put(key, property(getter.getSimpleName().toString(), element)) != null) {
+        return new Refused(row, PairingMessages.duplicateBackReferenceRow(simple(element)));
+      }
+      backReferenceTypes.put(
+        key,
+        returned instanceof DeclaredType type ? ((TypeElement) type.asElement()).getQualifiedName().toString() : ""
+      );
+      rowKinds.add("BackReference");
+      return null;
     }
 
     /** Reads one row, or answers why it cannot be compiled. */
@@ -983,9 +1032,10 @@ final class FieldRows {
       if (
         rowElement instanceof ExecutableElement hintExec &&
         hintExec.getEnclosingElement() instanceof TypeElement hintOwner &&
-        hintOwner.getQualifiedName().contentEquals(WRITE_HINT_FQN)
+        hintOwner.getQualifiedName().contentEquals(MAPPING_FQN)
       ) {
-        return hint(row, hintExec.getSimpleName().toString());
+        if (HINTS.contains(hintExec.getSimpleName().toString())) return hint(row, hintExec.getSimpleName().toString());
+        if (hintExec.getSimpleName().contentEquals("backReference")) return backReference(row);
       }
       if (
         !(rowElement instanceof ExecutableElement rowExec) ||
@@ -997,8 +1047,8 @@ final class FieldRows {
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
             " to, toOneWay, toOrElse, toOrElseGet, toFormatted, toFormattedOneWay, toFormattedNumber," +
-            " toFormattedNumberOneWay, via, drop, constant, compute and when, and the hints writeBean and" +
-            " writeBeans"
+            " toFormattedNumberOneWay, via, drop, constant, compute, when and backReference, and the hints" +
+            " writeBean and writeBeans"
         );
       }
       final var rowArgs = row.getArguments();
@@ -2575,14 +2625,25 @@ final class FieldRows {
       return null;
     }
 
-    /** The name of the {@code WriteStrategy} constant {@code arg} names, or null. */
+    /**
+     * The name of the {@code WriteStrategy} constant {@code arg} names, directly or through the
+     * field of the same name {@code Mapping} declares, or null.
+     */
     private String strategyOf(final ExpressionTree arg) {
       if (!(arg instanceof IdentifierTree || arg instanceof MemberSelectTree)) return null;
       if (!(elementAt(unit, arg) instanceof VariableElement constant)) return null;
       // javac typed the argument as a WriteStrategy, so an enum constant here is one of its
-      // constants.
-      if (constant.getKind() != ElementKind.ENUM_CONSTANT) return null;
-      return constant.getSimpleName().toString();
+      // constants, and a field of Mapping is the constant of its name.
+      if (constant.getKind() == ElementKind.ENUM_CONSTANT) return constant.getSimpleName().toString();
+      final var holder = constant.getEnclosingElement();
+      if (
+        constant.getKind() == ElementKind.FIELD &&
+        holder instanceof TypeElement mapping &&
+        mapping.getQualifiedName().contentEquals(MAPPING_FQN)
+      ) {
+        return constant.getSimpleName().toString();
+      }
+      return null;
     }
 
     /**

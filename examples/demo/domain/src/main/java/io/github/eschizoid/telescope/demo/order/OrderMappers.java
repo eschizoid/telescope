@@ -14,8 +14,6 @@ import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.Mapping.when;
 import static io.github.eschizoid.telescope.mapping.MergeStep.auto;
 import static io.github.eschizoid.telescope.mapping.MergeStep.from;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
 import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.Telescope;
@@ -148,7 +146,6 @@ public final class OrderMappers {
   public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
     PlaceOrder.class,
     Order.class,
-    writeBean(Order.class, ADDERS),
     via(PlaceOrder::lines, Order::getLines, CatalogLines.class),
     drop(PlaceOrder::customerEmail)
   );
@@ -165,7 +162,6 @@ public final class OrderMappers {
   public static final Mapper<Order, OrderChanges> EDITS = mapper(
     Order.class,
     OrderChanges.class,
-    writeBean(Order.class, ADDERS),
     via(Order::getLines, OrderChanges::lines, LineEdits.class),
     drop(Order::getId),
     drop(Order::getNumber),

@@ -7,8 +7,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * The words both paths refuse a container write and an adders build in. The runtime mapper, the
- * generated bridge and the verifier each read them from here, so the text is pinned once.
+ * The words both paths refuse a container write in, and describe and refuse how a collection's
+ * elements are tied to their owner. The runtime mapper, the generated bridge and the verifier each
+ * read them from here, so the text is pinned once.
  */
 class CollectionWriteMessagesTest {
 
@@ -35,35 +36,102 @@ class CollectionWriteMessagesTest {
   }
 
   @Test
-  @DisplayName("a missing adder lists every name looked for and the element it has to take")
-  void aMissingAdderListsTheNames() {
+  @DisplayName("an undecided adder names every candidate and the name that would settle it")
+  void anUndecidedAdderNamesTheCandidates() {
     assertEquals(
-      "writeStrategy = ADDERS on Order fills its collection 'lines' through an adder, one element at a time, and" +
-        " Order has no public method addLine, addLin or addLines taking a Line. Give Order an adder addLine(Line)," +
-        " or name another write strategy for it.",
-      PairingMessages.adderMissing("Order", "lines", "Line", List.of("addLine", "addLin", "addLines"))
+      "Order writes its collection 'lines' of OrderLine through the owner's adder, and addGift(OrderLine) and" +
+        " addSample(OrderLine) each take a OrderLine with no name telling which collection they belong to. Name" +
+        " the adder of 'lines' addLine, or give the other methods a name that starts with neither add nor remove.",
+      PairingMessages.collectionMemberUndecided(
+        "Order",
+        "lines",
+        "OrderLine",
+        "adder",
+        List.of("addGift(OrderLine)", "addSample(OrderLine)"),
+        "addLine"
+      )
     );
   }
 
   @Test
-  @DisplayName("a missing adder of one name and no element class names an element and Object")
-  void aMissingAdderOfOneNameAndNoElement() {
+  @DisplayName("each way a collection is written is one line, as explain prints it")
+  void eachCollectionWriteIsOneLine() {
     assertEquals(
-      "writeStrategy = ADDERS on Bag fills its collection 'data' through an adder, one element at a time, and Bag" +
-        " has no public method addData taking an element. Give Bag an adder addData(Object), or name another" +
-        " write strategy for it.",
-      PairingMessages.adderMissing("Bag", "data", null, List.of("addData"))
+      "Order.lines: through Order.addLine(OrderLine), removed through Order.removeLine(OrderLine)",
+      PairingMessages.collectionWritten(
+        "Order",
+        "lines",
+        "OrderLine",
+        "addLine(OrderLine)",
+        "removeLine(OrderLine)",
+        "order",
+        "MAPPED_BY",
+        null
+      )
+    );
+    assertEquals(
+      "Order.lines: through Order.addLine(BaseLine), back-reference OrderLine.order cleared on removal",
+      PairingMessages.collectionWritten(
+        "Order",
+        "lines",
+        "OrderLine",
+        "addLine(BaseLine)",
+        null,
+        "order",
+        "MAPPED_BY",
+        null
+      )
+    );
+    assertEquals(
+      "Order.lines: refilled in place, back-reference OrderLine.order set from mappedBy and cleared on removal",
+      PairingMessages.collectionWritten("Order", "lines", "OrderLine", null, null, "order", "MAPPED_BY", null)
+    );
+    assertEquals(
+      "Basket.items: refilled in place, back-reference Item.basket set by backReference and cleared on removal",
+      PairingMessages.collectionWritten("Basket", "items", "Item", null, null, "basket", "ROW", null)
+    );
+    assertEquals(
+      "Order.lines: refilled in place, back-reference OrderLine.order set by backReference," +
+        " removed through Order.removeLine(OrderLine)",
+      PairingMessages.collectionWritten(
+        "Order",
+        "lines",
+        "OrderLine",
+        null,
+        "removeLine(OrderLine)",
+        "order",
+        "ROW",
+        null
+      )
+    );
+    assertEquals(
+      "KOrder.lines: refilled in place; addBackup(KLine) and addPrimary(KLine) left unused: no name says which" +
+        " belongs to 'lines'",
+      PairingMessages.collectionWritten(
+        "KOrder",
+        "lines",
+        "KLine",
+        null,
+        null,
+        null,
+        null,
+        PairingMessages.collectionMembersLeftUnused("lines", List.of("addBackup(KLine)", "addPrimary(KLine)"))
+      )
+    );
+    assertEquals(
+      "Order.tags: refilled in place",
+      PairingMessages.collectionWritten("Order", "tags", "String", null, null, null, null, null)
     );
   }
 
   @Test
-  @DisplayName("an adders build with no no-argument constructor says what it needs")
-  void addersNeedANoArgumentConstructor() {
+  @DisplayName("a configured ADDERS strategy is refused with what replaced it")
+  void addersInConfigurationIsRefused() {
     assertEquals(
-      "writeStrategy = ADDERS on Order builds it through a no-argument constructor before its setters and adders" +
-        " write it, and Order has none that can be called. Give Order a no-argument constructor, or name another" +
-        " write strategy for it.",
-      PairingMessages.addersNeedNoArgConstructor("Order")
+      "telescope.default-write-strategy names ADDERS, which is no write strategy: a collection is written through" +
+        " its owner's adder whenever the owner has one, whatever strategy builds the owner. Name BUILDER," +
+        " CONSTRUCTOR or SETTERS, or remove the setting.",
+      PairingMessages.addersRemoved("telescope.default-write-strategy")
     );
   }
 }

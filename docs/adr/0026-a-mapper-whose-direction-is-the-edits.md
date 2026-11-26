@@ -106,14 +106,13 @@ type. `WriteStrategy.ADDERS` and its row are gone.
 4. **Collections follow #818, with no row.** `forward`, `into`, `patch` and `patchInto` write a collection property of
    `E` through the owner's adder found by type, else the collection the target holds, else its setter, and remove an
    element through the owner's remover, else by clearing its back-reference. The back-reference is the one #818's rule
-   names: the property a `backReference(...)` row pins, else the property a `mappedBy` on the collection names, else the
-   element's one writable property whose type is the owner's. Because that rule reads the element's and the owner's
-   classes alone, the back-reference counts as filled when the element's own mapper is built, so an element mapper needs
-   no row for it; an element with several owner-typed properties and none of the three is the one case that leaves it
-   unfilled, and the build warns there as #818 sets out. Elements converted through a nested pair the mapper walks, or
-   through an `EditMapper` a `via` row names, are converted by a conversion that can write in place, so with
-   telescope-jpa a managed collection is merged by `@Id` as ADR-0017's amendment sets out; elements a hand-written class
-   converts are still cleared and refilled.
+   names: the property a `backReference(...)` row pins, else the property a `mappedBy` on the collection names, else
+   none. Because that rule reads only the mapper's rows and what the owner's class declares, the back-reference counts
+   as filled when the element's own mapper is built, so an element mapper needs no row for it; a property of the owner's
+   type that none of them names is left as the element's conversion builds it. Elements converted through a nested pair
+   the mapper walks, or through an `EditMapper` a `via` row names, are converted by a conversion that can write in
+   place, so with telescope-jpa a managed collection is merged by `@Id` as ADR-0017's amendment sets out; elements a
+   hand-written class converts are still cleared and refilled.
 
 5. **The generated path compiles it like every `@Bridge` field.** `FieldRows` reads `Telescope.edits(...)` written in
    place on a `static final` field, as it reads `mapper` and `mapperForward`, and `keep` joins the rows it compiles.

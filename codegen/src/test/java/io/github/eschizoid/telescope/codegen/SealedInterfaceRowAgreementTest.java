@@ -1044,11 +1044,11 @@ class SealedInterfaceRowAgreementTest {
         """
         package demo;
         import static io.github.eschizoid.telescope.mapping.Mapping.*;
-        import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+        import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.annotations.Bridge;
         import io.github.eschizoid.telescope.conversion.Mapper;
-        import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+        import io.github.eschizoid.telescope.mapping.WriteStrategy;
         public sealed interface Shape permits Circle {
           @Bridge
           Mapper<Shape, ShapeDto> MAPPER = Telescope.mapper(Shape.class, ShapeDto.class, ROW);

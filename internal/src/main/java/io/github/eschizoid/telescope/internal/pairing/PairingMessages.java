@@ -1217,52 +1217,261 @@ public final class PairingMessages {
   }
 
   /**
-   * A bean written through its adders whose collection {@code property} has no adder: no public
-   * instance method under any of {@code names} takes a value of {@code element}, which is null
-   * where the collection names no element class.
+   * A collection {@code property} of {@code owner} that is written while the owner's methods leave
+   * its adder or remover undecided: each of {@code candidates} takes a {@code element}, and none is
+   * named for the property or for another collection of the owner.
+   *
+   * @param noun {@code adder} or {@code remover}
+   * @param named the name a method of that kind is named for the property under
    */
-  public static String adderMissing(
-    final String bean,
+  public static String collectionMemberUndecided(
+    final String owner,
     final String property,
     final String element,
-    final List<String> names
+    final String noun,
+    final List<String> candidates,
+    final String named
   ) {
-    final var listed =
-      names.size() == 1
-        ? names.getFirst()
-        : String.join(", ", names.subList(0, names.size() - 1)) + " or " + names.getLast();
+    final var one = candidates.size() == 1;
     return (
-      "writeStrategy = ADDERS on " +
-      bean +
-      " fills its collection '" +
+      owner +
+      " writes its collection '" +
       property +
-      "' through an adder, one element at a time, and " +
-      bean +
-      " has no public method " +
-      listed +
-      " taking " +
-      (element == null ? "an element" : "a " + element) +
-      ". Give " +
-      bean +
-      " an adder " +
-      names.getFirst() +
-      "(" +
-      (element == null ? "Object" : element) +
-      "), or name another write strategy for it."
+      "' of " +
+      element +
+      " through the owner's " +
+      noun +
+      ", and " +
+      listed(candidates) +
+      (one ? " takes a " : " each take a ") +
+      element +
+      " with no name telling which collection " +
+      (one ? "it belongs" : "they belong") +
+      " to. Name the " +
+      noun +
+      " of '" +
+      property +
+      "' " +
+      named +
+      ", or give the other " +
+      (one ? "method" : "methods") +
+      " a name that starts with neither add nor remove."
     );
   }
 
-  /** A bean written through its adders with no no-argument constructor to start from. */
-  public static String addersNeedNoArgConstructor(final String bean) {
+  /**
+   * The warning of a mapper writing collection {@code property} of {@code owner}, of {@code
+   * element}, without an adder or remover because each of {@code candidates} could be it and none
+   * is named for the property: the collection is written as one with no such method.
+   *
+   * @param noun {@code adder} or {@code remover}
+   * @param named the name a method of that kind is named for the property under
+   */
+  public static String collectionMemberUnused(
+    final String owner,
+    final String property,
+    final String element,
+    final String noun,
+    final List<String> candidates,
+    final String named
+  ) {
+    final var one = candidates.size() == 1;
     return (
-      "writeStrategy = ADDERS on " +
-      bean +
-      " builds it through a no-argument constructor before its setters and adders write it, and " +
-      bean +
-      " has none that can be called. Give " +
-      bean +
-      " a no-argument constructor, or name another write strategy for it."
+      owner +
+      " writes its collection '" +
+      property +
+      "' of " +
+      element +
+      " without " +
+      (noun.equals("adder") ? "an adder" : "a remover") +
+      ": " +
+      listed(candidates) +
+      (one ? " takes a " : " each take a ") +
+      element +
+      " with no name telling which collection " +
+      (one ? "it belongs" : "they belong") +
+      " to, so " +
+      (one ? "it is not" : "none is") +
+      " used. Name the " +
+      noun +
+      " of '" +
+      property +
+      "' " +
+      named +
+      " to have it used, or give the other " +
+      (one ? "method" : "methods") +
+      " a name that starts with neither add nor remove."
     );
+  }
+
+  /**
+   * What {@code explain()} adds to the line of {@code property} for {@code candidates} left unused.
+   */
+  public static String collectionMembersLeftUnused(final String property, final List<String> candidates) {
+    return listed(candidates) + " left unused: no name says which belongs to '" + property + "'";
+  }
+
+  /**
+   * How a mapper writes collection {@code property} of {@code owner}, a collection of {@code
+   * element}, as {@code explain()} and the processor's notes say it.
+   *
+   * @param adder the adder's signature as a member of the owner, as {@code addLine(OrderLine)}, or
+   *     null
+   * @param remover the remover's signature, as the adder's, or null
+   * @param backReference the element's back-reference property, or null
+   * @param source where the back-reference was decided from, {@code ROW} or {@code MAPPED_BY}, or
+   *     null with it
+   * @param unused the methods an undecided choice left unused, as {@link
+   *     #collectionMembersLeftUnused} says them, or null
+   */
+  public static String collectionWritten(
+    final String owner,
+    final String property,
+    final String element,
+    final String adder,
+    final String remover,
+    final String backReference,
+    final String source,
+    final String unused
+  ) {
+    final var line = new StringBuilder(owner).append('.').append(property).append(": ");
+    if (adder != null) line.append("through ").append(owner).append('.').append(adder);
+    else line.append("refilled in place");
+    final var back = backReference == null ? null : element + "." + backReference;
+    if (adder == null && back != null) {
+      line
+        .append(", back-reference ")
+        .append(back)
+        .append("ROW".equals(source) ? " set by backReference" : " set from mappedBy");
+      if (remover == null) line.append(" and cleared on removal");
+    }
+    if (remover != null) line.append(", removed through ").append(owner).append('.').append(remover);
+    else if (adder != null && back != null) line.append(", back-reference ").append(back).append(" cleared on removal");
+    if (unused != null) line.append("; ").append(unused);
+    return line.toString();
+  }
+
+  /** A {@code backReference} row whose element class is in no collection the mapper writes. */
+  public static String backReferenceRowUnused(
+    final String source,
+    final String target,
+    final String element,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": backReference(" +
+      element +
+      "::" +
+      property +
+      ") names an element of no collection the mapper converts. Remove the row, or name the" +
+      " element class of a collection whose elements the mapper converts."
+    );
+  }
+
+  /**
+   * A {@code backReference} row whose property is of {@code type}, which is not the class of the
+   * owner of any collection of {@code element} the mapper writes, those being {@code owners}.
+   */
+  public static String backReferenceRowNotOwner(
+    final String source,
+    final String target,
+    final String element,
+    final String property,
+    final String type,
+    final List<String> owners
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": backReference(" +
+      element +
+      "::" +
+      property +
+      ") names a property of type " +
+      type +
+      ", and the collections of " +
+      element +
+      " the mapper writes are held by " +
+      listed(owners) +
+      ". A back-reference is a property whose type is exactly its owner's class."
+    );
+  }
+
+  /** A {@code backReference} row naming a property the conversion of each element writes. */
+  public static String backReferenceRowFilled(
+    final String source,
+    final String target,
+    final String element,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": backReference(" +
+      element +
+      "::" +
+      property +
+      ") names a property the conversion of each element already writes from the source. Remove" +
+      " the row, or drop the property from the element's conversion."
+    );
+  }
+
+  /** A {@code backReference} row naming a property of the element with no setter for the owner. */
+  public static String backReferenceRowUnwritable(
+    final String source,
+    final String target,
+    final String element,
+    final String property
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": backReference(" +
+      element +
+      "::" +
+      property +
+      ") names a property " +
+      element +
+      " has no public setter for, so it cannot be pointed at the owner."
+    );
+  }
+
+  /** Two {@code backReference} rows for one element class. */
+  public static String duplicateBackReferenceRow(final String element) {
+    return (
+      "Duplicate backReference row for " +
+      element +
+      ". Each element class may declare at most one backReference(...) row per mapper."
+    );
+  }
+
+  /**
+   * {@code ADDERS}, which is no write strategy, named where a strategy is read from configuration
+   * under {@code key}.
+   */
+  public static String addersRemoved(final String key) {
+    return (
+      key +
+      " names ADDERS, which is no write strategy: a collection is written through its owner's adder" +
+      " whenever the owner has one, whatever strategy builds the owner. Name BUILDER, CONSTRUCTOR or" +
+      " SETTERS, or remove the setting."
+    );
+  }
+
+  /** {@code names} as {@code a}, {@code a and b} or {@code a, b and c}. */
+  private static String listed(final List<String> names) {
+    if (names.size() == 1) return names.getFirst();
+    return String.join(", ", names.subList(0, names.size() - 1)) + " and " + names.getLast();
   }
 
   /** Duplicate override row claiming an already-claimed target field. */

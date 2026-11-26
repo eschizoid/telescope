@@ -277,16 +277,15 @@ public static final Mapper<Sources, InvoiceDto> INVOICE = Telescope.merge(
 
 ### 3. Service ↔ entity: JPA, collection identity and the bidirectional association
 
-**Each line points back at its order, and only `addLine` sets that pointer.** `Order` has no setter for its lines.
-`writeBean(Order.class, ADDERS)` fills them one element at a time through `addLine`, and a `via` row prices each item
-from the catalog, so a client never sends a price:
+**Each line points back at its order, and only `addLine` sets that pointer.** `Order` has no setter for its lines. The
+mapper fills them one element at a time through `addLine`, the method `Order` declares to take an `OrderLine`, with no
+row naming it, and a `via` row prices each item from the catalog, so a client never sends a price:
 
 ```java
 @Bridge
 public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
   PlaceOrder.class,
   Order.class,
-  writeBean(Order.class, ADDERS),
   via(PlaceOrder::lines, Order::getLines, CatalogLines.class),
   drop(PlaceOrder::customerEmail)
 );
@@ -304,7 +303,6 @@ someone decides whether a PATCH may change it:
 public static final Mapper<Order, OrderChanges> EDITS = mapper(
   Order.class,
   OrderChanges.class,
-  writeBean(Order.class, ADDERS),
   via(Order::getLines, OrderChanges::lines, LineEdits.class),
   drop(Order::getId),
   drop(Order::getNumber),
@@ -373,7 +371,7 @@ fails naming `buyerEmail`.
 | `via` with methods and with a class, sealed cases                      | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
 | `merge`, with a lazy customer proxy among the sources                  | `OrderDeskTest`, both apps' `OrderApiTest`                              |
 | `OrderMappings` (`order.toOrderDto()`)                                 | every test                                                              |
-| `patchInto` with `ADDERS`                                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
+| `patchInto` through the entity's adders                                | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
 | the order lifecycle and its 409s                                       | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
 | `@FromMap`, `trace()` in the import's 400                              | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |
 | `telescope-jackson`'s `JsonBinder` reading the partner's JSON          | `OrderDeskTest`, both apps' `OrderApiTest`, `OrderRun`                  |

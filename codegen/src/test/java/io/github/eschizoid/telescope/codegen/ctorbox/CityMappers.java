@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.codegen.ctorbox;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 
 /**
  * A {@code @Bridge} field whose source path a {@code SETTERS} default writes back through {@link

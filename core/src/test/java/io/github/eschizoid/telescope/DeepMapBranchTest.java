@@ -1,11 +1,11 @@
 package io.github.eschizoid.telescope;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static io.github.eschizoid.telescope.mapping.Mapping.zip;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;

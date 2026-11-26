@@ -65,8 +65,6 @@ Two mapper fields say how those types relate, and the PATCH handler uses them:
 ```java
 import static io.github.eschizoid.telescope.Telescope.*; // mapper, mapperForward, path
 import static io.github.eschizoid.telescope.mapping.Mapping.*; // to, via, compute, drop
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
 public final class OrderMappers {
 
@@ -75,7 +73,6 @@ public final class OrderMappers {
   public static final Mapper<Order, OrderChanges> EDITS = mapper(
     Order.class,
     OrderChanges.class,
-    writeBean(Order.class, ADDERS), // write collections through the entity's adders, here addLine
     via(Order::getLines, OrderChanges::lines, LineEdits.class),
     drop(Order::getId), // the fields a client may never change
     drop(Order::getNumber),
@@ -114,12 +111,13 @@ Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
 ```
 
 That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name. The delivery and the lines
-change, and a field the client left out keeps its value. The new lines go through `order.addLine(...)` into the
-`@OneToMany` list the entity already holds, so Hibernate keeps tracking it and each line gets its back-reference. The
-response is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the
-internal notes. Every field is a method reference, so a typo is a compile error, and a field added to `Order` later
-fails the build until someone decides whether a PATCH may change it. The `telescope-codegen` processor compiles both
-mappers into plain Java with no reflection.
+change, and a field the client left out keeps its value. The new lines go through `order.addLine(...)`, the method
+`Order` declares to take an `OrderLine`, into the `@OneToMany` list the entity already holds, so Hibernate keeps
+tracking it and each line gets its back-reference. No row says so: the mapper finds the adder by its type. The response
+is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the internal
+notes. Every field is a method reference, so a typo is a compile error, and a field added to `Order` later fails the
+build until someone decides whether a PATCH may change it. The `telescope-codegen` processor compiles both mappers into
+plain Java with no reflection.
 
 ## What you stop writing
 
@@ -468,7 +466,7 @@ run an update inside a `CompletableFuture`, `Optional`, `Either` or `Validated` 
 |                           | [docs/introspection.md](docs/introspection.md)                         | `explain()`, `trace()` and logging                                            |
 |                           | [docs/navigation.md](docs/navigation.md)                               | every path operation, containers, sealed cases, filters and multi-edit        |
 |                           | [docs/effects.md](docs/effects.md)                                     | updates inside async, validated, either and optional results                  |
-| Service and entity        | [docs/pojos.md](docs/pojos.md)                                         | beans, write strategies, `into` and `ADDERS`                                  |
+| Service and entity        | [docs/pojos.md](docs/pojos.md)                                         | beans, write strategies, `into`, adders and back-references                   |
 |                           | [jpa/README.md](jpa/README.md)                                         | lazy collections, proxies and merge by `@Id` on JPA entities                  |
 | Coming from MapStruct     | [docs/mapstruct-comparison.md](docs/mapstruct-comparison.md)           | the two tools side by side                                                    |
 |                           | [docs/mapstruct-migration.md](docs/mapstruct-migration.md)             | moving one mapper at a time, and running both together                        |
@@ -487,7 +485,7 @@ The design decisions are recorded in [docs/adr/](docs/adr/).
   containers whose elements convert, enums with the same constant names, and a `String` against a number, an enum or a
   boolean. Narrowing, and text against a date or time, take a row.
 - **Records and JavaBeans-style POJOs.** Records rebuild through the canonical constructor. POJOs rebuild through a
-  builder, an all-args constructor or setters, in that order, and `WriteHint.writeBean(...)` picks one.
+  builder, an all-args constructor or setters, in that order, and `writeBean(...)` picks one.
 - **Nulls are uniform.** A null in the middle of a path focuses nothing, and a mapper maps `null` to `null`.
 
 ## Build and test

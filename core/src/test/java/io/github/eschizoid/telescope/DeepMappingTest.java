@@ -1,13 +1,13 @@
 package io.github.eschizoid.telescope;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.BUILDER;
+import static io.github.eschizoid.telescope.mapping.Mapping.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.Mapping.SETTERS;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

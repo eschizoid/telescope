@@ -81,7 +81,7 @@ element nothing matches is removed. A row that did not change is not written.
 public record OrderForm(Long id, List<LineForm> lines) {}
 public record LineForm(Long id, String sku, int quantity) {}
 
-static final Mapper<OrderForm, Order> EDIT = Telescope.mapper(OrderForm.class, Order.class, writeBean(Order.class, ADDERS));
+static final Mapper<OrderForm, Order> EDIT = Telescope.mapper(OrderForm.class, Order.class);
 
 final Order order = orders.findById(id).orElseThrow();
 EDIT.into(order, form);
@@ -127,6 +127,28 @@ The generated bridge merges the same way, through the same policy: each generate
 element, its check and its write in place, and a bridge converting a collection of those elements hands it to
 `ContainerCopy`. `MergeByIdTest` and `MergeByIdEdgesTest` count the statements Hibernate issues on both paths.
 
+## A new element points back at its owner
+
+A collection a mapper writes goes through the owner's adder where it has one, a method whose name starts with `add`
+taking the element class, and that adder sets the element's back-reference. Where the owner has none, the module names
+the back-reference: the property `@OneToMany(mappedBy = "...")` names on the owner's collection, read from the field or
+its getter, so every element the owner holds after the write points back at it before the flush. A `@OneToMany` with no
+`mappedBy` is unidirectional, so no element is pointed back, even through a property of the owner's type, unless a
+`backReference(Line::getOrder)` row names it. The full rule is in [docs/pojos.md](../docs/pojos.md).
+
+An element a write takes out of the collection goes through the owner's remover, a method whose name starts with
+`remove` taking the element class, where it has one, and otherwise has its back-reference cleared where it still points
+at the owner. What the flush then issues depends on the association:
+
+| Association                           | A new element            | An element taken out                                      |
+| ------------------------------------- | ------------------------ | --------------------------------------------------------- |
+| `orphanRemoval = true`, adder or none | one INSERT, with its key | one DELETE, and no UPDATE before it                       |
+| no orphan removal                     | one INSERT, with its key | one UPDATE setting its foreign key to null; the row stays |
+
+The generated bridge takes `mappedBy` only where the runtime takes it, by asking the registered policy when the bridge
+class loads, so the two paths set the same property with the module and without it. `BackReferenceTest` counts the
+statements on both paths, for an owner with an adder and a remover and for one with neither.
+
 ## A lazy proxy is read as its entity
 
 A lazy `@ManyToOne` is a runtime subclass of the entity until something reads it. Reflection over that subclass sees the
@@ -147,10 +169,10 @@ proxy's class.
 The module registers two providers through `ServiceLoader`, with a `provides` clause in its `module-info` and a
 `META-INF/services` entry for the class path:
 
-| Provider           | Core SPI                          | What it does                                                           |
-| ------------------ | --------------------------------- | ---------------------------------------------------------------------- |
-| `LoadedContainers` | `ContainerCopy.Policy`            | shares an unloaded container, merges a collection of entities by `@Id` |
-| `HibernateProxies` | `ProxyResolver` (in `conversion`) | resolves a Hibernate proxy to its entity class without initializing it |
+| Provider           | Core SPI                          | What it does                                                                                                     |
+| ------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `LoadedContainers` | `ContainerCopy.Policy`            | shares an unloaded container, merges a collection of entities by `@Id`, answers `mappedBy` as the back-reference |
+| `HibernateProxies` | `ProxyResolver` (in `conversion`) | resolves a Hibernate proxy to its entity class without initializing it                                           |
 
 At most one active `ContainerCopy.Policy` may be registered, so an application that registers a policy of its own
 alongside this module is refused when the first container is copied, naming both. Several `ProxyResolver`s may be

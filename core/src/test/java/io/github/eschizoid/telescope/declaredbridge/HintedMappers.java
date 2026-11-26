@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.declaredbridge;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.writeBean;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 
 /**
  * A {@code @Bridge} field whose rows carry a write hint beside a row naming accessors: the hint

@@ -30,6 +30,14 @@ public final class Shop implements AutoCloseable {
       .addAnnotatedClass(Basket.class)
       .addAnnotatedClass(Line.class)
       .addAnnotatedClass(Tag.class)
+      .addAnnotatedClass(Crate.class)
+      .addAnnotatedClass(Bottle.class)
+      .addAnnotatedClass(Rack.class)
+      .addAnnotatedClass(Jar.class)
+      .addAnnotatedClass(Pallet.class)
+      .addAnnotatedClass(Sack.class)
+      .addAnnotatedClass(UOrder.class)
+      .addAnnotatedClass(ULine.class)
       .buildMetadata()
       .buildSessionFactory();
     return new Shop(sessions);
@@ -61,6 +69,22 @@ public final class Shop implements AutoCloseable {
       basket.getTags().size();
       statistics().clear();
       final var answer = work.apply(basket);
+      session.flush();
+      return answer;
+    });
+  }
+
+  /**
+   * The entity {@code id} of {@code type}, with what {@code load} reads loaded, from a session of
+   * its own in which {@code work} runs and is flushed, the statistics counting only what the work
+   * and the flush issue. Answers what {@code work} answers.
+   */
+  public <E, T> T withEntity(final Class<E> type, final Long id, final Function<E, ?> load, final Function<E, T> work) {
+    return inSession(session -> {
+      final var entity = session.find(type, id);
+      load.apply(entity);
+      statistics().clear();
+      final var answer = work.apply(entity);
       session.flush();
       return answer;
     });

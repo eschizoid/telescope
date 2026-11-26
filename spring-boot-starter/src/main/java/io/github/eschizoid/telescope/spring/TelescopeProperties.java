@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.spring;
 
 import io.github.eschizoid.telescope.annotations.TelescopeMapper;
-import io.github.eschizoid.telescope.mapping.WriteHint;
+import io.github.eschizoid.telescope.mapping.WriteStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -29,20 +29,20 @@ public class TelescopeProperties {
   public TelescopeProperties() {}
 
   /**
-   * Reserved default {@link WriteHint.WriteStrategy} for a future bean construction shortcut.
-   * Currently no auto-configuration path consumes this setting, including {@link TelescopeMapper},
-   * which delegates to a generated bridge.
+   * Reserved default {@link WriteStrategy} for a future bean construction shortcut. Currently no
+   * auto-configuration path consumes this setting, including {@link TelescopeMapper}, which
+   * delegates to a generated bridge. {@code ADDERS} is refused at startup, with the reason.
    */
-  private WriteHint.WriteStrategy defaultWriteStrategy;
+  private WriteStrategy defaultWriteStrategy;
 
   /** Registry-specific configuration. See {@link Registry}. */
   private final Registry registry = new Registry();
 
-  public WriteHint.WriteStrategy getDefaultWriteStrategy() {
+  public WriteStrategy getDefaultWriteStrategy() {
     return defaultWriteStrategy;
   }
 
-  public void setDefaultWriteStrategy(final WriteHint.WriteStrategy defaultWriteStrategy) {
+  public void setDefaultWriteStrategy(final WriteStrategy defaultWriteStrategy) {
     this.defaultWriteStrategy = defaultWriteStrategy;
   }
 

@@ -109,6 +109,33 @@ public record Reflective(
     );
   }
 
+  /**
+   * This reflective, building each class {@code writers} names through that writer instead of the
+   * one it would choose: how a mapper builds a bean whose collections it fills through adders. A
+   * record and every other class are built as this reflective builds them. This reflective itself
+   * where {@code writers} is empty.
+   */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  public Reflective withWriters(final Map<Class<?>, Beans.BeanWriter<?>> writers) {
+    if (writers.isEmpty()) return this;
+    final var fixed = Map.copyOf(writers);
+    final var base = this;
+    return new Reflective(
+      names,
+      genericType,
+      read,
+      (cls, valueByName) -> {
+        final Beans.BeanWriter writer = fixed.get(cls);
+        return writer == null
+          ? base.construct(cls, valueByName)
+          : writer.construct(Beans.propertyNames(cls), valueByName);
+      },
+      normalize,
+      cls -> fixed.containsKey(cls) ? fixed.get(cls) : base.writerFor(cls),
+      namedStrategy
+    );
+  }
+
   /** Component / property names in declaration order. */
   public String[] names(final Class<?> cls) {
     return names.apply(cls);

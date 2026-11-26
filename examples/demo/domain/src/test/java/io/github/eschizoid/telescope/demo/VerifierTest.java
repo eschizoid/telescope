@@ -25,8 +25,6 @@ class VerifierTest {
       package demo.broken;
       import static io.github.eschizoid.telescope.mapping.Mapping.drop;
       import static io.github.eschizoid.telescope.mapping.Mapping.via;
-      import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.ADDERS;
-      import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
       import io.github.eschizoid.telescope.Telescope;
       import io.github.eschizoid.telescope.demo.api.OrderChanges;
       import io.github.eschizoid.telescope.demo.order.LineEdits;
@@ -35,7 +33,6 @@ class VerifierTest {
         static final Object EDITS = Telescope.mapper(
           Order.class,
           OrderChanges.class,
-          writeBean(Order.class, ADDERS),
           via(Order::getLines, OrderChanges::lines, LineEdits.class),
           drop(Order::getId),
           drop(Order::getNumber),

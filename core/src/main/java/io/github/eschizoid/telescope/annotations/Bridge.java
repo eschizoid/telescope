@@ -149,8 +149,8 @@ public @interface Bridge {
    * always use the canonical constructor and ignore this setting. Default {@link
    * WriteStrategy#AUTO} runs the priority ladder (static builder() → name-matched ctor → no-arg +
    * setters); the other values force one specific strategy and surface a precise compile error when
-   * the POJO doesn't expose the required shape. Mirrors the runtime {@code WriteHint.writeBean(cls,
-   * strategy)} hint.
+   * the POJO doesn't expose the required shape. Mirrors the runtime {@code Mapping.writeBean(cls,
+   * strategy)} row.
    */
   WriteStrategy writeStrategy() default WriteStrategy.AUTO;
 

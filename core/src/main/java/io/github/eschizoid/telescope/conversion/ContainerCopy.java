@@ -53,10 +53,12 @@ import java.util.function.Supplier;
  *
  * <p>It is also how {@code into} writes a container property into a target that already holds one:
  * a held container that can be changed is cleared and refilled with the converted elements, so it
- * keeps its identity, and one that cannot be changed is replaced through the setter. Under the
- * {@code ADDERS} write strategy each element goes through the target's adder instead, and the value
- * {@code into} reads from is built with no adder run on it. Both paths call the same methods here
- * for it.
+ * keeps its identity, and one that cannot be changed is replaced through the setter. Where the
+ * owner has an adder for a collection, each element goes through it instead, and the value {@code
+ * into} reads from is built with no adder run on it. Every element the owner holds after the write
+ * points back at it, where its {@link Links} name a back-reference and no adder sets it, and every
+ * element the write takes out goes through the owner's remover, or has its back-reference cleared.
+ * Both paths call the same methods here for it.
  *
  * <p>Both decisions go through one {@link Policy}. The standard policy is the behavior described
  * above. A module that knows more about a container, such as whether a persistence provider has
@@ -128,6 +130,20 @@ public final class ContainerCopy {
     }
 
     /**
+     * The property of each element of collection {@code property} of {@code owner} that points back
+     * at the owner, as the owner's class declares it, or null where it declares none. A persistence
+     * module answers with what {@code @OneToMany(mappedBy)} names. The standard behavior declares
+     * none.
+     *
+     * @param owner the class holding the collection
+     * @param property the name of the collection property
+     * @return the element's property, or null
+     */
+    default String backReference(final Class<?> owner, final String property) {
+      return null;
+    }
+
+    /**
      * Whether this policy applies in this runtime, such as whether the persistence API it consults
      * is on the class path. A policy that answers false is passed over as if it were not
      * registered, so a module carrying one costs nothing where what it knows about is absent.
@@ -186,11 +202,11 @@ public final class ContainerCopy {
   }
 
   /**
-   * One container property {@code into} writes into an existing target, or the adders strategy
-   * fills: the target that holds it, its name, the container the target holds, the converted
-   * container whose elements it is to hold and the source's container it was converted from, and,
-   * where the elements convert through a conversion that can write one element into another in
-   * place, that conversion.
+   * One container property {@code into} writes into an existing target, or the owner's adder fills:
+   * the target that holds it, its name, the container the target holds, the converted container
+   * whose elements it is to hold and the source's container it was converted from, and, where the
+   * elements convert through a conversion that can write one element into another in place, that
+   * conversion.
    */
   public static final class Refill {
 
@@ -221,7 +237,7 @@ public final class ContainerCopy {
       this.held = write.held;
       this.incoming = incoming;
       this.adder = adder;
-      this.throughAdder = write.adder;
+      this.throughAdder = write.links() != null && write.links().adder != null;
       this.elements = write.elements;
       this.sent = write.sent;
       this.writes = writes;
@@ -401,8 +417,8 @@ public final class ContainerCopy {
 
   /**
    * What one container write names before the policy is asked: the mapper's two classes, the owner,
-   * the property, the container the owner holds, whether an adder fills it, the conversion of its
-   * elements and the source's container.
+   * the property, the container the owner holds, how its elements are tied to the owner, the
+   * conversion of its elements and the source's container.
    */
   private record Write(
     String source,
@@ -410,10 +426,185 @@ public final class ContainerCopy {
     Object owner,
     String property,
     Object held,
-    boolean adder,
+    Links links,
     Elements elements,
     Object sent
   ) {}
+
+  /**
+   * How the elements of one collection property are tied to the owner that holds it: the owner's
+   * adder and remover, each null where it has none, and the element's back-reference, read and
+   * written, null where it has none. A write adds each new element through the adder where there is
+   * one; where there is none, every element the owner holds after the write has its back-reference
+   * set to the owner. An element the write takes out goes through the remover where there is one,
+   * and otherwise has its back-reference cleared where it still points at the owner. Where the
+   * collection the owner holds after the write has an element equal to one taken out, the taken
+   * one's back-reference is cleared and the remover is not called, since its own removal would take
+   * the equal element out.
+   *
+   * <p>Codegen-support seam: a generated bridge declares one per collection it writes, and the
+   * runtime mapper builds the same from the same decision; not meant to be built by hand.
+   */
+  public static final class Links {
+
+    private final Function<Object, Object> held;
+    private final BiConsumer<Object, Object> adder;
+    private final BiConsumer<Object, Object> remover;
+    private final Function<Object, Object> backRead;
+    private final BiConsumer<Object, Object> backWrite;
+
+    private Links(
+      final Function<Object, Object> held,
+      final BiConsumer<Object, Object> adder,
+      final BiConsumer<Object, Object> remover,
+      final Function<Object, Object> backRead,
+      final BiConsumer<Object, Object> backWrite
+    ) {
+      this.held = held;
+      this.adder = adder;
+      this.remover = remover;
+      this.backRead = backRead;
+      this.backWrite = backWrite;
+    }
+
+    /** Whether each new element goes through the owner's adder. */
+    public boolean throughAdder() {
+      return adder != null;
+    }
+
+    /** These links without the adder, for an owner built whole, which no adder fills. */
+    public Links withoutAdder() {
+      return adder == null ? this : new Links(held, null, remover, backRead, backWrite);
+    }
+
+    /** Whether a write through these links has anything to do beyond adding the elements. */
+    boolean ties() {
+      return remover != null || backWrite != null;
+    }
+
+    /**
+     * Points every element of {@code elements} at {@code owner}, where no adder sets it and the
+     * elements have a back-reference.
+     */
+    void pointBack(final Object owner, final Object elements) {
+      if (adder != null || backWrite == null || !(elements instanceof Collection<?> all)) return;
+      for (final var element : all) if (element != null) backWrite.accept(element, owner);
+    }
+
+    /**
+     * Unties from {@code owner} each element of {@code before} that {@code after} no longer holds,
+     * as {@link Links} describes it.
+     */
+    void untie(final Object owner, final Object before, final Object after) {
+      if ((remover == null && backRead == null) || !(before instanceof Collection<?> was)) return;
+      final var now = after instanceof Collection<?> c ? c : List.of();
+      final var kept = Collections.newSetFromMap(new IdentityHashMap<>());
+      kept.addAll(now);
+      for (final var element : was) {
+        if (element == null || kept.contains(element)) continue;
+        if (remover != null && !now.contains(element)) remover.accept(owner, element);
+        else if (backRead != null && backRead.apply(element) == owner) backWrite.accept(element, null);
+      }
+    }
+  }
+
+  /**
+   * The {@link Links} of one collection property: {@code held} reads the collection the owner
+   * holds, {@code adder} and {@code remover} are the owner's, each null where it has none, and
+   * {@code backRead} and {@code backWrite} read and write the element's back-reference, both null
+   * where it has none.
+   *
+   * @param held the owner's getter for the collection
+   * @param adder the owner's adder, or null
+   * @param remover the owner's remover, or null
+   * @param backRead the element's getter for its back-reference, or null
+   * @param backWrite the element's setter for its back-reference, or null
+   * @param <O> the owner's type
+   * @param <E> the element type
+   * @return the links
+   */
+  @SuppressWarnings("unchecked")
+  public static <O, E> Links links(
+    final Function<? super O, ?> held,
+    final BiConsumer<? super O, ? super E> adder,
+    final BiConsumer<? super O, ? super E> remover,
+    final Function<? super E, ?> backRead,
+    final BiConsumer<? super E, ? super O> backWrite
+  ) {
+    return new Links(
+      (Function<Object, Object>) held,
+      (BiConsumer<Object, Object>) adder,
+      (BiConsumer<Object, Object>) remover,
+      (Function<Object, Object>) backRead,
+      (BiConsumer<Object, Object>) backWrite
+    );
+  }
+
+  /**
+   * The {@link Links} of collection {@code property} of {@code owner} where its declaration names
+   * {@code mappedBy} as the element's back-reference: through {@code mappedByRead} and {@code
+   * mappedByWrite} where the registered {@link Policy} answers {@code mappedBy} for it, and
+   * otherwise through {@code backRead} and {@code backWrite}, which may be null. This is how a
+   * generated bridge takes the back-reference the runtime mapper would take in the same runtime.
+   *
+   * @param owner the owner's class
+   * @param property the name of the collection property
+   * @param mappedBy the element property the declaration names
+   * @param held the owner's getter for the collection
+   * @param adder the owner's adder, or null
+   * @param remover the owner's remover, or null
+   * @param mappedByRead the element's getter for {@code mappedBy}
+   * @param mappedByWrite the element's setter for {@code mappedBy}
+   * @param backRead the element's getter for the back-reference taken otherwise, or null
+   * @param backWrite the element's setter for that back-reference, or null
+   * @param <O> the owner's type
+   * @param <E> the element type
+   * @return the links
+   */
+  public static <O, E> Links links(
+    final Class<O> owner,
+    final String property,
+    final String mappedBy,
+    final Function<? super O, ?> held,
+    final BiConsumer<? super O, ? super E> adder,
+    final BiConsumer<? super O, ? super E> remover,
+    final Function<? super E, ?> mappedByRead,
+    final BiConsumer<? super E, ? super O> mappedByWrite,
+    final Function<? super E, ?> backRead,
+    final BiConsumer<? super E, ? super O> backWrite
+  ) {
+    return mappedBy.equals(backReference(owner, property))
+      ? links(held, adder, remover, mappedByRead, mappedByWrite)
+      : links(held, adder, remover, backRead, backWrite);
+  }
+
+  /**
+   * The element property the registered {@link Policy} answers as the back-reference of collection
+   * {@code property} of {@code owner}, or null.
+   *
+   * @param owner the owner's class
+   * @param property the name of the collection property
+   * @return the element's property, or null
+   */
+  public static String backReference(final Class<?> owner, final String property) {
+    return POLICY.backReference(owner, property);
+  }
+
+  /**
+   * Points the elements of each collection {@code links} reads from {@code owner}, a value just
+   * built, back at {@code owner}, for the collections no adder filled: what a conversion does once
+   * it has built an owner.
+   *
+   * @param owner the value built
+   * @param links the links of each collection to point back, none with an adder that ran
+   * @param <O> the owner's type
+   * @return {@code owner}
+   */
+  public static <O> O pointedBack(final O owner, final Links[] links) {
+    if (owner == null) return null;
+    for (final var link : links) link.pointBack(owner, link.held.apply(owner));
+    return owner;
+  }
 
   /** A refusal a {@link Policy} makes of a write, which reaches the caller as it is. */
   private static final class Refused extends IllegalArgumentException {
@@ -474,7 +665,7 @@ public final class ContainerCopy {
    * @param held the container the target holds for {@code property}, or null
    * @param incoming the container converted from the source, or null
    * @param setter whether the target class has a setter for {@code property}
-   * @param adder whether an adder fills {@code property}
+   * @param links how the elements of {@code property} are tied to the target, or null
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
    * @param bean the simple name of the target's class
@@ -485,7 +676,7 @@ public final class ContainerCopy {
    * @param sent the source's container {@code incoming} was converted from, or null where it is not
    *     known
    * @return what the policy's check prepared for the refill of this property, to be handed to
-   *     {@link #refill} or {@link #fill}; null where it prepared nothing
+   *     {@link #refill}; null where it prepared nothing
    * @throws IllegalArgumentException if nothing can write {@code property}, or the policy refuses
    *     the write
    */
@@ -493,7 +684,7 @@ public final class ContainerCopy {
     final Object held,
     final Object incoming,
     final boolean setter,
-    final boolean adder,
+    final Links links,
     final String source,
     final String target,
     final String bean,
@@ -502,10 +693,11 @@ public final class ContainerCopy {
     final Elements elements,
     final Object sent
   ) {
+    final var adder = links != null && links.adder != null;
     final var write = CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder);
     if (write == CollectionWrites.IntoWrite.REFUSE) throw unwritable(source, target, bean, property, held, null);
     if (write != CollectionWrites.IntoWrite.REFILL || POLICY == STANDARD) return null;
-    final var named = new Write(source, target, owner, property, held, adder, elements, sent);
+    final var named = new Write(source, target, owner, property, held, links, elements, sent);
     return POLICY.check(new Refill(named, incoming, null, false, null));
   }
 
@@ -513,13 +705,19 @@ public final class ContainerCopy {
    * Writes {@code incoming}, the container converted from the source, into {@code held}, the {@code
    * Collection} or {@code Map} {@code owner} holds for {@code property}, where {@link
    * CollectionWrites#intoWrite} refills it: cleared and then given every element or entry of {@code
-   * incoming}, as the registered {@link Policy} decides, so it keeps its identity. Answers false
-   * where the caller is to write {@code incoming} through the setter instead: the target holds no
-   * container, holds one that cannot be changed, or {@code incoming} is null. A held container
+   * incoming}, as the registered {@link Policy} decides, so it keeps its identity, each element
+   * through the owner's adder where {@code links} has one. Answers false where the caller is to
+   * write {@code incoming} through the setter instead: the target holds no container, holds one
+   * that cannot be changed, or {@code incoming} is null and no adder fills it. A held container
    * whose refill throws, as one that cannot change throws {@link UnsupportedOperationException} and
    * a sorted set handed a null throws {@link NullPointerException}, has its elements put back and
-   * is treated as one that cannot be changed. What an element write throws, and a refusal the
-   * policy makes, are thrown on once the held container has its elements back.
+   * is treated as one that cannot be changed. What the adder or an element write throws, and a
+   * refusal the policy makes, are thrown on once the held container has its elements back.
+   *
+   * <p>Where {@code links} tie the elements to the owner, every element the owner holds once the
+   * property is written points back at it, and every element {@code held} held that it no longer
+   * holds is untied, as {@link Links} describes; where the setter is to write {@code incoming},
+   * that is done here, before this answers false.
    *
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
@@ -528,6 +726,7 @@ public final class ContainerCopy {
    * @param held the container {@code owner} holds, or null
    * @param incoming the container converted from the source, or null
    * @param setter whether the target class has a setter for {@code property}
+   * @param links how the elements of {@code property} are tied to {@code owner}, or null
    * @param elements the conversion of the elements where it can write one into another in place, or
    *     null
    * @param sent the source's container {@code incoming} was converted from, or null where it is not
@@ -545,73 +744,23 @@ public final class ContainerCopy {
     final Object held,
     final Object incoming,
     final boolean setter,
+    final Links links,
     final Elements elements,
     final Object sent,
     final Object prepared
   ) {
-    final var named = new Write(source, target, owner, property, held, false, elements, sent);
-    return write(named, incoming, null, setter, prepared);
+    final var named = new Write(source, target, owner, property, held, links, elements, sent);
+    return write(named, incoming, setter, prepared);
   }
 
-  /**
-   * Fills collection {@code property} of {@code owner} through its {@code adder}, where {@link
-   * CollectionWrites#intoWrite} refills it: {@code held}, the collection {@code owner} holds, is
-   * cleared when there is one, and then each element of {@code incoming} is passed to the adder, as
-   * the registered {@link Policy} decides. A null {@code incoming} adds nothing. Answers false
-   * where the held collection itself cannot be changed and the caller is to write {@code incoming}
-   * through the setter instead. An exception the adder or an element write throws, rejecting an
-   * element, is thrown on as it is once the held collection has its elements back, setter or not,
-   * and so is a refusal the policy makes.
-   *
-   * @param source the simple name of the mapper's source class
-   * @param target the simple name of the mapper's target class
-   * @param owner the target whose property is written
-   * @param property the name of the property
-   * @param held the collection {@code owner} holds, or null
-   * @param incoming the collection converted from the source, or null
-   * @param adder the target's adder for the property
-   * @param setter whether the target class has a setter for {@code property}
-   * @param elements the conversion of the elements where it can write one into another in place, or
-   *     null
-   * @param sent the source's container {@code incoming} was converted from, or null where it is not
-   *     known
-   * @param prepared what {@link #refuseUnwritable} returned for this property
-   * @param <O> the target's type
-   * @param <E> the element type
-   * @return whether the property is written; false where the caller writes it through the setter
-   * @throws IllegalArgumentException if the property has no setter and the held collection cannot
-   *     be changed, or the policy refuses the write
-   */
-  @SuppressWarnings("unchecked")
-  public static <O, E> boolean fill(
-    final String source,
-    final String target,
-    final O owner,
-    final String property,
-    final Object held,
-    final Collection<? extends E> incoming,
-    final BiConsumer<? super O, ? super E> adder,
-    final boolean setter,
-    final Elements elements,
-    final Object sent,
-    final Object prepared
-  ) {
-    final var named = new Write(source, target, owner, property, held, true, elements, sent);
-    return write(named, incoming, (BiConsumer<Object, Object>) adder, setter, prepared);
-  }
-
-  private static boolean write(
-    final Write write,
-    final Object incoming,
-    final BiConsumer<Object, Object> adder,
-    final boolean setter,
-    final Object prepared
-  ) {
+  private static boolean write(final Write write, final Object incoming, final boolean setter, final Object prepared) {
     final var held = write.held();
+    final var links = write.links();
+    final var adder = links == null ? null : links.adder;
     return switch (
       CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder != null)
     ) {
-      case SET -> false;
+      case SET -> replaced(write, incoming);
       case REFUSE -> throw unwritable(
         write.source(),
         write.target(),
@@ -625,6 +774,20 @@ public final class ContainerCopy {
   }
 
   /**
+   * Ties the elements of {@code incoming}, which the setter is about to write in place of what the
+   * owner holds, to the owner, and unties those of the held container it replaces; answers false,
+   * for the caller to write it.
+   */
+  private static boolean replaced(final Write write, final Object incoming) {
+    final var links = write.links();
+    if (links != null && links.ties()) {
+      links.untie(write.owner(), write.held(), incoming);
+      links.withoutAdder().pointBack(write.owner(), incoming);
+    }
+    return false;
+  }
+
+  /**
    * Refills the held container with {@code incoming} through the registered {@link Policy}. A
    * refill that fails first has the elements the held container had put back, so whoever else holds
    * it sees it as it was wherever it takes its elements back; then {@link
@@ -634,7 +797,7 @@ public final class ContainerCopy {
    * UnsupportedOperationException} from a container that cannot change or {@code
    * NullPointerException} from a sorted set handed a null, answers false where a setter can write
    * the property instead, and refuses the call by name, with the failure as its cause, where none
-   * can.
+   * can. A refill that succeeds ties its elements to the owner as the write's {@link Links} say.
    */
   private static boolean refillHeld(
     final Write write,
@@ -668,7 +831,7 @@ public final class ContainerCopy {
       final var cause = passedOn ? (RuntimeException) failed.getCause() : failed;
       restore(held, kept, cause);
       return switch (CollectionWrites.afterFailedRefill(passedOn, setter)) {
-        case SET -> false;
+        case SET -> replaced(write, incoming);
         case REFUSE -> throw unwritable(
           write.source(),
           write.target(),
@@ -679,6 +842,11 @@ public final class ContainerCopy {
         );
         case RETHROW -> throw cause;
       };
+    }
+    final var links = write.links();
+    if (links != null && links.ties()) {
+      links.untie(write.owner(), kept, held);
+      links.pointBack(write.owner(), held);
     }
     return true;
   }
@@ -775,8 +943,8 @@ public final class ContainerCopy {
   }
 
   /**
-   * Passes each of {@code elements} to {@code adder} on {@code owner}, which the adders strategy
-   * does for each collection property of a bean it builds. While {@link #deferAdders} builds a
+   * Passes each of {@code elements} to {@code adder} on {@code owner}, which a setters build does
+   * for each collection property of a bean that has an adder. While {@link #deferAdders} builds a
    * value of {@code owner}'s class, the elements are recorded instead. A null {@code elements} adds
    * nothing.
    *
@@ -804,7 +972,7 @@ public final class ContainerCopy {
    * target's own adders to take. Any other instance of {@code owner} built on the way has its
    * adders called before this returns.
    *
-   * @param owner the class the adders strategy builds
+   * @param owner the class built through its adders
    * @param build the conversion, {@code forward(source)}
    * @param <T> the class built
    * @return the value built and the collections its adders were to be handed

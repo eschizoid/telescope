@@ -1,6 +1,7 @@
 # ADR-0017: `telescope-jpa` — persistence-aware container copies and proxy handling
 
-**Status:** Accepted, amended · **Date:** 2026-10-08 · **Accepted:** 2026-11-11 · **Amended:** 2026-11-12, 2026-11-19
+**Status:** Accepted, amended · **Date:** 2026-10-08 · **Accepted:** 2026-11-11 · **Amended:** 2026-11-12, 2026-11-19,
+2026-11-26
 
 ## Context
 
@@ -48,11 +49,11 @@ rather than a provider, so it serves Hibernate and EclipseLink alike.
    path, so an application with JPA gets them with no setup and one without it pays nothing.
 
 The collection write stays in core, through that hook: `into` writing a `Collection` or `Map` property into a target
-that already holds one clears and refills that instance instead of replacing it, through the owner's adder under the
-`ADDERS` write strategy, replaces through the setter a held container that cannot be changed, and refuses by name only a
-property no setter or modifiable container can take. At most one active policy is registered, and it replaces the
-standard one as a whole. Whether `patch` refills a container the same way is checked before this module is built, and
-fixed in core if it does not.
+that already holds one clears and refills that instance instead of replacing it, through the owner's adder where it has
+one, replaces through the setter a held container that cannot be changed, and refuses by name only a property no setter
+or modifiable container can take. At most one active policy is registered, and it replaces the standard one as a whole.
+Whether `patch` refills a container the same way is checked before this module is built, and fixed in core if it does
+not.
 
 A `share(src, tgt)` row in core remains the explicit per-field opt-out for cases the policy does not cover, such as a
 live concurrent view or a very large container on a hot path.
@@ -183,9 +184,9 @@ converted one, which is what clear-and-refill does.
    converts property by property, or the mapper of a `via(..., Mapper)` row. Elements converted by a `via` converter
    class or method pair, whose written properties are the hand-written code's own, or handed across unchanged, are
    cleared and refilled exactly as without the module, matched or not, and so are elements of a pair whose rows write
-   through a path or whose element class the mapper builds through adders. Refusing a matched element there would break
-   two writes that work today, `into` on entities outside any persistence context and on a detached owner later passed
-   to `EntityManager.merge`, to prevent one, a managed owner, that fails at flush; that owner keeps today's behavior.
+   through a path or whose element class has adders of its own. Refusing a matched element there would break two writes
+   that work today, `into` on entities outside any persistence context and on a detached owner later passed to
+   `EntityManager.merge`, to prevent one, a managed owner, that fails at flush; that owner keeps today's behavior.
 9. **No opt-in.** The merge is automatic wherever the module is active and the element class is an entity with a
    readable identifier, because it differs from clear-and-refill only where clear-and-refill fails or resets state. No
    row selects it; the policy is still one active `ContainerCopy.Policy`, and `Policy.refill` is still its one hook for
@@ -207,3 +208,27 @@ converted one, which is what clear-and-refill does.
 11. **Without the module.** Core's standard refill never uses the element conversion, so `into` clears and refills as
     before, and an application without telescope-jpa sees no change. `testWithoutTheModule` counts the statements the
     same write issues there.
+
+## Amendment (2026-11-26): the back-reference from `mappedBy`
+
+A mapper ties each element of a collection it writes to the owner with no row: through the owner's adder where it has
+one, and otherwise by setting the element's back-reference to the owner (ADR-0002, amended the same day, records how the
+adder and the back-reference are found from what the classes declare). The policy is where `@OneToMany(mappedBy)` is
+read:
+
+1. **`Policy.backReference(Class<?> owner, String property)`** answers the element property the owner's collection
+   declares as its back-reference, null by default. `LoadedContainers` answers what `@OneToMany(mappedBy = "...")` names
+   on the field of the collection's name or its getter. Core reads no persistence annotation, so it stays free of
+   provider and specification code. The back-reference is then the property a `backReference` row names, else the one
+   `mappedBy` names, else none: a `@OneToMany` with no `mappedBy` points no element back unless a row names the
+   property. A property the element's conversion writes keeps its value.
+2. **The generated bridge asks the same policy.** The processor reads `mappedBy` from the annotation's name, but where
+   the element's own properties would give another answer, the bridge declares its `ContainerCopy.Links` through
+   `ContainerCopy.links(owner, property, mappedBy, ...)`, which takes `mappedBy` only where the registered policy
+   answers it when the bridge class loads. Without the module, both paths set no back-reference a row does not name, so
+   nothing is added to ADR-0019's registers.
+3. **Removal.** An element a write takes out goes through the owner's remover where it has one, and otherwise has its
+   back-reference cleared where it still points at the owner. On an `orphanRemoval` association the element is deleted
+   and the cleared reference adds no statement; without orphan removal it is one UPDATE setting the foreign key to null,
+   and the row stays. A clear-and-refill takes out every held element it does not put back, and a merge by `@Id` the
+   held elements nothing matched.

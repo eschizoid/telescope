@@ -37,7 +37,7 @@ class WriteHintRowTest {
     "import io.github.eschizoid.telescope.Telescope;\n" +
     "import io.github.eschizoid.telescope.annotations.Bridge;\n" +
     "import io.github.eschizoid.telescope.conversion.*;\n" +
-    "import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;\n";
+    "import io.github.eschizoid.telescope.mapping.WriteStrategy;\n";
 
   /**
    * A bean built through its builder or through its setters, which records which one built it in a

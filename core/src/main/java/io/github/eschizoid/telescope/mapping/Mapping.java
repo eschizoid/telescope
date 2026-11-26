@@ -73,6 +73,62 @@ public sealed interface Mapping<A, B>
     ComputeFromSource,
     Conditional
 {
+  /** {@link WriteStrategy#BUILDER}, here so the import that brings the rows brings it. */
+  WriteStrategy BUILDER = WriteStrategy.BUILDER;
+
+  /** {@link WriteStrategy#CONSTRUCTOR}, here so the import that brings the rows brings it. */
+  WriteStrategy CONSTRUCTOR = WriteStrategy.CONSTRUCTOR;
+
+  /** {@link WriteStrategy#SETTERS}, here so the import that brings the rows brings it. */
+  WriteStrategy SETTERS = WriteStrategy.SETTERS;
+
+  /**
+   * Builds {@code target} through {@code strategy} wherever the mapper builds one, overriding the
+   * order an unhinted build takes. See {@link WriteHint}.
+   */
+  static <B> WriteHint<B> writeBean(final Class<B> target, final WriteStrategy strategy) {
+    return new WriteHint.BeanWriteHint<>(target, strategy);
+  }
+
+  /**
+   * Builds every bean the mapper builds that no {@link #writeBean} row names through {@code
+   * strategy}. One row replaces one per class when every bean shares the strategy, such as {@code
+   * SETTERS} across a tree of entities:
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, OrderEntity.class,
+   *     writeBeans(SETTERS),                          // OrderEntity, CustomerEntity, LineEntity, …
+   *     writeBean(CashRegisterEntity.class, BUILDER)); // overrides it for one class
+   * }</pre>
+   *
+   * <p>At most one {@code writeBeans(...)} row may appear per mapper, and a {@code writeBean} row
+   * always wins for its class. A strategy that cannot build a bean the mapper builds (such as
+   * {@code BUILDER} on a class with no static {@code builder()}) is refused when the mapper is
+   * built, as a {@code writeBean} row naming one is. A bean the mapper never builds, such as the
+   * source of a mapper that converts forward only, is not held to it.
+   *
+   * <p>The default walks every pair the mapper reaches, sealed cases included, so the settings of a
+   * nested pair's or a case's own bridge do not apply under it. A {@code @Bridge} field compiles it
+   * into the bridge where the bridge builds every such bean itself, and refuses it by name on a
+   * pair whose bridge would hand a nested pair to another bridge.
+   */
+  static WriteHint<?> writeBeans(final WriteStrategy strategy) {
+    return new WriteHint.DefaultWriteHint(strategy);
+  }
+
+  /**
+   * Names the property through which each element of a collection the mapper writes points back at
+   * its owner, as {@code OrderLine::getOrder}. A mapper sets it to the owner as it writes each
+   * element in, where the owner has no adder to do so, and clears it on an element the write takes
+   * out where the owner has no remover. Without the row the property is the one
+   * {@code @OneToMany(mappedBy)} names, with {@code telescope-jpa}, and otherwise there is none;
+   * the row names it for a plain bean, or pins it over {@code mappedBy}. See {@link BackReference}.
+   */
+  static <E, O> BackReference<E, O> backReference(final Accessor<E, O> property) {
+    return new BackReference<>(property);
+  }
+
   /**
    * Source class this row keys against — the class the source accessor is applied to, recovered via
    * {@code SerializedLambda}. For a getter inherited from a superclass that is the subclass the row

@@ -9,8 +9,9 @@ import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 /**
- * Every call the adders strategy makes to an adder, on the runtime writer and in generated code, so
- * that {@code into} can build the value it reads from without running any adder on it.
+ * Every call a mapper makes to an adder while it builds an owner, on the runtime writer and in
+ * generated code, so that {@code into} can build the value it reads from without running any adder
+ * on it.
  *
  * <p>{@code into} converts the source through {@code forward}, which builds a bean it then throws
  * away. Run through its adders, that bean would call each adder once and the target a second time,

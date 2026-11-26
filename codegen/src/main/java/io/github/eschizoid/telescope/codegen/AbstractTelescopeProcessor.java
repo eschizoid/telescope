@@ -2287,9 +2287,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         final var args = guardedArguments(all, rebuild.ctorOrder(), rebuild, readFor(target, owner), prelude);
         yield lensBody(prelude, owner.creation(String.join(", ", args)));
       }
-      // A navigator rebuilds in the shared order, which takes ADDERS only where a hint names it,
-      // and a navigator has no hint.
-      case SETTERS, ADDERS -> {
+      case SETTERS -> {
         final var sb = new StringBuilder("(p, v) -> { final var c = " + owner.creation("") + "; ");
         for (var i = 0; i < all.size(); i++) {
           final var prop = all.get(i);

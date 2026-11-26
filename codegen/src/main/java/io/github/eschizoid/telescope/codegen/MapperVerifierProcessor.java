@@ -141,7 +141,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     "mapField",
     "optional"
   );
-  private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
+
+  /**
+   * The factories of {@code Mapping} that build no field row: the write hints and backReference.
+   */
+  private static final Set<String> HINT_FACTORIES = Set.of("writeBean", "writeBeans", "backReference");
+
   private static final String NULL_HINT_FQN = "io.github.eschizoid.telescope.mapping.NullHint";
   private static final String CASES_FQN = "io.github.eschizoid.telescope.mapping.Cases";
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
@@ -770,6 +775,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var claimedTgt = new LinkedHashSet<String>();
       final var writes = new PairWrites(srcSimple, tgtSimple, strict);
       final var hintTargets = new HashSet<String>();
+      final var backReferences = new LinkedHashMap<String, String[]>();
       var analyzable = true;
       var permissive = false;
 
@@ -788,8 +794,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           continue;
         }
         final var ownerFqn = rowOwner.getQualifiedName().toString();
-        if (WRITE_HINT_FQN.equals(ownerFqn)) {
-          verifyWriteHint(row, rowExec, hintTargets);
+        if (isHint(rowExec)) {
+          if (rowExec.getSimpleName().contentEquals("backReference")) backReferenceRow(row, backReferences);
+          else verifyWriteHint(row, rowExec, hintTargets);
           continue;
         }
         if (NULL_HINT_FQN.equals(ownerFqn)) continue;
@@ -891,8 +898,108 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         for (final var name : match.matched()) {
           verifyProperty(srcEl, tgtEl, sides, name, name, name, node, seen, !strict);
         }
+        reportCollections(node, srcEl, tgtEl, srcProps, tgtProps, match.matched(), !strict, backReferences);
       }
       verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
+    }
+
+    /**
+     * Reports how each collection the call writes by name is tied to its owner, as the mapper built
+     * from the call ties it: a refusal where the owner's adder or remover is undecided, and under
+     * {@code -Atelescope.verify=warn} a note per collection, in the words {@code explain()} prints.
+     * The target's collections are reported, and the source's unless the call converts forward
+     * only.
+     */
+    private void reportCollections(
+      final MethodInvocationTree node,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final Map<String, TypeMirror> srcProps,
+      final Map<String, TypeMirror> tgtProps,
+      final List<String> matched,
+      final boolean forwardOnly,
+      final Map<String, String[]> backReferences
+    ) {
+      final var forward = new LinkedHashMap<String, TypeMirror>();
+      final var backward = new LinkedHashMap<String, TypeMirror>();
+      for (final var name : matched) {
+        forward.put(name, srcProps.get(name));
+        backward.put(name, tgtProps.get(name));
+      }
+      final var rows = new LinkedHashMap<String, String>();
+      final var rowTypes = new LinkedHashMap<String, String>();
+      for (final var row : backReferences.entrySet()) {
+        rows.put(row.getKey(), row.getValue()[0]);
+        rowTypes.put(row.getKey(), row.getValue()[1]);
+      }
+      final var links = new MirrorLinks(elements, types, props);
+      final var sides = new LinkedHashMap<TypeElement, Map<String, MirrorLinks.Link>>();
+      sides.put(tgtEl, links.of(tgtEl, forward, Set.of(), rows, rowTypes));
+      if (!forwardOnly) sides.put(srcEl, links.of(srcEl, backward, Set.of(), rows, rowTypes));
+      // A pair of one class both ways writes each collection the same way in both directions, and
+      // is noted once.
+      final var noted = new HashSet<String>();
+      for (final var side : sides.entrySet()) {
+        for (final var link : side.getValue().values()) {
+          if (link.refusal() != null) {
+            if (noted.add(link.refusal())) report(node, link.refusal());
+            continue;
+          }
+          for (final var warning : link.warnings()) {
+            if (noted.add(warning)) trees.printMessage(
+              Diagnostic.Kind.WARNING,
+              warning,
+              node,
+              getCurrentPath().getCompilationUnit()
+            );
+          }
+          final var line = link.described(side.getKey());
+          if (reportKind == Diagnostic.Kind.WARNING && noted.add(line)) trees.printMessage(
+            Diagnostic.Kind.NOTE,
+            "telescope: " + line,
+            node,
+            getCurrentPath().getCompilationUnit()
+          );
+        }
+      }
+    }
+
+    /**
+     * Records a {@code backReference(Element::getOwner)} row: by the element class's qualified
+     * name, the property it names and the qualified name of the class its getter returns.
+     */
+    private void backReferenceRow(final MethodInvocationTree row, final Map<String, String[]> rows) {
+      if (row.getArguments().size() != 1 || !(row.getArguments().getFirst() instanceof MemberReferenceTree reference)) {
+        return;
+      }
+      final var qualifier = trees.getTypeMirror(
+        TreePath.getPath(getCurrentPath().getCompilationUnit(), reference.getQualifierExpression())
+      );
+      if (
+        !(elementAt(reference) instanceof ExecutableElement getter) ||
+        !(qualifier instanceof DeclaredType declared) ||
+        !(types.erasure(getter.getReturnType()) instanceof DeclaredType returned)
+      ) {
+        return;
+      }
+      final var element = (TypeElement) declared.asElement();
+      final var property =
+        element.getKind() == ElementKind.RECORD
+          ? getter.getSimpleName().toString()
+          : PropertyNames.property(getter.getSimpleName().toString());
+      final var named = new String[] { property, ((TypeElement) returned.asElement()).getQualifiedName().toString() };
+      if (rows.put(element.getQualifiedName().toString(), named) != null) {
+        report(row, PairingMessages.duplicateBackReferenceRow(element.getSimpleName().toString()));
+      }
+    }
+
+    /** Whether {@code rowExec} is a factory of {@code Mapping} that builds no field row. */
+    private boolean isHint(final ExecutableElement rowExec) {
+      return (
+        rowExec.getEnclosingElement() instanceof TypeElement owner &&
+        owner.getQualifiedName().contentEquals(MAPPING_FQN) &&
+        HINT_FACTORIES.contains(rowExec.getSimpleName().toString())
+      );
     }
 
     /**
@@ -1051,8 +1158,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           return;
         }
         final var ownerFqn = rowOwner.getQualifiedName().toString();
-        if (WRITE_HINT_FQN.equals(ownerFqn)) {
-          writeHinted = true;
+        if (isHint(rowExec)) {
+          if (!rowExec.getSimpleName().contentEquals("backReference")) writeHinted = true;
           continue;
         }
         if (NULL_HINT_FQN.equals(ownerFqn)) {
@@ -1231,8 +1338,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           else caseRows.add(cases);
           continue;
         }
+        if (isHint(rowExec)) continue;
         if (!MAPPING_FQN.equals(owner)) {
-          if (!WRITE_HINT_FQN.equals(owner) && !NULL_HINT_FQN.equals(owner)) callRowsComplete = false;
+          if (!NULL_HINT_FQN.equals(owner)) callRowsComplete = false;
           continue;
         }
         final var keyed = keyedRow(row, rowExec, srcEl, tgtEl, strict);
@@ -2541,34 +2649,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var binaryName = elements.getBinaryName(targetEl).toString();
       if (!hintTargets.add(binaryName)) report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
-      if (
-        row.getArguments().size() == 2 &&
-        elementAt(row.getArguments().get(1)) instanceof VariableElement constant &&
-        constant.getKind() == ElementKind.ENUM_CONSTANT &&
-        constant.getSimpleName().contentEquals("ADDERS")
-      ) {
-        final var refusal = addersRefusal(targetEl);
-        if (refusal != null) report(row, refusal);
-      }
-    }
-
-    /**
-     * Why the adders strategy cannot build {@code bean}, as the runtime writer refuses it when the
-     * mapper is built, or null when it can: no no-argument constructor, or a collection a field of
-     * its name stores with no adder.
-     */
-    private String addersRefusal(final TypeElement bean) {
-      final var simple = bean.getSimpleName().toString();
-      if (
-        ElementFilter.constructorsIn(bean.getEnclosedElements())
-          .stream()
-          .noneMatch(c -> c.getParameters().isEmpty())
-      ) {
-        return PairingMessages.addersNeedNoArgConstructor(simple);
-      }
-      final var properties = new LinkedHashMap<String, TypeMirror>();
-      for (final var property : props.properties(bean.asType())) properties.put(property.name(), property.member());
-      return MirrorAdders.of(elements, types, props, bean, properties).refusal();
     }
 
     /**

@@ -934,8 +934,8 @@ class BridgeFieldTest {
         "Rows.RAW gives java.lang.Object, which the java.lang.String property 'kind' does not hold",
       },
       new String[] {
-        "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(" +
-        "io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.valueOf(\"SETTERS\"))",
+        "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(" +
+        "io.github.eschizoid.telescope.mapping.WriteStrategy.valueOf(\"SETTERS\"))",
         "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place",
       },
       new String[] { "compute(UserDto::kind, Conv.INSTANCE.held)", "held is not static and final" },
@@ -948,12 +948,12 @@ class BridgeFieldTest {
         "Mappers.HIDDEN cannot be called from the generated bridge in package 'fb'",
       },
       new String[] {
-        "io.github.eschizoid.telescope.mapping.WriteHint.writeBeans(Rows.STRATEGY)",
+        "io.github.eschizoid.telescope.mapping.Mapping.writeBeans(Rows.STRATEGY)",
         "a @Bridge mapper compiles a write hint whose strategy is a WriteStrategy constant written in place",
       },
       new String[] {
-        "io.github.eschizoid.telescope.mapping.WriteHint.writeBean(UserDto.class.asSubclass(UserDto.class)," +
-        " io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS)",
+        "io.github.eschizoid.telescope.mapping.Mapping.writeBean(UserDto.class.asSubclass(UserDto.class)," +
+        " io.github.eschizoid.telescope.mapping.WriteStrategy.SETTERS)",
         "a @Bridge mapper compiles a writeBean hint keyed to a class literal",
       }
     );
@@ -975,7 +975,7 @@ class BridgeFieldTest {
           " Telescope.mapper(Address.class, AddressDto.class);\n" +
           "  static java.util.function.Supplier<String> MUTABLE = () -> \"m\";\n" +
           "  @SuppressWarnings(\"rawtypes\") static final java.util.function.Supplier RAW = () -> 1;\n" +
-          "  static final WriteHint.WriteStrategy STRATEGY = WriteHint.WriteStrategy.SETTERS;\n" +
+          "  static final WriteStrategy STRATEGY = WriteStrategy.SETTERS;\n" +
           "  static java.util.function.Predicate<Object> OPEN = o -> true;\n" +
           "  static java.util.function.Predicate<Object> pred() { return o -> true; }\n" +
           "  static Mapping<User, UserDto> make() { return ID; }\n" +
