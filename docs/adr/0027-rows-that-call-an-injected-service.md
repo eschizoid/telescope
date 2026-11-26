@@ -53,20 +53,21 @@ handler stays one call.
    it. A method name with one form for each overload, as `Catalog` declaring both `price()` and `price(LineDto)`, is
    ambiguous to javac, as it is for a plain row; hold the one meant in a `static final` field.
 
-3. **The service reaches the call through a bound mapper.** `with(services...)` on a `Mapper`, a `ForwardMapper` or an
-   `EditMapper` returns a copy bound to the services given, of the same type; the mapper it is called on is unchanged.
-   It refuses by name, before returning, a null, a value no service of the mapper accepts, two values for one service,
-   and a service the mapper needs that it was not given, naming the row that needs it. A value is matched to a service
-   by `isInstance`, so a container's proxy binds as the bean, and a request-scoped service binds as the scoped proxy
-   both containers inject. So a bound mapper always runs, binding happens once where the service is injected, in a
-   constructor or a `@Bean` method, and each call stays one call.
+3. **A bound mapper carries its services.** `with(services...)` on a `Mapper`, a `ForwardMapper` or an `EditMapper`
+   returns a copy bound to the services given, of the same type; the mapper it is called on is unchanged. It refuses by
+   name, before returning, a null, a value no service of the mapper accepts, two values for one service, and a service
+   the mapper needs that it was not given, naming the row that needs it. A value is matched to a service by
+   `isInstance`, so a container's proxy binds as the bean, and a request-scoped service binds as the scoped proxy both
+   containers inject. So a bound mapper always runs. In an application on either starter, the container binds the mapper
+   (decision 4) and user code never calls `with`; `with` is for code with no container and for tests.
 
    A call on a mapper that needs a service and has none bound, such as `OrderMappers.EDITS.patchInto(order, changes)` on
    the field itself, is refused before anything is read or written, never run with null:
 
    ```
    IllegalStateException: OrderMappers.EDITS needs a Catalog for compute(OrderLine::getUnitPrice, Catalog::price)
-   in OrderMappers.LINE, and none is bound. Call it through the mapper OrderMappers.EDITS.with(catalog) returns.
+   in OrderMappers.LINE, and none is bound. Inject the EditMapper<OrderChanges, Order> bean, or bind one with
+   OrderMappers.EDITS.with(catalog).
    ```
 
    On the runtime path `with` builds the mapper's conversion once more, with each service function closed over its
@@ -75,15 +76,44 @@ handler stays one call.
    costs. A conversion holding a service row belongs to its mapper and is never put in `DeepMap`'s per-pair cache.
    Binding costs one mapper build.
 
-4. **The starters bind the mappers they resolve.** For a mapped endpoint, Spring's `MapperLookup` and Quarkus's
-   `TelescopeRestEndpoints` bind the mapper they find, a generated bridge's or the same-name forward fallback, to the
-   one bean of each service type, once at startup. No bean, or two, fails startup with the method, the row and the
-   service named, and the two bean names, in words `EndpointMappers` holds for both starters. A `Mapper` bean or a
-   `using` projection the application provides is the application's to bind, and one still unbound fails startup with
-   the method and the row named. A generated `@TelescopeMapper` bean whose bridge has service rows binds it in its
-   constructor, finding each service through `ObjectProvider` on Spring and `Instance` on CDI, in the same words. Spring
-   builds it at startup, and the CDI bean carries Quarkus's `@Startup` when it needs a service, so its refusal is a
-   startup failure there too. Nothing is bound process-wide: a field called from user code is bound with `with`.
+4. **Both starters register each such field as a bean of its own type, already bound.** For every `@Bridge` field whose
+   rows name a service, its own or through a mapper it nests, the Spring and Quarkus starters register one bean whose
+   type is the field's declared generic type, `EditMapper<OrderChanges, Order>`, `ForwardMapper<Order, OrderDto>` or
+   `Mapper<Order, OrderDto>`, holding the field's mapper bound to the one bean of each service type. A handler or a
+   service takes it the way it takes its repository, by constructor injection, and calls it:
+
+   ```java
+   OrderController(OrderRepository orders, EditMapper<OrderChanges, Order> edits) { ... }
+   ```
+
+   - **Found from what the processor recorded.** The field's generated provider records the declaring class, the field's
+     name, its declared type and its service classes, and hands over the field's value, so neither starter scans classes
+     or reads the field reflectively. Spring's auto-configuration registers a bean definition per field, typed by that
+     generic type, from the providers `ServiceLoader` finds; the Quarkus deployment reads the providers from the index
+     and produces a synthetic bean per field with the same type. A field the processor never saw has no provider and no
+     bean, and is bound with `with`.
+   - **Resolved once, at startup.** Each bean is a singleton built at startup: Spring builds it with the other
+     singletons, and the Quarkus extension creates each one when the application starts rather than on first use. No
+     bean of a service type, or two with none primary, fails startup with the field, the row and the service named, and
+     the two bean names, in words `EndpointMappers` holds for both starters. The Quarkus deployment marks the service
+     beans it looks up as unremovable.
+   - **Matched by type, then by the field's name.** An injection point of the field's generic type takes the field's
+     bean. The bean is named, and qualified, by the field as its class writes it, `OrderMappers.EDITS`: a Spring bean
+     name usable with `@Qualifier`, a CDI `@Named`. One declaration per pair is allowed in a compilation, so two beans
+     of one type come only from two modules; then an unqualified injection point fails with the container's own
+     ambiguity error, which lists both names, and `@Qualifier("OrderMappers.EDITS")` or `@Named("OrderMappers.EDITS")`
+     picks one. Two fields giving one name fail startup with both declaring classes named.
+   - **The registry and the endpoints use the same bean.** A field bean of type `Mapper<A, B>` is a `Mapper` bean, so
+     `TelescopeMapperRegistry` collects it under its pair like any other, and the registry's refusal of two `Mapper`
+     beans for one pair applies. `EditMapper` and `ForwardMapper` beans are not `Mapper`s and stay out of the registry,
+     which stays keyed by pair and holds `Mapper`s only. A mapped endpoint whose lookup reaches a field with services,
+     through the registry or through the generated bridge the forward fallback finds, uses that field's bean, and a
+     generated `@TelescopeMapper` bean whose bridge has service rows injects it, so each container binds each field
+     once. A `Mapper` bean the application declares itself is the application's to bind, and one still unbound fails
+     startup with the method and the row named.
+
+   Nothing is bound process-wide: the binding lives in the container's bean, and two application contexts in one JVM
+   each hold their own.
 
 5. **The generated path.** `FieldRows` reads a service form when its class argument is a class literal and its function
    is a reference to an instance method of that class or a type it extends, a reference to a static method taking the
@@ -177,7 +207,7 @@ handler stays one call.
    }
    ```
 
-   On Spring, the controller binds `EDITS` once, where the catalog is injected, and the handler stays one call:
+   On Spring, the controller takes `EDITS` the way it takes its repository, and the handler stays one call:
 
    ```java
    @RestController
@@ -186,9 +216,9 @@ handler stays one call.
      private final OrderRepository orders;
      private final EditMapper<OrderChanges, Order> edits;
 
-     OrderController(OrderRepository orders, Catalog catalog) {
+     OrderController(OrderRepository orders, EditMapper<OrderChanges, Order> edits) {
        this.orders = orders;
-       this.edits = OrderMappers.EDITS.with(catalog); // the catalog LINE prices lines with
+       this.edits = edits; // OrderMappers.EDITS, bound to the Catalog bean
      }
 
      @TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class)
@@ -209,9 +239,9 @@ handler stays one call.
      private final Orders orders;
      private final EditMapper<OrderChanges, Order> edits;
 
-     OrderResource(Orders orders, Catalog catalog) {
+     OrderResource(Orders orders, EditMapper<OrderChanges, Order> edits) {
        this.orders = orders;
-       this.edits = OrderMappers.EDITS.with(catalog);
+       this.edits = edits;
      }
 
      @PATCH
@@ -226,8 +256,8 @@ handler stays one call.
    }
    ```
 
-   Called from a service method outside any endpoint, the mapper is bound the same way, and a test hands the service a
-   catalog of its own with no container:
+   Called from a service method outside any endpoint, the mapper is injected the same way. A test with no container
+   binds it with `with`:
 
    ```java
    @Service
@@ -236,9 +266,9 @@ handler stays one call.
      private final OrderRepository orders;
      private final EditMapper<OrderChanges, Order> edits;
 
-     public OrderService(OrderRepository orders, Catalog catalog) {
+     public OrderService(OrderRepository orders, EditMapper<OrderChanges, Order> edits) {
        this.orders = orders;
-       this.edits = OrderMappers.EDITS.with(catalog);
+       this.edits = edits;
      }
 
      @Transactional
@@ -249,18 +279,22 @@ handler stays one call.
      }
    }
 
-   final var service = new OrderService(orders, new Catalog(products)); // in a test
+   final var service = new OrderService(orders, OrderMappers.EDITS.with(new Catalog(products))); // in a test
    ```
 
-   The demo's `Catalog` becomes a bean over a products table in each app, and `OrderDesk` binds its mappers in its
-   constructor.
+   The demo's `Catalog` becomes a bean over a products table in each app, and each app hands the framework-free
+   `OrderDesk` the bound mapper it injects.
 
 ## Consequences
 
 - A mapper can price, look up or allocate through a bean, on both paths, and its field still declares only rows. The
   README and the demo price lines from an injected catalog on Spring and on Quarkus.
-- Each class that calls such a mapper directly binds it once, in its constructor, and names the services it binds there.
-  A service added to the rows later fails that `with` at startup, naming the row, until the class binds it too.
+- In an application on either starter a mapper with services is injected like any other bean, names no service at the
+  injection point, and needs no change there when a row gains a service later: the bean binds the new one, or startup
+  fails naming the row.
+- The injected form needs `telescope-codegen` on the processor path, which a `@Bridge` field already wants: a field the
+  processor never saw has no bean, and the container reports the missing one by type. Such a field is bound with `with`.
+- Each such field adds one bean to the container, of a mapper type the application declared itself.
 - A call on an unbound field is refused when it runs, not when it compiles: nothing at compile time follows the field
   into every method that calls it.
 - The PATCH prices every line it writes, a matched one included, so the catalog is asked once per line. A catalog that
@@ -289,10 +323,12 @@ handler stays one call.
   line would run in a handler and fail in a scheduled job or on another thread, at run time rather than at startup.
 - **The services passed on every call**, `EDITS.patchInto(order, changes, catalog)`. Rejected: every call site carries
   them, and a service a nested mapper needs shows at the outer call.
-- **A starter bean that binds from the container**, `mappers.bind(OrderMappers.EDITS)`. Deferred: it saves naming the
-  services at the binding site, at the cost of a telescope type in each constructor that binds, and it does nothing for
-  code with no container, such as the demo's framework-free `OrderDesk`. `with` serves both. Worth revisiting if mappers
-  needing several services turn out to be common.
-- **A bean generated for each `@Bridge` field with service rows**, injected by its type. Rejected: it makes beans from
-  an annotation that is not a bean annotation, only where the processor runs, and two fields of one pair type would need
-  qualifiers.
+- **`with` in each constructor**, `this.edits = OrderMappers.EDITS.with(catalog)`. Rejected as the container form: each
+  class names the services the rows need, injects a catalog it does not otherwise use, and changes when a row gains a
+  service. It stays for code with no container and for tests.
+- **A binder bean**, `mappers.bind(OrderMappers.EDITS)`. Rejected: it puts a telescope type and a binding line in each
+  constructor, where the field's bean needs neither.
+- **A configuration class or producer method generated as source for each field.** Rejected: the processor would have to
+  know at compile time which container the application runs, which it decides today only for `@TelescopeMapper` beans,
+  and it would repeat what the provider already records. The starters register the bean from the provider instead, the
+  same way on both containers.

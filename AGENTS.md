@@ -970,11 +970,13 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     function, and the function takes the service first:
     `compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price)`, also for `compute`'s supplier, `when`'s
     predicate, `toOrElseGet` and `toOneWay`; `constant`, `via` and two-way conversions take none, and a mapper a `via`
-    row names brings its services along. The field stays `static final`; `with(services...)` returns a bound copy,
-    checked when it runs and by the verifier on a `@Bridge` field, and a call on an unbound mapper is refused by name
-    before anything is written. The starters bind the mappers a mapped endpoint or a generated `@TelescopeMapper` bean
-    resolves, once at startup, in `EndpointMappers`' words; user code binds once in a constructor, with no process-wide
-    binding. The generated bridge takes the services as arguments and calls them directly, so a native image needs
+    row names brings its services along. The field stays `static final`. Both starters register each `@Bridge` field
+    whose rows name services as a bean of the field's own generic type (`EditMapper<OrderChanges, Order>`), bound to the
+    container's beans once at startup, named after the field for a qualifier, with no bean or two beans for a service
+    refused naming the row in `EndpointMappers`' words; a handler injects it like a repository and never calls `with`. A
+    `Mapper` field bean joins `TelescopeMapperRegistry`, which stays keyed by pair. `with(services...)` returns a bound
+    copy for code with no container and for tests, and a call on an unbound mapper is refused by name before anything is
+    written. The generated bridge takes the services as arguments and calls them directly, so a native image needs
     nothing beyond the container's bean lookup.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
