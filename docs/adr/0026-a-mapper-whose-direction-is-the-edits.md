@@ -104,13 +104,16 @@ type. `WriteStrategy.ADDERS` and its row are gone.
    not decide it.
 
 4. **Collections follow #818, with no row.** `forward`, `into`, `patch` and `patchInto` write a collection property of
-   `E` through the owner's adder found by type, else the collection the target holds, else its setter, and set the
-   back-reference by #818's rule. The back-reference can be read from the element's class alone: the property a
-   `mappedBy` on a collection of that class names, or else its one property whose class holds a collection of it. It
-   counts as filled when the element's own mapper is built, so an element mapper needs no row for it. Elements converted
-   through a nested pair the mapper walks, or through an `EditMapper` a `via` row names, are converted by a conversion
-   that can write in place, so with telescope-jpa a managed collection is merged by `@Id` as ADR-0017's amendment sets
-   out; elements a hand-written class converts are still cleared and refilled.
+   `E` through the owner's adder found by type, else the collection the target holds, else its setter, and remove an
+   element through the owner's remover, else by clearing its back-reference. The back-reference is the one #818's rule
+   names: the property a `backReference(...)` row pins, else the property a `mappedBy` on the collection names, else the
+   element's one writable property whose type is the owner's. Because that rule reads the element's and the owner's
+   classes alone, the back-reference counts as filled when the element's own mapper is built, so an element mapper needs
+   no row for it; an element with several owner-typed properties and none of the three is the one case that leaves it
+   unfilled, and the build warns there as #818 sets out. Elements converted through a nested pair the mapper walks, or
+   through an `EditMapper` a `via` row names, are converted by a conversion that can write in place, so with
+   telescope-jpa a managed collection is merged by `@Id` as ADR-0017's amendment sets out; elements a hand-written class
+   converts are still cleared and refilled.
 
 5. **The generated path compiles it like every `@Bridge` field.** `FieldRows` reads `Telescope.edits(...)` written in
    place on a `static final` field, as it reads `mapper` and `mapperForward`, and `keep` joins the rows it compiles.
@@ -224,8 +227,8 @@ type. `WriteStrategy.ADDERS` and its row are gone.
 - **Hand `compute` the `E` being written.** Rejected: on `forward` it does not exist until every value has been built,
   and the generated code builds values before the constructor call.
 - **A `compute` that reads one property of the partial without claiming it**, as
-  `compute(OrderLine::getUnitPrice, LineDto::sku, Catalog::price)`. Deferred: it would be a second row for `compute`'s
-  job, and a static method taking the element does the same in one line.
+  `compute(OrderLine::getUnitPrice, LineDto::sku, Catalog::price)`. Rejected: it would be a second row for `compute`'s
+  job, and a static method taking the element does the same in one line, so the catalog takes the wire line.
 - **The line rows in `EDITS` itself, keyed to the nested pair.** Rejected for now: the generated path has no form for a
   row keyed to a nested pair, and an edit mapper of the element's own is its pair's bridge, which the create request can
   name too.
