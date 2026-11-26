@@ -966,6 +966,18 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     source of its pair. Collections follow the derived adder and back-reference rule, so an element edit mapper named in
     a `via` row merges by `@Id` with telescope-jpa. Compiled by `FieldRows` like every `@Bridge` field; ADR-0024's
     `before` and `after` rows apply in its one direction. `Mapper.patchInto` is removed.
+27. **0027 — Rows that call an injected service.** (Proposed.) A row's service form names the service's class before its
+    function, and the function takes the service first:
+    `compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price)`, also for `compute`'s supplier, `when`'s
+    predicate, `toOrElseGet` and `toOneWay`; `constant`, `via` and two-way conversions take none, and a mapper a `via`
+    row names brings its services along. The field stays `static final`. Both starters register each `@Bridge` field
+    whose rows name services as a bean of the field's own generic type (`EditMapper<OrderChanges, Order>`), bound to the
+    container's beans once at startup, named after the field for a qualifier, with no bean or two beans for a service
+    refused naming the row in `EndpointMappers`' words; a handler injects it like a repository and never calls `with`. A
+    `Mapper` field bean joins `TelescopeMapperRegistry`, which stays keyed by pair. `with(services...)` returns a bound
+    copy for code with no container and for tests, and a call on an unbound mapper is refused by name before anything is
+    written. The generated bridge takes the services as arguments and calls them directly, so a native image needs
+    nothing beyond the container's bean lookup.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
