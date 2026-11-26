@@ -930,6 +930,14 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     OpenAPI, a generated resource class per mapped method and a second scan through SmallRye's public builder document
     each body as its wire type. Amended: a same-name fallback that pairs no property is refused at startup, as on
     Spring.
+26. **0026 — A mapper whose direction is the edit's.** (Proposed.) `Telescope.edits(P.class, E.class, rows...)` builds
+    an `EditMapper<P, E>` from what an edit sends to what it writes into, with `forward`, `into`, `patch` and
+    `patchInto` and no `backward`, so `compute` and `constant` run on the way into an entity and a PATCH needs no
+    hand-written converter. Strict on both sides: `keep(E::x)` names a target property no edit writes and `drop(P::x)` a
+    partial property nothing reads; `patch` and `patchInto` never write a null, and a `compute` function takes the
+    source of its pair. Collections follow the derived adder and back-reference rule, so an element edit mapper named in
+    a `via` row merges by `@Id` with telescope-jpa. Compiled by `FieldRows` like every `@Bridge` field; ADR-0024's
+    `before` and `after` rows apply in its one direction. `Mapper.patchInto` is removed.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
