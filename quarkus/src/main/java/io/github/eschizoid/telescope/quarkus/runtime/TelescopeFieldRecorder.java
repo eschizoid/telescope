@@ -53,6 +53,7 @@ public class TelescopeFieldRecorder {
             final var bean = handle.getBean();
             names.add(bean.getName() != null ? bean.getName() : bean.getBeanClass().getName());
           }
+          names.sort(null);
           throw new IllegalStateException(EndpointMappers.serviceBeansAmbiguous(name, service.getName(), row, in, names));
         }
         values[i] = found.get();

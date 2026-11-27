@@ -145,11 +145,14 @@ class TelescopeProcessor {
     for (final var provider : BridgeRegistry.serviceFields(Thread.currentThread().getContextClassLoader())) {
       final var name = BridgeRegistry.beanName(provider);
       final var declaring = provider.declaringType().getName();
+      // A field of a class outside the application's index belongs to no bean archive the
+      // application builds, so it registers no bean.
+      final var indexed = index.getIndex().getClassByName(DotName.createSimple(declaring));
+      if (indexed == null) continue;
       final var taken = named.putIfAbsent(name, declaring);
       if (taken != null) throw new IllegalStateException(EndpointMappers.fieldBeanNamedTwice(name, taken, declaring));
       final var raw = DotName.createSimple(provider.fieldType());
-      final var indexed = index.getIndex().getClassByName(DotName.createSimple(declaring));
-      final var field = indexed == null ? null : indexed.field(provider.fieldName());
+      final var field = indexed.field(provider.fieldName());
       final Type type = field != null
         ? field.type()
         : ParameterizedType.create(
