@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.Telescope.edits;
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.keep;
+import static io.github.eschizoid.telescope.mapping.Mapping.service;
 
 import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.conversion.EditMapper;
@@ -30,8 +31,8 @@ public final class OrderMappers {
   public static final EditMapper<LineDto, OrderLine> LINE = edits(
     LineDto.class,
     OrderLine.class,
-    compute(OrderLine::getUnitPrice, Catalog::price),
-    compute(OrderLine::getCostPrice, Catalog::cost),
+    compute(OrderLine::getUnitPrice, service(Catalog::price)),
+    compute(OrderLine::getCostPrice, service(Catalog::cost)),
     drop(LineDto::unitPrice)
   );
 }

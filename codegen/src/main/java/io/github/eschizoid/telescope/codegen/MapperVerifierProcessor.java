@@ -66,6 +66,7 @@ import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.util.ElementFilter;
@@ -125,6 +126,13 @@ import javax.tools.StandardLocation;
 public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
+
+  // The mappers whose with(...) binds the services their rows call.
+  private static final Set<String> MAPPER_TYPES = Set.of(
+    "io.github.eschizoid.telescope.conversion.Mapper",
+    "io.github.eschizoid.telescope.conversion.ForwardMapper",
+    "io.github.eschizoid.telescope.conversion.EditMapper"
+  );
 
   private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
@@ -261,6 +269,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             final var path = trees.getPath(type);
             if (path == null) return;
             try {
+              recordServiceFields(type);
               new CallSiteScanner().scan(path, null);
             } catch (final RuntimeException e) {
               // The verifier must never break a build except through its own diagnostics — an
@@ -608,6 +617,159 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
   }
 
+  /** A {@code with(...)} call on a {@code @Bridge} field, the static type of each argument. */
+  private record Binding(
+    String key,
+    String who,
+    List<TypeMirror> given,
+    List<? extends Tree> args,
+    Tree call,
+    CompilationUnitTree unit
+  ) {}
+
+  /** A service a {@code @Bridge} field's rows call: the row and the field it belongs to. */
+  private record ServiceUse(TypeElement service, String row, String in) {}
+
+  // The services each @Bridge field's rows call, by the field's key, once its class is analysed;
+  // null for a field whose rows cannot be read. The with(...) calls met before then wait here.
+  private final Map<String, List<ServiceUse>> serviceFields = new HashMap<>();
+  private final List<Binding> pendingBindings = new ArrayList<>();
+
+  private String fieldKey(final VariableElement field) {
+    return binaryName((TypeElement) field.getEnclosingElement()) + "#" + field.getSimpleName();
+  }
+
+  /**
+   * Records the services the rows of every {@code @Bridge} field of {@code type} call, while its
+   * trees are attributed, and checks the {@code with(...)} calls that waited for them.
+   */
+  private void recordServiceFields(final TypeElement type) {
+    final var rows = new FieldRows(processingEnv, trees);
+    for (final var member : type.getEnclosedElements()) {
+      if (!(member instanceof VariableElement field) || !FieldRows.annotatedBridge(field)) continue;
+      serviceFields.put(fieldKey(field), fieldServices(rows, field, new HashSet<>()));
+    }
+    final var ready = new ArrayList<Binding>();
+    for (final var binding : pendingBindings) if (serviceFields.containsKey(binding.key())) ready.add(binding);
+    pendingBindings.removeAll(ready);
+    for (final var binding : ready) checkBinding(binding);
+  }
+
+  private void checkBinding(final Binding binding) {
+    final var uses = serviceFields.get(binding.key());
+    if (uses == null) return;
+    final var services = new ArrayList<TypeElement>();
+    for (final var use : uses) if (!services.contains(use.service())) services.add(use.service());
+    final var names = services.stream().map(s -> s.getSimpleName().toString()).toList();
+    final var taken = new TypeMirror[services.size()];
+    for (var a = 0; a < binding.given().size(); a++) {
+      final var type = binding.given().get(a);
+      var accepted = false;
+      for (var i = 0; i < services.size(); i++) {
+        if (!types.isAssignable(types.erasure(type), types.erasure(services.get(i).asType()))) continue;
+        accepted = true;
+        if (taken[i] != null) {
+          reportIn(
+            binding,
+            binding.args().get(a),
+            PairingMessages.serviceWithRepeated(binding.who(), names.get(i), shortName(taken[i]), shortName(type))
+          );
+          return;
+        }
+        taken[i] = type;
+      }
+      if (!accepted) {
+        reportIn(
+          binding,
+          binding.args().get(a),
+          PairingMessages.serviceWithUnneeded(binding.who(), shortName(type), names)
+        );
+        return;
+      }
+    }
+    for (var i = 0; i < services.size(); i++) {
+      if (taken[i] != null) continue;
+      final var service = services.get(i);
+      final var use = uses.stream().filter(u -> u.service().equals(service)).findFirst().orElseThrow();
+      reportIn(binding, binding.call(), PairingMessages.serviceWithMissing(binding.who(), names.get(i), use.row(), use.in()));
+      return;
+    }
+  }
+
+  private void reportIn(final Binding binding, final Tree at, final String message) {
+    trees.printMessage(reportKind, message, at, binding.unit());
+  }
+
+  private String shortName(final TypeMirror type) {
+    final var element = types.asElement(type);
+    return element == null ? type.toString() : element.getSimpleName().toString();
+  }
+
+  /**
+   * The services the rows of {@code field}, a {@code @Bridge} field, call, in the order its mapper
+   * lists them: its own rows', then those of each field a {@code via} row names, then those of each
+   * edit mapper field of its class an element pair converts through; null where a row cannot be
+   * read, which leaves the binding to the check {@code with} makes when it runs.
+   */
+  private List<ServiceUse> fieldServices(
+    final FieldRows rows,
+    final VariableElement field,
+    final Set<VariableElement> seen
+  ) {
+    if (!seen.add(field)) return List.of();
+    final var read = rows.read(field);
+    if (!(read instanceof FieldRows.Parsed parsed)) return null;
+    final var uses = new ArrayList<ServiceUse>();
+    for (final var use : parsed.services()) uses.add(new ServiceUse(use.service(), use.row(), null));
+    final var label = field.getEnclosingElement().getSimpleName() + "." + field.getSimpleName();
+    final var call = rows.initializerCall(field);
+    final var path = trees.getPath(field);
+    if (call != null && path != null) for (final var arg : call.getArguments()) {
+      if (!(arg instanceof MethodInvocationTree row) || row.getArguments().size() != 3) continue;
+      if (!row.getMethodSelect().toString().endsWith("via")) continue;
+      final var argPath = TreePath.getPath(path.getCompilationUnit(), row.getArguments().get(2));
+      final var named = argPath == null ? null : trees.getElement(argPath);
+      if (named instanceof VariableElement nested && FieldRows.annotatedBridge(nested)) {
+        final var theirs = fieldServices(rows, nested, seen);
+        if (theirs == null) return null;
+        for (final var use : theirs) uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(nested) : use.in()));
+      }
+    }
+    if (parsed.edits()) for (final var member : field.getEnclosingElement().getEnclosedElements()) {
+      if (!(member instanceof VariableElement other) || other.equals(field) || !FieldRows.annotatedBridge(other)) continue;
+      if (!(other.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) continue;
+      if (!elementPairOf(parsed, declared)) continue;
+      final var theirs = fieldServices(rows, other, seen);
+      if (theirs == null) return null;
+      for (final var use : theirs) uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(other) : use.in()));
+    }
+    return label.isEmpty() ? null : uses;
+  }
+
+  private static String nestedLabel(final VariableElement field) {
+    return field.getEnclosingElement().getSimpleName() + "." + field.getSimpleName();
+  }
+
+  /**
+   * Whether the edit mapper {@code declared} names converts the elements of a collection the
+   * source of {@code parsed} holds into those of a collection its target holds.
+   */
+  private boolean elementPairOf(final FieldRows.Parsed parsed, final DeclaredType declared) {
+    final var source = types.erasure(declared.getTypeArguments().get(0));
+    final var target = types.erasure(declared.getTypeArguments().get(1));
+    return holdsElementsOf(parsed.source(), source) && holdsElementsOf(parsed.target(), target);
+  }
+
+  private boolean holdsElementsOf(final TypeElement owner, final TypeMirror element) {
+    for (final var member : elements.getAllMembers(owner)) {
+      if (!(member instanceof ExecutableElement accessor) || !accessor.getParameters().isEmpty()) continue;
+      if (!(accessor.getReturnType() instanceof DeclaredType returned)) continue;
+      if (returned.getTypeArguments().size() != 1) continue;
+      if (types.isSameType(types.erasure(returned.getTypeArguments().getFirst()), element)) return true;
+    }
+    return false;
+  }
+
   private final class CallSiteScanner extends TreePathScanner<Void, Void> {
 
     // Reads a row written as a generated navigator's chain as the bridge processor reads it.
@@ -659,9 +821,47 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     @Override
     public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
       verifyIfTelescopeFactory(node);
+      verifyServiceBinding(node);
       return super.visitMethodInvocation(node, unused);
     }
 
+    /**
+     * Checks a {@code with(...)} call on a {@code @Bridge} field whose rows this compilation holds:
+     * the static type of each argument against the services the field's rows call, their own and
+     * those of the fields they convert through, refusing in the runtime's words an argument no
+     * service accepts, two arguments for one service and a service no argument is. A call met before
+     * the field's class is analysed is checked once it is.
+     */
+    private void verifyServiceBinding(final MethodInvocationTree node) {
+      if (!(node.getMethodSelect() instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("with")) {
+        return;
+      }
+      if (!(elementAt(node.getMethodSelect()) instanceof ExecutableElement method)) return;
+      if (!(method.getEnclosingElement() instanceof TypeElement owner)) return;
+      if (!MAPPER_TYPES.contains(owner.getQualifiedName().toString())) return;
+      if (!(elementAt(select.getExpression()) instanceof VariableElement field) || !FieldRows.annotatedBridge(field)) {
+        return;
+      }
+      if (suppressed()) return;
+      final var unit = getCurrentPath().getCompilationUnit();
+      final var given = new ArrayList<TypeMirror>();
+      for (final var arg : node.getArguments()) {
+        final var type = trees.getTypeMirror(TreePath.getPath(unit, arg));
+        // An argument javac cannot type, or a null, is the check with makes when it runs.
+        if (type == null || type.getKind() == TypeKind.ERROR || type.getKind() == TypeKind.NULL) return;
+        given.add(type);
+      }
+      final var binding = new Binding(
+        fieldKey(field),
+        field.getEnclosingElement().getSimpleName() + "." + field.getSimpleName(),
+        given,
+        List.copyOf(node.getArguments()),
+        node,
+        unit
+      );
+      if (serviceFields.containsKey(binding.key())) checkBinding(binding);
+      else pendingBindings.add(binding);
+    }
     private void verifyIfTelescopeFactory(final MethodInvocationTree node) {
       final var invoked = elementAt(node.getMethodSelect());
       if (!(invoked instanceof ExecutableElement method)) return;

@@ -2,16 +2,14 @@ package io.github.eschizoid.telescope.consumer;
 
 import java.math.BigDecimal;
 
-/** Prices a line by its SKU. */
-public final class Catalog {
+/** Prices a line by its SKU: the service the README's line rows call, a bean in an application. */
+public class Catalog {
 
-  private Catalog() {}
-
-  public static BigDecimal price(final LineDto line) {
+  public BigDecimal price(final LineDto line) {
     return BigDecimal.TEN;
   }
 
-  public static BigDecimal cost(final LineDto line) {
+  public BigDecimal cost(final LineDto line) {
     return BigDecimal.ONE;
   }
 }

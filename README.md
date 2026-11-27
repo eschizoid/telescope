@@ -64,7 +64,7 @@ Three mapper fields say how those types relate, and the PATCH handler uses them:
 
 ```java
 import static io.github.eschizoid.telescope.Telescope.*; // edits, mapperForward, path
-import static io.github.eschizoid.telescope.mapping.Mapping.*; // every row: to, via, compute, drop, keep
+import static io.github.eschizoid.telescope.mapping.Mapping.*; // every row: to, via, compute, service, drop, keep
 
 public final class OrderMappers {
 
@@ -78,13 +78,13 @@ public final class OrderMappers {
     keep(Order::getInternalNotes)
   );
 
-  // A line as a PATCH sends it, which EDITS finds by its pair. The price and the cost come from the catalog.
+  // A line as a PATCH sends it, which EDITS finds by its pair. The price and the cost come from the catalog bean.
   @Bridge
   public static final EditMapper<LineDto, OrderLine> LINE = edits(
     LineDto.class,
     OrderLine.class,
-    compute(OrderLine::getUnitPrice, Catalog::price),
-    compute(OrderLine::getCostPrice, Catalog::cost),
+    compute(OrderLine::getUnitPrice, service(Catalog::price)), // catalog.price(line)
+    compute(OrderLine::getCostPrice, service(Catalog::cost)),
     drop(LineDto::unitPrice) // a price the client sends is ignored
   );
 
@@ -98,35 +98,56 @@ public final class OrderMappers {
   );
 }
 
-@TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the response goes through OrderMappers.DTO
-Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
-  final var order = orders.findByNumber(number); // the entity JPA manages
-  OrderMappers.EDITS.patchInto(order, changes); // writes only the fields the client sent
-  return order;
+@Service // @ApplicationScoped on Quarkus
+@RequiredArgsConstructor
+public class Catalog {
+  private final ProductRepository products;
+
+  public BigDecimal price(LineDto line) { return products.bySku(line.sku()).getPrice(); }
+  public BigDecimal cost(LineDto line) { return products.bySku(line.sku()).getCost(); }
+}
+
+@RestController @RequiredArgsConstructor
+class OrderController {
+  private final OrderRepository orders;
+  private final EditMapper<OrderChanges, Order> edits; // OrderMappers.EDITS, bound to the Catalog bean
+
+  @TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the response goes through OrderMappers.DTO
+  Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
+    final var order = orders.findByNumber(number); // the entity JPA manages
+    edits.patchInto(order, changes); // writes only the fields the client sent, pricing each line it sends
+    return order;
+  }
 }
 ```
 
-That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name. An edit mapper's rows read from
-what the client sends and write into the entity, so `compute` runs on the way in: `Catalog.price(LineDto)` and
-`Catalog.cost(LineDto)` look the product up by the line's SKU, for every line the client sends. `EDITS` names no row for
-the lines: the pair `LineDto` to `OrderLine` has its own edit mapper, `LINE`, declared in the same class, so each line
-goes through it, before or after `EDITS`. An element pair's own edit mapper is found in the owner's class or in the
-pair's two classes; one declared anywhere else is named in a `via(...)` row, and the processor refuses it otherwise. The
-delivery and the lines change, and a field the client left out keeps its value. The new lines go through
-`order.addLine(...)`, the method `Order` declares to take an `OrderLine`, into the `@OneToMany` list the entity already
-holds, so Hibernate keeps tracking it and each line gets its back-reference. No row says so: the mapper finds the adder
-by its type, and with `telescope-jpa` the generated `@Id`s and the `mappedBy` back-reference need no row either. The
-response is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the
-internal notes. The annotation finds `DTO` by its pair, `Order` to `OrderDto`, when the application starts, and startup
-fails if no mapper or two mappers claim it. Every field is a method reference, so a typo is a compile error, and a field
-added to `Order`, `OrderLine`, `OrderChanges` or `LineDto` later fails the build until someone decides what an edit does
-with it. The `telescope-codegen` processor compiles every mapper into plain Java with no reflection.
+That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name, and the constructors. An edit
+mapper's rows read from what the client sends and write into the entity, so `compute` runs on the way in:
+`service(Catalog::price)` is `catalog.price(line)` on the `Catalog` bean, which looks the product up by the line's SKU,
+for every line the client sends. The mapper fields stay `static final` declarations of rows. The starter registers each
+field whose rows call a service as a bean of the field's own type, bound to the application's beans once at startup, so
+the controller takes `EditMapper<OrderChanges, Order>` the way it takes its repository; with no `Catalog` bean, the
+application fails to start, naming the field, the row and the service. `EDITS` names no row for the lines: the pair
+`LineDto` to `OrderLine` has its own edit mapper, `LINE`, declared in the same class, so each line goes through it,
+before or after `EDITS`, and `EDITS` needs the `Catalog` `LINE` calls. An element pair's own edit mapper is found in the
+owner's class or in the pair's two classes; one declared anywhere else is named in a `via(...)` row, and the processor
+refuses it otherwise. The delivery and the lines change, and a field the client left out keeps its value. The new lines
+go through `order.addLine(...)`, the method `Order` declares to take an `OrderLine`, into the `@OneToMany` list the
+entity already holds, so Hibernate keeps tracking it and each line gets its back-reference. No row says so: the mapper
+finds the adder by its type, and with `telescope-jpa` the generated `@Id`s and the `mappedBy` back-reference need no row
+either. The response is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price
+or the internal notes. The annotation finds `DTO` by its pair, `Order` to `OrderDto`, when the application starts, and
+startup fails if no mapper or two mappers claim it. Every field is a method reference, so a typo is a compile error, and
+a field added to `Order`, `OrderLine`, `OrderChanges` or `LineDto` later fails the build until someone decides what an
+edit does with it. The `telescope-codegen` processor compiles every mapper into plain Java with no reflection; the
+generated bridge takes the catalog as a parameter and calls it directly. A test with no container binds the mapper
+itself: `OrderMappers.EDITS.with(new Catalog(products))`.
 
 ## What you stop writing
 
 | Today, by hand or with a second tool                                    | With telescope                                                                          |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| a PATCH handler full of `if (x != null) entity.setX(x)`                 | `EDITS.patchInto(entity, changes)`                                                      |
+| a PATCH handler full of `if (x != null) entity.setX(x)`                 | `edits.patchInto(entity, changes)`                                                      |
 | clearing and refilling a `@OneToMany` list, setting each back-reference | the same call, through the entity's own `addLine`                                       |
 | a `LazyInitializationException` when a mapper touches a lazy collection | an unloaded collection is never read                                                    |
 | deleting and reinserting every child row to change one of them          | with ids on the elements, the changed row gets one UPDATE and the others are left alone |
@@ -212,13 +233,13 @@ JsonMapper json = JsonMapper.builder().addModule(TelescopeModule.of(CustomerCard
 
 ### Through: the service changes the managed entity in place
 
-`EDITS.patchInto(order, changes)` stands in for the code every service writes by hand:
+`edits.patchInto(order, changes)` stands in for the code every service writes by hand:
 
 ```java
 if (changes.delivery() != null) order.setDelivery(changes.delivery());
 if (changes.lines() != null) {
   order.getLines().clear(); // never setLines(...): Hibernate tracks this list
-  for (final var line : changes.lines()) order.addLine(Catalog.line(line)); // priced from the catalog
+  for (final var line : changes.lines()) order.addLine(catalog.line(line)); // priced from the catalog bean
 }
 // and one more branch for each field anyone adds later, if they remember
 ```
