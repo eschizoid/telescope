@@ -3726,6 +3726,31 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A mapper built from rows reaching the pair {@code source -> target}, whose generated bridge
+   * calls {@code service} for {@code row}: the mapper reaching it has no service of its own to hand
+   * on, so the pair's mapper is named in a {@code via} row, whose services the mapper then binds.
+   */
+  public static String serviceBridgeReached(
+    final String source,
+    final String target,
+    final String service,
+    final String row
+  ) {
+    return (
+      "The pair " +
+      source +
+      " -> " +
+      target +
+      " converts through a generated bridge whose rows call a " +
+      service +
+      ", for " +
+      row +
+      ". Name the pair's mapper in a via(...) row, so the mapper reaching the pair takes that service and" +
+      " hands it on."
+    );
+  }
+
   /** A factory returning a value with nothing to bind a service to, handed a row calling one. */
   public static String serviceOnUnbindable(final String factory, final String row) {
     return (

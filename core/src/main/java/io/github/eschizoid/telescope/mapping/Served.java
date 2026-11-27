@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.mapping;
 
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.Objects;
@@ -67,6 +68,41 @@ public abstract sealed class Served implements Serializable {
     out.append("service(").append(functionName()).append(')');
     if (row.equals("when")) out.append(", ...");
     return out.append(')').toString();
+  }
+
+  /**
+   * What {@code explain()} says the row does: the target property and the call, as {@code
+   * OrderLine.unitPrice: computed by Catalog.price(LineDto)}, or for a {@code when} row the call
+   * gating the rows it wraps.
+   */
+  public final String explain() {
+    final String takes;
+    try {
+      final var read = LambdaIntrospection.serviceOf(function).takes();
+      takes = read == null ? "" : PairingMessages.className(read);
+    } catch (final RuntimeException unreadable) {
+      return describe();
+    }
+    final var name = functionName();
+    final var call = name.contains("::") ? name.replace("::", ".") + "(" + takes + ")" : name;
+    if (row.equals("when")) return "rows gated by " + call;
+    final var verb = switch (row) {
+      case "toOneWay" -> "converted by ";
+      case "toOrElseGet" -> "defaulted by ";
+      default -> "computed by ";
+    };
+    return property(accessors[accessors.length - 1]) + ": " + verb + call;
+  }
+
+  /** A target accessor as {@code OrderLine.unitPrice}. */
+  private static String property(final Serializable accessor) {
+    try {
+      final var owner = LambdaIntrospection.receiverClassOf(accessor);
+      final var method = LambdaIntrospection.methodNameOf(accessor);
+      return PairingMessages.className(owner) + "." + (owner.isRecord() ? method : PropertyNames.property(method));
+    } catch (final RuntimeException unreadable) {
+      return "a property";
+    }
   }
 
   /** The function as {@code Owner::method}, or {@code a lambda}. */

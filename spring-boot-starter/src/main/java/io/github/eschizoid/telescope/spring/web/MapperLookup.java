@@ -4,8 +4,10 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.conversion.ServiceNeeds;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.internal.pairing.EndpointMappers;
+import io.github.eschizoid.telescope.spring.TelescopeBridgeFields;
 import io.github.eschizoid.telescope.spring.TelescopeMapperRegistry;
 import java.util.ArrayList;
 import java.util.function.Function;
@@ -109,19 +111,46 @@ final class MapperLookup {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> registeredMapping(final Mapper<?, ?> mapper) {
+    refuseUnbound(mapper, "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">");
     final var typed = (Mapper<Object, Object>) mapper;
     return typed::forward;
   }
 
+  /**
+   * The forward mapping of the pair: the bean of the {@code @Bridge} field declaring it, where its
+   * rows call a service and the field's bean binds them, and {@code Telescope.mapperForward}
+   * otherwise.
+   */
   @SuppressWarnings("unchecked")
-  private static Function<Object, Object> forwardMapping(final Class<?> source, final Class<?> target) {
+  private Function<Object, Object> forwardMapping(final Class<?> source, final Class<?> target) {
+    final var field = TelescopeBridgeFields.beanFor(
+      beanFactory.getBeanClassLoader(),
+      ForwardMapper.class,
+      source,
+      target
+    );
+    if (field != null && beanFactory.containsBean(field)) {
+      final var bound = (ForwardMapper<Object, Object>) beanFactory.getBean(field, ForwardMapper.class);
+      return bound::forward;
+    }
     EndpointMappers.checkForwardPairs(
       source,
       target,
       BridgeRegistry.find(source, target, source.getClassLoader()).isPresent()
     );
     final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
+    refuseUnbound(forward, "ForwardMapper<" + source.getSimpleName() + ", " + target.getSimpleName() + ">");
     return forward::forward;
+  }
+
+  /** Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to. */
+  private static void refuseUnbound(final Object mapper, final String name) {
+    final var needs = ServiceNeeds.of(mapper);
+    if (needs == null || needs.satisfied()) return;
+    final var first = needs.needs().getFirst();
+    throw new IllegalArgumentException(
+      EndpointMappers.endpointMapperUnbound(name, first.service().getSimpleName(), first.row(), first.in())
+    );
   }
 
   private String label(final String beanName) {

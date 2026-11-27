@@ -1332,7 +1332,7 @@ public sealed class Telescope<
       if (own.isPresent()) {
         @SuppressWarnings("unchecked")
         final var bridge = (Telescope<A, B>) own.get();
-        return ForwardMapper.create(bridge::read, source, target);
+        return DeepMap.needingServices(ForwardMapper.create(bridge::read, source, target), bridge, source, target);
       }
     }
     return DeepMap.resolveForwardMapper(source, target, steps, declaration.node(), caller);

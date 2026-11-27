@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.ServiceNeeds;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.ComputeFromSource;
 import io.github.eschizoid.telescope.mapping.Conditional;
@@ -61,8 +62,34 @@ final class ServiceRows {
     return ServiceNeeds.joined(own, nested);
   }
 
+  /**
+   * The nodes {@code explain()} reports for the rows of {@code steps} that call a service, each
+   * saying whether the row is bound.
+   */
+  static List<OpticNode> nodes(final MapStep[] steps) {
+    final var nodes = new ArrayList<OpticNode>();
+    for (final var step : steps) {
+      if (!(step instanceof Mapping<?, ?> row)) continue;
+      if (row instanceof Conditional<?, ?> c && c.predicate() instanceof Served s) {
+        nodes.add(need(s).node(s.service() != null));
+      }
+      final var served = row instanceof Conditional<?, ?> c ? servedOf(c.inner()) : servedOf(row);
+      if (served != null) nodes.add(need(served).node(served.service() != null));
+    }
+    return nodes;
+  }
+
+  /** {@code trail} followed by the nodes of the rows of {@code steps} that call a service. */
+  static List<OpticNode> withNodes(final List<OpticNode> trail, final MapStep[] steps) {
+    final var nodes = nodes(steps);
+    if (nodes.isEmpty()) return trail;
+    final var all = new ArrayList<>(trail);
+    all.addAll(nodes);
+    return all;
+  }
+
   private static ServiceNeeds.Need need(final Served served) {
-    return new ServiceNeeds.Need(served.serviceClass(), served.describe(), null);
+    return new ServiceNeeds.Need(served.serviceClass(), served.describe(), null, served.explain());
   }
 
   /** Whether any of {@code steps} calls a service, itself or through a mapper it names. */

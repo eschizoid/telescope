@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -22,13 +23,20 @@ import java.util.function.Supplier;
 public final class ServiceNeeds {
 
   /**
-   * One service a mapper needs: its class, the row that calls it, as it is written, and the mapper
-   * that row belongs to where it is not the mapper itself, by its field's name or its type.
+   * One service a mapper needs: its class, the row that calls it, as it is written, the mapper that
+   * row belongs to where it is not the mapper itself, by its field's name or its type, and what
+   * {@code explain()} says the row does, as {@code OrderLine.unitPrice: computed by
+   * Catalog.price(LineDto)}.
    */
-  public record Need(Class<?> service, String row, String in) {
+  public record Need(Class<?> service, String row, String in, String explain) {
     public Need {
       Objects.requireNonNull(service, "service");
       Objects.requireNonNull(row, "row");
+    }
+
+    /** The node {@code explain()} reports for this row, saying whether a service is bound. */
+    public OpticNode node(final boolean bound) {
+      return new OpticNode.ServiceCall(explain == null ? row : explain, service, bound);
     }
   }
 
@@ -250,9 +258,34 @@ public final class ServiceNeeds {
       final var their = of(mapper);
       if (their == null) continue;
       final var in = their.nameOf(mapper);
-      for (final var need : their.needs()) all.add(new Need(need.service(), need.row(), need.in() == null ? in : need.in()));
+      for (final var need : their.needs()) {
+        all.add(new Need(need.service(), need.row(), need.in() == null ? in : need.in(), need.explain()));
+      }
     }
     return all;
+  }
+
+  /**
+   * {@code mapper}, a {@code Mapper}, {@code ForwardMapper} or {@code EditMapper}, bound to {@code
+   * values} through its {@code with}, which a container integration calls with its beans.
+   *
+   * @throws IllegalArgumentException as {@code with} refuses, or for a value that is not a mapper
+   */
+  public static Object withServices(final Object mapper, final Object... values) {
+    return switch (mapper) {
+      case Mapper<?, ?> m -> m.with(values);
+      case ForwardMapper<?, ?> m -> m.with(values);
+      case EditMapper<?, ?> m -> m.with(values);
+      case null, default -> throw new IllegalArgumentException("not a mapper: " + mapper);
+    };
+  }
+
+  /** The first need of {@code mapper} for {@code service}, or null where it has none. */
+  public static Need needOf(final Object mapper, final Class<?> service) {
+    final var needs = of(mapper);
+    if (needs == null) return null;
+    for (final var need : needs.needs()) if (need.service() == service) return need;
+    return null;
   }
 
   /** The needs {@code mapper} holds, or null for a value that is not a mapper or needs none. */

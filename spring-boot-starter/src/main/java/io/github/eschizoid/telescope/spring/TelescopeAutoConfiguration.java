@@ -53,6 +53,18 @@ public class TelescopeAutoConfiguration {
   }
 
   /**
+   * Registers a bean of each {@code @Bridge} field whose rows call a service, of the field's own
+   * type and bound to the context's beans, as {@link TelescopeBridgeFields} describes. Static, so
+   * it runs before the other beans' definitions are read.
+   *
+   * @return the registrar
+   */
+  @Bean
+  public static TelescopeBridgeFields telescopeBridgeFields() {
+    return new TelescopeBridgeFields();
+  }
+
+  /**
    * Build the {@link TelescopeMapperRegistry} from every {@link Mapper} bean the context can
    * resolve. Spring injects the {@code Collection} parameter with the live list of {@code Mapper}
    * beans regardless of how many or how few are registered — an empty graph yields an empty
