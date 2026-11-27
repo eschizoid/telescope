@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.FixedFit;
+import io.github.eschizoid.telescope.internal.pairing.GeneratedProperties;
 import io.github.eschizoid.telescope.internal.pairing.KeptNames;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
@@ -180,7 +181,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       carrier.getSimpleName() +
       " declares a @Bridge field, and the runtime hands a field's bridge to a mapper of its pair this" +
       " class builds, so every mapper the class builds is a static field initialised by" +
-      " Telescope.mapper(...) or mapperForward(...) written in place, naming its classes as literals," +
+      " Telescope.mapper(...), mapperForward(...) or edits(...) written in place, naming its classes as" +
+      " literals," +
       " for a pair no @Bridge field of the class declares; build this one in another class"
     );
   }
@@ -409,7 +411,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // For a field's bridge, the property each backReference row names, and the class its getter
     // returns, both by the qualified name of the element class the row is keyed to.
     Map<String, String> backReferences,
-    Map<String, String> backReferenceTypes
+    Map<String, String> backReferenceTypes,
+    // For a field initialised by Telescope.edits: the bridge converts forward alone, with an into
+    // and the sparse writes of an edit mapper, and keeps are the target properties no edit
+    // writes.
+    boolean edits,
+    Set<String> keeps
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -436,7 +443,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       null,
       Map.of(),
-      Map.of()
+      Map.of(),
+      false,
+      Set.of()
     );
 
     /**
@@ -470,7 +479,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Map.of(),
         null,
         Map.of(),
-        Map.of()
+        Map.of(),
+        false,
+        Set.of()
       );
     }
   }
@@ -505,6 +516,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // this set is refused where an enum pair below it converts forward only
   // (refuseStrictReferencesToLenientPairs).
   private final Set<TypePair> lenientPairs = new HashSet<>();
+
+  // Sub-pairs an edit mapper's bridge converts, which write one element into another in place as
+  // the edit's own pair does, so a collection of them is merged where a container policy matches
+  // its elements. Propagated as leniency is, and cleared with it.
+  private final Set<TypePair> editPairs = new HashSet<>();
+
+  // For each pair an edit mapper converts, the @Bridge field of that edit mapper, as its carrier's
+  // qualified name and the field: the class whose element pairs convert through their own mappers.
+  private final Map<TypePair, String[]> editOwners = new HashMap<>();
+
+  // The owner of the pair being planned, when it is one an edit mapper converts.
+  private String[] planningOwner;
+
+  // Whether the pair being planned is an edit mapper's or one of its sub-pairs.
+  private boolean planningEdits;
+
+  // For the pair being planned, each source property whose value converts through the edit mapper
+  // a @Bridge field declares for its pair, with that field as Class.FIELD.
+  private final Map<String, String> elementsThrough = new LinkedHashMap<>();
 
   // By element pair, the properties of the target's, and of the source's, elements whose type is
   // exactly the class of the owner of a collection a bridge converts them for, where the owner's
@@ -909,7 +939,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           Map.of(),
           null,
           Map.of(),
-          Map.of()
+          Map.of(),
+          false,
+          Set.of()
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
@@ -972,6 +1004,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       multiTargetSources.clear();
       configsByPair.clear();
       lenientPairs.clear();
+      editPairs.clear();
+      editOwners.clear();
       pointerTargets.clear();
       pointerSources.clear();
       writeDefaults.clear();
@@ -1227,7 +1261,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.copyOf(parsed.beanStrategies()),
       parsed.defaultStrategy(),
       Map.copyOf(parsed.backReferences()),
-      Map.copyOf(parsed.backReferenceTypes())
+      Map.copyOf(parsed.backReferenceTypes()),
+      parsed.edits(),
+      Set.copyOf(parsed.keeps())
     );
     if (
       !roundEnv.processingOver() && (carriesLombokTrigger(parsed.source()) || carriesLombokTrigger(parsed.target()))
@@ -2067,7 +2103,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
     final var cfg = configsByPair.getOrDefault(thisPair, BridgeConfig.EMPTY);
-    final var drops = cfg.drops();
+    // At every pair an edit mapper writes, its own or one below it, a property the persistence
+    // mapping generates is written by no conversion. Its source namesake is left unread, as a drop
+    // leaves it: it is the key a merge by identifier matches a sent element by, read from the
+    // source.
+    final var drops = new LinkedHashSet<>(cfg.drops());
+    final var generatedUnwritten = new ArrayList<String>();
+    if (cfg.edits() || editPairs.contains(thisPair)) {
+      final var rowWritten = new HashSet<>(cfg.renames().values());
+      for (final var extras : cfg.renameFanouts().values()) rowWritten.addAll(extras);
+      rowWritten.addAll(cfg.computes().keySet());
+      rowWritten.addAll(cfg.computedFrom().keySet());
+      for (final var name : GeneratedProperties.unwritten(mirrorLinks().generated(target), rowWritten::contains)) {
+        generatedUnwritten.add(name);
+        final var read =
+          cfg.renames().containsKey(name) || cfg.transforms().containsKey(name) || cfg.viaMappers().containsKey(name);
+        if (hasField(sourceFields, name) && !read) drops.add(name);
+      }
+    }
     final var renames = cfg.renames();
     final var renameFanouts = cfg.renameFanouts();
     final var transforms = cfg.transforms();
@@ -2145,6 +2198,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
     // as a sub-pair (leniency propagates down the nesting).
     final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
+    // An edit mapper's bridge, or the bridge of a pair one converts, writes a target in place.
+    final var edits = cfg.edits() || editPairs.contains(thisPair);
+    planningEdits = edits;
+    planningOwner =
+      cfg.edits() && cfg.declaringField() != null
+        ? new String[] { cfg.carrierFq(), cfg.declaringField() }
+        : editOwners.get(thisPair);
+    elementsThrough.clear();
     // What each source path reads at every level, and how a strict bridge rebuilds each object it
     // writes back through.
     // An object a path builds is built through the strategy a writeBean row names for its class,
@@ -2683,6 +2744,63 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var root = path.read().row().properties().getFirst();
       if (renames.containsKey(root) || transforms.containsKey(root) || viaMappers.containsKey(root)) continue;
       if (!targetNames.contains(root)) pathConsumed.add(root);
+    }
+
+    // An edit mapper is strict at its own pair on both sides, with the properties no edit writes
+    // counted as filled: those keep rows name, those the persistence mapping generates and the
+    // back-reference a collection write sets. A target property a constant or compute row fills
+    // takes no source property of its name. The shared rule decides it for both paths.
+    final var unedited = new LinkedHashSet<String>(generatedUnwritten);
+    if (cfg.edits()) {
+      final var links = mirrorLinks();
+      final var noEdit = new LinkedHashSet<>(cfg.keeps());
+      noEdit.addAll(links.generated(target));
+      noEdit.addAll(links.backReferences(target));
+      final var pinned = cfg.backReferences().get(target.getQualifiedName().toString());
+      if (pinned != null) noEdit.add(pinned);
+      final var read = new HashSet<String>(drops);
+      read.addAll(renames.keySet());
+      read.addAll(transforms.keySet());
+      read.addAll(viaMappers.keySet());
+      read.addAll(pathConsumed);
+      read.addAll(targetPathSources);
+      final var claimed = new HashSet<String>(renames.values());
+      for (final var extras : renameFanouts.values()) claimed.addAll(extras);
+      for (final var name : transforms.keySet()) claimed.add(renames.getOrDefault(name, name));
+      for (final var name : viaMappers.keySet()) claimed.add(renames.getOrDefault(name, name));
+      claimed.addAll(computed);
+      claimed.addAll(parsedConstants.keySet());
+      claimed.addAll(cfg.keeps());
+      final var editSourceNames = sourceFields.stream().map(Field::name).toList();
+      final var match = PairingRules.matchFields(
+        editSourceNames,
+        targetFields.stream().map(Field::name).toList(),
+        read,
+        claimed
+      );
+      final var filled = new HashSet<>(injectedTargetFields);
+      filled.addAll(noEdit);
+      final var refusals = Unpaired.editRefusals(
+        new Unpaired.Sides(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          slotWord(source),
+          slotWord(target)
+        ),
+        editSourceNames,
+        match,
+        filled,
+        Set.of(),
+        name -> noWriteMember(target, name),
+        name -> noWriteMember(source, name)
+      );
+      if (!refusals.isEmpty()) {
+        error(source, refusals.getFirst());
+        return;
+      }
+      // A property no edit writes is left out of into and the sparse writes; one with a source
+      // property of its name still takes it on forward, so a new target carries what was sent.
+      unedited.addAll(noEdit);
     }
 
     // @Bridge(lenient = true): auto-fill the mismatch on both sides so the bijection check below
@@ -3487,9 +3605,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
-    // Each source property patch overlays, in the order patch reads them, and the expression that
-    // says whether the partial sent a value for it: what patchInto writes.
-    final var patchSent = new LinkedHashMap<String, String>();
     final Function<String, String> readPatchPlain = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
@@ -3510,14 +3625,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // from a partial that exists. A null partial overlays nothing, so base supplies every
       // slot.
       if (tf.type().getKind().isPrimitive()) {
-        patchSent.putIfAbsent(sourceName, "true");
         final var converted = applyBackward(sourceName, plan, partialReadExpr);
         if (unboxed) return patchUnboxed(sourceName, "partial", converted, baseRead, gives, sf.type());
         return "(partial == null ? " + baseRead + " : " + converted + ")";
       }
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
-      patchSent.putIfAbsent(sourceName, pLocal + " != null");
       patchLocals.put(
         pLocal,
         declarable(tf.type()) + " " + pLocal + " = partial == null ? null : " + partialReadExpr + ";"
@@ -3670,26 +3783,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
-    // patchInto rebuilds the partial over the target as patch does, recording which properties the
-    // partial sent, and writes only those into the target. A row writing through a path names no
-    // property of the source, so a bridge with one has no patchInto, and its field's mapper
-    // refuses.
+    // A row writing through a path of the source names no property of it.
     final var hasPathRows = !writtenPaths.isEmpty() || !readTargets.isEmpty();
-    final String overlaidBody;
-    {
-      final var sb = new StringBuilder("{ ");
-      for (final var decl : patchLocals.values()) sb.append("final ").append(decl).append(" ");
-      var k = 0;
-      for (final var guard : patchSent.values())
-        sb.append("__sent[").append(k++).append("] = ").append(guard).append("; ");
-      final var trimmedInner = patchInner.trim();
-      if (trimmedInner.startsWith("{") && trimmedInner.endsWith("}")) {
-        sb.append(trimmedInner, 1, trimmedInner.length() - 1).append(" }");
-      } else {
-        sb.append("return ").append(patchInner).append("; }");
-      }
-      overlaidBody = sb.toString().replaceAll("\\s+}$", " }");
-    }
 
     final var pathWriters = new ArrayList<String>();
     for (final var paths : writtenPaths.values()) {
@@ -3719,17 +3814,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // nothing fills. A strict bridge updates a target in place itself where generated code can.
     final var intoNames = new ArrayList<String>();
     for (final var f : targetFields) {
+      if (unedited.contains(f.name())) continue;
       if (!unwritten.targets().contains(f.name()) && !pointedTargets.contains(f.name())) intoNames.add(f.name());
     }
+    // An edit mapper writes a target path into the objects a target holds, which generated code
+    // does not yet do, so such an edit bridge writes nothing in place and its field's mapper runs
+    // the runtime path's into and patchInto.
+    final var editTargetPaths = cfg.edits() && (!targetPaths.isEmpty() || !pathsToPaths.isEmpty());
     // A collection whose elements convert through a generated bridge, a nested pair's or the one a
     // via row's mapper field declares, is handed that bridge's conversion of one element for the
     // container policy, and the source's container its value was converted from.
     final var intoElements = new LinkedHashMap<String, String>();
-    final var patchIntoElements = new LinkedHashMap<String, String>();
     final var intoSent = new LinkedHashMap<String, String>();
-    final var patchIntoSent = new LinkedHashMap<String, String>();
     final var writeSent = new LinkedHashMap<String, String>();
-    final var writeBackSent = new LinkedHashMap<String, String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
       if (plan.kind() != FieldPlan.Kind.LIST && plan.kind() != FieldPlan.Kind.SET) continue;
@@ -3742,40 +3839,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var sf = fieldByName(sourceFields, sourceName);
       final var tf = fieldByName(targetFields, targetName);
       intoElements.put(targetName, elementBridge + ".INTO_ELEMENTS");
-      patchIntoElements.put(sourceName, elementBridge + ".PATCH_INTO_ELEMENTS");
       intoSent.put(targetName, readExpr(source, "source", sf));
-      patchIntoSent.put(sourceName, readExpr(target, "partial", tf));
       writeSent.put(targetName, "sent == null ? null : " + readExpr(source, "((" + sourceFq + ") sent)", sf));
-      writeBackSent.put(sourceName, "sent == null ? null : " + readExpr(target, "((" + targetFq + ") sent)", tf));
     }
-    final var intoStatements = lenient
-      ? null
-      : intoStatements(
-          source,
-          target,
-          target,
-          targetFields,
-          intoNames,
-          linked.target(),
-          linked.targetConstants(),
-          true,
-          "forward(source)",
-          null,
-          intoElements,
-          intoSent,
-          false
-        );
+    final var intoStatements =
+      (lenient && !edits) || editTargetPaths
+        ? null
+        : intoStatements(
+            source,
+            target,
+            target,
+            targetFields,
+            intoNames,
+            linked.target(),
+            linked.targetConstants(),
+            true,
+            "forward(source)",
+            null,
+            intoElements,
+            intoSent,
+            false
+          );
     // The second half of into, and of patchInto for every property patch overlays, over one
     // element: the check before it writes and the write, which a bridge whose pair converts the
     // elements of a collection hands the container policy. None where into or patchInto has none,
     // a write goes through adders, or a row writes through a path.
-    final var writesInPlace = !(lenient || hasPathRows || !PairLinks.adders(linked.target()).isEmpty());
-    final var writesBackInPlace = !(lenient ||
-      hasPathRows ||
-      !PairLinks.adders(linked.source()).isEmpty() ||
-      sourceRebuild.kind() == Rebuild.Kind.RECORD ||
-      sourceRebuild.kind() == Rebuild.Kind.NONE);
-    final var backNames = new ArrayList<>(patchSent.keySet());
+    final var writesInPlace = !((lenient && !edits) ||
+      (hasPathRows && !edits) ||
+      editTargetPaths ||
+      !PairLinks.adders(linked.target()).isEmpty());
     final var writeConverted = !writesInPlace
       ? null
       : intoStatements(
@@ -3810,61 +3902,106 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           writeSent,
           true
         );
-    final var writeConvertedBack = !writesBackInPlace
-      ? null
-      : intoStatements(
-          source,
-          target,
-          source,
-          sourceFields,
-          backNames,
-          linked.source(),
-          linked.sourceConstants(),
-          false,
-          "produced",
-          null,
-          patchIntoElements,
-          writeBackSent,
-          false
+    // An edit mapper's patchInto writes what the partial sends, as into writes it: a property whose
+    // row reads the partial is sent where that value is not null, and every one is written only
+    // where the value forward gives it is not null, a primitive always. A container the partial
+    // sends is written whole. Its patch lays the same overlay over a copy of the base.
+    List<String> editPatchIntoBuilt = null;
+    String editPatchBuilt = null;
+    if (cfg.edits() && !editTargetPaths) {
+      final var prelude = new ArrayList<String>();
+      final var sentByPartial = editSentByPartial(
+        source,
+        target,
+        sourceFields,
+        targetFields,
+        renames,
+        cfg,
+        sourcePaths,
+        drops,
+        prelude
+      );
+      final var patchFlags = new LinkedHashMap<String, String>();
+      final var writes = new CollectionWrites<>(mirrorProps());
+      for (var i = 0; i < intoNames.size(); i++) {
+        final var name = intoNames.get(i);
+        final var field = fieldByName(targetFields, name);
+        final var fromPartial = sentByPartial.get(name);
+        final var container = linked.target().containsKey(name) || writes.refilledInPlace(field.type());
+        final var produced = field.type().getKind().isPrimitive() || container ? null : "__in" + i + " != null";
+        patchFlags.put(name, joinedFlag(fromPartial, produced));
+      }
+      final var statements = intoStatements(
+        source,
+        target,
+        target,
+        targetFields,
+        intoNames,
+        linked.target(),
+        linked.targetConstants(),
+        true,
+        "forward(partial)",
+        patchFlags,
+        intoElements,
+        editSentReads(intoSent, sourceFields, source, renames),
+        false
+      );
+      if (statements != null) {
+        editPatchIntoBuilt = new ArrayList<>(prelude);
+        editPatchIntoBuilt.addAll(statements);
+      }
+      final var flags = new LinkedHashMap<String, String>();
+      final var patchPrelude = new ArrayList<>(prelude);
+      for (final var name : intoNames) {
+        final var field = fieldByName(targetFields, name);
+        final var flag = "__es_" + name;
+        final var produced = field.type().getKind().isPrimitive()
+          ? null
+          : readExpr(target, "__produced", field) + " != null";
+        patchPrelude.add(
+          "final boolean " + flag + " = __produced != null && " + joinedFlag(sentByPartial.get(name), produced) + ";"
         );
-    final var checkConvertedBack = !writesBackInPlace
-      ? null
-      : intoStatements(
-          source,
-          target,
-          source,
-          sourceFields,
-          backNames,
-          linked.source(),
-          linked.sourceConstants(),
-          false,
-          "produced",
-          null,
-          patchIntoElements,
-          writeBackSent,
-          true
-        );
-    final var sentFlags = new LinkedHashMap<String, String>();
-    var sentIndex = 0;
-    for (final var name : patchSent.keySet()) sentFlags.put(name, "__sent[" + sentIndex++ + "]");
-    final var patchIntoStatements =
-      lenient || hasPathRows || sourceRebuild.kind() == Rebuild.Kind.RECORD || sourceRebuild.kind() == Rebuild.Kind.NONE
-        ? null
-        : intoStatements(
-            source,
-            target,
-            source,
-            sourceFields,
-            new ArrayList<>(patchSent.keySet()),
-            linked.source(),
-            linked.sourceConstants(),
-            true,
-            "__overlaid(target, partial, __sent)",
-            sentFlags,
-            patchIntoElements,
-            patchIntoSent,
-            false
-          );
+        flags.put(name, flag);
+      }
+      final var patched = buildExpr(
+        target,
+        name -> {
+          final var field = fieldByName(targetFields, name);
+          final var held = readExpr(target, "base", field);
+          final var flag = flags.get(name);
+          return flag == null ? held : "(" + flag + " ? " + readExpr(target, "__produced", field) + " : " + held + ")";
+        },
+        targetFields,
+        writeStrategy,
+        source,
+        targetRebuild.withAdders(PairLinks.adders(linked.target())),
+        null,
+        Set.of(),
+        Map.of(),
+        Set.of(),
+        target,
+        writesTarget
+      );
+      if (patched == null) return;
+      final var body = new StringBuilder(
+        "{ final " + targetFq + " __produced = partial == null ? null : forward(partial); "
+      );
+      for (final var line : patchPrelude) body.append(line).append(" ");
+      final var trimmed = patched.trim();
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        body.append(trimmed, 1, trimmed.length() - 1).append(" }");
+      } else {
+        body.append("return ").append(patched).append("; }");
+      }
+      editPatchBuilt = body.toString().replaceAll("\\s+}$", " }");
+    }
+    final var editPatchIntoStatements = editPatchIntoBuilt;
+    final var editPatchBody = editPatchBuilt;
+    // Whether the bridge writes an edit mapper's target itself; its field's mapper runs the runtime
+    // path's into, patchInto and patch otherwise.
+    final var writesEdits = !cfg.edits()
+      ? 0
+      : (intoStatements != null ? 1 : 0) + (editPatchIntoStatements != null ? 2 : 0) + (editPatchBody != null ? 4 : 0);
 
     // Carrier-form bridges live in the carrier's package, unreachable by the source-keyed runtime
     // probe — register a ServiceLoader provider so mapperForward discovers them by (source,
@@ -3878,7 +4015,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         cfgForEmission,
         intoNames,
         intoStatements != null,
-        patchIntoStatements != null
+        cfg.edits() && writesEdits == 7
       );
       emitCarrierMarker(source, target, carrierEl, qualifiedBridge);
     }
@@ -3990,31 +4127,54 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
         emitDirection(out, forwardSuppression, pathAccess, "forward", sourceFq, targetFq, "s", forwardBody);
-        emitDirection(out, backwardSuppression, pathAccess, "backward", targetFq, sourceFq, "t", backwardBody);
+        // An edit mapper converts forward alone: its bridge's backward refuses, and it has no
+        // patch
+        // of the source; a bridge converting along an active path keeps the overload its path
+        // methods call.
+        if (cfg.edits() && pathAccess == null) {
+          out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
+          out.println(
+            "    throw new UnsupportedOperationException(" +
+              literal(PairingMessages.editHasNoBackward(bridgeName)) +
+              ");"
+          );
+          out.println("  }");
+          out.println();
+        } else emitDirection(out, backwardSuppression, pathAccess, "backward", targetFq, sourceFq, "t", backwardBody);
         // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
         // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
         // Reference target components null-gate to base; primitive components autobox to non-null
         // and are always overlaid; nested components are written whole through the sub-bridge's
         // backward when the partial slot is non-null.
-        out.print(backwardSuppression);
-        out.println(
-          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
-        );
-        // Patch returns a new object whenever base exists, matching the runtime Mapper#patch: a
-        // null partial reads as one whose every slot is null, so the body rebuilds base.
-        out.println("    if (base == null) return null;");
-        emitMethodBody(out, patchBody);
-        out.println("  }");
-        out.println();
-        if (patchIntoStatements != null) emitPatchInto(
+        if (!cfg.edits()) {
+          out.print(backwardSuppression);
+          out.println(
+            "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+          );
+          // Patch returns a new object whenever base exists, matching the runtime Mapper#patch: a
+          // null partial reads as one whose every slot is null, so the body rebuilds base.
+          out.println("    if (base == null) return null;");
+          emitMethodBody(out, patchBody);
+          out.println("  }");
+          out.println();
+        }
+        if (editPatchIntoStatements != null) emitEditPatchInto(
           out,
-          backwardSuppression,
+          target.getTypeParameters().isEmpty() ? suppressRaw : RAW_SUPPRESSION + "\n",
           sourceFq,
           targetFq,
-          overlaidBody,
-          patchIntoStatements,
-          patchSent.size()
+          editPatchIntoStatements
         );
+        if (editPatchBody != null) {
+          out.print(forwardSuppression);
+          out.println(
+            "  public static " + targetFq + " editPatch(final " + targetFq + " base, final " + sourceFq + " partial) {"
+          );
+          out.println("    if (base == null) return null;");
+          emitMethodBody(out, editPatchBody);
+          out.println("  }");
+          out.println();
+        }
         // A generic target is named raw, so each setter call is an unchecked call on a raw type.
         if (intoStatements != null) emitInto(
           out,
@@ -4030,18 +4190,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           target.getTypeParameters().isEmpty() && source.getTypeParameters().isEmpty()
             ? suppressRaw
             : RAW_SUPPRESSION + "\n",
-          new ElementConversion("INTO_ELEMENTS", "forward", sourceFq, targetFq, "Converted"),
+          new ElementConversion(
+            "INTO_ELEMENTS",
+            "forward",
+            sourceFq,
+            targetFq,
+            "Converted",
+            sentValues(source, target)
+          ),
           writeConverted,
           checkConverted
-        );
-        emitElementConversion(
-          out,
-          target.getTypeParameters().isEmpty() && source.getTypeParameters().isEmpty()
-            ? backwardSuppression
-            : RAW_SUPPRESSION + "\n",
-          new ElementConversion("PATCH_INTO_ELEMENTS", "backward", targetFq, sourceFq, "ConvertedBack"),
-          writeConvertedBack,
-          checkConvertedBack
         );
         emitBridgeHandles(
           out,
@@ -4053,11 +4211,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           unwalkedSource,
           unwalkedTarget,
           guarded,
-          patchIntoStatements == null ? null : new ArrayList<>(patchSent.keySet()),
-          !lenient && hasPathRows && sourceRebuild.kind() != Rebuild.Kind.RECORD
-            ? PairingMessages.patchIntoThroughPath(source.getSimpleName().toString())
-            : null,
-          linked.collections()
+          linked.collections(),
+          cfg.edits(),
+          writesEdits
         );
         for (final var writer : pathWriters) out.print(writer);
         // Each when(...) predicate is tested through a Predicate, as the runtime tests it, and
@@ -4904,13 +5060,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           null,
           null
         );
-        emitElementConversion(
-          out,
-          namesRaw,
-          new ElementConversion("PATCH_INTO_ELEMENTS", "backward", targetFq, sourceFq, "ConvertedBack"),
-          null,
-          null
-        );
         // Sealed-dispatch via Match — the dispatch is lattice-routed (Match composes internal
         // Prism instances per permit) and exhaustiveness is verified at class-load time by
         // .exhaustive() reading getPermittedSubclasses(). Belt-and-suspenders: if the processor
@@ -4992,7 +5141,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // payment type. The partial is ignored instead, and base is rebuilt through its own
         // case's patch with a null partial, so the result is still a new object. A caller who
         // wants the case switch calls backward() explicitly. The switch over base is exhaustive
-        // over the sealed permits, which javac checks.
+        // over the sealed permits, which javac checks. An edit mapper's sealed pair has no such
+        // overlay of its source: its own operations run on the runtime path, case by case.
+        final var edits = ownConfig != null && ownConfig.edits();
+        if (edits) {
+          emitBridgeHandles(
+            out,
+            namesRaw,
+            bridgeName,
+            sourceFq,
+            targetFq,
+            declares(ownPair),
+            Set.of(),
+            Set.of(),
+            false,
+            false,
+            true,
+            0
+          );
+          return;
+        }
         out.print(namesRaw);
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
@@ -5051,9 +5219,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       unwalkedSource,
       unwalkedTarget,
       false,
-      null,
-      null,
-      false
+      false,
+      false,
+      0
     );
   }
 
@@ -5073,9 +5241,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<String> unwalkedSource,
     final Set<String> unwalkedTarget,
     final boolean takesPath,
-    final List<String> patchIntoNames,
-    final String patchIntoRefusal,
-    final boolean collections
+    final boolean collections,
+    final boolean edits,
+    final int writesEdits
   ) {
     out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
     out.print(suppression);
@@ -5090,19 +5258,50 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("      return " + bridgeName + ".backward(t);");
     out.println("    }");
     out.println();
-    out.println("    @Override");
-    out.println("    public " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {");
-    out.println("      return " + bridgeName + ".patch(base, partial);");
-    out.println("    }");
-    out.println();
+    if (!edits) {
+      out.println("    @Override");
+      out.println("    public " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {");
+      out.println("      return " + bridgeName + ".patch(base, partial);");
+      out.println("    }");
+      out.println();
+    }
+    if (writesEdits != 0) {
+      out.println("    @Override");
+      out.println("    public int writesEdits() {");
+      out.println("      return " + writesEdits + ";");
+      out.println("    }");
+      out.println();
+    }
+    if ((writesEdits & 1) != 0) {
+      out.println("    @Override");
+      out.println(
+        "    public " + targetFq + " editInto(final " + targetFq + " target, final " + sourceFq + " source) {"
+      );
+      out.println("      return " + bridgeName + ".into(target, source);");
+      out.println("    }");
+      out.println();
+    }
+    if ((writesEdits & 2) != 0) {
+      out.println("    @Override");
+      out.println(
+        "    public " + targetFq + " editPatchInto(final " + targetFq + " target, final " + sourceFq + " partial) {"
+      );
+      out.println("      return " + bridgeName + ".editPatchInto(target, partial);");
+      out.println("    }");
+      out.println();
+    }
+    if ((writesEdits & 4) != 0) {
+      out.println("    @Override");
+      out.println(
+        "    public " + targetFq + " editPatch(final " + targetFq + " base, final " + sourceFq + " partial) {"
+      );
+      out.println("      return " + bridgeName + ".editPatch(base, partial);");
+      out.println("    }");
+      out.println();
+    }
     out.println("    @Override");
     out.println("    public io.github.eschizoid.telescope.conversion.ContainerCopy.Elements targetWrite() {");
     out.println("      return " + bridgeName + ".INTO_ELEMENTS;");
-    out.println("    }");
-    out.println();
-    out.println("    @Override");
-    out.println("    public io.github.eschizoid.telescope.conversion.ContainerCopy.Elements sourceWrite() {");
-    out.println("      return " + bridgeName + ".PATCH_INTO_ELEMENTS;");
     out.println("    }");
     out.println();
     if (collections) {
@@ -5111,39 +5310,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "    public java.util.List<io.github.eschizoid.telescope.introspection.OpticNode> collectionWrites() {"
       );
       out.println("      return " + bridgeName + ".COLLECTIONS;");
-      out.println("    }");
-      out.println();
-    }
-    if (patchIntoNames != null || patchIntoRefusal != null) {
-      out.println("    @Override");
-      out.println(
-        "    public " + sourceFq + " patchInto(final " + sourceFq + " target, final " + targetFq + " partial) {"
-      );
-      out.println(
-        patchIntoRefusal != null
-          ? "      throw new UnsupportedOperationException(" + literal(patchIntoRefusal) + ");"
-          : "      return " + bridgeName + ".patchInto(target, partial);"
-      );
-      out.println("    }");
-      out.println();
-    }
-    if (patchIntoNames != null) {
-      out.println("    @Override");
-      out.println("    public java.util.List<String> patchIntoProperties() {");
-      out.println("      return java.util.List.of(" + quotedList(patchIntoNames) + ");");
-      out.println("    }");
-      out.println();
-      out.println("    @Override");
-      out.println(
-        "    public " +
-          sourceFq +
-          " overlaid(final " +
-          sourceFq +
-          " base, final " +
-          targetFq +
-          " partial, final boolean[] sent) {"
-      );
-      out.println("      return " + bridgeName + ".__overlaid(base, partial, sent);");
       out.println("    }");
       out.println();
     }
@@ -6097,6 +6263,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Leniency propagates: a lenient parent's nested sub-pair is itself lenient, so its
         // bijection check is skipped and unmatched nested-target fields take JLS defaults.
         if (lenient) lenientPairs.add(subPair);
+        if (planningEdits) {
+          editPairs.add(subPair);
+          if (!noteElementsThrough(source, target, sf.name(), subPair)) return null;
+        }
         final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, parentPkg);
         threadPathTo(source, target, subSourceEl, subTargetEl, subBridgeName);
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
@@ -6302,6 +6472,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // Leniency propagates into the element pair too, matching the scalar sub-pair path.
       if (lenient) lenientPairs.add(subPair);
+      if (planningEdits) {
+        editPairs.add(subPair);
+        if (!noteElementsThrough(parentSource, parentTarget, fieldName, subPair)) return null;
+      }
       final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, parentPkg);
       threadPathTo(parentSource, parentTarget, subSourceEl, subTargetEl, subBridgeName);
       if (kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET) elementBridges.add(subBridgeName);
@@ -9462,6 +9636,62 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Records that the source property {@code sourceProperty} of the pair of {@code source} and
+   * {@code target} being planned converts through the edit mapper a {@code @Bridge} field declares
+   * for {@code subPair}, where one does, and refuses one declared where the runtime would not look:
+   * outside the class of the owner's edit mapper and the pair's own two classes. Answers whether
+   * planning goes on.
+   */
+  private boolean noteElementsThrough(
+    final TypeElement source,
+    final TypeElement target,
+    final String sourceProperty,
+    final TypePair subPair
+  ) {
+    if (planningOwner != null) editOwners.putIfAbsent(subPair, planningOwner);
+    final var sub = configOf(subPair);
+    if (sub == null || !sub.edits() || sub.declaringField() == null || sub.carrierFq() == null) return true;
+    final var carrier = processingEnv.getElementUtils().getTypeElement(sub.carrierFq());
+    if (carrier == null) return true;
+    final var element = carrier.getSimpleName() + "." + sub.declaringField();
+    final var reached =
+      planningOwner == null ||
+      sub.carrierFq().equals(planningOwner[0]) ||
+      sub.carrierFq().equals(subPair.sourceFq()) ||
+      sub.carrierFq().equals(subPair.targetFq());
+    if (!reached) {
+      final var ownerCarrier = processingEnv.getElementUtils().getTypeElement(planningOwner[0]);
+      error(
+        source,
+        PairingMessages.editElementMapperUnreached(
+          source.getSimpleName().toString(),
+          target.getSimpleName().toString(),
+          sourceProperty,
+          (ownerCarrier == null ? planningOwner[0] : ownerCarrier.getSimpleName()) + "." + planningOwner[1],
+          element
+        )
+      );
+      return false;
+    }
+    elementsThrough.putIfAbsent(sourceProperty, element);
+    return true;
+  }
+
+  /**
+   * The reading of each property of {@code source} that has the name of a property of {@code
+   * target} the persistence mapping generates, from a source element held as {@code __s}: what a
+   * merge by identifier matches the element by, since no conversion writes the generated property.
+   */
+  private Map<String, String> sentValues(final TypeElement source, final TypeElement target) {
+    final var values = new LinkedHashMap<String, String>();
+    final var sourceFields = fieldsOf(source);
+    for (final var name : mirrorLinks().generated(target)) {
+      if (hasField(sourceFields, name)) values.put(name, readExpr(source, "__s", fieldByName(sourceFields, name)));
+    }
+    return values;
+  }
+
+  /**
    * The name a parent bridge in {@code parentPkg} calls a sub-bridge by. Auto-derived names are
    * built from the two simple names, so two sub-pairs whose types share simple names across
    * packages derive the same one, and a parent referencing both by simple name cannot resolve
@@ -9484,7 +9714,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * itself. {@code intoNames} are the target properties the bridge writes, which a field-declared
    * mapper's {@code into} updates; a derived getter the bridge leaves out is not among them. {@code
    * writesInto} says the bridge has an {@code into} of its own, which that mapper's {@code into}
-   * then calls.
+   * then calls, and {@code writesEdits} that an edit mapper's bridge writes each of its operations
+   * itself.
    */
   private void emitBridgeProvider(
     final TypeElement source,
@@ -9494,7 +9725,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final BridgeConfig cfg,
     final List<String> intoNames,
     final boolean writesInto,
-    final boolean writesPatchInto
+    final boolean writesEdits
   ) {
     final var providerName = bridgeName + "Provider";
     final var carrier =
@@ -9560,7 +9791,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             out.println("  }");
             out.println();
           }
-          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto, writesPatchInto);
+          emitFieldMapper(out, source, target, bridgeName, cfg, writesInto, writesEdits);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -9585,7 +9816,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * constant, so a call through the field resolves to the bridge as a call to {@code BRIDGE_FN}
    * does. Names are written in full, since the source or target may share a simple name with the
    * telescope types. Where {@code writesInto}, {@code into} is one call to the bridge's own {@code
-   * into} too.
+   * into} too. An edit mapper's field takes the class {@link #emitEditFieldMapper} writes, whose
+   * operations are each one call into the bridge where {@code writesEdits}.
    */
   private static void emitFieldMapper(
     final PrintWriter out,
@@ -9594,11 +9826,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgeName,
     final BridgeConfig cfg,
     final boolean writesInto,
-    final boolean writesPatchInto
+    final boolean writesEdits
   ) {
     final var s = source.getQualifiedName().toString();
     final var t = target.getQualifiedName().toString();
     final var fn = bridgeName + ".BRIDGE_FN";
+    if (cfg.edits()) {
+      emitEditFieldMapper(out, s, t, bridgeName, writesEdits);
+      return;
+    }
     final var base = cfg.lenient()
       ? "io.github.eschizoid.telescope.conversion.ForwardMapper"
       : "io.github.eschizoid.telescope.conversion.Mapper";
@@ -9656,21 +9892,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("      return " + bridgeName + ".into(target, source);");
         out.println("    }");
       }
-      if (writesPatchInto) {
-        out.println();
-        out.println("    @Override");
-        out.println("    public " + s + " patchInto(final " + s + " target, final " + t + " partial) {");
-        // As into: the bridge binds each setter on the source class itself, so a subclass, whose
-        // own
-        // setter can take the value instead, is written by the runtime patchInto.
-        if (!source.getModifiers().contains(Modifier.FINAL)) {
-          out.println(
-            "      if (target != null && target.getClass() != " + s + ".class) return super.patchInto(target, partial);"
-          );
-        }
-        out.println("      return " + bridgeName + ".patchInto(target, partial);");
-        out.println("    }");
-      }
+    }
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * The class generated for a field initialised by {@code Telescope.edits}: an {@code EditMapper}
+   * whose {@code forward} is one call into the bridge, and whose {@code into}, {@code patchInto}
+   * and {@code patch} are one call each where {@code writesEdits}; elsewhere they are the runtime
+   * path's, which the mapper it extends runs.
+   */
+  private static void emitEditFieldMapper(
+    final PrintWriter out,
+    final String s,
+    final String t,
+    final String bridgeName,
+    final boolean writesEdits
+  ) {
+    final var base = FieldRows.EDIT_MAPPER_FQN;
+    out.println("  @Override");
+    out.println("  @SuppressWarnings({ \"unchecked\", \"rawtypes\" })");
+    out.println("  public " + base + "<?, ?> editMapper(final " + base + "<?, ?> built, final " + GRANT + " grant) {");
+    out.println("    return new FieldMapper((" + base + "<" + s + ", " + t + ">) built, grant);");
+    out.println("  }");
+    out.println();
+    out.println(
+      "  /** The edit mapper the @Bridge field holds: each operation is one call into " + bridgeName + ". */"
+    );
+    out.println("  static final class FieldMapper extends " + base + "<" + s + ", " + t + "> {");
+    out.println();
+    out.println("    FieldMapper(final " + base + "<" + s + ", " + t + "> built, final " + GRANT + " grant) {");
+    out.println("      super(built, grant);");
+    out.println("    }");
+    out.println();
+    out.println("    @Override");
+    out.println("    public " + t + " forward(final " + s + " source) {");
+    // The bridge carries a generated identifier the source sends, which into and patchInto match
+    // elements by; forward hands back a new value, so the edit mapper leaves it unset.
+    out.println("      return " + bridgeName + ".forward(source);");
+    out.println("    }");
+    if (writesEdits) {
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + t + " into(final " + t + " target, final " + s + " source) {");
+      // The bridge binds each setter on the target class itself, so a subclass, whose own setters
+      // can take a value instead, is written by the runtime path.
+      out.println(
+        "      if (target != null && target.getClass() != " + t + ".class) return super.into(target, source);"
+      );
+      out.println("      return " + bridgeName + ".into(target, source);");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + t + " patchInto(final " + t + " target, final " + s + " partial) {");
+      out.println(
+        "      if (target != null && target.getClass() != " + t + ".class) return super.patchInto(target, partial);"
+      );
+      out.println("      return " + bridgeName + ".editPatchInto(target, partial);");
+      out.println("    }");
+      out.println();
+      out.println("    @Override");
+      out.println("    public " + t + " patch(final " + t + " base, final " + s + " partial) {");
+      out.println("      return " + bridgeName + ".editPatch(base, partial);");
+      out.println("    }");
     }
     out.println("  }");
     out.println();
@@ -10140,51 +10425,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The bridge's {@code patchInto(target, partial)}, whose body is {@code statements}, and the
-   * overlay it reads from, {@code overlaidBody}: patch's own rebuild of {@code partial} over the
-   * target, which also records in {@code __sent} the {@code sent} properties the partial supplied.
-   * A null target is refused by name and a null partial leaves the target as it was, as {@code
-   * Mapper.patchInto} does.
-   */
-  private static void emitPatchInto(
-    final PrintWriter out,
-    final String suppression,
-    final String sourceFq,
-    final String targetFq,
-    final String overlaidBody,
-    final List<String> statements,
-    final int sent
-  ) {
-    out.print(suppression);
-    out.println(
-      "  private static " +
-        sourceFq +
-        " __overlaid(final " +
-        sourceFq +
-        " base, final " +
-        targetFq +
-        " partial, final boolean[] __sent) {"
-    );
-    emitMethodBody(out, overlaidBody);
-    out.println("  }");
-    out.println();
-    out.println("  /**");
-    out.println("   * Writes into {@code target} the properties {@code patch(target, partial)} overlays, and only");
-    out.println("   * those, as {@code into} writes them, and returns {@code target}.");
-    out.println("   */");
-    out.print(suppression);
-    out.println(
-      "  public static " + sourceFq + " patchInto(final " + sourceFq + " target, final " + targetFq + " partial) {"
-    );
-    out.println("    if (target == null) throw new NullPointerException(\"target\");");
-    out.println("    if (partial == null) return target;");
-    out.println("    final boolean[] __sent = new boolean[" + sent + "];");
-    for (final var statement : statements) out.println("    " + statement);
-    out.println("  }");
-    out.println();
-  }
-
-  /**
    * {@code fqn}, the class a {@code via} row names, where it is the bridge a {@code @Bridge} mapper
    * field declares, whose conversions of one element a bridge converting a collection through it
    * hands on; null for a class written by hand, and for a null {@code fqn}.
@@ -10205,7 +10445,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * and the class it writes, and the suffix of the {@code write} and {@code check} methods it
    * calls.
    */
-  private record ElementConversion(String constant, String convert, String fromFq, String writtenFq, String suffix) {}
+  private record ElementConversion(
+    String constant,
+    String convert,
+    String fromFq,
+    String writtenFq,
+    String suffix,
+    Map<String, String> sentValues
+  ) {
+    ElementConversion(
+      final String constant,
+      final String convert,
+      final String fromFq,
+      final String writtenFq,
+      final String suffix
+    ) {
+      this(constant, convert, fromFq, writtenFq, suffix, Map.of());
+    }
+  }
 
   /**
    * The {@code write<suffix>} and {@code check<suffix>} methods of {@code conversion}, whose bodies
@@ -10281,7 +10538,47 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    public void write(final Object held, final Object converted, final Object sent) {");
     out.println("      write" + conversion.suffix() + "((" + written + ") held, (" + written + ") converted, sent);");
     out.println("    }");
+    if (!conversion.sentValues().isEmpty()) {
+      out.println();
+      out.println("    @Override");
+      out.println("    public Object sentValue(final Object sent, final String property) {");
+      out.println("      if (!(sent instanceof " + conversion.fromFq() + " __s)) return null;");
+      out.println("      return switch (property) {");
+      for (final var value : conversion.sentValues().entrySet()) {
+        out.println("        case " + literal(value.getKey()) + " -> " + value.getValue() + ";");
+      }
+      out.println("        default -> null;");
+      out.println("      };");
+      out.println("    }");
+    }
     out.println("  };");
+    out.println();
+  }
+
+  /**
+   * The static {@code editPatchInto(target, partial)} of an edit mapper's bridge, whose body is
+   * {@code statements}: a null partial sends nothing.
+   */
+  private static void emitEditPatchInto(
+    final PrintWriter out,
+    final String suppression,
+    final String sourceFq,
+    final String targetFq,
+    final List<String> statements
+  ) {
+    out.println("  /**");
+    out.println("   * Writes into {@code target} what {@code partial} sends, as into writes it, and returns");
+    out.println("   * {@code target}: a property whose row reads a value of the partial that is null is not");
+    out.println("   * written, and neither is a null value.");
+    out.println("   */");
+    out.print(suppression);
+    out.println(
+      "  public static " + targetFq + " editPatchInto(final " + targetFq + " target, final " + sourceFq + " partial) {"
+    );
+    out.println("    if (target == null) throw new NullPointerException(\"target\");");
+    out.println("    if (partial == null) return target;");
+    for (final var statement : statements) out.println("    " + statement);
+    out.println("  }");
     out.println();
   }
 
@@ -11020,7 +11317,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var declarations = new ArrayList<String>();
     final var targetConstants = constants(target, targetLinks, "INTO_LINKS_", declarations);
-    final var sourceConstants = constants(source, sourceLinks, "PATCH_INTO_LINKS_", declarations);
+    final var sourceConstants = constants(source, sourceLinks, "SOURCE_LINKS_", declarations);
     final var forwardPointBack = pointBack(targetLinks, targetConstants, targetRebuild, "FORWARD_LINKS", declarations);
     final var backwardPointBack = lenient
       ? null
@@ -11031,6 +11328,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var side : List.of(Map.entry(target, targetLinks), Map.entry(source, sourceLinks))) {
       for (final var link : side.getValue().values()) nodes.add(collectionNode(side.getKey(), link));
     }
+    final var targetFq = processingEnv.getTypeUtils().erasure(target.asType()).toString();
+    for (final var through : elementsThrough.entrySet())
+      nodes.add(
+        "new io.github.eschizoid.telescope.introspection.OpticNode.ElementsThrough(" +
+          targetFq +
+          ".class, " +
+          literal(renames.getOrDefault(through.getKey(), through.getKey())) +
+          ", " +
+          literal(through.getValue()) +
+          ")"
+      );
     if (!nodes.isEmpty()) declarations.add(
       "  static final java.util.List<io.github.eschizoid.telescope.introspection.OpticNode> COLLECTIONS =" +
         " java.util.List.of(" +
@@ -11349,6 +11657,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // patchInto writes a property only where the partial sent it, and refuses by name, before
       // anything is written, a sent one generated code cannot write, as the runtime refuses it.
       final var sent = sentFlags == null ? null : sentFlags.get(name);
+      // The operation a container refusal names: patchInto where a property is written only where
+      // the partial sent it, into otherwise.
+      final var operation = literal(sentFlags == null ? "into" : "patchInto");
       final var choice = setterChoice(target, name);
       final var unwritable =
         (choice.member() == null && !container) ||
@@ -11394,6 +11705,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             " = " +
             CONTAINER_COPY +
             ".refuseUnwritable(" +
+            operation +
+            ", " +
             held +
             ", " +
             local +
@@ -11417,6 +11730,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var call =
         CONTAINER_COPY +
         ".refill(" +
+        operation +
+        ", " +
         named +
         ", target, " +
         literal(name) +
@@ -11451,6 +11766,89 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** {@code statement}, run only where {@code sent} holds, or always where it is null. */
   private static String guardedBy(final String sent, final String statement) {
     return sent == null ? statement : "if (" + sent + ") { " + statement + " }";
+  }
+
+  /** The two conditions joined, either of which may be null for one that always holds. */
+  private static String joinedFlag(final String first, final String second) {
+    if (first == null) return second == null ? "true" : second;
+    return second == null ? first : first + " && " + second;
+  }
+
+  /**
+   * For an edit mapper, by target property, the condition over {@code partial} under which the
+   * partial sends the property: the value its row reads is not null. A property whose row reads a
+   * primitive, or reads nothing of the partial, as a {@code compute} or {@code constant} row does,
+   * has none. A source path is read into {@code prelude}'s locals once, each null where the object
+   * above it is.
+   */
+  private Map<String, String> editSentByPartial(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames,
+    final BridgeConfig cfg,
+    final List<SourcePathPlan> sourcePaths,
+    final Set<String> drops,
+    final List<String> prelude
+  ) {
+    final var sent = new LinkedHashMap<String, String>();
+    for (final var sf : sourceFields) {
+      if (drops.contains(sf.name())) continue;
+      final var targets = new ArrayList<String>();
+      targets.add(renames.getOrDefault(sf.name(), sf.name()));
+      targets.addAll(cfg.renameFanouts().getOrDefault(sf.name(), List.of()));
+      final var local = "__ps_" + sf.name();
+      var read = false;
+      for (final var name : targets) {
+        if (!hasField(targetFields, name)) continue;
+        if (sf.type().getKind().isPrimitive()) {
+          sent.put(name, null);
+          continue;
+        }
+        sent.put(name, local + " != null");
+        read = true;
+      }
+      // Each property of the partial is read once, into a local the flags and the writes share.
+      if (read) prelude.add(
+        "final var " + local + " = partial == null ? null : " + readExpr(source, "partial", sf) + ";"
+      );
+    }
+    for (final var path : sourcePaths) {
+      final var methods = path.row().methods();
+      var previous = "partial";
+      for (var step = 0; step < methods.size(); step++) {
+        final var local = "__ep" + path.index() + "_" + step;
+        prelude.add(
+          "final var " + local + " = " + previous + " == null ? null : " + previous + "." + methods.get(step) + "();"
+        );
+        previous = local;
+      }
+      sent.put(path.row().target(), previous + " != null");
+    }
+    return sent;
+  }
+
+  /**
+   * The readers of the partial's container each container property of {@code intoSent} was
+   * converted from, for an edit mapper's {@code patchInto}: the local {@link #editSentByPartial}
+   * read the partial's property into.
+   */
+  private static Map<String, String> editSentReads(
+    final Map<String, String> intoSent,
+    final List<Field> sourceFields,
+    final TypeElement source,
+    final Map<String, String> renames
+  ) {
+    final var reads = new LinkedHashMap<String, String>();
+    for (final var entry : intoSent.entrySet()) {
+      String local = null;
+      for (final var sf : sourceFields) {
+        if (renames.getOrDefault(sf.name(), sf.name()).equals(entry.getKey())) local = "__ps_" + sf.name();
+      }
+      reads.put(entry.getKey(), local);
+    }
+    return reads;
   }
 
   /**

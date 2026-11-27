@@ -142,13 +142,13 @@ class CollectionTiesTest {
     }
 
     @Test
-    @DisplayName("patchInto writes the sent list into the held one and ties it the same way")
+    @DisplayName("an edit mapper's patchInto writes the sent list into the held one and ties it the same way")
     void patchIntoTiesTheSentList() {
       final var basket = new Basket();
       basket.setName("kept");
       final var stale = entry("stale", basket);
       basket.getItems().add(stale);
-      Telescope.mapper(Basket.class, Form.class, backReference(Entry::getBasket)).patchInto(
+      Telescope.edits(Form.class, Basket.class, backReference(Entry::getBasket)).patchInto(
         basket,
         new Form(null, List.of(new Item("x")))
       );

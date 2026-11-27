@@ -18,36 +18,65 @@ import org.junit.jupiter.api.Test;
 class VerifierTest {
 
   @Test
-  @DisplayName("a PATCH mapper that forgets to drop the payment fails the build, naming the field")
-  void aPatchMapperMissingADropFailsTheBuild() {
+  @DisplayName("a PATCH mapper that forgets to keep the payment fails the build, naming the field")
+  void aPatchMapperMissingAKeepFailsTheBuild() {
     final var compilation = verify(
       """
       package demo.broken;
-      import static io.github.eschizoid.telescope.mapping.Mapping.drop;
+      import static io.github.eschizoid.telescope.mapping.Mapping.keep;
       import static io.github.eschizoid.telescope.mapping.Mapping.via;
       import io.github.eschizoid.telescope.Telescope;
       import io.github.eschizoid.telescope.demo.api.OrderChanges;
-      import io.github.eschizoid.telescope.demo.order.LineEdits;
       import io.github.eschizoid.telescope.demo.order.Order;
+      import io.github.eschizoid.telescope.demo.order.OrderMappers;
       class Holder {
-        static final Object EDITS = Telescope.mapper(
-          Order.class,
+        static final Object EDITS = Telescope.edits(
           OrderChanges.class,
-          via(Order::getLines, OrderChanges::lines, LineEdits.class),
-          drop(Order::getId),
-          drop(Order::getNumber),
-          drop(Order::getCustomer),
-          drop(Order::getStatus),
-          drop(Order::getPlacedOn),
-          drop(Order::getTrackingNumber),
-          drop(Order::getInternalNotes));
+          Order.class,
+          via(OrderChanges::lines, Order::getLines, OrderMappers.NEW_LINE),
+          keep(Order::getNumber),
+          keep(Order::getCustomer),
+          keep(Order::getStatus),
+          keep(Order::getPlacedOn),
+          keep(Order::getTrackingNumber),
+          keep(Order::getInternalNotes));
       }
       """
     );
     assertThat(compilation.success()).isFalse();
     assertThat(compilation.errorMessages()).contains(
-      "Deep map Order → OrderChanges: source property 'payment' has no same-name target field"
+      "Deep map OrderChanges → Order: an edit writes target property 'payment', and nothing fills it"
     );
+  }
+
+  @Test
+  @DisplayName("the PATCH mapper with every row the demo writes compiles, the generated identifier needing none")
+  void theDemosPatchRowsCompile() {
+    final var compilation = verify(
+      """
+      package demo.fixed;
+      import static io.github.eschizoid.telescope.mapping.Mapping.keep;
+      import static io.github.eschizoid.telescope.mapping.Mapping.via;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.demo.api.OrderChanges;
+      import io.github.eschizoid.telescope.demo.order.Order;
+      import io.github.eschizoid.telescope.demo.order.OrderMappers;
+      class Holder {
+        static final Object EDITS = Telescope.edits(
+          OrderChanges.class,
+          Order.class,
+          via(OrderChanges::lines, Order::getLines, OrderMappers.NEW_LINE),
+          keep(Order::getNumber),
+          keep(Order::getCustomer),
+          keep(Order::getStatus),
+          keep(Order::getPlacedOn),
+          keep(Order::getTrackingNumber),
+          keep(Order::getInternalNotes),
+          keep(Order::getPayment));
+      }
+      """
+    );
+    assertThat(compilation.success()).as(compilation::errorMessages).isTrue();
   }
 
   @Test

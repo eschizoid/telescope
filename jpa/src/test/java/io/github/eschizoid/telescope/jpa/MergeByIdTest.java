@@ -11,9 +11,11 @@ import io.github.eschizoid.telescope.jpa.fixtures.Basket;
 import io.github.eschizoid.telescope.jpa.fixtures.BasketEdit;
 import io.github.eschizoid.telescope.jpa.fixtures.BasketForm;
 import io.github.eschizoid.telescope.jpa.fixtures.BasketMappers;
+import io.github.eschizoid.telescope.jpa.fixtures.BasketPatch;
 import io.github.eschizoid.telescope.jpa.fixtures.Line;
 import io.github.eschizoid.telescope.jpa.fixtures.LineEdit;
 import io.github.eschizoid.telescope.jpa.fixtures.LineForm;
+import io.github.eschizoid.telescope.jpa.fixtures.LinePatch;
 import io.github.eschizoid.telescope.jpa.fixtures.Shop;
 import io.github.eschizoid.telescope.jpa.fixtures.TagEdit;
 import io.github.eschizoid.telescope.jpa.fixtures.TagForm;
@@ -66,7 +68,7 @@ class MergeByIdTest {
 
       @Override
       void patchInto(final Basket basket, final List<Sent> lines) {
-        BasketMappers.PATCH.patchInto(basket, new BasketForm(null, null, forms(lines), null));
+        BasketMappers.PATCH.patchInto(basket, new BasketPatch(null, null, patches(lines), null));
       }
     },
     RUNTIME {
@@ -89,6 +91,13 @@ class MergeByIdTest {
       return lines
         .stream()
         .map(line -> new LineForm(line.id(), line.sku(), line.quantity()))
+        .toList();
+    }
+
+    private static List<LinePatch> patches(final List<Sent> lines) {
+      return lines
+        .stream()
+        .map(line -> new LinePatch(line.id(), line.sku(), line.quantity()))
         .toList();
     }
 

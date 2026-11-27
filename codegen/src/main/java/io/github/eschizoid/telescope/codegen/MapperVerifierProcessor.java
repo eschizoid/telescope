@@ -647,6 +647,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     private boolean callCaseRowsComplete = true;
     // The drop rows of the call being verified given no target class.
     private List<KeyedRow> callTopLevelDrops = List.of();
+    // Whether the call being verified is Telescope.edits, which is strict on both sides with the
+    // properties no edit writes counted as filled, and alone takes keep and a via naming an edit
+    // mapper.
+    private boolean callEdits;
+    // The target properties the keep rows of the call being verified name, and those a constant or
+    // compute row writes through their accessor, which take no source property of their name.
+    private final Set<String> callKept = new LinkedHashSet<>();
+    private final Set<String> callComputed = new LinkedHashSet<>();
 
     @Override
     public Void visitMethodInvocation(final MethodInvocationTree node, final Void unused) {
@@ -661,9 +669,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!owner.getQualifiedName().contentEquals(TELESCOPE_FQN)) return;
       final var name = method.getSimpleName().toString();
       final boolean strict;
+      callEdits = name.equals("edits");
       switch (name) {
         case "map", "mapper" -> strict = true;
-        case "mapperForward" -> strict = false;
+        case "mapperForward", "edits" -> strict = false;
         case "merge" -> {
           if (!suppressed()) verifyMergeCall(node);
           return;
@@ -748,6 +757,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       callCaseRows = List.of();
       callCaseRowsComplete = true;
       callTopLevelDrops = List.of();
+      callKept.clear();
+      callComputed.clear();
       if (srcEl != null && tgtEl != null) nestedClaims = claimsOf(args, srcEl, tgtEl, strict);
       if (
         srcEl != null &&
@@ -891,6 +902,41 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             name -> noWriteMember(srcEl, name)
           );
           for (final var refusal : refusals) report(node, refusal);
+        } else if (callEdits) {
+          final var srcSlot = srcEl.getKind() == ElementKind.RECORD ? "field" : "property";
+          final var tgtSlot = tgtEl.getKind() == ElementKind.RECORD ? "field" : "property";
+          final var editClaimed = new LinkedHashSet<>(claimedTgt);
+          editClaimed.addAll(callComputed);
+          final var editMatch = PairingRules.matchFields(
+            List.copyOf(srcProps.keySet()),
+            List.copyOf(tgtProps.keySet()),
+            consumed,
+            editClaimed
+          );
+          final var links = new MirrorLinks(elements, types, props);
+          final var noEdit = new LinkedHashSet<>(callKept);
+          noEdit.addAll(links.generated(tgtEl));
+          noEdit.addAll(links.backReferences(tgtEl));
+          final var pinned = backReferences.get(tgtEl.getQualifiedName().toString());
+          if (pinned != null) noEdit.add(pinned[0]);
+          final var pathFilled = callRowsComplete ? filledAt(srcEl, tgtEl) : null;
+          Set<String> filled = null;
+          if (pathFilled != null) {
+            filled = new LinkedHashSet<>(pathFilled);
+            filled.addAll(noEdit);
+          }
+          final var read = callRowsComplete && callPathReadsKnown ? pathReadsAt(srcEl, tgtEl) : null;
+          final var refusals = Unpaired.editRefusals(
+            new Unpaired.Sides(srcSimple, tgtSimple, srcSlot, tgtSlot),
+            List.copyOf(srcProps.keySet()),
+            editMatch,
+            filled,
+            read,
+            name -> noWriteMember(tgtEl, name),
+            name -> noWriteMember(srcEl, name)
+          );
+          for (final var refusal : refusals) report(node, refusal);
+          reportAmbiguousElementMappers(node, srcEl, tgtEl, srcProps, tgtProps, editMatch.matched());
         }
         final var seen = new HashSet<String>();
         seen.add(pairKey(srcEl, tgtEl));
@@ -901,6 +947,164 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         reportCollections(node, srcEl, tgtEl, srcProps, tgtProps, match.matched(), !strict, backReferences);
       }
       verifyRowsVisited(node, args, srcType, tgtType, srcEl, tgtEl, strict);
+    }
+
+    /**
+     * Reports each property of an edit call matched by name whose pair, or whose elements' pair,
+     * has more than one edit mapper of its own among the static fields an edit mapper looks in: the
+     * class holding the call and the pair's two classes, which the mapper refuses when it is built.
+     */
+    private void reportAmbiguousElementMappers(
+      final MethodInvocationTree node,
+      final TypeElement srcEl,
+      final TypeElement tgtEl,
+      final Map<String, TypeMirror> srcProps,
+      final Map<String, TypeMirror> tgtProps,
+      final List<String> matched
+    ) {
+      final var holder = enclosingClass();
+      for (final var name : matched) {
+        final var pairSource = valueClass(srcProps.get(name));
+        final var pairTarget = valueClass(tgtProps.get(name));
+        if (pairSource == null || pairTarget == null) continue;
+        final var classes = new LinkedHashSet<TypeElement>();
+        if (holder != null) classes.add(holder);
+        classes.add(pairSource);
+        classes.add(pairTarget);
+        final var fields = new ArrayList<String>();
+        for (final var type : classes) {
+          for (final var field : ElementFilter.fieldsIn(type.getEnclosedElements())) {
+            if (!field.getModifiers().contains(Modifier.STATIC)) continue;
+            if (!(field.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) continue;
+            if (!(declared.asElement() instanceof TypeElement mapper)) continue;
+            if (!mapper.getQualifiedName().contentEquals(FieldRows.EDIT_MAPPER_FQN)) continue;
+            final var arguments = declared.getTypeArguments();
+            if (
+              types.isSameType(types.erasure(arguments.get(0)), types.erasure(pairSource.asType())) &&
+              types.isSameType(types.erasure(arguments.get(1)), types.erasure(pairTarget.asType()))
+            ) fields.add(type.getSimpleName() + "." + field.getSimpleName());
+          }
+        }
+        if (fields.size() > 1) report(
+          node,
+          PairingMessages.editElementMappersAmbiguous(
+            srcEl.getSimpleName().toString(),
+            tgtEl.getSimpleName().toString(),
+            name,
+            fields
+          )
+        );
+        if (!fields.isEmpty()) continue;
+        // An edit mapper of the pair declared where no edit mapper looks is one the mapper converts
+        // by name past, which the processor refuses for a @Bridge field.
+        final var elsewhere = inBridgeField() ? null : editMapperFieldOf(pairSource, pairTarget, classes);
+        if (elsewhere != null) report(
+          node,
+          PairingMessages.editElementMapperUnreached(
+            srcEl.getSimpleName().toString(),
+            tgtEl.getSimpleName().toString(),
+            name,
+            ownerLabel(holder),
+            elsewhere
+          )
+        );
+      }
+    }
+
+    /**
+     * A static field of the compilation, outside {@code looked}, whose type is {@code
+     * EditMapper<source, target>}, as {@code Class.FIELD}, or null.
+     */
+    private String editMapperFieldOf(
+      final TypeElement source,
+      final TypeElement target,
+      final Set<TypeElement> looked
+    ) {
+      for (final var unit : units.values()) {
+        for (final var declaration : unit.getTypeDecls()) {
+          final var path = TreePath.getPath(unit, declaration);
+          if (path == null || !(trees.getElement(path) instanceof TypeElement type)) continue;
+          final var found = editMapperFieldIn(type, source, target, looked);
+          if (found != null) return found;
+        }
+      }
+      return null;
+    }
+
+    private String editMapperFieldIn(
+      final TypeElement type,
+      final TypeElement source,
+      final TypeElement target,
+      final Set<TypeElement> looked
+    ) {
+      if (!looked.contains(type)) {
+        for (final var field : ElementFilter.fieldsIn(type.getEnclosedElements())) {
+          if (!field.getModifiers().contains(Modifier.STATIC)) continue;
+          if (!(field.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) continue;
+          if (!(declared.asElement() instanceof TypeElement mapper)) continue;
+          if (!mapper.getQualifiedName().contentEquals(FieldRows.EDIT_MAPPER_FQN)) continue;
+          final var arguments = declared.getTypeArguments();
+          if (
+            types.isSameType(types.erasure(arguments.get(0)), types.erasure(source.asType())) &&
+            types.isSameType(types.erasure(arguments.get(1)), types.erasure(target.asType()))
+          ) return type.getSimpleName() + "." + field.getSimpleName();
+        }
+      }
+      for (final var nested : ElementFilter.typesIn(type.getEnclosedElements())) {
+        final var found = editMapperFieldIn(nested, source, target, looked);
+        if (found != null) return found;
+      }
+      return null;
+    }
+
+    /**
+     * Whether the call being scanned initialises a {@code @Bridge} field, which the processor
+     * checks.
+     */
+    private boolean inBridgeField() {
+      for (var path = getCurrentPath(); path != null; path = path.getParentPath()) {
+        if (!(path.getLeaf() instanceof VariableTree)) continue;
+        final var field = trees.getElement(path);
+        if (field == null) return false;
+        for (final var annotation : field.getAnnotationMirrors()) {
+          if (
+            ((TypeElement) annotation.getAnnotationType().asElement()).getQualifiedName().contentEquals(BRIDGE_FQN)
+          ) return true;
+        }
+        return false;
+      }
+      return false;
+    }
+
+    /** The call being scanned as its class and the field it initialises, or its class alone. */
+    private String ownerLabel(final TypeElement holder) {
+      final var name = holder == null ? "" : holder.getSimpleName().toString();
+      for (var path = getCurrentPath(); path != null; path = path.getParentPath()) {
+        if (path.getLeaf() instanceof VariableTree variable) return name + "." + variable.getName();
+      }
+      return name;
+    }
+
+    /** The class whose body holds the call being scanned. */
+    private TypeElement enclosingClass() {
+      for (var path = getCurrentPath(); path != null; path = path.getParentPath()) {
+        if (path.getLeaf() instanceof ClassTree && trees.getElement(path) instanceof TypeElement type) return type;
+      }
+      return null;
+    }
+
+    /**
+     * The class a property of type {@code type} holds a value of, its element's for a collection
+     * and its value's for a map: a record or a class outside the JDK, or null.
+     */
+    private TypeElement valueClass(final TypeMirror type) {
+      if (!(type instanceof DeclaredType declared)) return null;
+      var held = declared;
+      final var arguments = declared.getTypeArguments();
+      if (!arguments.isEmpty() && arguments.getLast() instanceof DeclaredType last) held = last;
+      if (!(held.asElement() instanceof TypeElement element)) return null;
+      if (element.getQualifiedName().toString().startsWith("java.")) return null;
+      return element.getKind() == ElementKind.CLASS || element.getKind() == ElementKind.RECORD ? element : null;
     }
 
     /**
@@ -2170,6 +2374,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "enumTo", "toOrElse", "toOrElseGet", "toFormatted", "toFormattedNumber", "via" -> {
           return accessorRow(row, PairWalk.RowKind.CONVERTING);
         }
+        case "keep" -> {
+          final var tgt = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
+          if (tgt == null) return null;
+          return new KeyedRow(row, srcEl, tgt.owner(), PairWalk.RowKind.KEEP, null, tgt.method());
+        }
         case "drop" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           if (src == null) return null;
@@ -2474,6 +2683,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       );
     }
 
+    /** Whether {@code arg} is an expression of an edit mapper's type. */
+    private boolean namesEditMapper(final ExpressionTree arg) {
+      final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), arg);
+      final var type = path == null ? null : trees.getTypeMirror(path);
+      return (
+        type != null &&
+        types.erasure(type) instanceof DeclaredType declared &&
+        declared.asElement() instanceof TypeElement element &&
+        element.getQualifiedName().contentEquals(FieldRows.EDIT_MAPPER_FQN)
+      );
+    }
+
     /** Returns false when the row's accessors defeat static analysis (kills completeness only). */
     private boolean verifyRow(
       final MethodInvocationTree row,
@@ -2511,6 +2732,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           }
           if (src == null || tgt == null) return false;
+          if ("via".equals(rowName) && rowArgs.size() == 3 && !callEdits && namesEditMapper(rowArgs.get(2))) {
+            report(
+              row,
+              PairingMessages.viaEditsOutsideEdits(
+                forwardOnly ? "Telescope.mapperForward" : "Telescope.mapper",
+                srcSimple,
+                tgtSimple,
+                src.name()
+              )
+            );
+            return true;
+          }
           if ("via".equals(rowName) && rowArgs.size() == 3) verifyViaClass(row, rowArgs.get(2), src, tgt, forwardOnly);
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
@@ -2550,6 +2783,26 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             if (sides.source().containsKey(srcName) && sides.target().containsKey(tgtName)) {
               verifyProperty(src.owner(), tgt.owner(), sides, srcName, tgtName, componentName, row, seen, forwardOnly);
             }
+          }
+          return true;
+        }
+        case "keep" -> {
+          final var tgt = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
+          if (tgt == null) return false;
+          if (!callEdits) {
+            report(
+              row,
+              PairingMessages.keepOutsideEdits(
+                forwardOnly ? "Telescope.mapperForward" : "Telescope.mapper",
+                srcSimple,
+                tgtSimple,
+                tgt.name()
+              )
+            );
+            return true;
+          }
+          if (!callKept.add(tgt.name()) || callComputed.contains(tgt.name()) || !claimedTgt.add(tgt.name())) {
+            report(row, PairingMessages.keepBesideWrite(srcSimple, tgtSimple, tgt.name()));
           }
           return true;
         }
@@ -2594,6 +2847,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var tgt = accessorProp(arg);
           if (tgt != null) verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
           else verifyTargetPath(row, rowName, arg, tgtType, srcSimple, tgtSimple);
+          if (tgt != null && callEdits) {
+            if (callKept.contains(tgt.name())) {
+              report(row, PairingMessages.keepBesideWrite(srcSimple, tgtSimple, tgt.name()));
+            }
+            callComputed.add(tgt.name());
+          }
           if ("compute".equals(rowName)) verifyComputeReference(rowExec, rowArgs.get(1), tgt, srcType, tgtType);
           return true;
         }

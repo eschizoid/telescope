@@ -232,3 +232,11 @@ read:
    and the cleared reference adds no statement; without orphan removal it is one UPDATE setting the foreign key to null,
    and the row stays. A clear-and-refill takes out every held element it does not put back, and a merge by `@Id` the
    held elements nothing matched.
+
+## Amendment (2026-11-26): what an edit mapper never writes
+
+The policy also answers, through `ContainerCopy.Policy.generated`, which properties of an entity its mapping generates:
+an `@Id` or `@EmbeddedId` with `@GeneratedValue` or a Hibernate generator annotation, and a `@Version`. An edit mapper
+(ADR-0026) counts them as accounted for and no conversion of any pair it writes writes them, so they need no setter, and
+the processor reads the same annotations by name, so both paths need no row for them; the merge reads a sent element's
+identifier from the source's element. An assigned identifier still needs a row.

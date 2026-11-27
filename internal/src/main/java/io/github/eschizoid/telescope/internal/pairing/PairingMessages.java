@@ -879,23 +879,237 @@ public final class PairingMessages {
   }
 
   /**
-   * A mapper's {@code patchInto} on a mapper with a row writing through a source path, which names
-   * no property of {@code source} for {@code patchInto} to write. The runtime and the generated
-   * bridge refuse it in these words.
+   * A {@code keep} row given to a factory other than {@code Telescope.edits}. Only an edit mapper
+   * has operations that leave a target property alone; every other factory fills or defaults it.
    */
-  public static String patchIntoThroughPath(final String source) {
+  public static String keepOutsideEdits(
+    final String factory,
+    final String source,
+    final String target,
+    final String property
+  ) {
     return (
-      "patchInto() writes into " +
+      factory +
+      "(" +
       source +
-      " each property the partial supplies, and a row of this mapper writes through a source path, which" +
-      " names no property of it. Call patch(base, partial) and write the result."
+      ", " +
+      target +
+      ", ...) cannot take keep(...) for '" +
+      property +
+      "': keep says no edit writes a target property, and only Telescope.edits writes into a target it is" +
+      " handed. Use Telescope.edits(" +
+      source +
+      ".class, " +
+      target +
+      ".class, ...), or drop the row."
     );
   }
 
   /**
-   * A mapper's {@code patchInto} handed a {@code bean} with no setter that takes {@code property},
-   * a property the partial supplies. {@code patchInto} updates the object it is given through its
-   * setters, as {@code into} does, so it cannot update that property in place.
+   * A {@code via} row naming an edit mapper, given to a factory other than {@code Telescope.edits}.
+   * An edit mapper converts in one direction, which only another edit mapper runs it in.
+   */
+  public static String viaEditsOutsideEdits(
+    final String factory,
+    final String source,
+    final String target,
+    final String property
+  ) {
+    return (
+      factory +
+      "(" +
+      source +
+      ", " +
+      target +
+      ", ...) cannot convert '" +
+      property +
+      "' through an EditMapper: an edit mapper has no backward and runs only inside another edit mapper." +
+      " Name a Mapper or a ForwardMapper in the via row, or build this mapper with Telescope.edits."
+    );
+  }
+
+  /**
+   * The {@code backward} of a bridge generated for an edit mapper, which converts forward alone.
+   */
+  public static String editHasNoBackward(final String bridge) {
+    return (
+      bridge +
+      " is the bridge of an edit mapper, which converts in the direction the edit flows and has no backward." +
+      " Declare a Mapper or a ForwardMapper for the other direction."
+    );
+  }
+
+  /** A {@code keep} row beside a row of the same edit mapper that writes the same property. */
+  public static String keepBesideWrite(final String source, final String target, final String property) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": keep(...) says no edit writes '" +
+      property +
+      "', and another row writes it. Remove the keep, or the row that writes '" +
+      property +
+      "'."
+    );
+  }
+
+  /**
+   * An edit mapper's target property that nothing accounts for: no row writes it, no source
+   * property of its name fills it, and no {@code keep} names it. {@code namesakeRead} says the
+   * source has a property of its name that another row reads or a {@code drop} leaves out.
+   */
+  public static String editUnfilled(
+    final String source,
+    final String target,
+    final String tgtSlot,
+    final String name,
+    final boolean namesakeRead
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": an edit writes target " +
+      tgtSlot +
+      " '" +
+      name +
+      "', and nothing fills it: no row writes it and " +
+      (namesakeRead
+        ? "the source " + tgtSlot + " of its name is read by another row or dropped"
+        : "the source has no " + tgtSlot + " of its name") +
+      ". Add a row that writes '" +
+      name +
+      "', add it to " +
+      source +
+      ", or keep it with keep(...) when no edit may change it."
+    );
+  }
+
+  /**
+   * An edit mapper converting a value of a pair through the edit mapper of the pair's own that
+   * {@code field} declares, while {@code field} holds none yet: a mapper used while the class
+   * declaring {@code field} is still initialising.
+   */
+  public static String editElementMapperNotBuilt(final String field) {
+    return (
+      "An edit mapper converts through " +
+      field +
+      ", the pair's own edit mapper, and " +
+      field +
+      " holds none yet: a mapper was used while its class was still initialising. Use the mapper once the" +
+      " class has initialised, or name the element mapper in a via(...) row."
+    );
+  }
+
+  /**
+   * An edit mapper converting a value of a pair through the edit mapper of the pair's own that
+   * {@code field} declares, which cannot be read: a field of a package its module does not open.
+   */
+  public static String editElementMapperUnreadable(final String field) {
+    return (
+      "An edit mapper converts through " +
+      field +
+      ", the pair's own edit mapper, and cannot read the field: its module does not open the" +
+      " package to io.github.eschizoid.telescope. Make the field and its class public in an exported" +
+      " package, open the package, or name the element mapper in a via(...) row."
+    );
+  }
+
+  /**
+   * The class whose static initialiser builds an edit mapper, listing no field inside a native
+   * image: the image was not told to keep its fields, so the edit mappers they declare cannot be
+   * found.
+   */
+  public static String editFieldsNotRegistered(final String owner) {
+    return (
+      owner +
+      " builds an edit mapper, and the native image lists none of its fields, so the edit mappers it" +
+      " declares for the pairs below cannot be found. Register the class's fields for reflection, or" +
+      " generate its bridges with telescope-codegen."
+    );
+  }
+
+  /**
+   * An edit mapper writing a property by name whose pair has more than one edit mapper of its own
+   * among the fields an edit mapper looks in: {@code fields} names each, so which one converts the
+   * property is not decided.
+   */
+  public static String editElementMappersAmbiguous(
+    final String source,
+    final String target,
+    final String property,
+    final List<String> fields
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": '" +
+      property +
+      "' converts through its pair's own edit mapper, and " +
+      fields.size() +
+      " fields declare one: " +
+      String.join(", ", fields) +
+      ". Keep one, or name the one to use in a via(...) row."
+    );
+  }
+
+  /**
+   * An edit mapper's {@code @Bridge} field whose property {@code property} converts a pair that
+   * {@code element}, an edit mapper declared outside the owner's class and the pair's two classes,
+   * is the mapper of: the pair is not converted through it unless a {@code via} row names it.
+   */
+  public static String editElementMapperUnreached(
+    final String source,
+    final String target,
+    final String property,
+    final String owner,
+    final String element
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": '" +
+      property +
+      "' converts a pair " +
+      element +
+      " is the edit mapper of, and " +
+      owner +
+      " would not convert through it: an edit mapper converts a pair through its own edit mapper only" +
+      " where it is declared in the owner's class or in one of the pair's two classes. Name it in a" +
+      " via(...) row, as via(..., " +
+      element +
+      "), or move it into one of those classes."
+    );
+  }
+
+  /**
+   * An edit mapper's {@code into} or {@code patchInto} given a row whose target path steps through
+   * something other than properties, which cannot be written into the objects a target holds.
+   */
+  public static String editPathNotProperties(final String source, final String target) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": into and patchInto write a target path into the objects the target holds, and a row of this" +
+      " mapper writes through a path that steps through something other than properties. Call" +
+      " forward(source) or patch(base, partial) for a new " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * An edit mapper's {@code patchInto} handed a {@code bean} with no setter that takes {@code
+   * property}, a property the partial supplies. {@code patchInto} updates the object it is given
+   * through its setters, as {@code into} does, so it cannot update that property in place.
    */
   public static String patchIntoPropertyUnwritable(
     final String source,
@@ -1159,6 +1373,7 @@ public final class PairingMessages {
    * changed, and has no setter to give it a new one. {@code container} is null where it holds none.
    */
   public static String intoUnwritable(
+    final String operation,
     final String source,
     final String target,
     final String bean,
@@ -1170,7 +1385,9 @@ public final class PairingMessages {
       source +
       " → " +
       target +
-      ": into writes '" +
+      ": " +
+      operation +
+      " writes '" +
       property +
       "' of the " +
       bean +
@@ -1180,7 +1397,9 @@ public final class PairingMessages {
       bean +
       " has no setter for '" +
       property +
-      "' to give it a new one, so into cannot update it. Give " +
+      "' to give it a new one, so " +
+      operation +
+      " cannot update it. Give " +
       bean +
       " a setter for '" +
       property +
@@ -1196,6 +1415,7 @@ public final class PairingMessages {
    * the policy writes.
    */
   public static String intoElementsRefused(
+    final String operation,
     final String source,
     final String target,
     final String bean,
@@ -1207,7 +1427,9 @@ public final class PairingMessages {
       source +
       " → " +
       target +
-      ": into cannot write '" +
+      ": " +
+      operation +
+      " cannot write '" +
       property +
       "' of the " +
       bean +

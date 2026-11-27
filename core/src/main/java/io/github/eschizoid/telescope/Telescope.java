@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
@@ -1332,6 +1333,68 @@ public sealed class Telescope<
       }
     }
     return DeepMap.resolveForwardMapper(source, target, steps, declaration.node());
+  }
+
+  /**
+   * A mapper whose direction is the edit's: {@code source} is what an edit sends, such as the body
+   * of a PATCH, a create request or the changes a service works out, and {@code target} is what it
+   * writes into, usually an entity. The rows are written in the direction the edit flows, so a
+   * {@code compute} or {@code constant} row runs on the way in.
+   *
+   * <pre>{@code
+   * @Bridge
+   * public static final EditMapper<OrderChanges, Order> EDITS = edits(
+   *   OrderChanges.class,
+   *   Order.class,
+   *   via(OrderChanges::lines, Order::getLines, LINE), // LINE prices each line from the catalog
+   *   keep(Order::getNumber),                          // a PATCH never changes these
+   *   keep(Order::getCustomer)
+   * );
+   *
+   * EDITS.patchInto(order, changes); // writes only the fields the client sent
+   * }</pre>
+   *
+   * <p>The result builds a new target ({@link EditMapper#forward}), writes into one it is handed
+   * every property it accounts for ({@link EditMapper#into}, a PUT) or only what a partial sends
+   * ({@link EditMapper#patchInto}, a PATCH), and lays a partial over a copy ({@link
+   * EditMapper#patch}). It has no {@code backward}.
+   *
+   * <p><b>Strict on both sides.</b> When it is built, every property of {@code target} that a
+   * member can write is filled by a row, by the property of its name on {@code source}, or as the
+   * back-reference of an element by the collection write that holds it, or a {@link Mapping#keep
+   * keep} row says no edit writes it; every property of {@code source} is read by a row or by the
+   * property of its name, or a {@code drop} row leaves it out. So a property added to either side
+   * later fails the build until someone decides what an edit does with it. With {@code
+   * telescope-jpa}, an identifier with a generator and a version count as accounted for, and no
+   * operation writes them into a target it is handed.
+   *
+   * <p><b>Which factory.</b> {@link #mapperForward mapperForward} for what a client sees of an
+   * entity or a service value, {@link #mapper mapper} for two types that convert both ways where
+   * the round trip is the point, and {@code edits} for writing into an entity or another target,
+   * new or held: create, PUT and PATCH.
+   *
+   * <p><b>Element mappers.</b> A pair the mapper writes by name, such as the lines of an order,
+   * converts through the edit mapper the same class declares for that pair on a static field, with
+   * that mapper's rows, keeps and merge by {@code @Id}; a {@code via} row names another. The field
+   * is found by its pair when a value of the pair first converts, so it may be declared before or
+   * after this one, and two fields for one pair are refused by name.
+   *
+   * <p>With {@code telescope-codegen} on the processor path, a {@code @Bridge} on a {@code static
+   * final} field initialised by this call compiles its rows into a generated bridge, which the
+   * returned mapper runs.
+   *
+   * @param source the class an edit sends
+   * @param target the class it writes into
+   * @param steps rows written from {@code source} to {@code target}
+   * @param <P> what an edit sends
+   * @param <E> what it writes into
+   */
+  public static <P, E> EditMapper<P, E> edits(final Class<P> source, final Class<E> target, final MapStep... steps) {
+    final var caller = initialisingCaller();
+    final var declaration = DeepMap.declaration(caller, source, target, steps);
+    return declaration.provider() != null
+      ? DeepMap.declaredEditMapper(declaration, source, target, steps, caller)
+      : DeepMap.resolveEditMapper(source, target, steps, declaration.node(), caller);
   }
 
   /**

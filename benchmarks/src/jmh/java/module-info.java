@@ -38,6 +38,6 @@ module io.github.eschizoid.telescope.benchmarks {
       io.github.eschizoid.telescope.benchmarks.IntoFieldSrcToIntoNarrowBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.IntoFieldWideSrcToIntoWideBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.IntoListSrcToIntoListTgtBridgeProvider,
-      io.github.eschizoid.telescope.benchmarks.PatchIntoEntityToPatchIntoChangesBridgeProvider,
+      io.github.eschizoid.telescope.benchmarks.PatchIntoChangesToPatchIntoEntityBridgeProvider,
       io.github.eschizoid.telescope.benchmarks.MbOrderFormToMbOrderBridgeProvider;
 }

@@ -164,6 +164,24 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   generated navigator's paths record the same hops as the hand-written path through the same components, so the two
   forms fuse with each other, and `then` keeps the left side's hop record, recording a right side that carries none as
   one unfusible segment.
+- **Write into a target — `Telescope.edits(P.class, E.class, rows...)`:** an `EditMapper<P, E>` whose rows run from what
+  an edit sends into what it writes, so `compute` and `constant` run on the way in. `forward` builds a new `E`, `into`
+  writes every property it accounts for (a PUT), `patchInto` only what the partial sends (a PATCH), and `patch` the same
+  overlay on a copy; no `backward`. Strict on both sides, with `keep(E::x)` for a target property no edit writes; with
+  telescope-jpa a generated `@Id`, a `@Version` and a `mappedBy` back-reference need no row. No conversion of any pair
+  an edit mapper writes, at any level, writes a generated `@Id` or `@Version` a row does not name
+  (`GeneratedProperties`), so neither needs a setter; the merge by `@Id` reads the key from the source's element
+  (`ContainerCopy.Elements.sentValue`). The container seams take the operation a refusal names as a parameter. A pair
+  with an edit mapper of its own converts through it with no row when that mapper is declared in the class of the
+  owner's mapper or in the pair's source or target class, on both paths: at run time a static field read from the field
+  types (`EditRegistry`) and from its value at first use, so field order does not matter; on the generated path the
+  `@Bridge` field's bridge, the processor refusing one declared anywhere else, and the verifier refusing it for a plain
+  `edits(...)` call. Without the processor and the verifier the runtime cannot see a mapper declared in another class,
+  and converts that pair by name. `explain()` reports it as `OpticNode.ElementsThrough`. Pairs below an edit mapper's
+  own are checked leniently on all three paths. `via(src, tgt, EDIT_MAPPER)` names one explicitly and wins; with
+  telescope-jpa either merges a managed collection by `@Id`. Only `edits` takes `keep` and that `via`. The strictness
+  and null rules are `Unpaired.editRefusals` and `EditTargets`, one decision for the runtime, the processor and the
+  verifier.
 - **Write — multi-edit chain (alternative):** the inline-path shape, for edits built up in place rather than as rows.
   - `update(Telescope<S, X>, Function<X, X>)` — pre-built path; equivalent end-state to `over(...)` but accumulated
     inline.
@@ -312,20 +330,26 @@ from "compile-checked" to "runtime-checked" is a regression.
   identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
   `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
   that writes more makes `Telescope.all` fuse to a different result than the sequential fold.
-- `ContainerCopy.refuseUnwritable` and `refill`, which a generated `into` and `patchInto` call for each container
+- `ContainerCopy.refuseUnwritable` and `refill`, which a generated `into` and `editPatchInto` call for each container
   property, each handed the owner, the property's `ContainerCopy.Links` (its adder, remover and element back-reference,
   null where nothing ties the elements), the source's container the value was converted from, and the
   `ContainerCopy.Elements` of the element pair where its elements are written in place (null otherwise);
   `refuseUnwritable` answers what the container policy's `check` prepared, which the same property's `refill` is handed
   back. Every generated bridge declares the links of each collection it writes as `INTO_LINKS_<P>` and
-  `PATCH_INTO_LINKS_<P>`, built by `ContainerCopy.links`, and points a value its `forward` or `backward` builds back
-  through `ContainerCopy.pointedBack` with `FORWARD_LINKS` / `BACKWARD_LINKS`; a links constant whose back-reference
-  `mappedBy` decides asks `ContainerCopy.backReference` at class load, so it takes `mappedBy` only where the runtime
-  does. `ContainerCopy.Elements` converts one sent element, checks one element's write, its own collections included,
-  and writes it. Every generated bridge declares its own as `INTO_ELEMENTS` and `PATCH_INTO_ELEMENTS` (null where it
-  writes none in place), with the `writeConverted` / `checkConverted` and `writeConvertedBack` / `checkConvertedBack`
-  statics they call, and its `BridgeFn` answers them from `targetWrite` and `sourceWrite`. On the runtime path the same
-  conversions are `Mapper.intoElements()` and `patchIntoElements()`, final, of the element pair's mapper.
+  `SOURCE_LINKS_<P>`, built by `ContainerCopy.links`, and points a value its `forward` or `backward` builds back through
+  `ContainerCopy.pointedBack` with `FORWARD_LINKS` / `BACKWARD_LINKS`; a links constant whose back-reference `mappedBy`
+  decides asks `ContainerCopy.backReference` at class load, so it takes `mappedBy` only where the runtime does.
+  `ContainerCopy.Elements` converts one sent element, checks one element's write, its own collections included, and
+  writes it. Every generated bridge declares its own as `INTO_ELEMENTS` (null where it writes none in place), with the
+  `writeConverted` / `checkConverted` statics it calls, and its `BridgeFn` answers it from `targetWrite`. On the runtime
+  path the same conversion is `Mapper.intoElements()`, final, of the element pair's mapper, or of the mapper an edit
+  mapper a `via` row names runs.
+- `BridgeFn.writesEdits()`, `editInto`, `editPatchInto` and `editPatch`, with `EditMapper.ofGenerated` and the protected
+  `EditMapper(EditMapper, BridgeGrant)` constructor: the bridge of a field initialised by `Telescope.edits` answers
+  which of the three it writes itself, and the class written for the field overrides each it has with one static call
+  into the bridge; an operation it lacks, and a target of a subclass, run on the runtime edit mapper built from the same
+  rows. `EditMapper.engineOf` hands a `via` row the mapper an edit mapper runs, and `ContainerCopy.Policy.generated` the
+  properties a persistence module says no edit writes.
 - The protected `Mapper(Mapper, BridgeGrant)` and `ForwardMapper(ForwardMapper, BridgeGrant)` constructors: the class
   the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
   call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
@@ -475,24 +499,24 @@ The entity end of the mapping layer, written against the Jakarta Persistence API
 `requires static jakarta.persistence`) with no provider at compile time. It exports nothing and registers two providers
 through `ServiceLoader`, each inactive where what it consults is absent:
 
-| Class              | Core SPI               | Role                                                                                                                                                                 |
-| ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LoadedContainers` | `ContainerCopy.Policy` | a same-typed container `PersistenceUtil.isLoaded` reports as not loaded is shared, a loaded one copied; `@OneToMany(mappedBy)` answers a collection's back-reference |
-| `HibernateProxies` | `ProxyResolver`        | resolves a Hibernate proxy to its entity class without initializing it, found by name, never linked                                                                  |
+| Class              | Core SPI               | Role                                                                                                                                                                                                                            |
+| ------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LoadedContainers` | `ContainerCopy.Policy` | a same-typed container `PersistenceUtil.isLoaded` reports as not loaded is shared, a loaded one copied; `@OneToMany(mappedBy)` answers a collection's back-reference, and a generated `@Id` or a `@Version` what no edit writes |
+| `HibernateProxies` | `ProxyResolver`        | resolves a Hibernate proxy to its entity class without initializing it, found by name, never linked                                                                                                                             |
 
 `LoadStates` holds the load check: a container whose class is in `java.base` is never asked about, and the persistence
 API is touched only once it is known to be on the class path. The same policy merges a collection of entities by
-identifier when `into` or `patchInto` writes it into one the owner holds (`IdMerge`, over the `@Id` that `Identifiers`
-finds once per class): a converted element matching a held one is written into it in place through the element writer
-the write hands `ContainerCopy`, and refusals are made in `Policy.check`, before anything is written. Elements converted
-by a hand-written class or method pair have no element writer and are cleared and refilled. `Policy.backReference`
-answers, through `MappedBy`, the property `@OneToMany(mappedBy)` names on the owner's field or getter, which a write
-sets on every element the owner holds where no adder sets it, and clears on an element it takes out where the owner has
-no remover. Because both paths copy and write through `ContainerCopy`, the runtime mapper and every generated bridge
-take the policy alike. Three test tasks run in `check`: `test`, `imageTest` (the `imagecode` property set, so the proxy
-accessors run as `MhAccessors` closures), and `testWithoutTheModule`, which runs `WithoutTheModuleTest` with the
-module's classes and resources off the class path, so the same Hibernate statistics count what a mapping costs with no
-policy registered.
+identifier when `into` or an edit mapper's `patchInto` writes it into one the owner holds (`IdMerge`, over the `@Id`
+that `Identifiers` finds once per class): a converted element matching a held one is written into it in place through
+the element writer the write hands `ContainerCopy`, and refusals are made in `Policy.check`, before anything is written.
+Elements converted by a hand-written class or method pair have no element writer and are cleared and refilled.
+`Policy.backReference` answers, through `MappedBy`, the property `@OneToMany(mappedBy)` names on the owner's field or
+getter, which a write sets on every element the owner holds where no adder sets it, and clears on an element it takes
+out where the owner has no remover. Because both paths copy and write through `ContainerCopy`, the runtime mapper and
+every generated bridge take the policy alike. Three test tasks run in `check`: `test`, `imageTest` (the `imagecode`
+property set, so the proxy accessors run as `MhAccessors` closures), and `testWithoutTheModule`, which runs
+`WithoutTheModuleTest` with the module's classes and resources off the class path, so the same Hibernate statistics
+count what a mapping costs with no policy registered.
 
 ## Module: `:jackson` (telescope-jackson)
 
@@ -958,14 +982,15 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     OpenAPI, a generated resource class per mapped method and a second scan through SmallRye's public builder document
     each body as its wire type. Amended: a same-name fallback that pairs no property is refused at startup, as on
     Spring.
-26. **0026 — A mapper whose direction is the edit's.** (Proposed.) `Telescope.edits(P.class, E.class, rows...)` builds
-    an `EditMapper<P, E>` from what an edit sends to what it writes into, with `forward`, `into`, `patch` and
+26. **0026 — A mapper whose direction is the edit's.** (Accepted, shipped.) `Telescope.edits(P.class, E.class, rows...)`
+    builds an `EditMapper<P, E>` from what an edit sends to what it writes into, with `forward`, `into`, `patch` and
     `patchInto` and no `backward`, so `compute` and `constant` run on the way into an entity and a PATCH needs no
     hand-written converter. Strict on both sides: `keep(E::x)` names a target property no edit writes and `drop(P::x)` a
     partial property nothing reads; `patch` and `patchInto` never write a null, and a `compute` function takes the
     source of its pair. Collections follow the derived adder and back-reference rule, so an element edit mapper named in
     a `via` row merges by `@Id` with telescope-jpa. Compiled by `FieldRows` like every `@Bridge` field; ADR-0024's
-    `before` and `after` rows apply in its one direction. `Mapper.patchInto` is removed.
+    `before` and `after` rows apply in its one direction. `Mapper.patchInto` is removed. Amended: with telescope-jpa a
+    generated identifier and a version need no row, and no edit writes them into a held entity.
 27. **0027 — Rows that call an injected service.** (Proposed.) A row's service form names the service's class before its
     function, and the function takes the service first:
     `compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price)`, also for `compute`'s supplier, `when`'s

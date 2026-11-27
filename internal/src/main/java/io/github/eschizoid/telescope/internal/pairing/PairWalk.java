@@ -58,6 +58,8 @@ public final class PairWalk<T> {
     PATH,
     /** {@code drop}, which is never refused for a pair the walk does not visit. */
     DROP,
+    /** {@code keep}: claims the target property, reads nothing and leads nowhere. */
+    KEEP,
   }
 
   /**
@@ -472,6 +474,7 @@ public final class PairWalk<T> {
           read = new HashSet<>();
           for (final var row : rows) {
             if (row.kind() == RowKind.DROP) read.add(propertyName(row.sourceAccessor(), source));
+            if (row.kind() == RowKind.KEEP) claimed.add(propertyName(row.targetAccessor(), target));
             if (row.kind() != RowKind.PASS_THROUGH && row.kind() != RowKind.CONVERTING) continue;
             final var sourceName = propertyName(row.sourceAccessor(), source);
             final var targetName = propertyName(row.targetAccessor(), target);

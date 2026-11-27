@@ -98,4 +98,9 @@ public interface BridgeProvider {
   default ForwardMapper<?, ?> forwardMapper(final ForwardMapper<?, ?> built, final BridgeGrant grant) {
     return built;
   }
+
+  /** As {@link #mapper}, for a {@code Telescope.edits} call and its edit mapper. */
+  default EditMapper<?, ?> editMapper(final EditMapper<?, ?> built, final BridgeGrant grant) {
+    return built;
+  }
 }

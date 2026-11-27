@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
@@ -71,7 +72,8 @@ public sealed interface Mapping<A, B>
     Constant,
     Compute,
     ComputeFromSource,
-    Conditional
+    Conditional,
+    Keep
 {
   /** {@link WriteStrategy#BUILDER}, here so the import that brings the rows brings it. */
   WriteStrategy BUILDER = WriteStrategy.BUILDER;
@@ -802,6 +804,26 @@ public sealed interface Mapping<A, B>
   }
 
   /**
+   * Nested correspondence converted by an {@link EditMapper}, for a row of another edit mapper: the
+   * property, or each element of a {@code List}, {@code Set}, {@code Optional} or the values of a
+   * {@code Map}, is converted by {@code elements}' {@code forward}, which runs its {@code compute}
+   * and {@code constant} rows on the way in. A collection of entities whose elements convert this
+   * way is written element by element in place where a container policy matches them, as the one
+   * {@code telescope-jpa} registers does by {@code @Id}, so a matched element is updated rather
+   * than replaced.
+   *
+   * <pre>{@code
+   * via(OrderChanges::lines, Order::getLines, LINE) // LINE = edits(LineDto.class, OrderLine.class, ...)
+   * }</pre>
+   *
+   * <p>Only {@link Telescope#edits} accepts the row; every other factory refuses it by name, since
+   * an edit mapper converts in one direction and has no {@code backward}.
+   */
+  static <A, B> Mapping<A, B> via(final Accessor<A, ?> src, final Accessor<B, ?> tgt, final EditMapper<?, ?> elements) {
+    return new Via<>(src, tgt, EditMapper.engineOf(Objects.requireNonNull(elements, "elements")), elements);
+  }
+
+  /**
    * Nested correspondence converted by two methods written by hand: {@code forward} turns a source
    * value into a target value, and {@code backward} turns it back. As with {@link #via(Accessor,
    * Accessor, Mapper)}, the two may convert one element, and the row then converts a {@code List},
@@ -894,6 +916,27 @@ public sealed interface Mapping<A, B>
    */
   static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
     return new Drop<>(src, null);
+  }
+
+  /**
+   * Keep a property of an edit mapper's target: no operation writes it. {@code into} and {@code
+   * patchInto} leave the value the target holds, {@code patch} the value the base holds, and {@code
+   * forward} the value a new target is built with. An edit mapper is strict, so a target property
+   * that no row fills and no source property of its name fills fails the build until a row fills it
+   * or a {@code keep} names it.
+   *
+   * <pre>{@code
+   * edits(OrderChanges.class, Order.class,
+   *     keep(Order::getNumber),       // a PATCH never changes the number
+   *     keep(Order::getCustomer));
+   * }</pre>
+   *
+   * <p>The row names the target side, so it reads the same when the edit's two classes are one.
+   * Only {@link Telescope#edits} accepts it; every other factory refuses it by name, and so does an
+   * edit mapper given a {@code keep} beside a row that writes the same property.
+   */
+  static <A, B, X> Mapping<A, B> keep(final Accessor<B, X> tgt) {
+    return new Keep<>(Objects.requireNonNull(tgt, "tgt"));
   }
 
   /**

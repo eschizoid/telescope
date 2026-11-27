@@ -45,6 +45,28 @@ class UnpairedTest {
   }
 
   @Test
+  @DisplayName("an edit mapper refuses a target nothing fills in its own words, naming a namesake another row takes")
+  void editRefusalsUseTheEditWords() {
+    final var refusals = Unpaired.editRefusals(
+      SIDES,
+      List.of("a", "c", "y"),
+      match(List.of("b", "c"), List.of("y")),
+      Set.of(),
+      Set.of(),
+      NONE,
+      NONE
+    );
+    assertEquals(
+      List.of(
+        PairingMessages.editUnfilled("Src", "Tgt", "field", "b", false),
+        PairingMessages.editUnfilled("Src", "Tgt", "field", "c", true),
+        PairingMessages.noSameNameTarget("Src", "Tgt", "field", "field", "y")
+      ),
+      refusals
+    );
+  }
+
+  @Test
   @DisplayName("a target a path, constant or compute row fills and a source a path row reads are not refused")
   void filledAndReadPropertiesPass() {
     final var refusals = Unpaired.refusals(

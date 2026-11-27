@@ -13,6 +13,7 @@ import io.github.eschizoid.telescope.codegen.ctorbox.CityRuntime;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -16533,8 +16534,9 @@ class CrossPathCorpusTest {
      */
     PATCH,
     /**
-     * {@code patchInto(Src.sample(), Tgt.sample())}: the property is the source's, and the
-     * container it holds after the call is compared with the one it held before.
+     * An edit mapper's {@code patchInto(Src.sample(), Tgt.sample())}, from the partial {@code Tgt}
+     * into {@code Src}: the property is the target's, and the container it holds after the call is
+     * compared with the one it held before.
      */
     PATCH_INTO,
   }
@@ -16937,7 +16939,14 @@ class CrossPathCorpusTest {
       "lines",
       Call.INTO,
       REFUSED +
-        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", List.of().getClass().getName()) +
+        PairingMessages.intoUnwritable(
+          "into",
+          "%1$sSrc",
+          "%1$sTgt",
+          "%1$sTgt",
+          "lines",
+          List.of().getClass().getName()
+        ) +
         LEFT +
         "#0(id=\"old\", lines=[])"
     ),
@@ -16950,7 +16959,7 @@ class CrossPathCorpusTest {
       "lines",
       Call.INTO,
       REFUSED +
-        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", PACKAGE + ".%1$sFixed") +
+        PairingMessages.intoUnwritable("into", "%1$sSrc", "%1$sTgt", "%1$sTgt", "lines", PACKAGE + ".%1$sFixed") +
         LEFT +
         "#0(id=\"old\", lines=[#1(order=null, sku=null)])"
     ),
@@ -16980,7 +16989,14 @@ class CrossPathCorpusTest {
       "lines",
       Call.INTO,
       REFUSED +
-        PairingMessages.intoUnwritable("%1$sSrc", "%1$sTgt", "%1$sTgt", "notes", List.of().getClass().getName()) +
+        PairingMessages.intoUnwritable(
+          "into",
+          "%1$sSrc",
+          "%1$sTgt",
+          "%1$sTgt",
+          "notes",
+          List.of().getClass().getName()
+        ) +
         LEFT +
         "#0(id=\"old\", lines=[#1(order=@0, sku=\"stale\")], notes=[])"
     ),
@@ -17400,12 +17416,69 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * {@code rows}, each written in full, on a {@code @Bridge} field of {@code Telescope.edits} from
+   * the partial {@code %1$sTgt} into {@code %1$sSrc}, its carrier {@code %1$sTgtCarrier}.
+   */
+  private static String editBackField(final String... rows) {
+    return field("edits", "EditMapper", "%1$sTgt", "%1$sSrc", rows);
+  }
+
+  /**
+   * The runtime class whose {@code mapper()} builds the edit mapper of {@code rows} into {@code
+   * %1$sSrc}.
+   */
+  private static String editBackRuntime(final String... rows) {
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    return io.github.eschizoid.telescope.Telescope.edits(%1$sTgt.class, %1$sSrc.class" +
+      (rows.length == 0 ? "" : ",\n      " + String.join(",\n      ", rows)) +
+      ");\n  }\n}\n"
+    );
+  }
+
+  /** {@code rows} on the edit mapper's {@code @Bridge} field and its runtime mapper alike. */
+  private static List<String> editIntoPair(final String source, final String target, final String... rows) {
+    return List.of(source, target, editBackField(rows), editBackRuntime(rows));
+  }
+
+  /**
+   * What the edit mapper {@code mapper} gives {@code row}: the {@link #shape} of {@code
+   * Src.sample()} after {@code patchInto(Src.sample(), Tgt.sample())}, and whether the row's
+   * property then holds the container it held before, or {@link #REFUSED}, the message and the
+   * target's shape after the refusal.
+   */
+  @SuppressWarnings("unchecked")
+  private static String editPatchIntoOutcome(
+    final Object mapper,
+    final ClassLoader loader,
+    final String prefix,
+    final ContainerRow row
+  ) throws ReflectiveOperationException {
+    final var edits = (EditMapper<Object, Object>) mapper;
+    final var target = Class.forName(PACKAGE + "." + prefix + "Src", true, loader).getMethod("sample").invoke(null);
+    final var partial = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader).getMethod("sample").invoke(null);
+    final var getter = target.getClass().getMethod(accessorOf(target, row));
+    final var held = getter.invoke(target);
+    try {
+      final var written = edits.patchInto(target, partial);
+      if (written != target) return "another object than the target: " + shape(written, new IdentityHashMap<>());
+    } catch (final RuntimeException e) {
+      return REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>());
+    }
+    final var after = getter.invoke(target);
+    final var kept = held == null ? SET : after == held ? KEPT : REPLACED;
+    return shape(target, new IdentityHashMap<>()) + kept;
+  }
+
+  /**
    * A bean {@code %1$sSrc} with a name and a list of tags, both with setters, whose sample is named
    * {@code old} and holds {@code stale}, and the record {@code %1$sTgt} patchInto takes as the
    * partial, whose sample is {@code partial}.
    */
   private static List<String> namedTagsPair(final String partial, final String... rows) {
-    return intoPair(
+    return editIntoPair(
       taggedBeanSource("new java.util.ArrayList<>(java.util.List.of(\"stale\"))"),
       sampled("%1$sTgt", "String name, java.util.List<String> tags", partial),
       rows
@@ -17429,7 +17502,7 @@ class CrossPathCorpusTest {
     ),
     new ContainerRow(
       "a scalar the partial leaves out, whose setter marks each value it takes, so a write of it would show",
-      intoPair(
+      editIntoPair(
         "public class %1$sSrc {\n  private String name;\n  private java.util.List<String> tags;\n" +
           "  public %1$sSrc() {}\n  public String getName() { return name; }\n" +
           "  public void setName(final String v) { name = v + \"*\"; }\n" +
@@ -17462,8 +17535,8 @@ class CrossPathCorpusTest {
           "new %1$sTgt(null, new %1$sTgtAddress(\"Paris\", null))"
         ),
         "public record %1$sTgtAddress(String city, String zip) {}\n",
-        plainField(false),
-        plainRuntime(false)
+        editBackField(),
+        editBackRuntime()
       ),
       "address",
       Call.PATCH_INTO,
@@ -17471,7 +17544,7 @@ class CrossPathCorpusTest {
     ),
     new ContainerRow(
       "a list the partial sends into a target built through its adders, filled through its adder",
-      intoPair(
+      editIntoPair(
         "public class %1$sSrc {\n  private final java.util.List<String> tags = new java.util.ArrayList<>();\n" +
           "  public %1$sSrc() {}\n  public java.util.List<String> getTags() { return tags; }\n" +
           "  public void addTag(final String tag) { tags.add(tag + \"!\"); }\n" +
@@ -17494,12 +17567,12 @@ class CrossPathCorpusTest {
           "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
           "  public java.util.List<String> getTags() { return tags; }\n" +
           "  public void setTags(final java.util.List<String> v) { tags = v; }\n}\n",
-        fieldBridge("%1$sSrcA", "%1$sTgtA"),
+        editFieldOf("%1$sTgtA", "%1$sSrcA"),
         "public sealed interface %1$sTgt permits %1$sTgtA {\n" +
           "  static %1$sTgt sample() { return new %1$sTgtA(\"new\", java.util.List.of(\"x\")); }\n}\n",
         "public record %1$sTgtA(String name, java.util.List<String> tags) implements %1$sTgt {}\n",
-        plainField(false),
-        plainRuntime(false, "io.github.eschizoid.telescope.mapping.Cases.cases(%1$sSrcA.class, %1$sTgtA.class)")
+        editBackField(),
+        editBackRuntime("io.github.eschizoid.telescope.mapping.Cases.cases(%1$sTgtA.class, %1$sSrcA.class)")
       ),
       "tags",
       Call.PATCH_INTO,
@@ -17522,8 +17595,8 @@ class CrossPathCorpusTest {
         "public class %1$sSrcSub extends %1$sSrc {\n  public %1$sSrcSub() {}\n" +
           "  public void setName(final String v) { super.setName(\"sub:\" + v); }\n}\n",
         taggedPartial("null").replace("new %1$sTgt(null, ", "new %1$sTgt(\"x\", "),
-        plainField(false),
-        plainRuntime(false)
+        editBackField(),
+        editBackRuntime()
       ),
       "tags",
       Call.PATCH_INTO,
@@ -17532,7 +17605,7 @@ class CrossPathCorpusTest {
       "#0(name=\"base:sub:base:x\", tags=[\"stale\"])" + KEPT
     ),
     new ContainerRow(
-      "a mapper with a row writing through a source path, refused before anything is written",
+      "a row writing a target path, written into the object the target holds",
       List.of(
         "public class %1$sSrc {\n  private String name;\n  private %1$sSrcAddress address;\n  public %1$sSrc() {}\n" +
           "  public String getName() { return name; }\n  public void setName(final String v) { name = v; }\n" +
@@ -17543,23 +17616,21 @@ class CrossPathCorpusTest {
         "public class %1$sSrcAddress {\n  private String city;\n  public %1$sSrcAddress() {}\n" +
           "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n}\n",
         sampled("%1$sTgt", "String name, String city", "new %1$sTgt(\"new\", \"Paris\")"),
-        plainField(
-          false,
-          "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"
+        editBackField(
+          "to(%1$sTgt::city, io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity))"
         ),
-        plainRuntime(
-          false,
+        editBackRuntime(
           MAPPING +
-            "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity), %1$sTgt::city)"
+            "to(%1$sTgt::city, io.github.eschizoid.telescope.Telescope.path(%1$sSrc::getAddress, %1$sSrcAddress::getCity))"
         )
       ),
-      "name",
+      "address",
       Call.PATCH_INTO,
-      REFUSED + PairingMessages.patchIntoThroughPath("%1$sSrc") + LEFT + "#0(address=#1(city=\"Lyon\"), name=\"old\")"
+      "#0(address=#1(city=\"Paris\"), name=\"new\")" + KEPT
     ),
     new ContainerRow(
       "a scalar the partial sends that the target has no setter for, refused by name before anything is written",
-      intoPair(
+      editIntoPair(
         "public class %1$sSrc {\n  private final String name;\n  private java.util.List<String> tags;\n" +
           "  public %1$sSrc(final String name, final java.util.List<String> tags) {\n" +
           "    this.name = name;\n    this.tags = tags;\n  }\n" +
@@ -17573,13 +17644,13 @@ class CrossPathCorpusTest {
       "tags",
       Call.PATCH_INTO,
       REFUSED +
-        PairingMessages.patchIntoPropertyUnwritable("%1$sSrc", "%1$sTgt", "%1$sSrc", "name") +
+        PairingMessages.patchIntoPropertyUnwritable("%1$sTgt", "%1$sSrc", "%1$sSrc", "name") +
         LEFT +
         "#0(name=\"old\", tags=[\"stale\"])"
     ),
     new ContainerRow(
       "a target with no setter for a scalar the partial leaves out, which is written as the rest",
-      intoPair(
+      editIntoPair(
         "public class %1$sSrc {\n  private final String name;\n  private java.util.List<String> tags;\n" +
           "  public %1$sSrc(final String name, final java.util.List<String> tags) {\n" +
           "    this.name = name;\n    this.tags = tags;\n  }\n" +
@@ -17598,10 +17669,10 @@ class CrossPathCorpusTest {
 
   @Test
   @DisplayName(
-    "patchInto writes into the target exactly what patch overlays, as into writes it: a scalar sent or left out," +
+    "an edit mapper's patchInto writes what the partial sends, as into writes it: a scalar sent or left out," +
       " a nested value, a list refilled in place or left out, an adder, a sealed case and a refusal, on both paths"
   )
-  void patchIntoAgreesOnBothPaths() throws ReflectiveOperationException {
+  void editPatchIntoAgreesOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var row : PATCH_INTO_ROWS) {
@@ -17631,16 +17702,481 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
       final var generatedClasses = new ServicesLoader(processed);
-      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "TgtCarrier").getField("MAPPER").get(null);
       for (final var side : List.of(
         Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
         Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
       )) {
-        final var gave = containerOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
+        final var gave = editPatchIntoOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix, row);
         if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * One cell of an edit mapper: its declarations, each taking {@code %1$s} as the cell's prefix and
+   * the last of them the runtime class, and what both paths owe from {@code forward(Src.sample())},
+   * {@code into(Tgt.sample(), Src.sample())}, {@code patchInto(Tgt.sample(), Src.sample())} and
+   * {@code patch(Tgt.sample(), Src.sample())}, in {@link #editOutcome}'s words. {@code Src} is what
+   * the edit sends, and its sample sends a value for one property and leaves another null, so each
+   * operation's null rule shows; {@code Tgt} is what it writes into.
+   */
+  private record EditRow(String name, List<String> declarations, String owed) {}
+
+  /** {@code rows} on a {@code @Bridge} field of {@code Telescope.edits} from {@code %1$sSrc}. */
+  private static String editField(final String... rows) {
+    return field("edits", "EditMapper", "%1$sSrc", "%1$sTgt", rows);
+  }
+
+  /** As {@link #editField}, for a pair of its own: {@code <source>Carrier.MAPPER}. */
+  private static String editFieldOf(final String source, final String target, final String... rows) {
+    return field("edits", "EditMapper", source, target, rows);
+  }
+
+  /** The runtime class whose {@code mapper()} builds the edit mapper of {@code rows}. */
+  private static String editRuntime(final String... rows) {
+    return (
+      "public class %1$sRuntime {\n" +
+      "  @SuppressWarnings({\"rawtypes\", \"unchecked\"})\n" +
+      "  public static Object mapper() {\n" +
+      "    return io.github.eschizoid.telescope.Telescope.edits(%1$sSrc.class, %1$sTgt.class" +
+      (rows.length == 0 ? "" : ",\n      " + String.join(",\n      ", rows)) +
+      ");\n  }\n}\n"
+    );
+  }
+
+  /** A bean {@code %1$sTgt} holding a name, a rank and a code, sampled as one held entity. */
+  private static final String EDIT_TARGET = sampledBean(
+    "%1$sTgt",
+    "final var t = new %1$sTgt(); t.setName(\"old\"); t.setRank(3); t.setCode(\"C\"); return t;",
+    "String name",
+    "int rank",
+    "String code"
+  );
+
+  private static final String KEEP_CODE = MAPPING + "keep(%1$sTgt::getCode)";
+
+  /** What a price is computed from: the length of the name a partial sends. */
+  private static final String EDIT_PRICES =
+    "public class %1$sPrices {\n  private %1$sPrices() {}\n" +
+    "  public static Integer of(final %1$sSrc s) { return s.name() == null ? null : s.name().length(); }\n}\n";
+
+  /** Whether a partial asks for the fixed label. */
+  private static final String EDIT_RULES =
+    "public class %1$sRules {\n  private %1$sRules() {}\n" +
+    "  public static boolean wanted(final %1$sSrc s) { return s.name() != null; }\n}\n";
+
+  private static final List<EditRow> EDIT_ROWS = List.of(
+    new EditRow(
+      "properties by name, one sent and one left null, and a kept one",
+      List.of(
+        sampled("%1$sSrc", "String name, Integer rank", "new %1$sSrc(\"new\", null)"),
+        EDIT_TARGET,
+        editField(KEEP_CODE),
+        editRuntime(KEEP_CODE)
+      ),
+      "forward #0(code=null, name=\"new\", rank=0); into #0(code=\"C\", name=\"new\", rank=0);" +
+        " patchInto #0(code=\"C\", name=\"new\", rank=3); patch #0(code=\"C\", name=\"new\", rank=3)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a rename, sent, beside a property by name the partial leaves null",
+      List.of(
+        sampled("%1$sSrc", "String label, Integer rank", "new %1$sSrc(\"new\", null)"),
+        EDIT_TARGET,
+        editField(MAPPING + "to(%1$sSrc::label, %1$sTgt::getName)", KEEP_CODE),
+        editRuntime(MAPPING + "to(%1$sSrc::label, %1$sTgt::getName)", KEEP_CODE)
+      ),
+      "forward #0(code=null, name=\"new\", rank=0); into #0(code=\"C\", name=\"new\", rank=0);" +
+        " patchInto #0(code=\"C\", name=\"new\", rank=3); patch #0(code=\"C\", name=\"new\", rank=3)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a rename the partial leaves null, which into writes and patchInto leaves alone",
+      List.of(
+        sampled("%1$sSrc", "String label, Integer rank", "new %1$sSrc(null, 7)"),
+        EDIT_TARGET,
+        editField(MAPPING + "to(%1$sSrc::label, %1$sTgt::getName)", KEEP_CODE),
+        editRuntime(MAPPING + "to(%1$sSrc::label, %1$sTgt::getName)", KEEP_CODE)
+      ),
+      "forward #0(code=null, name=null, rank=7); into #0(code=\"C\", name=null, rank=7);" +
+        " patchInto #0(code=\"C\", name=\"old\", rank=7); patch #0(code=\"C\", name=\"old\", rank=7)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a compute row, run on every operation from the partial, beside a dropped source property",
+      List.of(
+        sampled("%1$sSrc", "String name, Integer rank", "new %1$sSrc(\"tea\", 9)"),
+        EDIT_TARGET,
+        EDIT_PRICES,
+        editField(MAPPING + "compute(%1$sTgt::getRank, %1$sPrices::of)", MAPPING + "drop(%1$sSrc::rank)", KEEP_CODE),
+        editRuntime(MAPPING + "compute(%1$sTgt::getRank, %1$sPrices::of)", MAPPING + "drop(%1$sSrc::rank)", KEEP_CODE)
+      ),
+      "forward #0(code=null, name=\"tea\", rank=3); into #0(code=\"C\", name=\"tea\", rank=3);" +
+        " patchInto #0(code=\"C\", name=\"tea\", rank=3); patch #0(code=\"C\", name=\"tea\", rank=3)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a constant, written on every operation, and a toOrElse whose default patchInto does not write",
+      List.of(
+        sampled("%1$sSrc", "String name, Integer rank", "new %1$sSrc(null, 5)"),
+        EDIT_TARGET,
+        editField(
+          MAPPING + "constant(%1$sTgt::getCode, \"K\")",
+          MAPPING + "toOrElse(%1$sSrc::name, %1$sTgt::getName, \"none\")"
+        ),
+        editRuntime(
+          MAPPING + "constant(%1$sTgt::getCode, \"K\")",
+          MAPPING + "toOrElse(%1$sSrc::name, %1$sTgt::getName, \"none\")"
+        )
+      ),
+      "forward #0(code=\"K\", name=\"none\", rank=5); into #0(code=\"K\", name=\"none\", rank=5);" +
+        " patchInto #0(code=\"K\", name=\"old\", rank=5); patch #0(code=\"K\", name=\"old\", rank=5)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a when row, whose predicate is tested on the partial",
+      List.of(
+        sampled("%1$sSrc", "String name, Integer rank", "new %1$sSrc(\"new\", null)"),
+        EDIT_TARGET,
+        EDIT_RULES,
+        editField(MAPPING + "when(%1$sRules::wanted, " + MAPPING + "constant(%1$sTgt::getCode, \"W\"))"),
+        editRuntime(MAPPING + "when(%1$sRules::wanted, " + MAPPING + "constant(%1$sTgt::getCode, \"W\"))")
+      ),
+      "forward #0(code=\"W\", name=\"new\", rank=0); into #0(code=\"W\", name=\"new\", rank=0);" +
+        " patchInto #0(code=\"W\", name=\"new\", rank=3); patch #0(code=\"W\", name=\"new\", rank=3)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a source path, sent where no object on it is null",
+      List.of(
+        sampled("%1$sSrc", "%1$sSrcIn inner, Integer rank", "new %1$sSrc(new %1$sSrcIn(\"deep\"), null)"),
+        "public record %1$sSrcIn(String label) {}\n",
+        EDIT_TARGET,
+        editField(
+          MAPPING +
+            "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::inner, %1$sSrcIn::label), %1$sTgt::getName)",
+          KEEP_CODE
+        ),
+        editRuntime(
+          MAPPING +
+            "to(io.github.eschizoid.telescope.Telescope.path(%1$sSrc::inner, %1$sSrcIn::label), %1$sTgt::getName)",
+          KEEP_CODE
+        )
+      ),
+      "forward #0(code=null, name=\"deep\", rank=0); into #0(code=\"C\", name=\"deep\", rank=0);" +
+        " patchInto #0(code=\"C\", name=\"deep\", rank=3); patch #0(code=\"C\", name=\"deep\", rank=3)" +
+        " over #0(code=\"C\", name=\"old\", rank=3)"
+    ),
+    new EditRow(
+      "a target path, written into the object the target holds",
+      List.of(
+        sampled("%1$sSrc", "String city, Integer rank", "new %1$sSrc(\"Lyon\", null)"),
+        "public class %1$sTgtIn {\n  private String city;\n  private String zip;\n  public %1$sTgtIn() {}\n" +
+          "  public String getCity() { return city; }\n  public void setCity(final String v) { city = v; }\n" +
+          "  public String getZip() { return zip; }\n  public void setZip(final String v) { zip = v; }\n}\n",
+        sampledBean(
+          "%1$sTgt",
+          "final var t = new %1$sTgt(); final var in = new %1$sTgtIn(); in.setCity(\"Rome\"); in.setZip(\"00100\");" +
+            " t.setPlace(in); t.setRank(3); return t;",
+          "%1$sTgtIn place",
+          "int rank"
+        ),
+        editField(
+          MAPPING +
+            "to(%1$sSrc::city, io.github.eschizoid.telescope.Telescope.path(%1$sTgt::getPlace, %1$sTgtIn::getCity))"
+        ),
+        editRuntime(
+          MAPPING +
+            "to(%1$sSrc::city, io.github.eschizoid.telescope.Telescope.path(%1$sTgt::getPlace, %1$sTgtIn::getCity))"
+        )
+      ),
+      "forward #0(place=#1(city=\"Lyon\", zip=null), rank=0); into #0(place=#1(city=\"Lyon\", zip=\"00100\"), rank=0);" +
+        " patchInto #0(place=#1(city=\"Lyon\", zip=\"00100\"), rank=3);" +
+        " patch #0(place=#1(city=\"Lyon\", zip=\"00100\"), rank=3) over #0(place=#1(city=\"Rome\", zip=\"00100\"), rank=3)"
+    ),
+    new EditRow(
+      "the elements converting through their pair's own edit mapper, declared after the owner's, with no via row",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<%1$sSrcLine> lines, String note",
+          "new %1$sSrc(java.util.List.of(new %1$sSrcLine(\"ab\")), null)"
+        ),
+        "public record %1$sSrcLine(String sku) {}\n",
+        "public class %1$sLinePrices {\n  private %1$sLinePrices() {}\n" +
+          "  public static Integer of(final %1$sSrcLine l) { return l.sku().length() * 10; }\n}\n",
+        "public class %1$sTgtLine {\n  private String sku;\n  private int price;\n  public %1$sTgtLine() {}\n" +
+          "  public String getSku() { return sku; }\n  public void setSku(final String v) { sku = v; }\n" +
+          "  public int getPrice() { return price; }\n  public void setPrice(final int v) { price = v; }\n}\n",
+        "public class %1$sTgt {\n  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+          "  private String note;\n  public %1$sTgt() {}\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { lines.add(line); }\n" +
+          "  public String getNote() { return note; }\n  public void setNote(final String v) { note = v; }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setNote(\"held\");\n" +
+          "    final var l = new %1$sTgtLine(); l.setSku(\"old\"); t.addLine(l); return t;\n  }\n}\n",
+        "public class %1$sSrcCarrier {\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrc, %1$sTgt> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrc.class, %1$sTgt.class);\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrcLine, %1$sTgtLine> LINE =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrcLine.class, %1$sTgtLine.class, " +
+          MAPPING +
+          "compute(%1$sTgtLine::getPrice, %1$sLinePrices::of));\n}\n",
+        "public class %1$sRuntime {\n" +
+          "  static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrc, %1$sTgt> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrc.class, %1$sTgt.class);\n" +
+          "  static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrcLine, %1$sTgtLine> LINE =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrcLine.class, %1$sTgtLine.class, " +
+          MAPPING +
+          "compute(%1$sTgtLine::getPrice, %1$sLinePrices::of));\n" +
+          "  public static Object mapper() { return MAPPER; }\n}\n"
+      ),
+      "forward #0(lines=[#1(price=20, sku=\"ab\")], note=null); into #0(lines=[#1(price=20, sku=\"ab\")], note=null);" +
+        " patchInto #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\");" +
+        " patch #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\") over #0(lines=[#1(price=0, sku=\"old\")], note=\"held\")"
+    ),
+    new EditRow(
+      "the elements converting through the edit mapper the element's own class declares, with no via row",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<%1$sSrcLine> lines, String note",
+          "new %1$sSrc(java.util.List.of(new %1$sSrcLine(\"ab\")), null)"
+        ),
+        "public record %1$sSrcLine(String sku) {}\n",
+        "public class %1$sLinePrices {\n  private %1$sLinePrices() {}\n" +
+          "  public static Integer of(final %1$sSrcLine l) { return l.sku().length() * 10; }\n}\n",
+        "public class %1$sTgtLine {\n  private String sku;\n  private int price;\n  public %1$sTgtLine() {}\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrcLine, %1$sTgtLine> LINE =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrcLine.class, %1$sTgtLine.class, " +
+          MAPPING +
+          "compute(%1$sTgtLine::getPrice, %1$sLinePrices::of));\n" +
+          "  public String getSku() { return sku; }\n  public void setSku(final String v) { sku = v; }\n" +
+          "  public int getPrice() { return price; }\n  public void setPrice(final int v) { price = v; }\n}\n",
+        "public class %1$sTgt {\n  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+          "  private String note;\n  public %1$sTgt() {}\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { lines.add(line); }\n" +
+          "  public String getNote() { return note; }\n  public void setNote(final String v) { note = v; }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setNote(\"held\");\n" +
+          "    final var l = new %1$sTgtLine(); l.setSku(\"old\"); t.addLine(l); return t;\n  }\n}\n",
+        "public class %1$sSrcCarrier {\n" +
+          "  @io.github.eschizoid.telescope.annotations.Bridge\n" +
+          "  public static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrc, %1$sTgt> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrc.class, %1$sTgt.class);\n}\n",
+        "public class %1$sRuntime {\n" +
+          "  static final io.github.eschizoid.telescope.conversion.EditMapper<%1$sSrc, %1$sTgt> MAPPER =" +
+          " io.github.eschizoid.telescope.Telescope.edits(%1$sSrc.class, %1$sTgt.class);\n" +
+          "  public static Object mapper() { return MAPPER; }\n}\n"
+      ),
+      "forward #0(lines=[#1(price=20, sku=\"ab\")], note=null); into #0(lines=[#1(price=20, sku=\"ab\")], note=null);" +
+        " patchInto #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\");" +
+        " patch #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\") over #0(lines=[#1(price=0, sku=\"old\")], note=\"held\")"
+    ),
+    new EditRow(
+      "a via row naming the edit mapper of the elements, which computes each element on the way in",
+      List.of(
+        sampled(
+          "%1$sSrc",
+          "java.util.List<%1$sSrcLine> lines, String note",
+          "new %1$sSrc(java.util.List.of(new %1$sSrcLine(\"ab\")), null)"
+        ),
+        "public record %1$sSrcLine(String sku) {}\n",
+        "public class %1$sLinePrices {\n  private %1$sLinePrices() {}\n" +
+          "  public static Integer of(final %1$sSrcLine l) { return l.sku().length() * 10; }\n}\n",
+        "public class %1$sTgtLine {\n  private String sku;\n  private int price;\n  public %1$sTgtLine() {}\n" +
+          "  public String getSku() { return sku; }\n  public void setSku(final String v) { sku = v; }\n" +
+          "  public int getPrice() { return price; }\n  public void setPrice(final int v) { price = v; }\n}\n",
+        editFieldOf("%1$sSrcLine", "%1$sTgtLine", MAPPING + "compute(%1$sTgtLine::getPrice, %1$sLinePrices::of)"),
+        "public class %1$sTgt {\n  private final java.util.List<%1$sTgtLine> lines = new java.util.ArrayList<>();\n" +
+          "  private String note;\n  public %1$sTgt() {}\n" +
+          "  public java.util.List<%1$sTgtLine> getLines() { return lines; }\n" +
+          "  public void addLine(final %1$sTgtLine line) { lines.add(line); }\n" +
+          "  public String getNote() { return note; }\n  public void setNote(final String v) { note = v; }\n" +
+          "  public static %1$sTgt sample() {\n    final var t = new %1$sTgt(); t.setNote(\"held\");\n" +
+          "    final var l = new %1$sTgtLine(); l.setSku(\"old\"); t.addLine(l); return t;\n  }\n}\n",
+        editField(MAPPING + "via(%1$sSrc::lines, %1$sTgt::getLines, %1$sSrcLineCarrier.MAPPER)"),
+        editRuntime(
+          MAPPING +
+            "via(%1$sSrc::lines, %1$sTgt::getLines, io.github.eschizoid.telescope.Telescope.edits(%1$sSrcLine.class," +
+            " %1$sTgtLine.class, " +
+            MAPPING +
+            "compute(%1$sTgtLine::getPrice, %1$sLinePrices::of)))"
+        )
+      ),
+      "forward #0(lines=[#1(price=20, sku=\"ab\")], note=null); into #0(lines=[#1(price=20, sku=\"ab\")], note=null);" +
+        " patchInto #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\");" +
+        " patch #0(lines=[#1(price=20, sku=\"ab\")], note=\"held\") over #0(lines=[#1(price=0, sku=\"old\")], note=\"held\")"
+    )
+  );
+
+  @Test
+  @DisplayName(
+    "an edit mapper's forward, into, patchInto and patch agree on both paths for each row kind: by name, to, a" +
+      " source and a target path, compute, constant, toOrElse, when, drop, keep and via an edit mapper"
+  )
+  void editsAgreeOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : EDIT_ROWS) {
+      final var prefix = "Ed" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var all = row
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(
+        plain.success(),
+        () -> row.name() + ": the pair and its runtime row should compile: " + plain.errorMessages()
+      );
+      final var processed = bridged(all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new));
+      if (!processed.success()) {
+        failures.add(row.name() + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      final var owed = row.owed().formatted(prefix);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var runtime = classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+      final var generatedClasses = new ServicesLoader(processed);
+      final var field = generatedClasses.loadClass(PACKAGE + "." + prefix + "SrcCarrier").getField("MAPPER").get(null);
+      if (!field.getClass().getName().endsWith("FieldMapper")) {
+        failures.add(row.name() + ": the field holds " + field.getClass().getName() + ", not the generated class");
+      }
+      // A bridge writes a target in place itself unless a row writes a path into it, which the
+      // runtime path's operations then write.
+      final var writesInPlace = Arrays.stream(field.getClass().getDeclaredMethods()).anyMatch(m ->
+        m.getName().equals("patchInto")
+      );
+      if (writesInPlace == row.name().contains("target path")) {
+        failures.add(
+          row.name() + ": the generated class " + (writesInPlace ? "writes" : "does not write") + " in place"
+        );
+      }
+      for (final var side : List.of(
+        Map.entry("generated", Map.entry(field, (ClassLoader) generatedClasses)),
+        Map.entry("reflective", Map.entry(runtime, classes.get(PACKAGE + "." + prefix + "Src").getClassLoader()))
+      )) {
+        final var gave = editOutcome(side.getValue().getKey(), side.getValue().getValue(), prefix);
+        if (!gave.equals(owed)) failures.add(row.name() + ": " + side.getKey() + " gave " + gave + ", owed " + owed);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "an edit mapper refuses, on both paths in the same words, a target property nothing accounts for and a source" +
+      " property nothing reads"
+  )
+  void editsRefuseWhatNothingAccountsFor() {
+    final var head = "package " + PACKAGE + ";\n";
+    final var cells = List.of(
+      Map.entry(
+        List.of(sampled("%1$sSrc", "String name, Integer rank", "new %1$sSrc(\"n\", 1)"), EDIT_TARGET),
+        PairingMessages.editUnfilled("%1$sSrc", "%1$sTgt", "property", "code", false)
+      ),
+      Map.entry(
+        List.of(
+          sampled("%1$sSrc", "String name, Integer rank, String extra", "new %1$sSrc(\"n\", 1, \"x\")"),
+          EDIT_TARGET
+        ),
+        PairingMessages.noSameNameTarget("%1$sSrc", "%1$sTgt", "field", "property", "extra")
+      )
+    );
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cell : cells) {
+      final var prefix = "Er" + index++;
+      final var rows = cell.getValue().contains("extra") ? new String[] { KEEP_CODE } : new String[0];
+      final var declarations = new ArrayList<>(cell.getKey());
+      declarations.add(editField(rows));
+      declarations.add(editRuntime(rows));
+      final var all = declarations
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toList();
+      final var owed = cell.getValue().formatted(prefix);
+      final var processed = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        all.subList(0, all.size() - 1).toArray(JavaFileObject[]::new)
+      );
+      if (processed.success() || !processed.errorMessages().contains(owed)) {
+        failures.add(prefix + ": the processor gave " + processed.errorMessages() + ", owed " + owed);
+      }
+      final var plain = ProcessorHarness.compileFully(
+        List.of(),
+        List.of("-parameters"),
+        all.toArray(JavaFileObject[]::new)
+      );
+      assertTrue(plain.success(), plain::errorMessages);
+      final var classes = plain.define(MethodHandles.lookup());
+      try {
+        classes.get(PACKAGE + "." + prefix + "Runtime").getMethod("mapper").invoke(null);
+        failures.add(prefix + ": the runtime path built the mapper");
+      } catch (final InvocationTargetException e) {
+        if (!owed.equals(e.getCause().getMessage())) {
+          failures.add(prefix + ": the runtime path refused with " + e.getCause().getMessage() + ", owed " + owed);
+        }
+      } catch (final ReflectiveOperationException e) {
+        failures.add(prefix + ": " + e);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
+  }
+
+  /**
+   * What the edit mapper {@code mapper} gives each of its four operations on the samples of {@code
+   * prefix}'s classes, which {@code loader} holds: the {@link #shape} of what {@code forward}
+   * builds, of the target after {@code into} and {@code patchInto}, and of what {@code patch}
+   * returns followed by the base it was given; a refusal as {@link #REFUSED} and its message.
+   */
+  @SuppressWarnings("unchecked")
+  private static String editOutcome(final Object mapper, final ClassLoader loader, final String prefix)
+    throws ReflectiveOperationException {
+    final var edits = (EditMapper<Object, Object>) mapper;
+    final var src = Class.forName(PACKAGE + "." + prefix + "Src", true, loader).getMethod("sample");
+    final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader).getMethod("sample");
+    final var parts = new ArrayList<String>();
+    try {
+      parts.add("forward " + shape(edits.forward(src.invoke(null)), new IdentityHashMap<>()));
+    } catch (final RuntimeException e) {
+      parts.add("forward " + REFUSED + e.getMessage());
+    }
+    for (final var operation : List.of("into", "patchInto")) {
+      final var target = tgt.invoke(null);
+      try {
+        final var written = operation.equals("into")
+          ? edits.into(target, src.invoke(null))
+          : edits.patchInto(target, src.invoke(null));
+        parts.add(
+          operation + " " + (written == target ? "" : "another object: ") + shape(target, new IdentityHashMap<>())
+        );
+      } catch (final RuntimeException e) {
+        parts.add(operation + " " + REFUSED + e.getMessage() + LEFT + shape(target, new IdentityHashMap<>()));
+      }
+    }
+    final var base = tgt.invoke(null);
+    try {
+      final var patched = edits.patch(base, src.invoke(null));
+      parts.add("patch " + shape(patched, new IdentityHashMap<>()) + " over " + shape(base, new IdentityHashMap<>()));
+    } catch (final RuntimeException e) {
+      parts.add("patch " + REFUSED + e.getMessage());
+    }
+    return String.join("; ", parts);
   }
 
   /**
@@ -18136,19 +18672,6 @@ class CrossPathCorpusTest {
       }
     }
     final var tgt = Class.forName(PACKAGE + "." + prefix + "Tgt", true, loader);
-    if (row.call() == Call.PATCH_INTO) {
-      final var getter = source.getClass().getMethod(accessorOf(source, row));
-      final var held = getter.invoke(source);
-      try {
-        final var written = converts.patchInto(source, tgt.getMethod("sample").invoke(null));
-        if (written != source) return "another object than the target: " + shape(written, new IdentityHashMap<>());
-      } catch (final RuntimeException e) {
-        return REFUSED + e.getMessage() + LEFT + shape(source, new IdentityHashMap<>());
-      }
-      final var after = getter.invoke(source);
-      final var kept = held == null ? SET : after == held ? KEPT : REPLACED;
-      return shape(source, new IdentityHashMap<>()) + kept;
-    }
     if (row.call() == Call.PATCH) {
       final var getter = source.getClass().getMethod(accessorOf(source, row));
       final var held = getter.invoke(source);

@@ -279,15 +279,32 @@ public static final Mapper<Sources, InvoiceDto> INVOICE = Telescope.merge(
 
 **Each line points back at its order, and only `addLine` sets that pointer.** `Order` has no setter for its lines. The
 mapper fills them one element at a time through `addLine`, the method `Order` declares to take an `OrderLine`, with no
-row naming it, and a `via` row prices each item from the catalog, so a client never sends a price:
+row naming it. Each line converts through `NEW_LINE`, an edit mapper whose `compute` rows price it from the catalog on
+the way in, so a client never sends a price. `PLACE` names no row for the lines: `NEW_LINE` is the edit mapper of the
+pair `NewLine` to `OrderLine`, so the lines go through it, though it is declared after `PLACE`. The line's generated
+`@Id` and its `order` back-reference, which `mappedBy` names, need no row:
 
 ```java
 @Bridge
-public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
+public static final EditMapper<PlaceOrder, Order> PLACE = edits(
   PlaceOrder.class,
   Order.class,
-  via(PlaceOrder::lines, Order::getLines, CatalogLines.class),
-  drop(PlaceOrder::customerEmail)
+  drop(PlaceOrder::customerEmail),
+  keep(Order::getNumber), // the service fills these
+  keep(Order::getCustomer),
+  keep(Order::getStatus),
+  keep(Order::getPlacedOn),
+  keep(Order::getTrackingNumber),
+  keep(Order::getInternalNotes)
+);
+
+@Bridge
+public static final EditMapper<NewLine, OrderLine> NEW_LINE = edits(
+  NewLine.class,
+  OrderLine.class,
+  compute(OrderLine::getName, Catalog::name),
+  compute(OrderLine::getUnitPrice, Catalog::price),
+  compute(OrderLine::getCostPrice, Catalog::cost)
 );
 ```
 
@@ -295,23 +312,21 @@ public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
 lines.** `EDITS.patchInto(order, changes)` writes into the entity in place each field the client sent and nothing else,
 so a field left out keeps its value. A list the client sends is cleared and refilled in the list the entity already
 holds, through `addLine`, so Hibernate's orphan removal deletes the old rows and the new lines get their foreign key.
-The fields a client may never change are dropped by name, so a field added to `Order` later fails the build until
-someone decides whether a PATCH may change it:
+Each line is priced through `NEW_LINE`, found by its pair as for the create request. The fields a PATCH may never change
+are kept by name, so a field added to `Order` later fails the build until someone decides whether a PATCH may change it:
 
 ```java
 @Bridge
-public static final Mapper<Order, OrderChanges> EDITS = mapper(
-  Order.class,
+public static final EditMapper<OrderChanges, Order> EDITS = edits(
   OrderChanges.class,
-  via(Order::getLines, OrderChanges::lines, LineEdits.class),
-  drop(Order::getId),
-  drop(Order::getNumber),
-  drop(Order::getCustomer),
-  drop(Order::getStatus),
-  drop(Order::getPlacedOn),
-  drop(Order::getTrackingNumber),
-  drop(Order::getInternalNotes),
-  drop(Order::getPayment)
+  Order.class,
+  keep(Order::getNumber),
+  keep(Order::getCustomer),
+  keep(Order::getStatus),
+  keep(Order::getPlacedOn),
+  keep(Order::getTrackingNumber),
+  keep(Order::getInternalNotes),
+  keep(Order::getPayment)
 );
 ```
 

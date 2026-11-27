@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
@@ -132,6 +133,43 @@ final class PathWrites {
       if (property.equals(name)) return next == null ? nullValue(cls, property) : next;
       return current == null ? nullValue(cls, property) : refl.read(current, property);
     });
+  }
+
+  /**
+   * Writes {@code value} at the leaf of {@code plan} into {@code root}, a bean, in place: into each
+   * bean the path steps through that {@code root} holds, through its setter, building an object
+   * only where the one before it holds null. A record on the path cannot be written into, so it is
+   * rebuilt from the level it sits at, as {@link #write} rebuilds it, and set on the bean holding
+   * it. A null written into a primitive setter is not written, and a null object on the path stays
+   * null when the value is null.
+   */
+  static void writeInPlace(
+    final Plan plan,
+    final Object root,
+    final Object value,
+    final Reflective beanRefl,
+    final String source,
+    final String target
+  ) {
+    var current = root;
+    for (var level = 0; level < plan.names.length; level++) {
+      final var cls = Beans.persistentClassOf(current);
+      final var name = plan.names[level];
+      final var last = level == plan.names.length - 1;
+      final var child = last ? null : plan.reads.get(level).get(current);
+      final var below = last ? null : plan.levels[level + 1];
+      if (!last && child != null && !below.isRecord()) {
+        current = child;
+        continue;
+      }
+      final Object next = last
+        ? value
+        : writeAt(plan, level + 1, child, value, below.isRecord() ? Reflective.RECORDS : beanRefl, beanRefl);
+      if (next == null && child == null && !last) return;
+      // The mapper refuses, when it is built, a path through a property no member writes.
+      Beans.capturedWriter(cls, name).accept(current, next);
+      return;
+    }
   }
 
   /**

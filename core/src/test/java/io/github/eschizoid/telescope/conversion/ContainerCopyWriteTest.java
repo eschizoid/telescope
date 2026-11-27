@@ -78,6 +78,7 @@ class ContainerCopyWriteTest {
 
   private static String unwritable(final Object owner, final String property, final Object held) {
     return PairingMessages.intoUnwritable(
+      "into",
       "S",
       "T",
       PairingMessages.className(owner.getClass()),
@@ -94,12 +95,26 @@ class ContainerCopyWriteTest {
     @DisplayName("no container and no setter, or an unmodifiable JDK one and no setter, is refused by name")
     void anUnwritablePropertyIsRefused() {
       final var none = assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refuseUnwritable(null, List.of("x"), false, null, "S", "T", "Owner", "tags", null, null, null)
+        ContainerCopy.refuseUnwritable(
+          "into",
+          null,
+          List.of("x"),
+          false,
+          null,
+          "S",
+          "T",
+          "Owner",
+          "tags",
+          null,
+          null,
+          null
+        )
       );
-      assertEquals(PairingMessages.intoUnwritable("S", "T", "Owner", "tags", null), none.getMessage());
+      assertEquals(PairingMessages.intoUnwritable("into", "S", "T", "Owner", "tags", null), none.getMessage());
       final var frozen = List.of("held");
       final var unmodifiable = assertThrows(IllegalArgumentException.class, () ->
         ContainerCopy.refuseUnwritable(
+          "into",
           frozen,
           List.of("x"),
           false,
@@ -114,7 +129,7 @@ class ContainerCopyWriteTest {
         )
       );
       assertEquals(
-        PairingMessages.intoUnwritable("S", "T", "Owner", "tags", frozen.getClass().getName()),
+        PairingMessages.intoUnwritable("into", "S", "T", "Owner", "tags", frozen.getClass().getName()),
         unmodifiable.getMessage()
       );
     }
@@ -123,6 +138,7 @@ class ContainerCopyWriteTest {
     @DisplayName("a setter, a changeable container, or an adder for a target holding none lets the write go ahead")
     void aWritablePropertyPasses() {
       ContainerCopy.refuseUnwritable(
+        "into",
         List.of("held"),
         List.of("x"),
         true,
@@ -136,6 +152,7 @@ class ContainerCopyWriteTest {
         null
       );
       ContainerCopy.refuseUnwritable(
+        "into",
         new ArrayList<>(),
         List.of("x"),
         false,
@@ -149,6 +166,7 @@ class ContainerCopyWriteTest {
         null
       );
       ContainerCopy.refuseUnwritable(
+        "into",
         null,
         List.of("x"),
         false,
@@ -173,12 +191,25 @@ class ContainerCopyWriteTest {
     void aChangeableContainerKeepsItsIdentity() {
       final var list = new ArrayList<>(List.of("stale"));
       assertTrue(
-        ContainerCopy.refill("S", "T", new Owner(), "tags", list, List.of("a", "b"), true, null, null, null, null)
+        ContainerCopy.refill(
+          "into",
+          "S",
+          "T",
+          new Owner(),
+          "tags",
+          list,
+          List.of("a", "b"),
+          true,
+          null,
+          null,
+          null,
+          null
+        )
       );
       assertEquals(List.of("a", "b"), list);
       final var map = new HashMap<>(Map.of("stale", 1));
       assertTrue(
-        ContainerCopy.refill("S", "T", new Owner(), "counts", map, Map.of("k", 2), true, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", new Owner(), "counts", map, Map.of("k", 2), true, null, null, null, null)
       );
       assertEquals(Map.of("k", 2), map);
     }
@@ -187,7 +218,9 @@ class ContainerCopyWriteTest {
     @DisplayName("the container handed across as its own value is left as it is")
     void theSameContainerIsLeftAlone() {
       final var list = new ArrayList<>(List.of("x"));
-      assertTrue(ContainerCopy.refill("S", "T", new Owner(), "tags", list, list, false, null, null, null, null));
+      assertTrue(
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", list, list, false, null, null, null, null)
+      );
       assertEquals(List.of("x"), list);
     }
 
@@ -196,13 +229,15 @@ class ContainerCopyWriteTest {
     void theSetterWritesWhatCannotBeRefilled() {
       final var frozen = List.of("held");
       assertFalse(
-        ContainerCopy.refill("S", "T", new Owner(), "tags", null, List.of("x"), true, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", null, List.of("x"), true, null, null, null, null)
       );
       assertFalse(
-        ContainerCopy.refill("S", "T", new Owner(), "tags", frozen, List.of("x"), true, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", frozen, List.of("x"), true, null, null, null, null)
       );
       final var held = new ArrayList<>(List.of("held"));
-      assertFalse(ContainerCopy.refill("S", "T", new Owner(), "tags", held, null, true, null, null, null, null));
+      assertFalse(
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", held, null, true, null, null, null, null)
+      );
       assertEquals(List.of("held"), held);
     }
 
@@ -210,7 +245,9 @@ class ContainerCopyWriteTest {
     @DisplayName("a null value with no setter to write it empties the container held")
     void aNullValueWithNoSetterEmpties() {
       final var held = new ArrayList<>(List.of("held"));
-      assertTrue(ContainerCopy.refill("S", "T", new Owner(), "tags", held, null, false, null, null, null, null));
+      assertTrue(
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", held, null, false, null, null, null, null)
+      );
       assertEquals(List.of(), held);
     }
 
@@ -219,7 +256,7 @@ class ContainerCopyWriteTest {
     void aContainerThatCannotClearGoesToTheSetter() {
       final var fixed = Arrays.asList("held");
       assertFalse(
-        ContainerCopy.refill("S", "T", new Owner(), "tags", fixed, List.of("x"), true, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", new Owner(), "tags", fixed, List.of("x"), true, null, null, null, null)
       );
       assertEquals(List.of("held"), fixed);
     }
@@ -230,7 +267,7 @@ class ContainerCopyWriteTest {
       final var owner = new Owner();
       final var fixed = Arrays.asList("held");
       final var thrown = assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refill("S", "T", owner, "tags", fixed, List.of("x"), false, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", owner, "tags", fixed, List.of("x"), false, null, null, null, null)
       );
       assertEquals(unwritable(owner, "tags", fixed), thrown.getMessage());
       assertInstanceOf(UnsupportedOperationException.class, thrown.getCause());
@@ -242,7 +279,20 @@ class ContainerCopyWriteTest {
     void aContainerThatTakesNothingBackIsLeftEmpty() {
       final var clearOnly = new ClearOnly(List.of("held"));
       final var thrown = assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refill("S", "T", new Owner(), "tags", clearOnly, List.of("x"), false, null, null, null, null)
+        ContainerCopy.refill(
+          "into",
+          "S",
+          "T",
+          new Owner(),
+          "tags",
+          clearOnly,
+          List.of("x"),
+          false,
+          null,
+          null,
+          null,
+          null
+        )
       );
       assertEquals(List.of(), clearOnly);
       assertEquals(1, thrown.getCause().getSuppressed().length);
@@ -254,13 +304,13 @@ class ContainerCopyWriteTest {
       final var withNull = new ArrayList<>(Arrays.asList("x", null));
       final var replaced = new TreeSet<>(List.of("keep"));
       assertFalse(
-        ContainerCopy.refill("S", "T", new Owner(), "codes", replaced, withNull, true, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", new Owner(), "codes", replaced, withNull, true, null, null, null, null)
       );
       assertEquals(Set.of("keep"), replaced);
       final var owner = new Owner();
       final var refused = new TreeSet<>(List.of("keep"));
       final var thrown = assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refill("S", "T", owner, "codes", refused, withNull, false, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", owner, "codes", refused, withNull, false, null, null, null, null)
       );
       assertEquals(unwritable(owner, "codes", refused), thrown.getMessage());
       assertInstanceOf(NullPointerException.class, thrown.getCause());
@@ -273,7 +323,7 @@ class ContainerCopyWriteTest {
       final var owner = new Owner();
       final var frozen = Map.of("k", 1);
       assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refill("S", "T", owner, "counts", frozen, Map.of("j", 2), false, null, null, null, null)
+        ContainerCopy.refill("into", "S", "T", owner, "counts", frozen, Map.of("j", 2), false, null, null, null, null)
       );
       assertEquals(Map.of("k", 1), frozen);
     }
@@ -283,7 +333,20 @@ class ContainerCopyWriteTest {
     void aMapThatRefusesItsNewEntriesGetsItsOldOnesBack() {
       final var map = new RefusesOnce(Map.of("k", 1));
       assertThrows(IllegalArgumentException.class, () ->
-        ContainerCopy.refill("S", "T", new Owner(), "counts", map, Map.of("j", 2), false, null, null, null, null)
+        ContainerCopy.refill(
+          "into",
+          "S",
+          "T",
+          new Owner(),
+          "counts",
+          map,
+          Map.of("j", 2),
+          false,
+          null,
+          null,
+          null,
+          null
+        )
       );
       assertEquals(Map.of("k", 1), map);
     }
@@ -292,7 +355,9 @@ class ContainerCopyWriteTest {
     @DisplayName("a null value with no setter to write it empties the map held")
     void aNullValueEmptiesTheMap() {
       final var map = new HashMap<>(Map.of("k", 1));
-      assertTrue(ContainerCopy.refill("S", "T", new Owner(), "counts", map, null, false, null, null, null, null));
+      assertTrue(
+        ContainerCopy.refill("into", "S", "T", new Owner(), "counts", map, null, false, null, null, null, null)
+      );
       assertEquals(Map.of(), map);
     }
   }
@@ -327,7 +392,20 @@ class ContainerCopyWriteTest {
       final var owner = new Owner();
       final var held = new ArrayList<Object>(List.of("stale"));
       assertTrue(
-        ContainerCopy.refill("S", "T", owner, "lines", held, List.of("a", "b"), false, adding(ADD), null, null, null)
+        ContainerCopy.refill(
+          "into",
+          "S",
+          "T",
+          owner,
+          "lines",
+          held,
+          List.of("a", "b"),
+          false,
+          adding(ADD),
+          null,
+          null,
+          null
+        )
       );
       assertEquals(List.of(), held);
       assertEquals(List.of("a", "b"), owner.added);
@@ -338,9 +416,11 @@ class ContainerCopyWriteTest {
     void noHeldCollectionIsFilledThroughTheAdder() {
       final var owner = new Owner();
       assertTrue(
-        ContainerCopy.refill("S", "T", owner, "lines", null, List.of("a"), false, adding(ADD), null, null, null)
+        ContainerCopy.refill("into", "S", "T", owner, "lines", null, List.of("a"), false, adding(ADD), null, null, null)
       );
-      assertTrue(ContainerCopy.refill("S", "T", owner, "lines", null, null, false, adding(ADD), null, null, null));
+      assertTrue(
+        ContainerCopy.refill("into", "S", "T", owner, "lines", null, null, false, adding(ADD), null, null, null)
+      );
       assertEquals(List.of("a"), owner.added);
     }
 
@@ -349,7 +429,9 @@ class ContainerCopyWriteTest {
     void theOwnCollectionIsReadBeforeTheClear() {
       final var owner = new Owner();
       final var held = new ArrayList<Object>(List.of("a", "b"));
-      assertTrue(ContainerCopy.refill("S", "T", owner, "lines", held, held, false, adding(ADD), null, null, null));
+      assertTrue(
+        ContainerCopy.refill("into", "S", "T", owner, "lines", held, held, false, adding(ADD), null, null, null)
+      );
       assertEquals(List.of("a", "b"), owner.added);
     }
 
@@ -358,6 +440,7 @@ class ContainerCopyWriteTest {
     void anUnmodifiableCollectionGoesToTheSetter() {
       assertFalse(
         ContainerCopy.refill(
+          "into",
           "S",
           "T",
           new Owner(),
@@ -385,6 +468,7 @@ class ContainerCopyWriteTest {
         };
         final var thrown = assertThrows(IllegalArgumentException.class, () ->
           ContainerCopy.refill(
+            "into",
             "S",
             "T",
             new Owner(),
@@ -408,7 +492,20 @@ class ContainerCopyWriteTest {
     void aContainerThatCannotClearStillGoesToTheSetter() {
       final var fixed = Arrays.<Object>asList("held");
       assertFalse(
-        ContainerCopy.refill("S", "T", new Owner(), "lines", fixed, List.of("a"), true, adding(ADD), null, null, null)
+        ContainerCopy.refill(
+          "into",
+          "S",
+          "T",
+          new Owner(),
+          "lines",
+          fixed,
+          List.of("a"),
+          true,
+          adding(ADD),
+          null,
+          null,
+          null
+        )
       );
       assertEquals(List.of("held"), fixed);
     }
@@ -637,7 +734,7 @@ class ContainerCopyWriteTest {
   class RefillReadsFirst {
 
     private static boolean refill(final Object held, final Object incoming) {
-      return ContainerCopy.refill("S", "T", new Owner(), "tags", held, incoming, true, null, null, null, null);
+      return ContainerCopy.refill("into", "S", "T", new Owner(), "tags", held, incoming, true, null, null, null, null);
     }
 
     @Test
@@ -680,19 +777,47 @@ class ContainerCopyWriteTest {
         final var refill = refillOf(copy);
         assertEquals(
           true,
-          refill.invoke(null, "S", "T", new Owner(), "tags", held, List.of("x"), true, null, null, null, null)
+          refill.invoke(null, "into", "S", "T", new Owner(), "tags", held, List.of("x"), true, null, null, null, null)
         );
         assertEquals(List.of("x"), held);
         final var owner = new Owner();
         assertEquals(
           true,
-          refill.invoke(null, "S", "T", owner, "lines", null, List.of("y"), false, adding(copy), null, null, null)
+          refill.invoke(
+            null,
+            "into",
+            "S",
+            "T",
+            owner,
+            "lines",
+            null,
+            List.of("y"),
+            false,
+            adding(copy),
+            null,
+            null,
+            null
+          )
         );
         assertEquals(List.of("y"), owner.added);
         final var counts = new HashMap<>(Map.of("stale", 0));
         assertEquals(
           true,
-          refill.invoke(null, "S", "T", new Owner(), "counts", counts, Map.of("k", 1), true, null, null, null, null)
+          refill.invoke(
+            null,
+            "into",
+            "S",
+            "T",
+            new Owner(),
+            "counts",
+            counts,
+            Map.of("k", 1),
+            true,
+            null,
+            null,
+            null,
+            null
+          )
         );
         assertEquals(Map.of("k", 1), counts);
         assertEquals(
@@ -717,7 +842,21 @@ class ContainerCopyWriteTest {
         final var refuse = refuseOf(copy);
         final var held = new ArrayList<>(List.of("a"));
         final var thrown = assertThrows(InvocationTargetException.class, () ->
-          refuse.invoke(null, held, List.of("early"), true, null, "S", "T", "Owner", "tags", new Owner(), null, null)
+          refuse.invoke(
+            null,
+            "into",
+            held,
+            List.of("early"),
+            true,
+            null,
+            "S",
+            "T",
+            "Owner",
+            "tags",
+            new Owner(),
+            null,
+            null
+          )
         );
         assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
         assertEquals(
@@ -727,7 +866,21 @@ class ContainerCopyWriteTest {
         assertEquals(List.of("a"), held);
         assertEquals(
           "prepared for tags",
-          refuse.invoke(null, held, List.of("b"), true, null, "S", "T", "Owner", "tags", new Owner(), null, null),
+          refuse.invoke(
+            null,
+            "into",
+            held,
+            List.of("b"),
+            true,
+            null,
+            "S",
+            "T",
+            "Owner",
+            "tags",
+            new Owner(),
+            null,
+            null
+          ),
           "what the check prepared is handed back, for the refill of the same write"
         );
         assertEquals(List.of("check of tags only reads", "check of tags only reads"), calls);
@@ -742,6 +895,7 @@ class ContainerCopyWriteTest {
         final var thrown = assertThrows(InvocationTargetException.class, () ->
           refuse.invoke(
             null,
+            "into",
             new ArrayList<>(List.of("a")),
             List.of("boom"),
             true,
@@ -767,7 +921,21 @@ class ContainerCopyWriteTest {
         final var refill = refillOf(loader.loadClass(ContainerCopy.class.getName()));
         final var held = new ArrayList<Object>(List.of("a"));
         final var thrown = assertThrows(InvocationTargetException.class, () ->
-          refill.invoke(null, "S", "T", new Owner(), "tags", held, List.of("late"), true, null, null, null, null)
+          refill.invoke(
+            null,
+            "into",
+            "S",
+            "T",
+            new Owner(),
+            "tags",
+            held,
+            List.of("late"),
+            true,
+            null,
+            null,
+            null,
+            null
+          )
         );
         assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
         assertTrue(thrown.getCause().getMessage().endsWith("late is refused."), thrown.getCause()::getMessage);
@@ -793,6 +961,7 @@ class ContainerCopyWriteTest {
           true,
           refill.invoke(
             null,
+            "into",
             "S",
             "T",
             new Owner(),
@@ -814,7 +983,21 @@ class ContainerCopyWriteTest {
           throw rejected;
         });
         final var thrown = assertThrows(InvocationTargetException.class, () ->
-          refill.invoke(null, "S", "T", new Owner(), "tags", held, List.of("c"), true, null, rejects, null, null)
+          refill.invoke(
+            null,
+            "into",
+            "S",
+            "T",
+            new Owner(),
+            "tags",
+            held,
+            List.of("c"),
+            true,
+            null,
+            rejects,
+            null,
+            null
+          )
         );
         assertSame(rejected, thrown.getCause(), "thrown on as it is, never past it to the setter");
         assertEquals(List.of(first), held);
@@ -824,6 +1007,7 @@ class ContainerCopyWriteTest {
     private static Method refillOf(final Class<?> copy) throws ReflectiveOperationException {
       return copy.getMethod(
         "refill",
+        String.class,
         String.class,
         String.class,
         Object.class,
@@ -853,6 +1037,7 @@ class ContainerCopyWriteTest {
     private static Method refuseOf(final Class<?> copy) throws ReflectiveOperationException {
       return copy.getMethod(
         "refuseUnwritable",
+        String.class,
         Object.class,
         Object.class,
         boolean.class,

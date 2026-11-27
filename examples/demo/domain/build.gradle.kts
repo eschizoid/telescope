@@ -30,6 +30,9 @@ dependencies {
     api(project(":jackson"))
     // The entities carry their JPA mapping. The Spring app reads it; elsewhere it is plain metadata.
     api("jakarta.persistence:jakarta.persistence-api:3.2.0")
+    // The domain is compiled without a starter, which would bring telescope-jpa, so it names the
+    // module itself: the edit mappers count a generated identifier as accounted for, as it answers.
+    implementation(project(":jpa"))
     // Each app brings its own Jackson; the domain needs only the annotations that name the payment
     // cases on the wire.
     compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.23")

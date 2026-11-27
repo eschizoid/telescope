@@ -113,48 +113,67 @@ public interface BridgeFn<A, B> {
     );
   }
 
+  /** {@link #writesEdits()} has {@link #editInto}. */
+  int EDIT_INTO = 1;
+
+  /** {@link #writesEdits()} has {@link #editPatchInto}. */
+  int EDIT_PATCH_INTO = 2;
+
+  /** {@link #writesEdits()} has {@link #editPatch}. */
+  int EDIT_PATCH = 4;
+
   /**
-   * Write into {@code target} the properties {@link #patch} overlays from {@code partial}, in
-   * place, as {@code Mapper.patchInto} does, and answer {@code target}. A bridge {@code @Bridge}
-   * generates for a source bean answers with its own {@code patchInto}; a mapper between two sealed
-   * interfaces writes a case converted through its bridge with it.
-   *
-   * @throws UnsupportedOperationException by default: a pair written by hand, or a bridge whose
-   *     source generated code cannot write in place, has no in-place partial update
+   * Codegen-support seam: which of the {@link #editInto}, {@link #editPatchInto} and {@link
+   * #editPatch} of an edit mapper this bridge has, as the sum of {@link #EDIT_INTO}, {@link
+   * #EDIT_PATCH_INTO} and {@link #EDIT_PATCH}. A bridge generated for a field initialised by {@code
+   * Telescope.edits} has each one generated code can write: {@code editInto} where the target is a
+   * bean with a setter for every property it writes, the other two where no row writes a path into
+   * it. The field's mapper runs the runtime path's operation for one it lacks. None by default.
    */
-  default A patchInto(final A target, final B partial) {
-    throw new UnsupportedOperationException(
-      getClass().getName() +
-        " has no patchInto: a conversion pair written by hand, or a generated bridge whose source is a record" +
-        " or has a row writing through a source path, cannot write a partial in place. If it is a generated" +
-        " bridge, re-run the @Bridge processor."
+  default int writesEdits() {
+    return 0;
+  }
+
+  /**
+   * Codegen-support seam: write into {@code target} every property an edit mapper accounts for,
+   * from {@code source}, as {@link EditMapper#into} does, and answer {@code target}. A bridge
+   * {@code @Bridge} generates for a field initialised by {@code Telescope.edits} answers with its
+   * own {@code into}.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge no edit mapper declares
+   */
+  default B editInto(final B target, final A source) {
+    throw new UnsupportedOperationException(noEdit(getClass(), "into"));
+  }
+
+  /**
+   * Codegen-support seam: write into {@code target} what {@code partial} sends, as {@link
+   * EditMapper#patchInto} does, and answer {@code target}.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge no edit mapper declares
+   */
+  default B editPatchInto(final B target, final A partial) {
+    throw new UnsupportedOperationException(noEdit(getClass(), "patchInto"));
+  }
+
+  /**
+   * Codegen-support seam: a copy of {@code base} with what {@code partial} sends laid over it, as
+   * {@link EditMapper#patch} answers it.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge no edit mapper declares
+   */
+  default B editPatch(final B base, final A partial) {
+    throw new UnsupportedOperationException(noEdit(getClass(), "patch"));
+  }
+
+  private static String noEdit(final Class<?> bridge, final String operation) {
+    return (
+      bridge.getName() +
+      " has no " +
+      operation +
+      " of an edit mapper: only a bridge generated for a field initialised by Telescope.edits has one. If it" +
+      " is one, re-run the @Bridge processor."
     );
-  }
-
-  /**
-   * The source properties {@link #patchInto} writes, in the order {@link #overlaid} records them.
-   * Empty by default.
-   *
-   * @return the properties the overlay records
-   */
-  default List<String> patchIntoProperties() {
-    return List.of();
-  }
-
-  /**
-   * {@link #patch}'s rebuild of {@code base} with {@code partial} laid over it, recording in {@code
-   * sent}, by the index of each of {@link #patchIntoProperties}, whether the partial sent it. What
-   * {@code Mapper.patchInto} writes a subclass of the source from, through that subclass's own
-   * setters.
-   *
-   * @param base the object rebuilt, never null
-   * @param partial the partial, never null
-   * @param sent one flag per property of {@link #patchIntoProperties}
-   * @return the rebuilt object
-   * @throws UnsupportedOperationException by default, as {@link #patchInto} throws
-   */
-  default A overlaid(final A base, final B partial, final boolean[] sent) {
-    return patchInto(base, partial);
   }
 
   /**
@@ -214,21 +233,11 @@ public interface BridgeFn<A, B> {
   }
 
   /**
-   * Codegen-support seam: the mirror of {@link #targetWrite()} for {@code patchInto}, this bridge's
-   * {@code backward} and the check and write of every property its {@code patch} overlays, or null
-   * where the bridge writes none in place. Null by default.
+   * Codegen-support seam: how the bridge writes each collection of its pair, and for an edit
+   * mapper's bridge each property that converts through the edit mapper of its own pair, as the
+   * nodes {@code explain()} reports for a mapper over the same rows. Empty by default.
    *
-   * @return the conversion, or null
-   */
-  default ContainerCopy.Elements sourceWrite() {
-    return null;
-  }
-
-  /**
-   * Codegen-support seam: how the bridge writes each collection of its pair, as the nodes {@code
-   * explain()} reports for a mapper over the same rows. Empty by default.
-   *
-   * @return the nodes, one per collection
+   * @return the nodes, one per collection and one per property converting through an edit mapper
    */
   default List<OpticNode> collectionWrites() {
     return List.of();

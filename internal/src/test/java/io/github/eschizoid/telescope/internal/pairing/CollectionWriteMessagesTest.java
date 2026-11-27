@@ -20,7 +20,7 @@ class CollectionWriteMessagesTest {
       "Deep map Src → Tgt: into writes 'lines' of the Order it is given, which holds a java.util.ListN that cannot" +
         " be changed, and Order has no setter for 'lines' to give it a new one, so into cannot update it. Give" +
         " Order a setter for 'lines' or a modifiable container, or call forward(source) for a new Order.",
-      PairingMessages.intoUnwritable("Src", "Tgt", "Order", "lines", "java.util.ListN")
+      PairingMessages.intoUnwritable("into", "Src", "Tgt", "Order", "lines", "java.util.ListN")
     );
   }
 
@@ -31,7 +31,7 @@ class CollectionWriteMessagesTest {
       "Deep map Src → Tgt: into writes 'lines' of the Order it is given, which holds no container for it, and" +
         " Order has no setter for 'lines' to give it a new one, so into cannot update it. Give Order a setter for" +
         " 'lines' or a modifiable container, or call forward(source) for a new Order.",
-      PairingMessages.intoUnwritable("Src", "Tgt", "Order", "lines", null)
+      PairingMessages.intoUnwritable("into", "Src", "Tgt", "Order", "lines", null)
     );
   }
 
@@ -132,6 +132,17 @@ class CollectionWriteMessagesTest {
         " its owner's adder whenever the owner has one, whatever strategy builds the owner. Name BUILDER," +
         " CONSTRUCTOR or SETTERS, or remove the setting.",
       PairingMessages.addersRemoved("telescope.default-write-strategy")
+    );
+  }
+
+  @Test
+  @DisplayName("a container write refused inside patchInto names patchInto")
+  void patchIntoNamesItself() {
+    assertEquals(
+      "Deep map Src → Tgt: patchInto writes 'lines' of the Order it is given, which holds no container for it, and" +
+        " Order has no setter for 'lines' to give it a new one, so patchInto cannot update it. Give Order a setter" +
+        " for 'lines' or a modifiable container, or call forward(source) for a new Order.",
+      PairingMessages.intoUnwritable("patchInto", "Src", "Tgt", "Order", "lines", null)
     );
   }
 }

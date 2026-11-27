@@ -212,6 +212,19 @@ method reference, and under GraalVM's strict missing-registration mode the image
 through instead. `OrderRun` builds two such rows over the demo's `Envelope` record, one reading it as `String` and one
 as the demo's `TrackingCode` record, with both classes in the demo's `reflect-config.json`.
 
+## An edit mapper's element mappers
+
+A runtime edit mapper finds the edit mapper of an element pair among the static fields of the class building it and of
+the pair's two classes, from the fields' declared types, and reads the one it uses from its field. In an image, register
+those classes with their declared fields. A class building an edit mapper whose fields the image does not list is
+refused by name rather than read as declaring none, which would convert by name what the JVM converts through the
+element's own mapper. A `@Bridge` field whose generated bridge writes every operation itself calls the element's bridge
+directly and needs no entry; one with an operation that runs on the runtime edit mapper needs it.
+
+```json
+{ "name": "com.example.OrderMappers", "allDeclaredFields": true }
+```
+
 ## A via row naming a class
 
 A runtime mapper with a `via(src, tgt, Hw.class)` row reads `Hw`'s declared methods when it is built, to choose the

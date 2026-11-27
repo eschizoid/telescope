@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.jpa;
 
 import io.github.eschizoid.telescope.conversion.ContainerCopy;
 import io.github.eschizoid.telescope.internal.Beans;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -16,8 +17,10 @@ import java.util.Set;
  *
  * <ul>
  *   <li>An element's identifier is read from the converted element, so whatever the element
- *       conversion writes into it is what is matched. A converted element with no identifier, or
- *       with a primitive identifier at its default, is new.
+ *       conversion writes into it is what is matched. Where it carries none, as an edit mapper
+ *       writes no generated identifier, it is read from the source's element it was converted from,
+ *       its property of the identifier's name. An element with neither, or with a primitive
+ *       identifier at its default, is new.
  *   <li>A non-null identifier that matches nothing is new where the identifier is assigned, and
  *       refused where it is generated, since the provider assigns a new row's generated identifier.
  *       Two converted elements carrying one identifier are refused, and so are two sent elements
@@ -103,15 +106,22 @@ final class IdMerge {
   }
 
   /**
-   * The match of a write's converted elements to its held ones: the collection held, how many
-   * converted elements there are, the held element each matched by its position among them, how
-   * many matched, and the source's elements by the same positions where they line up with the
-   * converted ones, or null.
+   * The match of a write's converted elements to its held ones: the collection held, the converted
+   * container it was planned for, the converted elements in the order they are written, the held
+   * element each matched by its position among them, how many matched, and the source's elements by
+   * the same positions where they are known, or null.
    */
-  private record Plan(Collection<?> held, int size, Object[] matched, int matches, List<?> sent) {
+  private record Plan(
+    Collection<?> held,
+    Object incoming,
+    List<?> elements,
+    Object[] matched,
+    int matches,
+    List<?> sent
+  ) {
     /** Whether this is the match of {@code refill}'s containers. */
     boolean fits(final ContainerCopy.Refill refill) {
-      return refill.held() == held && refill.incoming() instanceof Collection<?> incoming && incoming.size() == size;
+      return refill.held() == held && refill.incoming() == incoming;
     }
 
     /**
@@ -132,18 +142,35 @@ final class IdMerge {
     if (
       !(refill.held() instanceof Collection<?> held) || !(refill.incoming() instanceof Collection<?> incoming)
     ) return null;
-    if (!anyIdentified(incoming)) return null;
+    // Each converted element beside the source's element it was converted from. A list converted
+    // into a list of as many elements lines up element by element; elsewhere, where no converted
+    // element carries an identifier, as no edit mapper writes a generated one, each sent element
+    // is converted again beside the one it came from.
+    List<?> elements = incoming instanceof List<?> list ? list : List.copyOf(withoutNulls(incoming));
+    List<?> sent = aligned(refill, incoming);
+    var reconverted = false;
+    if (sent == null && !anyIdentified(refill, elements, null) && refill.sent() instanceof Collection<?> given) {
+      final var converted = new ArrayList<Object>(given.size());
+      final var from = new ArrayList<Object>(given.size());
+      for (final var element : given) {
+        from.add(element);
+        converted.add(element == null ? null : refill.convertSent(element));
+      }
+      elements = converted;
+      sent = from;
+      reconverted = true;
+    }
+    if (!anyIdentified(refill, elements, sent)) return null;
     final var index = heldIndex(held);
     if (index == null) return null;
-    final var matched = new Object[incoming.size()];
+    final var matched = new Object[elements.size()];
     var matches = 0;
-    var position = 0;
-    for (final var element : incoming) {
-      final var at = position++;
+    for (var at = 0; at < elements.size(); at++) {
+      final var element = elements.get(at);
       if (element == null) continue;
       final var identifier = identifierOf(element);
       if (identifier == Identifiers.NONE) return null;
-      final var id = identifier.of(element);
+      final var id = keyOf(refill, identifier, element, sent == null ? null : sent.get(at));
       if (id == null) continue;
       final var found = index.put(id, CLAIMED);
       if (found == CLAIMED) throw refill.refused(twice(id, identifier));
@@ -154,16 +181,38 @@ final class IdMerge {
       matched[at] = found;
       matches++;
     }
-    refuseCollapsed(refill, incoming);
+    if (!reconverted) refuseCollapsed(refill, incoming);
     if (matches == 0) return null;
-    final var plan = new Plan(held, matched.length, matched, matches, aligned(refill, incoming));
-    position = 0;
-    for (final var element : incoming) {
-      final var at = position++;
+    final var plan = new Plan(held, incoming, elements, matched, matches, sent);
+    for (var at = 0; at < elements.size(); at++) {
       final var kept = matched[at];
+      final var element = elements.get(at);
       if (kept != null && kept != element) refill.checkElement(kept, element, plan.sentAt(at));
     }
     return plan;
+  }
+
+  /**
+   * The identifier {@code converted} is matched by: the one it carries, else the value {@code
+   * sent}, the source's element it was converted from, has for each identifier property, which no
+   * conversion of an edit mapper writes into it. Null where neither has one.
+   */
+  private static Object keyOf(
+    final ContainerCopy.Refill refill,
+    final Identifiers.Identifier identifier,
+    final Object converted,
+    final Object sent
+  ) {
+    final var carried = identifier.of(converted);
+    if (carried != null || sent == null) return carried;
+    return identifier.sentBy(name -> refill.sentValue(sent, name));
+  }
+
+  /** The elements of {@code incoming} other than null, in its order. */
+  private static List<Object> withoutNulls(final Collection<?> incoming) {
+    final var elements = new ArrayList<Object>(incoming.size());
+    for (final var element : incoming) if (element != null) elements.add(element);
+    return elements;
   }
 
   /**
@@ -223,33 +272,36 @@ final class IdMerge {
   /** Writes the merge {@code plan} matched. */
   private static void write(final ContainerCopy.Refill refill, final Plan plan) {
     final var held = plan.held();
-    final var incoming = (Collection<?>) refill.incoming();
+    final var elements = plan.elements();
     final var matched = plan.matched();
-    var position = 0;
-    for (final var element : incoming) {
-      final var at = position++;
+    for (var at = 0; at < elements.size(); at++) {
       final var kept = matched[at];
+      final var element = elements.get(at);
       if (kept != null && kept != element) refill.writeElement(kept, element, plan.sentAt(at));
     }
-    if (plan.matches() == held.size() && plan.matches() == incoming.size() && holdsAlready(held, matched)) return;
+    if (plan.matches() == held.size() && plan.matches() == elements.size() && holdsAlready(held, matched)) return;
     held.clear();
-    position = 0;
-    for (final var element : incoming) {
-      final var kept = matched[position++];
+    for (var at = 0; at < elements.size(); at++) {
+      final var kept = matched[at];
       if (kept != null) refill.keep(kept);
-      else refill.add(element);
+      else if (elements.get(at) != null) refill.add(elements.get(at));
     }
-    if (held instanceof Set && !refill.throughAdder() && held.size() < incoming.size()) throw refill.refused(
+    if (held instanceof Set && !refill.throughAdder() && held.size() < elements.size()) throw refill.refused(
       becameEqual()
     );
   }
 
-  /** Whether any converted element is an entity carrying an identifier. */
-  private static boolean anyIdentified(final Collection<?> incoming) {
-    for (final var element : incoming) {
+  /**
+   * Whether any converted element is an entity matched by an identifier, its own or, by the same
+   * position in {@code sent} where that is known, its source element's.
+   */
+  private static boolean anyIdentified(final ContainerCopy.Refill refill, final List<?> elements, final List<?> sent) {
+    for (var at = 0; at < elements.size(); at++) {
+      final var element = elements.get(at);
       if (element == null) continue;
       final var identifier = identifierOf(element);
-      if (identifier != Identifiers.NONE && identifier.of(element) != null) return true;
+      if (identifier == Identifiers.NONE) continue;
+      if (keyOf(refill, identifier, element, sent == null ? null : sent.get(at)) != null) return true;
     }
     return false;
   }

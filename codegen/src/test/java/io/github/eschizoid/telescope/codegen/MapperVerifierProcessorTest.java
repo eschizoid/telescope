@@ -8,8 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.TextFormats;
+import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import javax.tools.Diagnostic;
+import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -2014,6 +2017,319 @@ class MapperVerifierProcessorTest {
           """
       );
       assertTrue(compilation.success(), compilation::errorMessages);
+    }
+  }
+
+  @Nested
+  @DisplayName("Telescope.edits — strict on both sides, in the runtime's words")
+  class Edits {
+
+    private static final String BEANS = """
+      class Line {
+        private String sku; private int price;
+        public Line() {}
+        public String getSku() { return sku; } public void setSku(String v) { sku = v; }
+        public int getPrice() { return price; } public void setPrice(int v) { price = v; }
+      }
+      record LineChanges(String sku) {}
+      class Prices { static Integer of(LineChanges l) { return l.sku().length(); } }
+      """;
+
+    private ProcessorHarness.Compilation verifyEdits(final String holder) {
+      return verify(
+        """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          """ +
+          BEANS +
+          holder
+      );
+    }
+
+    @Test
+    @DisplayName("a target property nothing accounts for is refused, and a keep accounts for it")
+    void anUnfilledTargetIsRefusedAndAKeepAccountsForIt() {
+      final var refused = verifyEdits(
+        "class Holder { static final Object M = Telescope.edits(LineChanges.class, Line.class); }\n"
+      );
+      assertFalse(refused.success());
+      assertTrue(
+        refused.hasError(PairingMessages.editUnfilled("LineChanges", "Line", "property", "price", false)),
+        refused::errorMessages
+      );
+      final var kept = verifyEdits(
+        "class Holder { static final Object M = Telescope.edits(LineChanges.class, Line.class, keep(Line::getPrice)); }\n"
+      );
+      assertTrue(kept.success(), kept::errorMessages);
+      final var computed = verifyEdits(
+        "class Holder { static final Object M =" +
+          " Telescope.edits(LineChanges.class, Line.class, compute(Line::getPrice, Prices::of)); }\n"
+      );
+      assertTrue(computed.success(), computed::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a source property nothing reads is refused, as a mapper refuses it")
+    void anUnreadSourceIsRefused() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.*;
+        import io.github.eschizoid.telescope.Telescope;
+        record Changes(String sku, String note) {}
+        record Held(String sku) {}
+        class Holder { static final Object M = Telescope.edits(Changes.class, Held.class); }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.noSameNameTarget("Changes", "Held", "field", "field", "note")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "an element pair's edit mapper declared where no edit mapper looks is refused for a plain edits call," +
+        " naming both fields"
+    )
+    void anUnreachedElementMapperIsRefused() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.EditMapper;
+        import java.util.List;
+        record Item(String sku) {}
+        class Held {
+          private String sku;
+          public Held() {}
+          public String getSku() { return sku; }
+          public void setSku(String v) { sku = v; }
+        }
+        record Basket(List<Item> items) {}
+        class Cart {
+          private List<Held> items;
+          public Cart() {}
+          public List<Held> getItems() { return items; }
+          public void setItems(List<Held> v) { items = v; }
+        }
+        class Prices {
+          static final EditMapper<Item, Held> ITEM = Telescope.edits(Item.class, Held.class);
+        }
+        class Holder {
+          static final EditMapper<Basket, Cart> EDITS = Telescope.edits(Basket.class, Cart.class);
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.editElementMapperUnreached("Basket", "Cart", "items", "Holder.EDITS", "Prices.ITEM")
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("two edit mappers of an element pair where an edit mapper looks for one are refused by name")
+    void twoElementMappersAreRefused() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.*;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.EditMapper;
+        import java.util.List;
+        record Item(String sku) {}
+        class Held {
+          private String sku;
+          public Held() {}
+          public String getSku() { return sku; }
+          public void setSku(String v) { sku = v; }
+        }
+        record Basket(List<Item> items) {}
+        class Cart {
+          private List<Held> items;
+          public Cart() {}
+          public List<Held> getItems() { return items; }
+          public void setItems(List<Held> v) { items = v; }
+        }
+        class Holder {
+          static final EditMapper<Basket, Cart> EDITS = Telescope.edits(Basket.class, Cart.class);
+          static final EditMapper<Item, Held> ONE = Telescope.edits(Item.class, Held.class);
+          static final EditMapper<Item, Held> TWO = Telescope.edits(Item.class, Held.class);
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.editElementMappersAmbiguous("Basket", "Cart", "items", List.of("Holder.ONE", "Holder.TWO"))
+        ),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a keep beside a row writing the same property is refused by name")
+    void aKeepBesideAWriteIsRefused() {
+      final var compilation = verifyEdits(
+        "class Holder { static final Object M = Telescope.edits(LineChanges.class, Line.class," +
+          " compute(Line::getPrice, Prices::of), keep(Line::getPrice)); }\n"
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.keepBesideWrite("LineChanges", "Line", "price")),
+        compilation::errorMessages
+      );
+      final var keptFirst = verifyEdits(
+        "class Holder { static final Object M = Telescope.edits(LineChanges.class, Line.class," +
+          " keep(Line::getPrice), compute(Line::getPrice, Prices::of)); }\n"
+      );
+      assertFalse(keptFirst.success());
+      assertTrue(
+        keptFirst.hasError(PairingMessages.keepBesideWrite("LineChanges", "Line", "price")),
+        keptFirst::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("keep and a via row naming an edit mapper are refused outside edits, naming the factory")
+    void editRowsAreRefusedOutsideEdits() {
+      final var compilation = verify(
+        """
+        package demo;
+        import static io.github.eschizoid.telescope.mapping.Mapping.*;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.conversion.EditMapper;
+        import java.util.List;
+        record Item(String sku) {}
+        record ItemDto(String sku) {}
+        record Basket(String name, List<Item> items) {}
+        record BasketDto(String name, List<ItemDto> items) {}
+        class Holder {
+          static final EditMapper<Item, ItemDto> ITEM = Telescope.edits(Item.class, ItemDto.class);
+          static final Object KEPT = Telescope.mapperForward(Basket.class, BasketDto.class, keep(BasketDto::name));
+          static final Object VIA = Telescope.mapper(Basket.class, BasketDto.class,
+            via(Basket::items, BasketDto::items, ITEM));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(
+          PairingMessages.keepOutsideEdits("Telescope.mapperForward", "Basket", "BasketDto", "name")
+        ),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.viaEditsOutsideEdits("Telescope.mapper", "Basket", "BasketDto", "items")),
+        compilation::errorMessages
+      );
+    }
+
+    /**
+     * Hibernate's generator marker, declared by name as the verifier reads it, and a generator it
+     * marks. {@code jakarta.persistence} is on the test class path.
+     */
+    private static final List<JavaFileObject> PERSISTENCE = List.of(
+      source(
+        "org.hibernate.annotations.IdGeneratorType",
+        "package org.hibernate.annotations; public @interface IdGeneratorType { Class<?> value(); }"
+      ),
+      source(
+        "demo.Sequence",
+        """
+        package demo;
+        @org.hibernate.annotations.IdGeneratorType(Object.class)
+        public @interface Sequence {}
+        """
+      )
+    );
+
+    private static final String ENTITIES = """
+      package demo;
+      import static io.github.eschizoid.telescope.mapping.Mapping.*;
+      import io.github.eschizoid.telescope.Telescope;
+      import jakarta.persistence.*;
+      import java.util.ArrayList;
+      import java.util.List;
+      class Cart {
+        @Id @GeneratedValue private Long id;
+        @Version private int version;
+        @OneToMany(mappedBy = "cart") private List<CartLine> lines = new ArrayList<>();
+        public Cart() {}
+        public Long getId() { return id; } public void setId(Long v) { id = v; }
+        public int getVersion() { return version; } public void setVersion(int v) { version = v; }
+        public List<CartLine> getLines() { return lines; } public void setLines(List<CartLine> v) { lines = v; }
+      }
+      class CartLine {
+        private Long id; private String sku; private Cart cart;
+        public CartLine() {}
+        @Id @Sequence public Long getId() { return id; } public void setId(Long v) { id = v; }
+        public String getSku() { return sku; } public void setSku(String v) { sku = v; }
+        public Cart getCart() { return cart; } public void setCart(Cart v) { cart = v; }
+      }
+      record LineChanges(String sku) {}
+      record CartChanges(List<LineChanges> lines) {}
+      class Holder {
+        static final Object CART = Telescope.edits(CartChanges.class, Cart.class);
+        static final Object LINE = Telescope.edits(LineChanges.class, CartLine.class);
+      }
+      """;
+
+    private ProcessorHarness.Compilation verifyEntities(final String entities) {
+      return verifyEntities(entities, List.of());
+    }
+
+    private ProcessorHarness.Compilation verifyEntities(final String entities, final List<String> options) {
+      final var sources = new ArrayList<>(PERSISTENCE);
+      sources.add(source("demo.Holder", entities));
+      return compileFully(List.of(new MapperVerifierProcessor()), options, sources.toArray(JavaFileObject[]::new));
+    }
+
+    @Test
+    @DisplayName(
+      "without telescope-jpa on the class path, the identifiers, the version and the mappedBy back-reference are" +
+        " each refused, as the runtime refuses them"
+    )
+    void nothingIsDerivedWithoutTheModule() {
+      final var withoutTheModule = new ArrayList<String>();
+      for (final var entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+        if (!entry.replace(File.separatorChar, '/').contains("/jpa/build/")) withoutTheModule.add(entry);
+      }
+      final var refused = verifyEntities(
+        ENTITIES,
+        List.of("-classpath", String.join(File.pathSeparator, withoutTheModule))
+      );
+      assertFalse(refused.success());
+      for (final var refusal : List.of(
+        PairingMessages.editUnfilled("CartChanges", "Cart", "property", "id", false),
+        PairingMessages.editUnfilled("CartChanges", "Cart", "property", "version", false),
+        PairingMessages.editUnfilled("LineChanges", "CartLine", "property", "id", false),
+        PairingMessages.editUnfilled("LineChanges", "CartLine", "property", "cart", false)
+      )) {
+        assertTrue(refused.hasError(refusal), refused::errorMessages);
+      }
+    }
+
+    @Test
+    @DisplayName(
+      "with telescope-jpa on the class path, a generated identifier, a version and a mappedBy back-reference need" +
+        " no row, and an assigned identifier still does"
+    )
+    void generatedPropertiesNeedNoRow() {
+      final var generated = verifyEntities(ENTITIES);
+      assertTrue(generated.success(), generated::errorMessages);
+      final var assigned = verifyEntities(ENTITIES.replace("@Id @Sequence ", "@Id "));
+      assertFalse(assigned.success());
+      assertEquals(1, assigned.errors().size(), assigned::errorMessages);
+      assertTrue(
+        assigned.hasError(PairingMessages.editUnfilled("LineChanges", "CartLine", "property", "id", false)),
+        assigned::errorMessages
+      );
     }
   }
 }

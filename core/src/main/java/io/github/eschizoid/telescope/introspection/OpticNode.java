@@ -39,6 +39,20 @@ public sealed interface OpticNode {
      * no {@code @FromMap(required = ...)} requires.
      */
     MISSING_SOURCE,
+    /**
+     * A target property of an edit mapper that a {@code Mapping.keep(tgt)} row says no edit writes.
+     */
+    KEPT,
+    /**
+     * A target property of an edit mapper whose persistence mapping generates its value, an
+     * identifier with a generator or a version, which no edit writes into a held target.
+     */
+    GENERATED,
+    /**
+     * A target property of an edit mapper that points back at the owner of the collection the
+     * target is an element of, which the collection's write sets.
+     */
+    BACK_REFERENCE,
   }
 
   /** What a {@code fromMap} slot does when its key carries no value. See {@link Extracted}. */
@@ -152,6 +166,19 @@ public sealed interface OpticNode {
    * mapper no field declares.
    */
   record Declared(String declaredBy, Runs runs, String why) implements Row {}
+
+  /**
+   * An edit mapper's {@code property} of {@code owner}, written by name, whose values convert
+   * through {@code mapper}, the edit mapper its class declares for their pair, as {@code
+   * OrderMappers.LINE}. {@link #toString()} is the line {@code explain()} prints for it, as in
+   * {@code Order.lines: elements through OrderMappers.LINE}.
+   */
+  record ElementsThrough(Class<?> owner, String property, String mapper) implements Row {
+    @Override
+    public String toString() {
+      return owner.getSimpleName() + "." + property + ": elements through " + mapper;
+    }
+  }
 
   /**
    * How a mapper writes collection {@code property} of {@code owner}, a collection of {@code

@@ -5,6 +5,7 @@ import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
+import jakarta.persistence.Version;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -12,7 +13,9 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -43,7 +46,7 @@ final class Identifiers {
   };
 
   /** What a class with no identifier to merge by has. */
-  static final Identifier NONE = new Identifier(List.of(), false, false, null);
+  static final Identifier NONE = new Identifier(List.of(), List.of(), false, false, null);
 
   /** Hibernate's mark on an annotation that declares an identifier generator. */
   private static final String ID_GENERATOR_TYPE = "org.hibernate.annotations.IdGeneratorType";
@@ -60,13 +63,20 @@ final class Identifiers {
    * and each class's in name order, whether the provider generates it, and whether it is one
    * property of a primitive type.
    *
+   * @param names the name of each identifier property, in the order of {@code readers}
    * @param readers the getter of each identifier property
    * @param generated whether a property of the identifier is generated
    * @param primitive whether the identifier is one property of a primitive type, whose default no
    *     row carries, as the provider reads an unsaved instance's
    * @param entity the simple name of the entity class, as a refusal names it
    */
-  record Identifier(List<Function<Object, Object>> readers, boolean generated, boolean primitive, String entity) {
+  record Identifier(
+    List<String> names,
+    List<Function<Object, Object>> readers,
+    boolean generated,
+    boolean primitive,
+    String entity
+  ) {
     /**
      * The identifier of {@code element}: the value of its one identifier property, or the list of
      * the values of several; null where any is null, and where a primitive identifier holds its
@@ -81,6 +91,24 @@ final class Identifiers {
       final var values = new Object[readers.size()];
       for (var i = 0; i < values.length; i++) {
         values[i] = readers.get(i).apply(element);
+        if (values[i] == null) return null;
+      }
+      return List.of(values);
+    }
+
+    /**
+     * The identifier a sent element names through its properties of the identifier properties'
+     * names, as {@code valueOf} reads each: one value, or the list of several; null where any is
+     * null, and where a primitive identifier holds its type's default.
+     */
+    Object sentBy(final Function<String, Object> valueOf) {
+      if (names.size() == 1) {
+        final var value = valueOf.apply(names.getFirst());
+        return primitive && isDefault(value) ? null : value;
+      }
+      final var values = new Object[names.size()];
+      for (var i = 0; i < values.length; i++) {
+        values[i] = valueOf.apply(names.get(i));
         if (values[i] == null) return null;
       }
       return List.of(values);
@@ -125,7 +153,49 @@ final class Identifiers {
         return NONE;
       }
     }
-    return new Identifier(List.copyOf(readers), generated, primitive && names.size() == 1, type.getSimpleName());
+    return new Identifier(
+      List.copyOf(names),
+      List.copyOf(readers),
+      generated,
+      primitive && names.size() == 1,
+      type.getSimpleName()
+    );
+  }
+
+  /** The properties of each class whose value its persistence mapping generates. */
+  private static final ClassValue<Set<String>> GENERATED = new ClassValue<>() {
+    @Override
+    protected Set<String> computeValue(final Class<?> type) {
+      final var names = new LinkedHashSet<String>();
+      for (
+        var declaring = type;
+        declaring != null && declaring != Object.class;
+        declaring = declaring.getSuperclass()
+      ) {
+        for (final var field : sorted(declaring.getDeclaredFields())) {
+          if (!Modifier.isStatic(field.getModifiers()) && generatedValue(field)) names.add(field.getName());
+        }
+        for (final var method : sorted(declaring.getDeclaredMethods())) {
+          if (Modifier.isStatic(method.getModifiers()) || !generatedValue(method)) continue;
+          final var name = propertyOf(method);
+          if (name != null) names.add(name);
+        }
+      }
+      return Set.copyOf(names);
+    }
+  };
+
+  /**
+   * Whether property {@code property} of {@code type} holds a value its persistence mapping
+   * generates: an identifier, {@link Id} or {@link EmbeddedId}, with a generator, or a {@link
+   * Version}, declared on the field of its name or on its getter, in the class or a superclass.
+   */
+  static boolean generated(final Class<?> type, final String property) {
+    return GENERATED.get(type).contains(property);
+  }
+
+  private static boolean generatedValue(final AnnotatedElement member) {
+    return member.isAnnotationPresent(Version.class) || (identifies(member) && generates(member));
   }
 
   private static boolean identifies(final AnnotatedElement member) {

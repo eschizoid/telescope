@@ -75,10 +75,12 @@ tasks.named("check") {
 
 tasks.jacocoTestReport {
     // The merge by identifier writes each element through core: the element writes DeepMap builds,
-    // Mapper's in-place write of one element, and the refill and check ContainerCopy hands this
-    // module's policy. Core's own tests run with no policy registered, so only these tests reach
-    // that code. A report covers only the classes it lists, so they are listed here too, and the
-    // lines these tests execute count toward them beside the :core report's.
+    // Mapper's in-place write of one element, the refill and check ContainerCopy hands this
+    // module's policy, and the generated identifiers EditTargets reads through that policy for the
+    // edit mappers these tests build and the generated ones they call, which explain() reports.
+    // Core's own tests run with no policy registered, so only these tests reach that code. A
+    // report covers only the classes it lists, so they are listed here too, and the lines these
+    // tests execute count toward them beside the :core report's.
     val core = project(":core")
     dependsOn(":core:classes")
     classDirectories.from(
@@ -88,6 +90,13 @@ tasks.jacocoTestReport {
                     "io/github/eschizoid/telescope/DeepMap*.class",
                     "io/github/eschizoid/telescope/conversion/Mapper*.class",
                     "io/github/eschizoid/telescope/conversion/ContainerCopy*.class",
+                    "io/github/eschizoid/telescope/conversion/EditMapper*.class",
+                    "io/github/eschizoid/telescope/EditTargets*.class",
+                    "io/github/eschizoid/telescope/EditRegistry*.class",
+                    "io/github/eschizoid/telescope/GeneratedClearing*.class",
+                    "io/github/eschizoid/telescope/PathWrites*.class",
+                    "io/github/eschizoid/telescope/introspection/OpticReport*.class",
+                    "io/github/eschizoid/telescope/conversion/MappingTraces*.class",
                 )
             }
         },
