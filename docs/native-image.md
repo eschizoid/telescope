@@ -249,6 +249,17 @@ come from the reflection metadata registered for the bean, so their order is wha
 `:core:imageTest` gate checks this order on the accessor substrate an image uses, but it runs on the JVM. `OrderRun`
 does not check the order, so a real image's order is not verified. It matters only to conversions with side effects.
 
+## Rows that call a service
+
+A row's service form, `compute(OrderLine::getUnitPrice, service(Catalog::price))`, needs nothing beyond what its plain
+row needs. The generated bridge takes the service as a parameter and calls it directly, and its provider records the
+service classes as class literals, so a mapper running the bridge decodes nothing for the row and binds through
+`with(...)`, a container bean or the bridge's `bind`. The runtime path reads which class a service function takes from
+the function's `SerializedLambda`, as it reads every row's accessors, so a mapper built at run time inside an image
+needs the capturing class registered for lambda serialization, as every runtime row does. On Quarkus the extension
+creates each field's bean when the application starts, looking up each service bean by type through ArC, and keeps those
+service beans from removal; the native demo, which has no container, binds its edit mappers with `with(catalog)`.
+
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the demo's

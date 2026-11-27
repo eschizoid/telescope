@@ -350,6 +350,14 @@ from "compile-checked" to "runtime-checked" is a regression.
   into the bridge; an operation it lacks, and a target of a subclass, run on the runtime edit mapper built from the same
   rows. `EditMapper.engineOf` hands a `via` row the mapper an edit mapper runs, and `ContainerCopy.Policy.generated` the
   properties a persistence module says no edit writes.
+- `BridgeFn.serviceNeeds()` and `bind(services)`, `BridgeProvider.fieldName()`, `fieldType()`, `services()` and
+  `field()`, and `BridgeRegistry.serviceFields(loader)` and `beanName(provider)`: what a bridge whose rows call a
+  service takes, the bound copy of its `BridgeFn`, which holds the services in final fields, and what a field's provider
+  records so a starter registers the field's bean without reading the field reflectively. `ServiceNeeds` in `conversion`
+  is the seam a mapper holds its services through; `withServices` and `needOf` are what the starters call. The bridge's
+  static operations take the services after their own arguments, named by `FieldRows.serviceVariable` in every bridge,
+  and `ServiceThreading` threads them through the bridge's text once the round settles each bridge's services; each
+  public operation keeps a refusing form without them.
 - The protected `Mapper(Mapper, BridgeGrant)` and `ForwardMapper(ForwardMapper, BridgeGrant)` constructors: the class
   the processor writes for a `@Bridge` field extends one and overrides `forward` (and `backward` / `patch`) with one
   call through the bridge's `BRIDGE_FN`; every other method of both classes is final. `BridgeGrant` has no public
@@ -420,7 +428,8 @@ class declaring the field, named in full.
 | `MappingsInterfaces.java`                                 | the `<Type>Mappings` interfaces `BridgeProcessor` writes for each type a `@Bridge` field converts (ADR-0023), in the round the field is first seen so an `implements` clause compiled with them resolves. Each default method calls the field's `forward` or `backward`.                                                                                                                                                                                                                                                                                                                            |
 | `FromMapProcessor.java`                                   | scans `@FromMap`, emits the reflection-free `Map<String, Object>` → record binder (ADR-0010). Uses the sealed `Coercion` taxonomy for per-component conversion.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `FromJsonProcessor.java`                                  | scans telescope-jackson's `@FromJson` by name and emits `<X>FromJson`, whose `BINDER` comes from `JsonBinder.generated`: one parser method per object level, reading through `JsonReads`, keys from the shared `JsonPropertyKeys`, beans built through the shared rebuilds (ADR-0016).                                                                                                                                                                                                                                                                                                              |
-| `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`. Also checks a `with(...)` on a `@Bridge` field against the services its rows call.                                                                                                                                                                                                                                                                                                               |
+| `ServiceThreading.java`                                   | threads the services a bridge's rows, or the bridges it calls, call through the bridge's source: every static operation takes them, every call hands them on, and the `BridgeFn` holds them in final fields with its `bind`.                                                                                                                                                                                                                                                                                                                                                                        |
 | `TelescopeMapperProcessor.java`                           | scans core's `@TelescopeMapper` / `@TelescopeTransformer` interfaces and emits a Spring `@Component` or a CDI `@ApplicationScoped` implementation for each, as the telescope starter on the classpath, else the container annotation, or `-Atelescope.beans` decides. Refuses on the interface when neither container is on the classpath, and when both starters are and the option is unset. Covered by `:codegen`'s `ProcessorHarness` tests, with each container's annotations declared as sources, and by both starters' tests against the real containers; all three JaCoCo reports count it. |
 | `Coercion.java`, `MirrorProps.java`                       | the per-component conversion taxonomy and the `javax.lang.model` side of the pairing `PropertySystem`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `MirrorLinks.java`                                        | the `javax.lang.model` side of `CollectionLinks`: a bean's adder and remover and the `@OneToMany(mappedBy)` it reads by the annotation's name, for `BridgeProcessor`'s links constants, its `explain()` nodes and refusals, and the verifier's notes and refusals.                                                                                                                                                                                                                                                                                                                                  |
@@ -602,6 +611,18 @@ Quarkus's `@All List<Mapper<?, ?>>`. Exposes the registry as `@Bean @Conditional
 `failFast` on a nested `Registry` type, so the resolved key is the same `telescope.registry.fail-fast`.
 `telescope.default-write-strategy` is read through `WriteStrategyConverter`, a `@ConfigurationPropertiesBinding`
 converter that refuses `ADDERS` at startup with the reason.
+
+**Field beans, both starters (ADR-0027).** For every `@Bridge` field whose rows call a service, its own or through a
+mapper it converts through, each starter registers one singleton bean of the field's declared generic type, named after
+the field as its class writes it (`OrderMappers.EDITS`), holding the field's mapper bound to the container's one bean of
+each service. The fields come from `BridgeRegistry.serviceFields`, the generated providers `ServiceLoader` lists, and
+the value from `BridgeProvider.field()`, so nothing is scanned or read reflectively. Spring registers the definitions in
+`TelescopeBridgeFields`, a static `BeanDefinitionRegistryPostProcessor` reading the bean class loader; Quarkus registers
+a synthetic bean per field of a class in the application's index in the deployment's `fieldBeans` step, created at
+startup by `TelescopeFieldRecorder` through `Arc.container()`, and keeps the service beans from removal. No bean of a
+service, two with none primary, and two fields of one name fail startup in `EndpointMappers`' words. A `Mapper` field
+bean joins the registry; a mapped body whose pair a `ForwardMapper` field with services declares converts through its
+bean, and a mapper the lookup finds still unbound fails startup naming the method and the row.
 
 **Generated beans, both starters.** `@TelescopeMapper` and `@TelescopeTransformer` are core annotations on interfaces
 that extend core's `inject` contracts. `TelescopeMapperProcessor` in `:codegen` emits one `<Interface>Impl` per
@@ -991,18 +1012,21 @@ decisions: ADR-0015. Core holds no persistence-provider code; telescope-jpa's Hi
     a `via` row merges by `@Id` with telescope-jpa. Compiled by `FieldRows` like every `@Bridge` field; ADR-0024's
     `before` and `after` rows apply in its one direction. `Mapper.patchInto` is removed. Amended: with telescope-jpa a
     generated identifier and a version need no row, and no edit writes them into a held entity.
-27. **0027 — Rows that call an injected service.** (Proposed.) A row's service form names the service's class before its
-    function, and the function takes the service first:
-    `compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price)`, also for `compute`'s supplier, `when`'s
-    predicate, `toOrElseGet` and `toOneWay`; `constant`, `via` and two-way conversions take none, and a mapper a `via`
-    row names brings its services along. The field stays `static final`. Both starters register each `@Bridge` field
-    whose rows name services as a bean of the field's own generic type (`EditMapper<OrderChanges, Order>`), bound to the
-    container's beans once at startup, named after the field for a qualifier, with no bean or two beans for a service
-    refused naming the row in `EndpointMappers`' words; a handler injects it like a repository and never calls `with`. A
-    `Mapper` field bean joins `TelescopeMapperRegistry`, which stays keyed by pair. `with(services...)` returns a bound
-    copy for code with no container and for tests, and a call on an unbound mapper is refused by name before anything is
-    written. The generated bridge takes the services as arguments and calls them directly, so a native image needs
-    nothing beyond the container's bean lookup.
+27. **0027 — Rows that call an injected service.** (Accepted, shipped.) `service(Catalog::price)` marks a row's function
+    as a call on a service bean, the class the function takes first:
+    `compute(OrderLine::getUnitPrice, service(Catalog::price))`, also for `compute`'s supplier, `when`'s predicate,
+    `toOrElseGet` and `toOneWay`; `constant`, `via` and two-way conversions take none, and a mapper a `via` row names,
+    or an element pair converts through, brings its services along. Unlike a literal-free overload, the wrapper leaves
+    every row written before it resolving as it did, and unlike a class literal it repeats no class. The field stays
+    `static final`. Both starters register each `@Bridge` field whose rows call services as a bean of the field's own
+    generic type (`EditMapper<OrderChanges, Order>`), bound to the container's beans once at startup, named after the
+    field for a qualifier, with no bean or two beans for a service refused naming the row in `EndpointMappers`' words; a
+    handler injects it like a repository and never calls `with`. A `Mapper` field bean joins `TelescopeMapperRegistry`,
+    which stays keyed by pair, and a mapped body whose pair a `ForwardMapper` field with services declares converts
+    through its bean. `with(services...)` returns a bound copy for code with no container and for tests, and a call on
+    an unbound mapper is refused naming the field, the row and the mapper the row is in, before anything is written. The
+    generated bridge takes the services as arguments and calls them directly, so a native image needs nothing beyond the
+    container's bean lookup.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

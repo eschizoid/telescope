@@ -57,6 +57,12 @@ class BrokenRegistrationTest {
           getClass().getClassLoader()
         ).orElseThrow()
       );
+      // Looked up by pair through the loader carrying the broken entry, as a starter looks one up.
+      assertEquals(
+        RegistryFixtures.BRIDGE,
+        BridgeRegistry.find(RegistryFixtures.Source.class, RegistryFixtures.Target.class, loader).orElseThrow()
+      );
+      assertTrue(BridgeRegistry.serviceFields(loader).isEmpty());
     } catch (final IOException e) {
       throw new AssertionError(e);
     }

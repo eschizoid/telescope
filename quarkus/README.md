@@ -219,6 +219,38 @@ any other `Mapper` bean exists, so a `@DefaultBean` mapper that is alone on its 
 ambiguous and Quarkus fails at build time. To supply your own registry, annotate your producer method with
 `@Alternative` and `@Priority`, which makes CDI choose it over the one in this module.
 
+## Mappers whose rows call a service
+
+A row can call a bean of the application, `compute(OrderLine::getUnitPrice, service(Catalog::price))`, while the mapper
+field stays a `static final` declaration. For every `@Bridge` field of a class in the application's index whose rows
+call a service, its own or through a mapper it converts through, the extension registers one synthetic `@Singleton` bean
+of the field's declared type, created when the application starts and bound to the container's bean of each service. A
+resource takes it by injection:
+
+```java
+@Path("/orders")
+public class OrderResource {
+
+  private final Orders orders;
+  private final EditMapper<OrderChanges, Order> edits; // OrderMappers.EDITS, bound to the Catalog bean
+
+  OrderResource(Orders orders, EditMapper<OrderChanges, Order> edits) {
+    this.orders = orders;
+    this.edits = edits;
+  }
+}
+```
+
+- The deployment reads the fields from the providers the `@Bridge` processor generated, and the bean reads the field's
+  value through its provider, so nothing is scanned or read reflectively. The service beans the fields call are kept
+  from removal.
+- No bean of a service type, or two, fails startup naming the field, the row and the service. A service only a mapper
+  built at run time needs is the application's to keep with `@Unremovable`.
+- The bean is `@Named` after the field, `OrderMappers.EDITS`. A `Mapper<A, B>` field's bean joins the registry, and a
+  mapped body whose pair a `ForwardMapper` field with services declares converts through that field's bean.
+
+Outside a container, `OrderMappers.EDITS.with(catalog)` returns the bound copy a test needs.
+
 ## Generated mapper and transformer beans
 
 `@TelescopeMapper` and `@TelescopeTransformer` turn an interface into an injectable bean, the same way they do in the

@@ -158,7 +158,17 @@ public final class BridgeRegistry {
     // cheap.)
     final var effective = loader != null ? loader : BridgeRegistry.class.getClassLoader();
     Object match = null;
-    for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, effective)) {
+    final var providers = ServiceLoader.load(BridgeProvider.class, effective).iterator();
+    while (true) {
+      final BridgeProvider provider;
+      try {
+        if (!providers.hasNext()) break;
+        provider = providers.next();
+      } catch (final ServiceConfigurationError broken) {
+        // An entry naming a class this loader cannot load says nothing of this pair, as for the
+        // bridges a class declares.
+        continue;
+      }
       if (provider.sourceType() != source || provider.targetType() != target) continue;
       if (match != null) {
         throw new IllegalStateException(

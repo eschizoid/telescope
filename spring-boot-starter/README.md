@@ -129,6 +129,36 @@ The registry bean is `@ConditionalOnMissingBean`. When you declare your own `@Be
 one that wraps the default with logging or metrics, the starter does not create its own. The autoconfiguration is also
 `@ConditionalOnClass(Telescope.class)`, which always holds because the starter depends on `telescope-core`.
 
+## Mappers whose rows call a service
+
+A row can call a bean of the application, `compute(OrderLine::getUnitPrice, service(Catalog::price))`, while the mapper
+field stays a `static final` declaration. For every `@Bridge` field whose rows call a service, its own or through a
+mapper it converts through, the starter registers one singleton bean of the field's declared type, bound to the
+context's bean of each service, so a class takes it the way it takes its repository:
+
+```java
+@RestController
+@RequiredArgsConstructor
+class OrderController {
+
+  private final OrderRepository orders;
+  private final EditMapper<OrderChanges, Order> edits; // OrderMappers.EDITS, bound to the Catalog bean
+}
+```
+
+- The bean is found from the provider the `@Bridge` processor generated for the field, which `ServiceLoader` lists; the
+  field's value is read through the provider, so nothing is scanned or read reflectively. A field the processor never
+  saw has no bean; bind it with `with(...)`.
+- Each bean is built with the other singletons at startup. No bean of a service type, or two with none `@Primary`, fails
+  startup naming the field, the row and the service.
+- The bean is named after the field, `OrderMappers.EDITS`, which `@Qualifier("OrderMappers.EDITS")` takes where two
+  modules declare a field of one type. Two fields giving one name fail startup naming both classes.
+- A `Mapper<A, B>` field's bean joins the registry under its pair. A mapped response or request body whose pair a
+  `ForwardMapper` field with services declares converts through that field's bean; a mapper bean the application
+  declares itself and leaves unbound fails startup with the method and the row named.
+
+Outside a container, `OrderMappers.EDITS.with(catalog)` returns the bound copy a test needs.
+
 ## Generated mapper and transformer beans
 
 `@TelescopeMapper` and `@TelescopeTransformer` are declared in `telescope-core`, and so are the interfaces your beans
