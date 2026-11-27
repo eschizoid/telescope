@@ -27,6 +27,7 @@ import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLClassLoader;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
@@ -72,6 +73,7 @@ import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -23102,6 +23104,422 @@ class CrossPathCorpusTest {
       return String.valueOf(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return String.valueOf(e.getMessage());
+    }
+  }
+
+  /**
+   * Rows that call a service, compiled once with the processor and once without, so each field runs
+   * its generated bridge on the one path and its rows on the other. Each service form is run under
+   * each operation, bound; an unbound mapper is refused in the same words on both paths with
+   * nothing written; {@code with} refuses alike; a service reached through a mapper a {@code via}
+   * row names, and through the edit mapper of an element pair, is bound with the mapper reaching
+   * it; and one service called by two rows is bound once.
+   */
+  @Nested
+  class ServiceRows {
+
+    private static final String LINE_BEAN = """
+      package svc;
+      public class Line {
+        private String sku;
+        private int price;
+        private String added;
+        private String code;
+        private String batch;
+        public String getSku() { return sku; }
+        public void setSku(final String v) { sku = v; }
+        public int getPrice() { return price; }
+        public void setPrice(final int v) { price = v; }
+        public String getAdded() { return added; }
+        public void setAdded(final String v) { added = v; }
+        public String getCode() { return code; }
+        public void setCode(final String v) { code = v; }
+        public String getBatch() { return batch; }
+        public void setBatch(final String v) { batch = v; }
+        @Override public String toString() {
+          return "Line(" + sku + ", " + price + ", " + added + ", " + code + ", " + batch + ")";
+        }
+      }
+      """;
+
+    private static final String ORDER_BEAN = """
+      package svc;
+      import java.util.ArrayList;
+      import java.util.List;
+      public class Order {
+        private String note;
+        private List<Line> lines = new ArrayList<>();
+        public String getNote() { return note; }
+        public void setNote(final String v) { note = v; }
+        public List<Line> getLines() { return lines; }
+        public void setLines(final List<Line> v) { lines = v; }
+        @Override public String toString() { return "Order(" + note + ", " + lines + ")"; }
+      }
+      """;
+
+    private static final String SHOP = """
+      package svc;
+
+      import static io.github.eschizoid.telescope.Telescope.edits;
+      import static io.github.eschizoid.telescope.Telescope.mapper;
+      import static io.github.eschizoid.telescope.Telescope.mapperForward;
+      import static io.github.eschizoid.telescope.mapping.Mapping.compute;
+      import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+      import static io.github.eschizoid.telescope.mapping.Mapping.service;
+      import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
+      import static io.github.eschizoid.telescope.mapping.Mapping.toOrElseGet;
+      import static io.github.eschizoid.telescope.mapping.Mapping.via;
+      import static io.github.eschizoid.telescope.mapping.Mapping.when;
+
+      import io.github.eschizoid.telescope.annotations.Bridge;
+      import io.github.eschizoid.telescope.conversion.EditMapper;
+      import io.github.eschizoid.telescope.conversion.ForwardMapper;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+
+      public final class Shop {
+        private Shop() {}
+
+        @Bridge
+        public static final EditMapper<OrderChanges, Order> EDITS = edits(OrderChanges.class, Order.class);
+
+        @Bridge
+        public static final EditMapper<LineChanges, Line> LINE = edits(
+          LineChanges.class,
+          Line.class,
+          compute(Line::getPrice, service(Catalog::price)),
+          compute(Line::getAdded, service(Stamps::now)),
+          toOneWay(LineChanges::label, Line::getCode, service(Codes::code)),
+          toOrElseGet(LineChanges::batch, Line::getBatch, service(Skus::next))
+        );
+
+        @Bridge
+        public static final EditMapper<Basket, Order> NAMED = edits(
+          Basket.class,
+          Order.class,
+          via(Basket::lines, Order::getLines, LINE)
+        );
+
+        @Bridge
+        public static final ForwardMapper<Line, LineView> VIEW = mapperForward(
+          Line.class,
+          LineView.class,
+          compute(LineView::price, service(Catalog::listed)),
+          compute(LineView::total, service(Prices::discounted)),
+          compute(LineView::label, service(Labels::label)),
+          when(service(Promotions::promoted), constant(LineView::promoted, true))
+        );
+
+        @Bridge
+        public static final Mapper<Tag, TagDto> TAG = mapper(
+          Tag.class,
+          TagDto.class,
+          toOrElseGet(Tag::name, TagDto::name, service(Skus::next))
+        );
+      }
+      """;
+
+    private static final List<JavaFileObject> MODEL = List.of(
+      ProcessorHarness.source("svc.Line", LINE_BEAN),
+      ProcessorHarness.source("svc.Order", ORDER_BEAN),
+      ProcessorHarness.source(
+        "svc.LineChanges",
+        "package svc; public record LineChanges(String sku, String label, String batch) {}"
+      ),
+      ProcessorHarness.source(
+        "svc.OrderChanges",
+        "package svc; public record OrderChanges(String note, java.util.List<LineChanges> lines) {}"
+      ),
+      ProcessorHarness.source(
+        "svc.Basket",
+        "package svc; public record Basket(String note, java.util.List<LineChanges> lines) {}"
+      ),
+      ProcessorHarness.source(
+        "svc.LineView",
+        "package svc; public record LineView(String sku, int price, int total, String label, boolean promoted) {}"
+      ),
+      ProcessorHarness.source("svc.Tag", "package svc; public record Tag(String name) {}"),
+      ProcessorHarness.source("svc.TagDto", "package svc; public record TagDto(String name) {}"),
+      ProcessorHarness.source(
+        "svc.Catalog",
+        """
+        package svc;
+        public class Catalog {
+          private final int perLetter;
+          public Catalog(final int perLetter) { this.perLetter = perLetter; }
+          public int price(final LineChanges line) { return line.sku().length() * perLetter; }
+          public int listed(final Line line) { return line.getSku().length() * perLetter; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "svc.Prices",
+        """
+        package svc;
+        public final class Prices {
+          private Prices() {}
+          public static int discounted(final Catalog catalog, final Line line) { return catalog.listed(line) - 1; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "svc.Stamps",
+        "package svc; public class Stamps { public String now() { return \"noon\"; } }"
+      ),
+      ProcessorHarness.source(
+        "svc.Codes",
+        "package svc; public class Codes { public String code(final String label) { return \"C-\" + label; } }"
+      ),
+      ProcessorHarness.source(
+        "svc.Skus",
+        """
+        package svc;
+        public class Skus {
+          private final String next;
+          public Skus(final String next) { this.next = next; }
+          public String next() { return next; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "svc.Labels",
+        "package svc; public class Labels { public String label(final Line line) { return \"L-\" + line.getSku(); } }"
+      ),
+      ProcessorHarness.source(
+        "svc.Promotions",
+        "package svc; public class Promotions { public boolean promoted(final Line line) { return line.getPrice() > 5; } }"
+      ),
+      ProcessorHarness.source("svc.Shop", SHOP)
+    );
+
+    /** The model compiled with the processor, which runs each field's bridge, and without. */
+    private static final Map<String, ProcessorHarness.Compilation> PATHS = compiled();
+
+    private static Map<String, ProcessorHarness.Compilation> compiled() {
+      final var generated = ProcessorHarness.compileFully(
+        List.<Processor>of(new BridgeProcessor()),
+        List.of(),
+        MODEL.toArray(JavaFileObject[]::new)
+      );
+      final var runtime = ProcessorHarness.compileFully(List.of(), List.of(), MODEL.toArray(JavaFileObject[]::new));
+      return Map.of("generated", generated, "runtime", runtime);
+    }
+
+    /** One loader per path, over the classes and resources its compilation produced. */
+    private Map<String, ClassLoader> loaders() throws Exception {
+      final var loaders = new LinkedHashMap<String, ClassLoader>();
+      for (final var path : List.of("generated", "runtime")) {
+        final var compilation = PATHS.get(path);
+        assertTrue(compilation.success(), () -> path + ": " + compilation.diagnostics());
+        final var dir = Files.createTempDirectory("service-rows-" + path);
+        for (final var e : compilation.classes().entrySet()) {
+          final var file = dir.resolve(e.getKey().replace('.', '/') + ".class");
+          Files.createDirectories(file.getParent());
+          Files.write(file, e.getValue());
+        }
+        for (final var e : compilation.resources().entrySet()) {
+          final var file = dir.resolve(e.getKey());
+          Files.createDirectories(file.getParent());
+          Files.writeString(file, e.getValue());
+        }
+        loaders.put(path, new URLClassLoader(new URL[] { dir.toUri().toURL() }, CrossPathCorpusTest.class.getClassLoader()));
+      }
+      return loaders;
+    }
+
+    private static Object field(final ClassLoader loader, final String name) throws ReflectiveOperationException {
+      return loader.loadClass("svc.Shop").getField(name).get(null);
+    }
+
+    private static Object make(final ClassLoader loader, final String type, final Object... args)
+      throws ReflectiveOperationException {
+      final var constructors = loader.loadClass("svc." + type).getConstructors();
+      for (final var constructor : constructors) {
+        if (constructor.getParameterCount() == args.length) return constructor.newInstance(args);
+      }
+      throw new IllegalArgumentException("no constructor of " + type + " takes " + args.length);
+    }
+
+    /** Every service the model's rows call, made in {@code loader}. */
+    private static Map<String, Object> services(final ClassLoader loader) throws ReflectiveOperationException {
+      final var services = new LinkedHashMap<String, Object>();
+      services.put("catalog", make(loader, "Catalog", 10));
+      services.put("stamps", make(loader, "Stamps"));
+      services.put("codes", make(loader, "Codes"));
+      services.put("skus", make(loader, "Skus", "B-9"));
+      services.put("labels", make(loader, "Labels"));
+      services.put("promotions", make(loader, "Promotions"));
+      return services;
+    }
+
+    private static Object line(final ClassLoader loader, final String sku, final String label, final String batch)
+      throws ReflectiveOperationException {
+      return make(loader, "LineChanges", sku, label, batch);
+    }
+
+    /** What {@code call} gives on {@code loader}'s path, or the message it fails with. */
+    private interface Run {
+      Object on(ClassLoader loader, Map<String, Object> services) throws Exception;
+    }
+
+    private static String outcome(final Run run, final ClassLoader loader) {
+      try {
+        return String.valueOf(run.on(loader, services(loader)));
+      } catch (final InvocationTargetException e) {
+        return "refused: " + e.getCause().getMessage();
+      } catch (final RuntimeException e) {
+        return "refused: " + e.getMessage();
+      } catch (final Exception e) {
+        throw new IllegalStateException(e);
+      }
+    }
+
+    /** Asserts both paths give {@code owed} for {@code run}. */
+    private void bothOwe(final String owed, final Run run) throws Exception {
+      for (final var path : loaders().entrySet()) {
+        assertEquals(owed, outcome(run, path.getValue()), path.getKey());
+      }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static EditMapper<Object, Object> edit(final Object mapper) {
+      return (EditMapper<Object, Object>) mapper;
+    }
+
+    private static EditMapper<Object, Object> line(final ClassLoader loader, final Map<String, Object> s)
+      throws ReflectiveOperationException {
+      return edit(field(loader, "LINE")).with(s.get("catalog"), s.get("stamps"), s.get("codes"), s.get("skus"));
+    }
+
+    @Test
+    @DisplayName("each service form gives on both paths what its plain row gives with the service's answer")
+    void eachFormUnderEachOperation() throws Exception {
+      bothOwe("Line(abc, 30, noon, C-x, B-9)", (l, s) -> line(l, s).forward(line(l, "abc", "x", null)));
+      bothOwe("Line(ab, 20, noon, C-y, K)", (l, s) -> line(l, s).forward(line(l, "ab", "y", "K")));
+      bothOwe("Line(ab, 20, noon, C-y, B-9)", (l, s) -> {
+        final var held = l.loadClass("svc.Line").getConstructor().newInstance();
+        return line(l, s).into(held, line(l, "ab", "y", null));
+      });
+      bothOwe("Line(abcd, 40, noon, C-z, null)", (l, s) -> {
+        final var held = l.loadClass("svc.Line").getConstructor().newInstance();
+        return line(l, s).patchInto(held, line(l, "abcd", "z", null));
+      });
+      bothOwe("Line(abcd, 40, noon, C-z, null)", (l, s) -> {
+        final var base = l.loadClass("svc.Line").getConstructor().newInstance();
+        return line(l, s).patch(base, line(l, "abcd", "z", null));
+      });
+    }
+
+    @Test
+    @DisplayName("an element pair's edit mapper and one a via row names are bound with the mapper reaching them")
+    void nestedServicesAreBound() throws Exception {
+      bothOwe("Order(kept, [Line(ab, 20, noon, C-y, K)])", (l, s) -> {
+        final var order = l.loadClass("svc.Order").getConstructor().newInstance();
+        l.loadClass("svc.Order").getMethod("setNote", String.class).invoke(order, "kept");
+        final var changes = make(l, "OrderChanges", null, List.of(line(l, "ab", "y", "K")));
+        return edit(field(l, "EDITS"))
+          .with(s.get("catalog"), s.get("stamps"), s.get("codes"), s.get("skus"))
+          .patchInto(order, changes);
+      });
+      bothOwe("Order(n, [Line(abcd, 40, noon, C-z, B-9)])", (l, s) ->
+        edit(field(l, "NAMED"))
+          .with(s.get("skus"), s.get("codes"), s.get("stamps"), s.get("catalog"))
+          .forward(make(l, "Basket", "n", List.of(line(l, "abcd", "z", null))))
+      );
+      bothOwe("[class svc.Catalog, class svc.Stamps, class svc.Codes, class svc.Skus]", (l, s) ->
+        edit(field(l, "EDITS")).services()
+      );
+      bothOwe("[class svc.Catalog, class svc.Stamps, class svc.Codes, class svc.Skus]", (l, s) ->
+        edit(field(l, "NAMED")).services()
+      );
+    }
+
+    @Test
+    @DisplayName("a forward mapper calling one service from two rows, and a two-way mapper, bind alike on both paths")
+    void forwardAndTwoWay() throws Exception {
+      bothOwe("LineView[sku=abc, price=30, total=29, label=L-abc, promoted=true]", (l, s) -> {
+        @SuppressWarnings("unchecked")
+        final var view = (ForwardMapper<Object, Object>) field(l, "VIEW");
+        final var source = l.loadClass("svc.Line").getConstructor().newInstance();
+        l.loadClass("svc.Line").getMethod("setSku", String.class).invoke(source, "abc");
+        l.loadClass("svc.Line").getMethod("setPrice", int.class).invoke(source, 7);
+        return view.with(s.get("promotions"), s.get("labels"), s.get("catalog")).forward(source);
+      });
+      bothOwe("[class svc.Catalog, class svc.Labels, class svc.Promotions]", (l, s) ->
+        ((ForwardMapper<?, ?>) field(l, "VIEW")).services()
+      );
+      bothOwe("TagDto[name=B-9] TagDto[name=t] Tag[name=q]", (l, s) -> {
+        @SuppressWarnings("unchecked")
+        final var tag = ((Mapper<Object, Object>) field(l, "TAG")).with(s.get("skus"));
+        return (
+          tag.forward(make(l, "Tag", (Object) null)) +
+          " " +
+          tag.forward(make(l, "Tag", "t")) +
+          " " +
+          tag.backward(make(l, "TagDto", "q"))
+        );
+      });
+    }
+
+    @Test
+    @DisplayName("an unbound mapper is refused in the same words on both paths, before it writes anything")
+    void unboundIsRefusedAlike() throws Exception {
+      bothOwe(
+        "refused: Shop.EDITS needs a Catalog for compute(Line::getPrice, service(Catalog::price)) in Shop.LINE, and" +
+          " none is bound. Inject the EditMapper<OrderChanges, Order> bean, or bind one with" +
+          " Shop.EDITS.with(catalog). Order(kept, [])",
+        (l, s) -> {
+          final var order = l.loadClass("svc.Order").getConstructor().newInstance();
+          l.loadClass("svc.Order").getMethod("setNote", String.class).invoke(order, "kept");
+          try {
+            edit(field(l, "EDITS")).patchInto(order, make(l, "OrderChanges", "new", List.of(line(l, "ab", "y", "K"))));
+            return "written " + order;
+          } catch (final IllegalStateException refused) {
+            return "refused: " + refused.getMessage() + " " + order;
+          }
+        }
+      );
+      bothOwe(
+        "refused: Shop.VIEW needs a Catalog for compute(LineView::price, service(Catalog::listed)), and none is" +
+          " bound. Inject the ForwardMapper<Line, LineView> bean, or bind one with Shop.VIEW.with(catalog).",
+        (l, s) -> ((ForwardMapper<?, ?>) field(l, "VIEW")).forward(null)
+      );
+    }
+
+    @Test
+    @DisplayName("with refuses a null, an unneeded value, two values for one service and a missing one alike")
+    void withRefusesAlike() throws Exception {
+      bothOwe(
+        "refused: Shop.LINE.with(...) was handed null as its service 1; hand it the Catalog, Stamps, Codes, Skus its" +
+          " rows call.",
+        (l, s) -> edit(field(l, "LINE")).with((Object) null)
+      );
+      bothOwe(
+        "refused: Shop.LINE.with(...) was handed a Labels, which no row it converts through calls; it calls" +
+          " Catalog, Stamps, Codes, Skus.",
+        (l, s) -> edit(field(l, "LINE")).with(s.get("catalog"), s.get("labels"))
+      );
+      bothOwe(
+        "refused: Shop.LINE.with(...) was handed two values for its Catalog, a Catalog and a Catalog.",
+        (l, s) -> edit(field(l, "LINE")).with(s.get("catalog"), make(l, "Catalog", 2))
+      );
+      bothOwe(
+        "refused: Shop.LINE.with(...) was handed no Stamps, which compute(Line::getAdded, service(Stamps::now)) calls.",
+        (l, s) -> edit(field(l, "LINE")).with(s.get("catalog"), s.get("codes"), s.get("skus"))
+      );
+    }
+
+    @Test
+    @DisplayName("explain names each service row and whether its service is bound, on both paths")
+    void explainSaysBound() throws Exception {
+      bothOwe("true true", (l, s) -> {
+        final var unbound = edit(field(l, "LINE")).explain().toString();
+        final var bound = line(l, s).explain().toString();
+        return (
+          unbound.contains("Line.price: computed by Catalog.price(LineChanges), no Catalog bound") +
+          " " +
+          bound.contains("Line.price: computed by Catalog.price(LineChanges), Catalog bound")
+        );
+      });
     }
   }
 }

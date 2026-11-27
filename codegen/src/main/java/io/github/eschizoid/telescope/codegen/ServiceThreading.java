@@ -43,6 +43,14 @@ final class ServiceThreading {
     "^  (?:public |private |protected )?static (?!final )(?:<[^>]*> )?[^=(]+? (\\w+)\\((.*)\\) \\{$"
   );
 
+  private static final Pattern NESTED_METHOD = Pattern.compile(
+    "^    (?:public |private |protected )?static (?!final |class )(?:<[^>]*> )?[^=(]+? (\\w+)\\(([^)]*)\\) \\{"
+  );
+
+  private static final Pattern NESTED_CLASS = Pattern.compile(
+    "^  (?:public |private |protected )?static final class (\\w+) \\{$"
+  );
+
   private static final Pattern ELEMENTS_FIELD = Pattern.compile(
     "^  public static final io\\.github\\.eschizoid\\.telescope\\.conversion\\.ContainerCopy\\.Elements (\\w+) = (.*)$"
   );
@@ -75,9 +83,25 @@ final class ServiceThreading {
     own.put(simple, new Callee(services, null));
     own.put(qualified, new Callee(services, null));
     final var declared = declarations(services);
-    // Declarations first: each static method takes the services after its own parameters.
+    // Declarations first: each static method takes the services after its own parameters, those
+    // of a nested class holding element conversions too, which the bridge calls by the class.
+    String nested = null;
     for (var i = 0; i < lines.size(); i++) {
       final var line = lines.get(i);
+      final var opened = NESTED_CLASS.matcher(line);
+      if (opened.matches()) {
+        nested = opened.group(1).equals("Fn") ? null : opened.group(1);
+        if (nested != null) own.put(nested, new Callee(services, null));
+        continue;
+      }
+      if (line.equals("  }")) nested = null;
+      if (nested != null) {
+        final var inner = NESTED_METHOD.matcher(line);
+        if (!inner.find()) continue;
+        final var at = inner.end() - ") {".length();
+        lines.set(i, line.substring(0, at) + (inner.group(2).isEmpty() ? "" : ", ") + declared + line.substring(at));
+        continue;
+      }
       final var method = STATIC_METHOD.matcher(line);
       if (!method.matches()) continue;
       final var params = method.group(2);
@@ -118,9 +142,50 @@ final class ServiceThreading {
         }
       }
     }
+    final var refusing = refusing(lines, services, needs);
     var threaded = String.join("\n", lines);
     threaded = calls(threaded, withElements, elements, services, own);
-    return boundFn(threaded, services, needs);
+    threaded = boundFn(threaded, services, needs);
+    final var end = threaded.lastIndexOf("\n}");
+    return threaded.substring(0, end) + refusing + threaded.substring(end);
+  }
+
+  /**
+   * Each public static method of the bridge as it was before it took services, refusing: code
+   * calling the bridge directly, as a class written against a bridge with no services does, then
+   * compiles and fails naming the row that needs a service. Read from the threaded declarations.
+   */
+  private static String refusing(final List<String> lines, final List<Service> services, final List<Need> needs) {
+    final var message = quoted(unbound(needs));
+    final var suffix = ", " + declarations(services) + ") {";
+    final var alone = "(" + declarations(services) + ") {";
+    final var out = new StringBuilder();
+    for (final var line : lines) {
+      if (!line.startsWith("  public static ") || !line.endsWith(") {") || line.contains("ContainerCopy.Elements ")) {
+        continue;
+      }
+      final String original;
+      if (line.endsWith(suffix)) original = line.substring(0, line.length() - suffix.length()) + ") {";
+      else if (line.endsWith(alone)) original = line.substring(0, line.length() - alone.length()) + "() {";
+      else continue;
+      out
+        .append("\n  /** Refuses: the rows of this bridge call a service, which a bound mapper hands it. */\n")
+        .append(original)
+        .append("\n    throw new IllegalStateException(")
+        .append(message)
+        .append(");\n  }\n");
+    }
+    return out.toString();
+  }
+
+  /** The refusal of a call on the bridge made without its services, naming the first row. */
+  private static String unbound(final List<Need> needs) {
+    final var first = needs.getFirst();
+    return (
+      first.row() +
+      (first.in() == null ? "" : " in " + first.in()) +
+      " calls a service, and none is bound. Inject the @Bridge field's mapper bean, or bind it with with(...)."
+    );
   }
 
   private static String declarations(final List<Service> services) {
@@ -335,10 +400,24 @@ final class ServiceThreading {
     methods.append(");\n    }");
     final var nulls = new StringBuilder();
     for (var i = 0; i < services.size(); i++) nulls.append(i > 0 ? ", null" : "null");
+    // The constant built bound to none refuses each operation that would hand a service on.
+    final var message = quoted(unbound(needs));
+    final var body = new StringBuilder();
+    for (final var line : text.substring(open, close).split("\n", -1)) {
+      var guarded = line;
+      if (line.startsWith("      return ")) for (final var service : services) {
+        guarded = guarded.replaceAll(
+          "(?<=[(, ])" + Pattern.quote(service.variable()) + "(?=[),])",
+          "java.util.Objects.requireNonNull(" + service.variable() + ", " + message.replace("\\", "\\\\").replace("$", "\\$") + ")"
+        );
+      }
+      if (!body.isEmpty()) body.append('\n');
+      body.append(guarded);
+    }
     return (
       text.substring(0, open) +
       fields +
-      text.substring(open, close) +
+      body +
       methods +
       text.substring(close).replace("new Fn();", "new Fn(" + nulls + ");")
     );

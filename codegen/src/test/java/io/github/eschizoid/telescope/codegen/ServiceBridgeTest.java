@@ -110,6 +110,6 @@ class ServiceBridgeTest {
     assertTrue(edits.contains("final sv.Catalog __svc_sv_Catalog"), edits);
     assertTrue(provider.contains("return List.of(sv.Catalog.class);"), provider);
     assertTrue(!provider.contains("FieldMapper"), provider);
-    System.out.println(line + "\n=====\n" + edits + "\n=====\n" + provider);
+
   }
 }

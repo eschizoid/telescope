@@ -640,7 +640,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // The rows calling a service of each pair a @Bridge field declares, and the service of each
   // class a row converts through one, by the class's qualified name.
-  private final Map<TypePair, List<FieldRows.ServiceUse>> fieldServices = new HashMap<>();
+  private final Map<String, List<FieldRows.ServiceUse>> fieldServiceUses = new HashMap<>();
+  private final Map<String, String> fieldLabels = new HashMap<>();
   private final Map<String, String> serviceHelpers = new HashMap<>();
 
   // The services of each bridge whose rows, or the bridges it calls, call one, by the bridge's
@@ -1226,6 +1227,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The pair is held under the field's name while its classes are written.
     configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrier, fieldName));
     seen.add(pair);
+    if (!parsed.services().isEmpty()) {
+      // The container bean a starter registers for the field reads it from the field's provider.
+      if (field.getModifiers().contains(Modifier.PRIVATE)) {
+        errorAt(
+          trees,
+          field,
+          call,
+          "@Bridge field " +
+            fieldName +
+            " calls a service, and a telescope starter registers its mapper as a bean read from the field;" +
+            " declare the field package-private or wider"
+        );
+        return;
+      }
+      // Known from the rows already, so a bridge written in this round that calls this field's
+      // bridge, which may be written only in a later one, hands it its services.
+      final var carrierPkg = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
+      final var bridge =
+        (carrierPkg.isEmpty() ? "" : carrierPkg + ".") + FieldRows.bridgeSimpleName(parsed.source(), parsed.target());
+      fieldServiceUses.put(bridge, parsed.services());
+      fieldLabels.put(bridge, carrier.getSimpleName() + "." + fieldName);
+    }
+    for (final var generated : parsed.classes()) {
+      if (generated.service() != null) serviceHelpers.put(generated.qualifiedName(), generated.service());
+    }
     var waits = false;
     for (final var generated : parsed.classes()) {
       if (processingEnv.getElementUtils().getTypeElement(generated.qualifiedName()) != null) continue;
@@ -1269,25 +1295,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       fieldRetries.add(carrier.getQualifiedName() + "#" + fieldName);
       return;
-    }
-    if (!parsed.services().isEmpty()) {
-      // The container bean a starter registers for the field reads it from the field's provider.
-      if (field.getModifiers().contains(Modifier.PRIVATE)) {
-        errorAt(
-          trees,
-          field,
-          call,
-          "@Bridge field " +
-            fieldName +
-            " calls a service, and a telescope starter registers its mapper as a bean read from the field;" +
-            " declare the field package-private or wider"
-        );
-        return;
-      }
-      fieldServices.put(pair, parsed.services());
-    }
-    for (final var generated : parsed.classes()) {
-      if (generated.service() != null) serviceHelpers.put(generated.qualifiedName(), generated.service());
     }
     if (parsed.defaultStrategy() != null) writeDefaults.put(pair, parsed.defaultStrategy());
     final var carrierPackage = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
@@ -9934,26 +9941,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var elements = processingEnv.getElementUtils();
     final var bridges = new LinkedHashMap<String, PendingWrite>();
     for (final var write : pendingWrites) if (write.providedBridge() == null) bridges.put(write.qualifiedName(), write);
-    for (final var bridge : bridges.values()) {
-      final var pair = fieldBridgePairs.get(bridge.qualifiedName());
-      final var uses = pair == null ? null : fieldServices.get(pair);
-      if (uses == null || uses.isEmpty()) continue;
+    // A field's own rows decide its bridge's services first, whether the bridge is written this
+    // round or a later one.
+    final var own = new HashMap<String, List<ServiceThreading.Service>>();
+    final var ownNeeds = new HashMap<String, List<ServiceThreading.Need>>();
+    for (final var entry : fieldServiceUses.entrySet()) {
       final var services = new ArrayList<ServiceThreading.Service>();
       final var needs = new ArrayList<ServiceThreading.Need>();
-      for (final var use : uses) {
+      for (final var use : entry.getValue()) {
         final var type = use.service().getQualifiedName().toString();
         final var service = new ServiceThreading.Service(type, FieldRows.serviceVariable(use.service(), elements));
         if (!services.contains(service)) services.add(service);
         needs.add(new ServiceThreading.Need(type, use.row(), null, use.explain()));
       }
-      serviceBridges.put(bridge.qualifiedName(), services);
-      serviceBridgeNeeds.put(bridge.qualifiedName(), needs);
+      own.put(entry.getKey(), List.copyOf(services));
+      ownNeeds.put(entry.getKey(), List.copyOf(needs));
+      if (!bridges.containsKey(entry.getKey())) {
+        serviceBridges.putIfAbsent(entry.getKey(), List.copyOf(services));
+        serviceBridgeNeeds.putIfAbsent(entry.getKey(), List.copyOf(needs));
+      }
     }
-    final var own = new HashMap<String, List<ServiceThreading.Service>>();
-    final var ownNeeds = new HashMap<String, List<ServiceThreading.Need>>();
     for (final var bridge : bridges.keySet()) {
-      own.put(bridge, serviceBridges.getOrDefault(bridge, List.of()));
-      ownNeeds.put(bridge, serviceBridgeNeeds.getOrDefault(bridge, List.of()));
+      own.putIfAbsent(bridge, List.of());
+      ownNeeds.putIfAbsent(bridge, List.of());
+      if (!own.get(bridge).isEmpty()) {
+        serviceBridges.put(bridge, own.get(bridge));
+        serviceBridgeNeeds.put(bridge, ownNeeds.get(bridge));
+      }
     }
     var changed = true;
     while (changed) {
@@ -10061,6 +10075,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /** How a refusal names the mapper of {@code bridge}: its field, as {@code OrderMappers.LINE}. */
   private String bridgeLabel(final String bridge) {
+    if (fieldLabels.containsKey(bridge)) return fieldLabels.get(bridge);
     final var pair = fieldBridgePairs.get(bridge);
     final var config = pair == null ? null : configsByPair.get(pair);
     if (config == null || config.declaringField() == null || config.carrierFq() == null) return null;
