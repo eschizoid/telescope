@@ -1,6 +1,11 @@
 package io.github.eschizoid.telescope.demo.quarkus;
 
+import io.github.eschizoid.telescope.conversion.EditMapper;
+import io.github.eschizoid.telescope.demo.api.OrderChanges;
+import io.github.eschizoid.telescope.demo.api.PlaceOrder;
+import io.github.eschizoid.telescope.demo.order.Catalog;
 import io.github.eschizoid.telescope.demo.order.InMemoryOrders;
+import io.github.eschizoid.telescope.demo.order.Order;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
 import io.github.eschizoid.telescope.demo.order.Orders;
 import io.github.eschizoid.telescope.demo.order.SampleData;
@@ -32,10 +37,26 @@ public class OrderBeans {
     return new Seller(name, vatId);
   }
 
+  /** The products the shop sells, which prices each line an order is placed or changed with. */
   @Produces
   @Singleton
-  OrderDesk orderDesk(final Orders orders, final Seller seller) {
-    return new OrderDesk(orders, seller, Clock.systemDefaultZone());
+  Catalog catalog() {
+    return new Catalog(Catalog.stock());
+  }
+
+  /**
+   * The desk, handed the beans the extension registers for {@code OrderMappers.PLACE} and {@code
+   * OrderMappers.EDITS}, each bound to the catalog bean their line rows call.
+   */
+  @Produces
+  @Singleton
+  OrderDesk orderDesk(
+    final Orders orders,
+    final Seller seller,
+    final EditMapper<PlaceOrder, Order> place,
+    final EditMapper<OrderChanges, Order> edits
+  ) {
+    return new OrderDesk(orders, seller, Clock.systemDefaultZone(), place, edits);
   }
 
   void loadSampleData(@Observes final StartupEvent started, final OrderDesk desk, final Orders orders) {

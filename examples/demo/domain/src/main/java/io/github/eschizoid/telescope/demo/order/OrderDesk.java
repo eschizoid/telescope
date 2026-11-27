@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.demo.order;
 
 import io.github.eschizoid.telescope.Sources;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
 import io.github.eschizoid.telescope.demo.api.NewLine;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
@@ -12,17 +13,30 @@ import java.util.List;
 /**
  * The order service's business rules, with no framework in them. Each app calls these from its own
  * endpoints, and the mapping in between is all in {@link OrderMappers} and {@code RequestMappers}.
+ * The two edit mappers that write an order are handed in bound to the app's {@link Catalog}, which
+ * prices each line they write: each app injects the beans its starter registers for {@link
+ * OrderMappers#PLACE} and {@link OrderMappers#EDITS}.
  */
 public final class OrderDesk {
 
   private final Orders orders;
   private final Seller seller;
   private final Clock clock;
+  private final EditMapper<PlaceOrder, Order> place;
+  private final EditMapper<OrderChanges, Order> edits;
 
-  public OrderDesk(final Orders orders, final Seller seller, final Clock clock) {
+  public OrderDesk(
+    final Orders orders,
+    final Seller seller,
+    final Clock clock,
+    final EditMapper<PlaceOrder, Order> place,
+    final EditMapper<OrderChanges, Order> edits
+  ) {
     this.orders = orders;
     this.seller = seller;
     this.clock = clock;
+    this.place = place;
+    this.edits = edits;
   }
 
   public List<Order> list() {
@@ -43,7 +57,7 @@ public final class OrderDesk {
       .orElseThrow(() -> new IllegalArgumentException("no customer with email " + command.customerEmail()));
     checkLines(command.lines());
     checkDiscountCode(command.discountCode());
-    final var order = OrderMappers.PLACE.forward(command);
+    final var order = place.forward(command);
     order.setNumber("SO-" + (1001 + orders.all().size()));
     order.setCustomer(customer);
     order.setStatus(OrderStatus.PLACED);
@@ -62,7 +76,7 @@ public final class OrderDesk {
     require(order, OrderStatus.PLACED, "change");
     checkDiscountCode(changes.discountCode());
     if (changes.lines() != null) checkLines(changes.lines());
-    OrderMappers.EDITS.patchInto(order, changes);
+    edits.patchInto(order, changes);
     return orders.save(order);
   }
 

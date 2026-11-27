@@ -6,6 +6,7 @@ import static io.github.eschizoid.telescope.Telescope.path;
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.keep;
+import static io.github.eschizoid.telescope.mapping.Mapping.service;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.toFormatted;
 import static io.github.eschizoid.telescope.mapping.Mapping.toFormattedNumber;
@@ -182,17 +183,19 @@ public final class OrderMappers {
 
   /**
    * A line as a client sends it, in a new order or a PATCH. The client names a SKU and a quantity;
-   * the name, the price and the cost come from the catalog on the way in, on every write, so a line
-   * sent again is priced again. The line's identifier is generated and its order is the
-   * back-reference {@code mappedBy} names, so neither needs a row.
+   * the name, the price and the cost come from the {@link Catalog} bean on the way in, on every
+   * write, so a line sent again is priced again. The line's identifier is generated and its order
+   * is the back-reference {@code mappedBy} names, so neither needs a row. {@link #PLACE} and {@link
+   * #EDITS} convert their lines through this mapper, so they call the catalog too: each app injects
+   * them bound to its catalog bean.
    */
   @Bridge
   public static final EditMapper<NewLine, OrderLine> NEW_LINE = edits(
     NewLine.class,
     OrderLine.class,
-    compute(OrderLine::getName, Catalog::name),
-    compute(OrderLine::getUnitPrice, Catalog::price),
-    compute(OrderLine::getCostPrice, Catalog::cost)
+    compute(OrderLine::getName, service(Catalog::name)),
+    compute(OrderLine::getUnitPrice, service(Catalog::price)),
+    compute(OrderLine::getCostPrice, service(Catalog::cost))
   );
 
   /**

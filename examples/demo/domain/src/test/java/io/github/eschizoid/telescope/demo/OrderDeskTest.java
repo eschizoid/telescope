@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.demo.api.PartnerFeed;
 import io.github.eschizoid.telescope.demo.api.PlaceOrderV2;
 import io.github.eschizoid.telescope.demo.api.RequestMappers;
 import io.github.eschizoid.telescope.demo.order.Card;
+import io.github.eschizoid.telescope.demo.order.Catalog;
 import io.github.eschizoid.telescope.demo.order.Delivery;
 import io.github.eschizoid.telescope.demo.order.InMemoryOrders;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
@@ -47,7 +48,14 @@ class OrderDeskTest {
   @BeforeEach
   void load() {
     orders = new InMemoryOrders();
-    desk = new OrderDesk(orders, new Seller("Telescope Goods", "GB123456789"), TODAY);
+    final var catalog = new Catalog(Catalog.stock());
+    desk = new OrderDesk(
+      orders,
+      new Seller("Telescope Goods", "GB123456789"),
+      TODAY,
+      OrderMappers.PLACE.with(catalog),
+      OrderMappers.EDITS.with(catalog)
+    );
     SampleData.load(desk, orders);
   }
 

@@ -21,10 +21,12 @@ import io.github.eschizoid.telescope.demo.api.PlaceOrderV2;
 import io.github.eschizoid.telescope.demo.api.PlaceOrderV2ToPlaceOrderBridge;
 import io.github.eschizoid.telescope.demo.api.RequestMappers;
 import io.github.eschizoid.telescope.demo.order.Card;
+import io.github.eschizoid.telescope.demo.order.Catalog;
 import io.github.eschizoid.telescope.demo.order.Delivery;
 import io.github.eschizoid.telescope.demo.order.InMemoryOrders;
 import io.github.eschizoid.telescope.demo.order.Order;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
+import io.github.eschizoid.telescope.demo.order.OrderMappers;
 import io.github.eschizoid.telescope.demo.order.OrderStatus;
 import io.github.eschizoid.telescope.demo.order.SampleData;
 import io.github.eschizoid.telescope.demo.order.Seller;
@@ -141,7 +143,15 @@ public final class OrderRun {
 
   private static OrderDesk openShop() {
     final var orders = new InMemoryOrders();
-    final var desk = new OrderDesk(orders, new Seller("Telescope Goods Ltd", "GB123456789"), TODAY);
+    // No container here: the edit mappers are bound to the catalog by hand.
+    final var catalog = new Catalog(Catalog.stock());
+    final var desk = new OrderDesk(
+      orders,
+      new Seller("Telescope Goods Ltd", "GB123456789"),
+      TODAY,
+      OrderMappers.PLACE.with(catalog),
+      OrderMappers.EDITS.with(catalog)
+    );
     SampleData.load(desk, orders);
     return desk;
   }
