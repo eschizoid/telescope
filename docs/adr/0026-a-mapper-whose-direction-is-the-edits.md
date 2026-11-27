@@ -250,7 +250,9 @@ type. `WriteStrategy.ADDERS` and its row are gone.
    class path, so both paths agree. Both starters carry telescope-jpa as an API dependency, so a consumer of either
    compiles with it. An explicit `keep` on such a property stays legal, and an assigned identifier still needs a row or
    a `keep`. Without the module nothing changes. `explain()` reports each as `generated, never written by an edit`. The
-   README's example and the demo carry no `keep` of an identifier.
+   README's example and the demo carry no `keep` of an identifier. The rule holds for every entity a conversion builds
+   from what the client sent, a referenced one included, so a `@ManyToOne` sent as a reference by identifier arrives
+   with none and is resolved by a `compute` or `via` row that loads it.
 2. **What `forward` builds a kept property with.** A kept property takes the default of its type on `forward`, null for
    a reference and the JLS default for a primitive, as a forward mapper builds a property nothing fills; for a bean
    built through its setters that default is what the setter is handed.

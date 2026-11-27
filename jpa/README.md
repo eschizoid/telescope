@@ -121,14 +121,18 @@ element; the database fills both. A merge by `@Id` reads the identifier from the
 of the identifier's name, so a held element is still matched, keeps its version and is written in place. The
 `@OneToMany(mappedBy)` back-reference of an element counts as accounted for too, in the element's own edit mapper, since
 the write of the collection holding it sets it. An assigned identifier still needs a row or a `keep`. `explain()`
-reports each as `generated, never written by an edit`.
+reports each as `generated, never written by an edit`. The rule holds for every entity a conversion builds from what the
+client sent, a referenced one included: a `@ManyToOne` sent as a reference by identifier, such as a `ProductRef(77)`
+converted into a `Product`, arrives with no identifier, so resolve a reference with a `compute` or `via` row that loads
+it; the persistence provider refuses an unresolved one at flush.
 
-- **The identifier is the converted element's.** The entity's `@Id` or `@EmbeddedId`, on a field or a getter, read
-  through its getter from the element the conversion built, so whatever the element conversion writes into it, by name
-  or through a row, is what is matched. A sent element with no identifier is new, and so is one whose primitive
-  identifier, a `long id`, holds 0; a boxed `Long` holding 0 is an identifier. An identifier the collection does not
-  hold is new where the entity assigns its identifiers, and refused by name where it is generated, by `@GeneratedValue`
-  or by a Hibernate generator annotation such as `@UuidGenerator`.
+- **The identifier is the one the client sent.** The entity's `@Id` or `@EmbeddedId`, on a field or a getter. A
+  generated identifier, which no conversion writes, is read from the element the client sent, its property of the
+  identifier's name; an assigned one is read through its getter from the element the conversion built, so whatever the
+  element conversion writes into it, by name or through a row, is what is matched. A sent element with no identifier is
+  new, and so is one whose primitive identifier, a `long id`, holds 0; a boxed `Long` holding 0 is an identifier. An
+  identifier the collection does not hold is new where the entity assigns its identifiers, and refused by name where it
+  is generated, by `@GeneratedValue` or by a Hibernate generator annotation such as `@UuidGenerator`.
 - **Refused before anything is written.** One identifier sent twice is refused, and so are two elements sent with
   different identifiers that convert into equal values of a set, which would keep one and delete the other's row. To
   find those, each sent element is converted a second time when a converted set comes out smaller than what was sent, so
