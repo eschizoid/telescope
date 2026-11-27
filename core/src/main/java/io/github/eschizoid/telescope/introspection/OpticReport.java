@@ -150,6 +150,12 @@ public record OpticReport(List<OpticNode> nodes) {
     section(blocks, "Unused sources", unused, u -> row("•", u.field(), leftWidth, ""));
     section(blocks, "Cases", dispatched, d -> row("•", caseCell(d), leftWidth, "→ " + d.targetCase().getSimpleName()));
     section(blocks, "Collections", collections(), c -> "  • " + c);
+    section(
+      blocks,
+      "Element mappers",
+      nodes.stream().filter(OpticNode.ElementsThrough.class::isInstance).toList(),
+      e -> "  • " + e
+    );
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
     final var hops = hops();
     if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));
@@ -183,6 +189,9 @@ public record OpticReport(List<OpticNode> nodes) {
     return switch (reason) {
       case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
+      case KEPT -> "kept, never written by an edit";
+      case GENERATED -> "generated, never written by an edit";
+      case BACK_REFERENCE -> "back-reference, set by the collection write";
     };
   }
 

@@ -95,6 +95,11 @@ public final class BridgeRegistry {
     return registered(provider) ? provider.forwardMapper(built, BridgeGrant.INSTANCE) : built;
   }
 
+  /** As {@link #specialise(BridgeProvider, Mapper)}, for an edit mapper. */
+  public static EditMapper<?, ?> specialise(final BridgeProvider provider, final EditMapper<?, ?> built) {
+    return registered(provider) ? provider.editMapper(built, BridgeGrant.INSTANCE) : built;
+  }
+
   /** Whether {@code provider} is the instance this registry read for its declaring class. */
   private static boolean registered(final BridgeProvider provider) {
     final var declaring = provider.declaringType();

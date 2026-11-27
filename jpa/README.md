@@ -73,9 +73,9 @@ What it does not change:
 
 ## A managed collection is merged by identifier
 
-`into` and `patchInto` writing a collection of entities into an entity that holds one merge it by identifier: a sent
-element whose identifier matches a held element is written into that element in place, a new one is added, and a held
-element nothing matches is removed. A row that did not change is not written.
+`into` and an edit mapper's `patchInto` writing a collection of entities into an entity that holds one merge it by
+identifier: a sent element whose identifier matches a held element is written into that element in place, a new one is
+added, and a held element nothing matches is removed. A row that did not change is not written.
 
 ```java
 public record OrderForm(Long id, List<LineForm> lines) {}
@@ -94,6 +94,34 @@ EDIT.into(order, form);
 Without the module, the same `into` clears the order's lines and adds a new instance per sent line: every line the order
 held is deleted and every sent one inserted, and a sent line carrying the id of a held one fails at flush, since it is a
 new instance with the identifier of a managed one.
+
+An edit mapper merges the same way, and prices each element on the way in when its elements convert through an edit
+mapper of their own, declared in the same class as the owner's mapper or in the element pair's own two classes:
+
+```java
+static final EditMapper<LineForm, OrderLine> LINE = Telescope.edits(
+  LineForm.class,
+  OrderLine.class,
+  compute(OrderLine::getUnitPrice, Catalog::price)
+);
+static final EditMapper<OrderForm, Order> PATCH = Telescope.edits(
+  OrderForm.class,
+  Order.class // the lines go through LINE, the edit mapper of their pair
+);
+
+PATCH.patchInto(order, form);
+// A line sent as it is held, priced as the catalog prices it: no statement.
+// A line sent again whose stored price the catalog no longer gives: one UPDATE, priced again.
+```
+
+With the module, an edit mapper counts an identifier with a generator, `@GeneratedValue` or a Hibernate generator
+annotation, and a `@Version`, as accounted for: it needs no row for them and no setter, because no conversion of any
+pair it writes writes them, an element's included, whether it builds a new entity, writes into a held one or adds a new
+element; the database fills both. A merge by `@Id` reads the identifier from the element the client sent, its property
+of the identifier's name, so a held element is still matched, keeps its version and is written in place. The
+`@OneToMany(mappedBy)` back-reference of an element counts as accounted for too, in the element's own edit mapper, since
+the write of the collection holding it sets it. An assigned identifier still needs a row or a `keep`. `explain()`
+reports each as `generated, never written by an edit`.
 
 - **The identifier is the converted element's.** The entity's `@Id` or `@EmbeddedId`, on a field or a getter, read
   through its getter from the element the conversion built, so whatever the element conversion writes into it, by name

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.jpa.fixtures;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 
 /**
@@ -20,11 +21,11 @@ public final class BasketMappers {
 
   /** {@code PATCH.patchInto(basket, form)}, compiled by {@code telescope-codegen}. */
   @Bridge
-  public static final Mapper<Basket, BasketForm> PATCH = Telescope.mapper(Basket.class, BasketForm.class);
+  public static final EditMapper<BasketPatch, Basket> PATCH = Telescope.edits(BasketPatch.class, Basket.class);
 
   /** {@code EDIT.into(basket, edit)}, built at run time. */
   public static final Mapper<BasketEdit, Basket> EDIT = Telescope.mapper(BasketEdit.class, Basket.class);
 
   /** {@code EDIT_PATCH.patchInto(basket, edit)}, built at run time. */
-  public static final Mapper<Basket, BasketEdit> EDIT_PATCH = Telescope.mapper(Basket.class, BasketEdit.class);
+  public static final EditMapper<BasketEdit, Basket> EDIT_PATCH = Telescope.edits(BasketEdit.class, Basket.class);
 }

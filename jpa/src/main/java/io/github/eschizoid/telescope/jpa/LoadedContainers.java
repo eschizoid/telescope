@@ -12,9 +12,10 @@ import java.util.ServiceLoader;
  * into it in place, a new one is added and a held one nothing matches is removed, so a row that did
  * not change is not written. The back-reference of a collection's elements is the property
  * {@code @OneToMany(mappedBy)} names on it, which a write sets to the owner where no adder does and
- * clears on an element it takes out where the owner has no remover. Every mapper and every
- * generated bridge copies and writes through {@link ContainerCopy}, so the runtime and generated
- * paths take this policy alike.
+ * clears on an element it takes out where the owner has no remover. An identifier with a generator
+ * and a version are what an edit mapper never writes into an entity it is handed. Every mapper and
+ * every generated bridge copies and writes through {@link ContainerCopy}, so the runtime and
+ * generated paths take this policy alike.
  *
  * <p>A shared container is the provider's own. Reading it after its session has closed throws, as
  * reading the entity's property would: the policy changes when a collection loads, not whether
@@ -53,6 +54,11 @@ public final class LoadedContainers implements ContainerCopy.Policy {
   @Override
   public String backReference(final Class<?> owner, final String property) {
     return MappedBy.of(owner, property);
+  }
+
+  @Override
+  public boolean generated(final Class<?> owner, final String property) {
+    return Identifiers.generated(owner, property);
   }
 
   @Override

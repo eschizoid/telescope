@@ -77,9 +77,9 @@ final class FieldRows {
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
   private static final Set<String> HINTS = Set.of("writeBean", "writeBeans");
   private static final String BRIDGE_FQN = "io.github.eschizoid.telescope.annotations.Bridge";
-  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward", "merge");
+  private static final Set<String> FACTORIES = Set.of("map", "mapper", "mapperForward", "edits", "merge");
   private static final String MERGE_STEP_FQN = "io.github.eschizoid.telescope.mapping.MergeStep";
-  private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward");
+  private static final Set<String> DISPATCHING = Set.of("mapper", "mapperForward", "edits");
   private static final Set<String> ROW_FACTORIES = Set.of(
     "to",
     "toOneWay",
@@ -92,6 +92,7 @@ final class FieldRows {
     "enumTo",
     "via",
     "drop",
+    "keep",
     "constant",
     "compute",
     "zip",
@@ -174,7 +175,12 @@ final class FieldRows {
     Map<String, Gate> gatedTargets,
     Map<Integer, Gate> gatedPaths,
     Map<String, String> backReferences,
-    Map<String, String> backReferenceTypes
+    Map<String, String> backReferenceTypes,
+    // Whether the field is initialised by Telescope.edits, and the target properties its keep
+    // rows
+    // name, which no edit writes.
+    boolean edits,
+    Set<String> keeps
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -558,6 +564,19 @@ final class FieldRows {
     return source == null || target == null ? null : List.of(source, target);
   }
 
+  /** The qualified name of the edit mapper a field initialised by {@code Telescope.edits} holds. */
+  static final String EDIT_MAPPER_FQN = "io.github.eschizoid.telescope.conversion.EditMapper";
+
+  /** Whether {@code field} is declared as an {@code EditMapper}. */
+  private boolean editMapperField(final VariableElement field) {
+    final var erased = env.getTypeUtils().erasure(field.asType());
+    return (
+      erased instanceof DeclaredType declared &&
+      declared.asElement() instanceof TypeElement type &&
+      type.getQualifiedName().contentEquals(EDIT_MAPPER_FQN)
+    );
+  }
+
   /** Whether {@code field} carries {@code @Bridge}, read from its annotation's name. */
   private static boolean bridgeAnnotated(final VariableTree field) {
     for (final var annotation : field.getModifiers().getAnnotations()) {
@@ -626,13 +645,15 @@ final class FieldRows {
         variable.getInitializer() == null ? variable : variable.getInitializer(),
         "@Bridge field " +
           fieldName +
-          " must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)" +
+          " must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...), Telescope.edits(...) or" +
+          " Telescope.merge(...)" +
           " call written in place, whose rows the processor compiles into the bridge"
       );
     }
     final var call = (MethodInvocationTree) variable.getInitializer();
     if (factory.equals("merge")) return merged(unit, call, fieldName);
     final var strict = factory.equals("mapper");
+    final var edits = factory.equals("edits");
     final var args = call.getArguments();
     final var source = args.size() < 2 ? null : classLiteral(unit, args.get(0));
     final var target = args.size() < 2 ? null : classLiteral(unit, args.get(1));
@@ -644,13 +665,15 @@ final class FieldRows {
     }
     final var pkg = env.getElementUtils().getPackageOf(field.getEnclosingElement()).getQualifiedName().toString();
     final var bridgeName = bridgeSimpleName(source, target);
-    final var rows = new Rows(unit, source, target, strict, pkg, bridgeName, fieldName);
+    final var rows = new Rows(unit, source, target, strict, edits, pkg, bridgeName, fieldName);
     for (var i = 2; i < args.size(); i++) {
       final var refused = rows.read(args.get(i));
       if (refused != null) return refused;
     }
     final var fannedOut = rows.fanOut();
     if (fannedOut != null) return fannedOut;
+    final var keptAndWritten = rows.keptAndWritten();
+    if (keptAndWritten != null) return keptAndWritten;
     final var offThePair = rows.hintsOffThePair();
     if (offThePair != null) return offThePair;
     return rows.parsed();
@@ -858,6 +881,11 @@ final class FieldRows {
     private final TypeElement source;
     private final TypeElement target;
     private final boolean strict;
+    // Whether the rows are an edit mapper's, which alone takes keep and a via naming an edit
+    // mapper.
+    private final boolean edits;
+    private final Set<String> keeps = new LinkedHashSet<>();
+    private final Map<String, Tree> keptAt = new LinkedHashMap<>();
     private final String pkg;
     private final String bridgeName;
     private final Set<String> drops = new LinkedHashSet<>();
@@ -927,6 +955,7 @@ final class FieldRows {
       final TypeElement source,
       final TypeElement target,
       final boolean strict,
+      final boolean edits,
       final String pkg,
       final String bridgeName,
       final String fieldName
@@ -935,6 +964,7 @@ final class FieldRows {
       this.source = source;
       this.target = target;
       this.strict = strict;
+      this.edits = edits;
       this.pkg = pkg;
       this.bridgeName = bridgeName;
       this.fieldName = fieldName;
@@ -967,8 +997,60 @@ final class FieldRows {
         gatedTargets,
         gatedPaths,
         backReferences,
-        backReferenceTypes
+        backReferenceTypes,
+        edits,
+        keeps
       );
+    }
+
+    /** The factory these rows were given to, as a refusal names it. */
+    private String factory() {
+      return edits ? "Telescope.edits" : strict ? "Telescope.mapper" : "Telescope.mapperForward";
+    }
+
+    /**
+     * The refusal of a {@code keep} row whose property another row writes, in whichever order the
+     * two came, or null.
+     */
+    Refused keptAndWritten() {
+      for (final var kept : keptAt.entrySet()) {
+        final var name = kept.getKey();
+        if (targetsWritten.contains(name) || computedTargetsSoFar().contains(name) || pathWrites(name)) {
+          return new Refused(kept.getValue(), PairingMessages.keepBesideWrite(simple(source), simple(target), name));
+        }
+      }
+      return null;
+    }
+
+    private Set<String> computedTargetsSoFar() {
+      final var computed = new LinkedHashSet<>(computes.keySet());
+      computed.addAll(computedFrom.keySet());
+      return computed;
+    }
+
+    private boolean pathWrites(final String name) {
+      for (final var path : targetPaths) if (path.properties().getFirst().equals(name)) return true;
+      for (final var path : sourcePaths) if (path.target().equals(name)) return true;
+      for (final var path : pathsToPaths) if (path.written().properties().getFirst().equals(name)) return true;
+      return false;
+    }
+
+    /** A {@code keep(Target::property)} row: a target property no edit writes. */
+    private Refused keep(final MethodInvocationTree row) {
+      final var tgt = accessor(row.getArguments().getFirst(), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var t = (Accessor) tgt;
+      if (!edits) return new Refused(
+        row,
+        PairingMessages.keepOutsideEdits(factory(), simple(source), simple(target), t.property())
+      );
+      if (!keeps.add(t.property())) {
+        return new Refused(row, PairingMessages.keepBesideWrite(simple(source), simple(target), t.property()));
+      }
+      keptAt.put(t.property(), row);
+      rowKinds.add("Keep");
+      rowAccessors.add(">" + t.method());
+      return null;
     }
 
     /** The property each {@code backReference} row names, by its element class. */
@@ -1047,7 +1129,7 @@ final class FieldRows {
           row.getMethodSelect() +
             "(...) is not a row a @Bridge mapper compiles; the generated bridge takes the Mapping rows" +
             " to, toOneWay, toOrElse, toOrElseGet, toFormatted, toFormattedOneWay, toFormattedNumber," +
-            " toFormattedNumberOneWay, via, drop, constant, compute, when and backReference, and the hints" +
+            " toFormattedNumberOneWay, via, drop, keep, constant, compute, when and backReference, and the hints" +
             " writeBean and writeBeans"
         );
       }
@@ -1090,6 +1172,7 @@ final class FieldRows {
         case "toFormatted", "toFormattedOneWay", "toFormattedNumber", "toFormattedNumberOneWay" -> formatted(row, kind);
         case "via" -> via(row);
         case "drop" -> drop(row);
+        case "keep" -> keep(row);
         case "constant" -> filled(row, true);
         case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(computeForm) ? computedFrom(row) : filled(row, false);
         default -> new Refused(
@@ -2109,6 +2192,10 @@ final class FieldRows {
         );
       }
       final var s = ((Accessor) src).property();
+      if (!edits && editMapperField(mapperField)) return new Refused(
+        args.get(2),
+        PairingMessages.viaEditsOutsideEdits(factory(), simple(source), simple(target), s)
+      );
       final var refusal = write(row, s, ((Accessor) tgt).property(), mapperField);
       if (refusal != null) return refusal;
       final var owner = (TypeElement) mapperField.getEnclosingElement();

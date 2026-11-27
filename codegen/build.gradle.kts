@@ -53,6 +53,27 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.jacocoTestReport {
+    // The cross-path tests compile generated bridges and run them through core: the edit mapper a
+    // generated bridge's field holds, and the runtime mapper each one is compared against. A
+    // report covers only the classes it lists, so those core classes are listed here too, and the
+    // lines these tests execute count toward them beside the :core report's.
+    val core = project(":core")
+    dependsOn(":core:classes")
+    classDirectories.from(
+        core.layout.buildDirectory.dir("classes/java/main").map { dir ->
+            fileTree(dir) {
+                include(
+                    "io/github/eschizoid/telescope/DeepMap*.class",
+                    "io/github/eschizoid/telescope/EditTargets*.class",
+                    "io/github/eschizoid/telescope/EditRegistry*.class",
+                    "io/github/eschizoid/telescope/PathWrites*.class",
+                    "io/github/eschizoid/telescope/conversion/Mapper*.class",
+                    "io/github/eschizoid/telescope/conversion/EditMapper*.class",
+                )
+            }
+        },
+    )
+    sourceDirectories.from(core.file("src/main/java"))
     reports {
         csv.required.set(true)
         xml.required.set(true)

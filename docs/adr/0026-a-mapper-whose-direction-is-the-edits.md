@@ -1,6 +1,6 @@
 # ADR-0026: A mapper whose direction is the edit's
 
-**Status:** Proposed · **Date:** 2026-11-26
+**Status:** Accepted, amended · **Date:** 2026-11-26 · **Accepted:** 2026-11-26
 
 ## Context
 
@@ -149,8 +149,8 @@ type. `WriteStrategy.ADDERS` and its row are gone.
    - `mapperForward` stays the factory for what a client sees. A `mapperForward` that builds an entity, such as the
      demo's `PLACE`, keeps working, and the documentation steers it to `edits` for the strict target.
    - `docs/type-conversion.md` explains which factory to pick with the table in decision 1. The demo's `LineEdits` and
-     `CatalogLines` give way to one edit mapper for its line pair, which the PATCH and the create request both name in a
-     `via` row.
+     `CatalogLines` give way to one edit mapper for its line pair, which the PATCH and the create request both convert
+     their lines through, found by its pair.
 
 8. **The README's opening example after #818 and this ADR.** The entities, `OrderChanges`, `OrderDto` and the PATCH
    handler are unchanged, and `EDITS.patchInto(order, changes)` reads in the direction it writes. `LineEdits` and the
@@ -163,27 +163,24 @@ type. `WriteStrategy.ADDERS` and its row are gone.
 
    public final class OrderMappers {
 
-     // A line as a PATCH sends it. The price and the cost come from the catalog.
+     // A PATCH: how an OrderChanges is written into an Order.
+     @Bridge
+     public static final EditMapper<OrderChanges, Order> EDITS = edits(
+       OrderChanges.class,
+       Order.class,
+       keep(Order::getNumber), // the fields a PATCH may never change
+       keep(Order::getCustomer),
+       keep(Order::getInternalNotes)
+     );
+
+     // A line as a PATCH sends it, which EDITS finds by its pair. The price and the cost come from the catalog.
      @Bridge
      public static final EditMapper<LineDto, OrderLine> LINE = edits(
        LineDto.class,
        OrderLine.class,
        compute(OrderLine::getUnitPrice, Catalog::price),
        compute(OrderLine::getCostPrice, Catalog::cost),
-       drop(LineDto::unitPrice), // a price the client sends is ignored
-       keep(OrderLine::getId)
-     );
-
-     // A PATCH: how an OrderChanges is written into an Order.
-     @Bridge
-     public static final EditMapper<OrderChanges, Order> EDITS = edits(
-       OrderChanges.class,
-       Order.class,
-       via(OrderChanges::lines, Order::getLines, LINE),
-       keep(Order::getId), // the fields a PATCH may never change
-       keep(Order::getNumber),
-       keep(Order::getCustomer),
-       keep(Order::getInternalNotes)
+       drop(LineDto::unitPrice) // a price the client sends is ignored
      );
 
      // The response: what a client sees of an Order.
@@ -197,10 +194,12 @@ type. `WriteStrategy.ADDERS` and its row are gone.
    }
    ```
 
-   `LINE` is declared before `EDITS` because a static initializer cannot name a field declared after it. The new lines
-   go through `order.addLine(...)`, found by its type, and `OrderLine.order` is the back-reference `mappedBy` names, so
-   `LINE` needs no row for it. A property added to `Order`, `OrderLine`, `OrderChanges` or `LineDto` later fails the
-   build until someone decides what an edit does with it.
+   `EDITS` names no row for its lines: the pair `LineDto` to `OrderLine` has its own edit mapper, `LINE`, which `EDITS`
+   finds by its pair the first time a line converts, so `LINE` may be declared after it (amendment item 8). The new
+   lines go through `order.addLine(...)`, found by its type, and `OrderLine.order` is the back-reference `mappedBy`
+   names, so `LINE` needs no row for it. With `telescope-jpa`, neither needs a row for its generated `@Id` either (the
+   amendment below). A property added to `Order`, `OrderLine`, `OrderChanges` or `LineDto` later fails the build until
+   someone decides what an edit does with it.
 
 ## Consequences
 
@@ -234,3 +233,56 @@ type. `WriteStrategy.ADDERS` and its row are gone.
 - **Keep `Mapper.patchInto` beside `edits`.** Rejected: two ways to PATCH an entity, one of which cannot compute on the
   way in, would need a page explaining when each is right, and the backward in-place write carries seams on every
   generated bridge that nothing else needs.
+
+## Amendment (2026-11-26): generated properties, and what building it settled
+
+1. **A generated identifier and a version need no row.** With `telescope-jpa`, the container policy answers which
+   properties of an entity its mapping generates, `ContainerCopy.Policy.generated`: an `@Id` or `@EmbeddedId` with
+   `@GeneratedValue` or a Hibernate generator annotation, and a `@Version`, on a field or a getter. An edit mapper
+   counts them as accounted for, as it counts a kept property. One rule, `GeneratedProperties` in the shared pairing
+   spec, holds at every pair an edit mapper writes, its own and every one below it: no conversion writes a generated
+   property a row does not name, whether it builds a new value, writes into a held one or adds a new element, whatever
+   the source sends under its name. So such a property needs no setter, a held element keeps its version, a new one
+   takes the database's, and a new entity saved through a merge cannot overwrite a stored row. The source's namesake is
+   the key a merge by `@Id` matches a sent element to a held one by, read from the source's element
+   (`ContainerCopy.Elements.sentValue`, generated on the generated path) rather than from the converted one. The
+   processor reads the same annotations, and the `mappedBy` back-reference, by name only where `telescope-jpa` is on its
+   class path, so both paths agree. Both starters carry telescope-jpa as an API dependency, so a consumer of either
+   compiles with it. An explicit `keep` on such a property stays legal, and an assigned identifier still needs a row or
+   a `keep`. Without the module nothing changes. `explain()` reports each as `generated, never written by an edit`. The
+   README's example and the demo carry no `keep` of an identifier.
+2. **What `forward` builds a kept property with.** A kept property takes the default of its type on `forward`, null for
+   a reference and the JLS default for a primitive, as a forward mapper builds a property nothing fills; for a bean
+   built through its setters that default is what the setter is handed.
+3. **A target property a `compute` or `constant` row writes takes no source property of its name.** Otherwise a PATCH
+   would write the computed value only where the client sent the namesake. So the namesake is read by nothing, and the
+   strict check asks for a `drop` of it, as the README's `drop(LineDto::unitPrice)` is.
+4. **The generated path writes each operation it can, and runs the runtime edit mapper for the rest.** A bridge
+   generated for an `edits(...)` field has `into` where its target is a bean with a setter for every property it writes,
+   and `editPatchInto` and `editPatch` where no row writes a path into the target; `BridgeFn.writesEdits()` says which.
+   An operation the bridge lacks, and a target of a subclass, run on the runtime edit mapper the field's factory builds
+   from the same rows the first time one is called. The results agree, as `CrossPathCorpusTest` holds them to; a target
+   path written in place is therefore runtime work on both paths.
+5. **Between two sealed interfaces**, `patchInto` and `patch` write a target through the edit mapper of its own case,
+   and ignore a partial of another case, as `Mapper.patchInto` did.
+6. **The demo's create request is an edit mapper too.** `PLACE` is `edits(PlaceOrder.class, Order.class, ...)`, with
+   `keep` rows for what the service fills itself, and its lines and the PATCH's convert through one edit mapper,
+   `NEW_LINE`, named so beside the response mapper the demo calls `LINE`.
+7. **`via(..., EditMapper)` is an edit mapper's row alone.** `mapper` and `mapperForward` refuse it by name, as they
+   refuse `keep`, on both paths and in the verifier.
+8. **A pair with its own edit mapper converts through it.** Where an edit mapper writes a property without a row naming
+   its conversion, and the pair of its values has an edit mapper of its own, each value converts through that mapper,
+   its rows and its merge by `@Id` included, rather than by name. One rule holds on both paths: an edit mapper converts
+   a pair through the pair's own edit mapper when that mapper is declared in the same class as the owner's mapper, or in
+   the pair's source or target class; one declared anywhere else is named in a `via` row. At run time the fields are
+   found from their declared types and the mapper read from the field the first time a value of the pair converts, so
+   the fields may come in any order and a field assigned from another class's field works. On the generated path it is
+   the bridge of the `@Bridge` field declaring the pair, and the processor refuses an edit `@Bridge` field for the pair
+   declared anywhere else, naming both fields. Two fields for one pair where the mapper looks are refused by name by the
+   mapper, the processor and the verifier, and a `via` row naming a mapper for the property wins. The verifier refuses a
+   plain `edits(...)` call whose element pair has an edit mapper declared elsewhere in the compilation, as the processor
+   refuses a `@Bridge` field; without either, the runtime cannot see another class and converts the pair by name. Pairs
+   below an edit mapper's own pair are checked leniently on all three paths; strictness applies at each edit mapper's
+   own pair, which is why a pair's own edit mapper is where its rows and refusals live. `explain()` reports each as
+   `Order.lines: elements through OrderMappers.LINE`. The README's `EDITS` and the demo's `PLACE` and `EDITS` therefore
+   carry no `via` row for their lines.

@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
+import io.github.eschizoid.telescope.mapping.Keep;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TelescopeTo;
@@ -269,6 +270,7 @@ final class TelescopeFixups {
         case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case ViaClass<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
+        case Keep<?, ?, ?> __ -> throw structuralInFixups(__);
       };
     }
     return t;
@@ -335,6 +337,7 @@ final class TelescopeFixups {
         case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case ViaClass<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
+        case Keep<?, ?, ?> __ -> throw structuralInFixups(__);
       }
     }
     S s = (S) srcRefl.construct(source, name ->
@@ -386,6 +389,7 @@ final class TelescopeFixups {
         case ViaMethods<?, ?> __ -> throw structuralInFixups(__);
         case ViaClass<?, ?> __ -> throw structuralInFixups(__);
         case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
+        case Keep<?, ?, ?> __ -> throw structuralInFixups(__);
       };
     }
     return s;

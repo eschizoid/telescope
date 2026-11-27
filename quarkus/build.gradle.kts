@@ -187,8 +187,9 @@ dependencies {
     api(project(":core"))
     api(platform("io.quarkus.platform:quarkus-bom:$quarkusVersion"))
     // telescope-jpa registers itself through core's ServiceLoader SPIs and stays inactive unless
-    // jakarta.persistence is on the class path, so an application with JPA gets it with no setup.
-    runtimeOnly(project(":jpa"))
+    // jakarta.persistence is on the class path, so an application with JPA gets it with no setup. It is
+    // on the compile class path too, where the processor reads which properties it generates.
+    api(project(":jpa"))
     api("io.quarkus:quarkus-arc")
     // Mapped REST bodies: present only in an application that uses Quarkus REST, and validated
     // only in one that uses Hibernate Validator.
@@ -256,3 +257,19 @@ signing {
     if (signingKey != null && signingPassword != null) useInMemoryPgpKeys(signingKey, signingPassword)
     sign(publishing.publications["maven"])
 }
+
+// A consumer that depends on the starter alone: the README's entities and edit mappers, compiled with the processor
+// against the class path the starter's published dependencies give a consumer. Compiling them is the check that the
+// generated identifiers and the back-reference need no row there, which takes telescope-jpa at compile time.
+val consumer by sourceSets.creating {
+    // The same sources as the Spring starter's consumer, so both starters are held to one hero.
+    java.srcDir(rootProject.file("spring-boot-starter/src/consumer/java"))
+}
+
+dependencies {
+    "consumerImplementation"(project(path))
+    "consumerCompileOnly"(libs.jakartaPersistenceApi)
+    "consumerAnnotationProcessor"(project(":codegen"))
+}
+
+tasks.named("check") { dependsOn(tasks.named("compileConsumerJava")) }

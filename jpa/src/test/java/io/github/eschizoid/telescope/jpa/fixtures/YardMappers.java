@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.jpa.fixtures;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 
 /**
@@ -27,5 +28,5 @@ public final class YardMappers {
 
   /** {@code PALLET_PATCH.patchInto(pallet, form)}. */
   @Bridge
-  public static final Mapper<Pallet, PalletForm> PALLET_PATCH = Telescope.mapper(Pallet.class, PalletForm.class);
+  public static final EditMapper<PalletPatch, Pallet> PALLET_PATCH = Telescope.edits(PalletPatch.class, Pallet.class);
 }

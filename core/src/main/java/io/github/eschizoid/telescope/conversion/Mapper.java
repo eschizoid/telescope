@@ -16,15 +16,16 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -51,16 +52,14 @@ public class Mapper<A, B> {
    * part of that internal contract; external code must not depend on this record's shape. Treat as
    * private to the module — it may change or disappear without a deprecation cycle.
    *
-   * <p>{@code intoElements} and {@code patchIntoElements} give, for a collection whose elements
-   * convert through a conversion that can write one element into another in place, that conversion:
-   * {@code intoElements} for the target property {@link #into} writes, {@code patchIntoElements}
-   * for the source property {@link #patchInto} writes. Either is null, or gives null, where the
-   * elements are not written in place. Each is asked every time its property is written, so one
-   * that builds the conversion remembers what it built.
+   * <p>{@code intoElements} gives, for a collection whose elements convert through a conversion
+   * that can write one element into another in place, that conversion, for the target property
+   * {@link #into} writes. It is null, or gives null, where the elements are not written in place.
+   * It is asked every time its property is written, so one that builds the conversion remembers
+   * what it built.
    *
-   * <p>{@code intoTie} and {@code patchIntoTie} say, for a collection, how its elements are tied to
-   * the owner {@link #into} and {@link #patchInto} write them into; null where the mapper decided
-   * nothing for it.
+   * <p>{@code intoTie} says, for a collection, how its elements are tied to the owner {@link #into}
+   * writes them into; null where the mapper decided nothing for it.
    */
   public record PatchEntry(
     String sourceField,
@@ -68,13 +67,11 @@ public class Mapper<A, B> {
     BiFunction<Object, Object, Object> overlay,
     Function<Object, Object> read,
     Supplier<ContainerCopy.Elements> intoElements,
-    Supplier<ContainerCopy.Elements> patchIntoElements,
-    Tie intoTie,
-    Tie patchIntoTie
+    Tie intoTie
   ) {
     /** An entry whose value only ever converts into {@code sourceField}. */
     public PatchEntry(final String sourceField, final Function<Object, Object> backward) {
-      this(sourceField, backward, null, null, null, null, null, null);
+      this(sourceField, backward, null, null, null, null);
     }
   }
 
@@ -95,6 +92,73 @@ public class Mapper<A, B> {
    */
   public record CaseEntry(Class<?> sourceCase, Class<?> targetCase, Mapper<?, ?> mapper) {}
 
+  /**
+   * <b>Module-internal seam — NOT public API.</b> What the mapper an {@link EditMapper} runs needs
+   * beyond its table, both decided when it is built. {@code sentBy} gives, for each target property
+   * the table writes, the reader of the partial whose null value means the partial did not send it,
+   * or null where the property is always sent, as a {@code compute} or {@code constant} row's is.
+   * {@code paths} are the rows writing the target through a path, which {@code into} and {@code
+   * patchInto} write into the objects the target holds, and {@code patch} into a copy of the base.
+   * Declared {@code public} for the same reason as {@link PatchEntry}.
+   */
+  public record EditWrites(Map<String, Function<Object, Object>> sentBy, List<PathEdit> paths) {
+    /** The writes of a mapper with no path rows. */
+    public EditWrites {
+      sentBy = Collections.unmodifiableMap(new LinkedHashMap<>(sentBy));
+      paths = List.copyOf(paths);
+    }
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> One row of an edit mapper writing its target
+   * through a path: {@code sentBy} reads the partial, null where the row reads nothing of it;
+   * {@code gate} is the predicate of a {@code when} row around it, or null; {@code leaf} reads the
+   * value {@code forward} wrote at the path's end; {@code inPlace} writes a value into a target's
+   * objects along the path; {@code copied} answers a copy of an object with the value written along
+   * the path.
+   */
+  public record PathEdit(
+    Function<Object, Object> sentBy,
+    Predicate<Object> gate,
+    Function<Object, Object> leaf,
+    BiConsumer<Object, Object> inPlace,
+    BiFunction<Object, Object, Object> copied
+  ) {}
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> The mapper an {@link EditMapper} runs: {@code
+   * forward} and {@code into} as {@link #ofIso} builds them, with the target paths of {@code edits}
+   * written in place by {@code into}, and the sparse writes {@link EditMapper#patchInto} and {@link
+   * EditMapper#patch} make. Fenced like {@link #ofIso}.
+   */
+  @SuppressWarnings("exports")
+  public static <A, B> Mapper<A, B> ofEdits(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final Map<String, PatchEntry> patchByTargetField,
+    final List<OpticNode> explainTrail,
+    final Reflective beanRefl,
+    final List<CaseEntry> cases,
+    final EditWrites edits
+  ) {
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      cases == null ? patchByTargetField : Map.of(),
+      null,
+      null,
+      null,
+      null,
+      explainTrail,
+      cases,
+      null,
+      beanRefl,
+      Objects.requireNonNull(edits, "edits")
+    );
+  }
+
   private final Iso<A, B> iso;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
@@ -104,18 +168,13 @@ public class Mapper<A, B> {
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private volatile IntoPlan intoPlan;
-  // The slots one element is written back through in place, bound the first time one is.
-  private volatile IntoPlan backPlan;
-  // The conversions intoElements() and patchIntoElements() answer, each decided the first time it
-  // is asked for, UNSET until then.
+  // The conversion intoElements() answers, decided the first time it is asked for, UNSET until
+  // then.
   private volatile Object intoElements = UNSET;
-  private volatile Object patchIntoElements = UNSET;
-  // The accessors patchInto writes each property of one target class through, bound the first time
-  // a partial sends the property.
-  private volatile PatchIntoPlan patchIntoPlan;
-  // Whether into, and patchInto, fill a collection of each class written into through its adder.
+  // The accessors an edit mapper's patchInto writes each property of one target class through.
+  private volatile PatchIntoPlan editPlan;
+  // Whether into fills a collection of each class written into through its adder.
   private final Map<Class<?>, Boolean> intoAdds = new ConcurrentHashMap<>();
-  private final Map<Class<?>, Boolean> patchIntoAdds = new ConcurrentHashMap<>();
   private final Map<String, PatchEntry> patchByTargetField;
   // Non-null for a mapper between two sealed interfaces, one entry per case of the source: patch
   // and into hand a value to the mapper of the case it belongs to.
@@ -164,6 +223,9 @@ public class Mapper<A, B> {
   // The generated bridge this mapper converts through, when it is one with no hooks, which the
   // class generated for a @Bridge field may then specialise. Null for every other mapper.
   private final BridgeFn<A, B> generated;
+
+  // Non-null for the mapper an EditMapper runs: what its sparse writes need beyond the table.
+  private final EditWrites edits;
 
   /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
   private static final class GeneratedIso<A, B> implements Iso<A, B> {
@@ -216,7 +278,7 @@ public class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
-    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of(), null, null, null);
+    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of(), null, null, null, null);
   }
 
   private Mapper(
@@ -231,9 +293,11 @@ public class Mapper<A, B> {
     final List<OpticNode> explainTrail,
     final List<CaseEntry> cases,
     final BiFunction<A, B, A> patcher,
-    final Reflective beanRefl
+    final Reflective beanRefl,
+    final EditWrites edits
   ) {
     this.iso = iso;
+    this.edits = edits;
     this.cases = cases == null ? null : List.copyOf(cases);
     this.patcher = patcher;
     this.sourceClass = sourceClass;
@@ -308,6 +372,7 @@ public class Mapper<A, B> {
     this.traced = built.traced;
     this.generated = built.generated;
     this.logger = built.logger;
+    this.edits = built.edits;
   }
 
   /**
@@ -356,6 +421,7 @@ public class Mapper<A, B> {
       explainTrail,
       null,
       null,
+      null,
       null
     );
   }
@@ -399,7 +465,8 @@ public class Mapper<A, B> {
       explainTrail,
       null,
       null,
-      beanRefl
+      beanRefl,
+      null
     );
   }
 
@@ -427,6 +494,7 @@ public class Mapper<A, B> {
       null,
       explainTrail,
       cases,
+      null,
       null,
       null
     );
@@ -471,6 +539,7 @@ public class Mapper<A, B> {
       null,
       null,
       explainTrail,
+      null,
       null,
       null,
       null
@@ -521,6 +590,7 @@ public class Mapper<A, B> {
       explainTrail,
       null,
       patcher,
+      null,
       null
     );
   }
@@ -653,8 +723,8 @@ public class Mapper<A, B> {
    * nested object or a container it holds is the one {@code base} holds, and changing it changes
    * {@code base}.
    *
-   * <p>{@link #patchInto} writes the same overlay into {@code base} in place instead, which is the
-   * update a managed entity needs.
+   * <p>A partial written into an object in place, which is the update a managed entity needs, is an
+   * {@link EditMapper}'s {@code patchInto}, declared from the partial's class to the object's.
    *
    * <p>Between two sealed interfaces, {@code base} is patched by the mapper of its own case. A
    * {@code partial} of the case {@code base}'s case converts to overlays it there; a partial of any
@@ -685,15 +755,11 @@ public class Mapper<A, B> {
         sourceClass.getName() +
         " is an enum or a class no write strategy can build, so there is nothing to rebuild."
     );
-    return (A) overlaid(base, partial, null);
+    return (A) overlaid(base, partial);
   }
 
-  /**
-   * {@link #patch}'s rebuild of {@code base} with {@code partial} laid over it. Where {@code sent}
-   * is not null it is given, in the table's order, every property of {@code A} the partial supplies
-   * a value for, which {@link #patchInto} writes.
-   */
-  private Object overlaid(final A base, final B partial, final Set<String> sent) {
+  /** {@link #patch}'s rebuild of {@code base} with {@code partial} laid over it. */
+  private Object overlaid(final A base, final B partial) {
     // The overlay map exists only once the partial supplies a value, so a partial that overlays
     // nothing rebuilds base without allocating it.
     HashMap<String, Object> patched = null;
@@ -713,7 +779,6 @@ public class Mapper<A, B> {
       if (entry.getValue().sourceField() == null) continue;
       if (patched == null) patched = new HashMap<>();
       patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
-      if (sent != null) sent.add(entry.getValue().sourceField());
     }
     final var overlay = patched;
     Object rebuilt =
@@ -730,8 +795,7 @@ public class Mapper<A, B> {
 
   /**
    * <b>Module-internal seam — NOT public API.</b> The patcher of a pair converted through the
-   * generated bridge {@code fn}: its {@code patch}, with the bridge kept so {@link #patchInto}
-   * writes through the bridge's own {@code patchInto}.
+   * generated bridge {@code fn}: its {@code patch}.
    */
   public static <A, B> BiFunction<A, B, A> bridgePatcher(final BridgeFn<A, B> fn) {
     return new BridgePatcher<>(fn);
@@ -743,149 +807,6 @@ public class Mapper<A, B> {
     public A apply(final A base, final B partial) {
       return fn.patch(base, partial);
     }
-  }
-
-  /**
-   * In-place partial update: write into {@code target} the properties {@link #patch} would overlay
-   * from {@code partial}, and only those, keeping {@code target}'s identity. Which properties are
-   * written, and the value each takes, is exactly what {@code patch(target, partial)} overlays; see
-   * {@link #patch}. A property the partial leaves null is not sent, so it keeps the value {@code
-   * target} has, and a nested object the partial carries replaces {@code target}'s whole. How each
-   * is written is exactly how {@link #into} writes: through the same setters and adders, a {@code
-   * Collection} or {@code Map} refilled in the container {@code target} holds through {@link
-   * ContainerCopy}, so it keeps its identity, container properties first, and every value read
-   * before the first write.
-   *
-   * <pre>{@code
-   * final OrderEntity managed = repository.findById(id).orElseThrow();
-   * mapper.patchInto(managed, changes); // only the fields the client sent, in place
-   * }</pre>
-   *
-   * <p>A null {@code partial}, or one that supplies nothing, leaves {@code target} as it was.
-   * Between two sealed interfaces {@code target} is written by the mapper of its own case, and a
-   * partial of another case is ignored, as {@code patch} ignores it. A {@code @Bridge} field's
-   * mapper hands a target of exactly the class its bridge rebuilds to the bridge's own {@code
-   * patchInto}.
-   *
-   * @param target the existing instance to update; must not be null and must not be a record
-   * @param partial a partially populated {@code B} whose non-null fields are written
-   * @return {@code target}
-   * @throws NullPointerException if {@code target} is null
-   * @throws UnsupportedOperationException if {@code target}'s class is a record, if the mapper has
-   *     no fields to overlay, as one from {@code Telescope.merge} or a {@code lift*} method, or if
-   *     a row of the mapper writes through a source path, which names no property of {@code A}
-   * @throws IllegalArgumentException if {@code target}'s class has no setter for a property the
-   *     partial supplies other than a container, or if nothing can write a container property it
-   *     supplies
-   */
-  @SuppressWarnings("unchecked")
-  public A patchInto(final A target, final B partial) {
-    if (target == null) throw new NullPointerException("target");
-    if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("patchInto()"));
-    if (cases != null) {
-      final var entry = caseOfSource(target);
-      if (!entry.targetCase().isInstance(partial)) return target;
-      return (A) ((Mapper<Object, Object>) entry.mapper()).patchInto(target, partial);
-    }
-    refusePatchIntoRecord(target.getClass());
-    if (partial == null) return target;
-    for (final var entry : patchByTargetField.values()) {
-      if (entry.overlay() != null) {
-        throw new UnsupportedOperationException(PairingMessages.patchIntoThroughPath(sourceClass.getSimpleName()));
-      }
-    }
-    if (patcher instanceof BridgePatcher<A, B> bridged) {
-      // The bridge binds each setter on the class it rebuilds; a subclass, whose own setters can
-      // take
-      // a value instead, is written here through the setters of its own class, from the bridge's
-      // overlay, as into writes one.
-      if (target.getClass() == sourceClass) return bridged.fn().patchInto(target, partial);
-      final var names = bridged.fn().patchIntoProperties();
-      final var flags = new boolean[names.size()];
-      final var produced = bridged.fn().overlaid(target, partial, flags);
-      final var sent = new LinkedHashSet<String>();
-      for (var i = 0; i < flags.length; i++) {
-        if (flags[i]) sent.add(names.get(i));
-      }
-      writeSent(target, sent, produced, null, partial);
-      return target;
-    }
-    if (patcher != null) throw new UnsupportedOperationException(
-      "patchInto(): this mapper patches " +
-        sourceClass.getSimpleName() +
-        " whole, with no fields a partial could supply, so there is nothing to write in place."
-    );
-    if (!rebuildable()) throw new UnsupportedOperationException(
-      "patchInto() rebuilds the partial over the target to read the values it writes, and " +
-        sourceClass.getName() +
-        " is an enum or a class no write strategy can build."
-    );
-    final var sent = new LinkedHashSet<String>();
-    // The value read from is built with no adder of the target class run on it, so each adder runs
-    // once per element, on the target, as into does.
-    if (!addsThroughAdders(Beans.persistentClassOf(target), true)) {
-      writeSent(target, sent, overlaid(target, partial, sent), null, partial);
-      return target;
-    }
-    final var built = AdderCalls.deferring(sourceClass, () -> overlaid(target, partial, sent));
-    writeSent(target, sent, built.value(), built.elements(), partial);
-    return target;
-  }
-
-  /** The bound writers of {@link #patchInto} for a target of {@code writeClass}. */
-  private PatchIntoPlan patchIntoPlan(final Class<?> writeClass) {
-    final var known = patchIntoPlan;
-    if (known != null && known.writeClass() == writeClass) return known;
-    final var plan = new PatchIntoPlan(writeClass, new ConcurrentHashMap<>());
-    patchIntoPlan = plan;
-    return plan;
-  }
-
-  /**
-   * Writes into {@code target} each property in {@code sent}, the value {@code produced}, the
-   * overlay, holds for it, as {@link #into} writes: an adder-filled collection from {@code
-   * deferred} where the overlay was built with its adders deferred. {@code from} is the partial,
-   * whose containers the overlay's were converted from.
-   */
-  private void writeSent(
-    final A target,
-    final Set<String> sent,
-    final Object produced,
-    final Map<String, Object> deferred,
-    final Object from
-  ) {
-    if (sent.isEmpty()) return;
-    final var writeClass = Beans.persistentClassOf(target);
-    final var plan = patchIntoPlan(writeClass);
-    final var readClass = Beans.persistentClassOf(produced);
-    final var slots = new IntoSlot[sent.size()];
-    final var staged = new Object[slots.length];
-    var i = 0;
-    for (final var name : sent) {
-      // A slot refused for a class with no setter is not kept, so it is refused again on each call
-      // that sends the property, and never on one that leaves it out.
-      final var slot =
-        readClass == writeClass
-          ? plan.slots().computeIfAbsent(name, n -> intoSlot(Beans.capturedReader(readClass, n), writeClass, n, true))
-          : intoSlot(Beans.capturedReader(readClass, name), writeClass, name, true);
-      slots[i] = slot;
-      staged[i] =
-        slot.adds() && deferred != null && deferred.containsKey(name)
-          ? deferred.get(name)
-          : slot.read().apply(produced);
-      i++;
-    }
-    writeSlots(target, writeClass, slots, staged, from);
-  }
-
-  private void refusePatchIntoRecord(final Class<?> written) {
-    if (written.isRecord() || sourceClass.isRecord()) throw new UnsupportedOperationException(
-      PairingMessages.intoRecordTarget(
-        sourceClass.getSimpleName(),
-        targetClass.getSimpleName(),
-        PairingMessages.className(written)
-      )
-    );
   }
 
   /**
@@ -1036,11 +957,163 @@ public class Mapper<A, B> {
     // builds, so each adder runs once per element, on the target. Between two sealed interfaces
     // the mapper that writes the target is its case's.
     final var writer = writerOf(target);
-    if (writer != null && writer.addsThroughAdders(Beans.persistentClassOf(target), false)) {
+    if (writer != null && writer.addsThroughAdders(Beans.persistentClassOf(target))) {
       final var deferred = AdderCalls.deferring(writer.targetClass, () -> forward(source));
-      return writeInto(target, deferred.value(), deferred.elements(), source);
+      writeInto(target, deferred.value(), deferred.elements(), source);
+      return pathsWritten(target, deferred.value(), source, false);
     }
-    return writeInto(target, forward(source), null, source);
+    final var produced = forward(source);
+    writeInto(target, produced, null, source);
+    return pathsWritten(target, produced, source, false);
+  }
+
+  /**
+   * {@code target} once each target path of an edit mapper is written into the objects it holds,
+   * with the value {@code produced} holds at the path's end: every path whose {@code when} accepts
+   * {@code source}, or where {@code sparse} is true only those {@code source} sends a value for.
+   */
+  private B pathsWritten(final B target, final B produced, final A source, final boolean sparse) {
+    if (edits == null || produced == null) return target;
+    for (final var path : edits.paths()) {
+      if (path.gate() != null && !path.gate().test(source)) continue;
+      if (sparse && path.sentBy() != null && path.sentBy().apply(source) == null) continue;
+      final var value = path.leaf().apply(produced);
+      if (sparse && value == null) continue;
+      path.inPlace().accept(target, value);
+    }
+    return target;
+  }
+
+  /**
+   * Run by {@link EditMapper#patchInto}: writes into {@code target} only what {@code partial}
+   * sends, as {@link #into} writes, each property the value {@code forward(partial)} gives it. A
+   * property is sent where the partial's value of what its row reads is not null, and the value is
+   * not null either; one a {@code compute} or {@code constant} row fills is sent wherever its value
+   * is not null. A target path is written into the objects the target holds on the same terms.
+   */
+  @SuppressWarnings("unchecked")
+  B editPatchInto(final B target, final A partial) {
+    if (target == null) throw new NullPointerException("target");
+    if (cases != null) {
+      // Between two sealed interfaces the target is written by the mapper of its own case, and a
+      // partial of another case is ignored, since it would change which case the target is.
+      final var entry = caseOfTarget(target);
+      if (!entry.sourceCase().isInstance(partial)) return target;
+      return (B) ((Mapper<Object, Object>) entry.mapper()).editPatchInto(target, partial);
+    }
+    refuseRecordTarget(Beans.persistentClassOf(target));
+    if (partial == null) return target;
+    final var writeClass = Beans.persistentClassOf(target);
+    final B produced;
+    final Map<String, Object> deferred;
+    if (addsThroughAdders(writeClass)) {
+      final var built = AdderCalls.deferring(targetClass, () -> forward(partial));
+      produced = built.value();
+      deferred = built.elements();
+    } else {
+      produced = forward(partial);
+      deferred = null;
+    }
+    if (produced == null) return target;
+    final var readClass = Beans.persistentClassOf(produced);
+    final var plan = editPlan(writeClass);
+    final var slots = new ArrayList<IntoSlot>();
+    final var staged = new ArrayList<Object>();
+    for (final var name : intoNames()) {
+      if (!sent(name, partial)) continue;
+      final var slot =
+        readClass == writeClass
+          ? plan.slots().computeIfAbsent(name, n -> intoSlot(Beans.capturedReader(readClass, n), writeClass, n, true))
+          : intoSlot(Beans.capturedReader(readClass, name), writeClass, name, true);
+      final var value =
+        slot.adds() && deferred != null && deferred.containsKey(name)
+          ? deferred.get(name)
+          : slot.read().apply(produced);
+      if (value == null) continue;
+      slots.add(slot);
+      staged.add(value);
+    }
+    if (!slots.isEmpty()) writeSlots(
+      "patchInto",
+      target,
+      writeClass,
+      slots.toArray(IntoSlot[]::new),
+      staged.toArray(),
+      partial
+    );
+    return pathsWritten(target, produced, partial, true);
+  }
+
+  /**
+   * Whether {@code partial} sends target property {@code name}: the value its row reads of the
+   * partial is not null, or its row reads nothing of it. The reader is the one an edit mapper's
+   * writes decided, and for the mapper of a sealed case, built by the same walk, the source
+   * property the table converts from.
+   */
+  private boolean sent(final String name, final A partial) {
+    final Function<Object, Object> reader;
+    if (edits != null) reader = edits.sentBy().get(name);
+    else {
+      final var entry = patchByTargetField.get(name);
+      final var from = entry == null ? null : entry.sourceField();
+      reader = from == null ? null : value -> sourceRefl.read(value, from);
+    }
+    return reader == null || reader.apply(partial) != null;
+  }
+
+  /** The bound writers of {@link #editPatchInto} for a target of {@code writeClass}. */
+  private PatchIntoPlan editPlan(final Class<?> writeClass) {
+    final var known = editPlan;
+    if (known != null && known.writeClass() == writeClass) return known;
+    final var plan = new PatchIntoPlan(writeClass, new ConcurrentHashMap<>());
+    editPlan = plan;
+    return plan;
+  }
+
+  /**
+   * Run by {@link EditMapper#patch}: a copy of {@code base} with what {@code partial} sends laid
+   * over it, each sent property the value {@code forward(partial)} gives it, decided as {@link
+   * #editPatchInto} decides it, and each sent target path written into the copy. Every other
+   * property is the one {@code base} holds. Null for a null {@code base}.
+   */
+  @SuppressWarnings("unchecked")
+  B editPatch(final B base, final A partial) {
+    if (base == null) return null;
+    if (cases != null) {
+      final var entry = caseOfTarget(base);
+      final var sameCase = entry.sourceCase().isInstance(partial) ? partial : null;
+      return (B) ((Mapper<Object, Object>) entry.mapper()).editPatch(base, sameCase);
+    }
+    if (targetClass.isEnum() || (!targetClass.isRecord() && targetRefl.writerFor(targetClass) == null)) {
+      throw new UnsupportedOperationException(
+        "patch() rebuilds base property by property, and " +
+          targetClass.getName() +
+          " is an enum or a class no write strategy can build."
+      );
+    }
+    final var produced = partial == null ? null : forward(partial);
+    HashMap<String, Object> overlay = null;
+    if (produced != null) for (final var name : intoNames()) {
+      if (!sent(name, partial)) continue;
+      final var value = targetRefl.read(produced, name);
+      if (value == null) continue;
+      if (overlay == null) overlay = new HashMap<>();
+      overlay.put(name, value);
+    }
+    final var laid = overlay;
+    Object rebuilt =
+      laid == null
+        ? targetRefl.construct(targetClass, name -> targetRefl.read(base, name))
+        : targetRefl.construct(targetClass, name ->
+            laid.containsKey(name) ? laid.get(name) : targetRefl.read(base, name)
+          );
+    if (produced != null && edits != null) for (final var path : edits.paths()) {
+      if (path.gate() != null && !path.gate().test(partial)) continue;
+      if (path.sentBy() != null && path.sentBy().apply(partial) == null) continue;
+      final var value = path.leaf().apply(produced);
+      if (value != null) rebuilt = path.copied().apply(rebuilt, value);
+    }
+    return (B) rebuilt;
   }
 
   /**
@@ -1118,7 +1191,7 @@ public class Mapper<A, B> {
       final var slots = new IntoSlot[names.size()];
       var i = 0;
       for (final var name : names) slots[i++] = intoSlot(null, writeClass, name, false);
-      return writeSlots(target, writeClass, slots, new Object[slots.length], from);
+      return writeSlots("into", target, writeClass, slots, new Object[slots.length], from);
     }
     final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
     final var staged = new Object[slots.length];
@@ -1129,7 +1202,7 @@ public class Mapper<A, B> {
           ? deferred.get(slot.name())
           : slot.read().apply(produced);
     }
-    return writeSlots(target, writeClass, slots, staged, from);
+    return writeSlots("into", target, writeClass, slots, staged, from);
   }
 
   /**
@@ -1142,10 +1215,11 @@ public class Mapper<A, B> {
    * properties are written before every other property, those with no setter first, so a container
    * found unchangeable only when it is written leaves every other property as it was. {@code from}
    * is the value whose containers {@code staged}'s were converted from, or null where it is not
-   * known.
+   * known. {@code operation} is the operation writing, which a refusal names.
    */
   @SuppressWarnings("unchecked")
   private <T> T writeSlots(
+    final String operation,
     final T target,
     final Class<?> writeClass,
     final IntoSlot[] slots,
@@ -1167,6 +1241,7 @@ public class Mapper<A, B> {
       }
       held[i] = slot.held().apply(target);
       prepared[i] = ContainerCopy.refuseUnwritable(
+        operation,
         held[i],
         staged[i],
         slot.write() != null,
@@ -1190,6 +1265,7 @@ public class Mapper<A, B> {
           continue;
         }
         final var written = ContainerCopy.refill(
+          operation,
           source,
           targetName,
           target,
@@ -1209,40 +1285,25 @@ public class Mapper<A, B> {
   }
 
   /**
-   * What gives the conversion of the elements of container property {@code name}, where they are
-   * written in place: of the target, which {@link #into} writes, or, where {@code patchInto} is
-   * true, of the source, which {@link #patchInto} writes. Null where they are not. It is asked only
-   * when the slot writes, so binding a slot never resolves the element pair's own.
+   * What gives the conversion of the elements of container property {@code name} of the target,
+   * which {@link #into} writes, where they are written in place; null where they are not. It is
+   * asked only when the slot writes, so binding a slot never resolves the element pair's own.
    */
-  private Supplier<ContainerCopy.Elements> elementsOf(final String name, final boolean patchInto) {
+  private Supplier<ContainerCopy.Elements> elementsOf(final String name) {
     if (patchByTargetField == null) return null;
-    if (!patchInto) {
-      final var entry = patchByTargetField.get(name);
-      return entry == null ? null : entry.intoElements();
-    }
-    for (final var entry : patchByTargetField.values())
-      if (name.equals(entry.sourceField()) && entry.patchIntoElements() != null) return entry.patchIntoElements();
-    return null;
+    final var entry = patchByTargetField.get(name);
+    return entry == null ? null : entry.intoElements();
   }
 
   /**
-   * The reader of the container a value of the other side holds for container property {@code
-   * name}, the one its value was converted from: a source's for {@link #into}, a partial's for
-   * {@link #patchInto}. Null where no property of the other side converts into it.
+   * The reader of the container a source holds for container property {@code name}, the one its
+   * value was converted from; null where no source property converts into it.
    */
-  private Function<Object, Object> sentReaderOf(final String name, final boolean patchInto) {
+  private Function<Object, Object> sentReaderOf(final String name) {
     if (patchByTargetField == null) return null;
-    if (!patchInto) {
-      final var entry = patchByTargetField.get(name);
-      final var sourceField = entry == null || entry.read() != null ? null : entry.sourceField();
-      return sourceField == null ? null : from -> sourceRefl.read(from, sourceField);
-    }
-    for (final var entry : patchByTargetField.entrySet()) {
-      if (!name.equals(entry.getValue().sourceField()) || entry.getValue().read() != null) continue;
-      final var key = entry.getKey();
-      return from -> targetRefl.read(from, key);
-    }
-    return null;
+    final var entry = patchByTargetField.get(name);
+    final var sourceField = entry == null || entry.read() != null ? null : entry.sourceField();
+    return sourceField == null ? null : from -> sourceRefl.read(from, sourceField);
   }
 
   /**
@@ -1259,80 +1320,56 @@ public class Mapper<A, B> {
   public final ContainerCopy.Elements intoElements() {
     var known = intoElements;
     if (known == UNSET) {
-      known = writesConverted() ? new InPlace(false) : null;
+      known = writesConverted() ? new InPlace() : null;
       intoElements = known;
     }
     return (ContainerCopy.Elements) known;
   }
 
-  /**
-   * <b>Codegen-support seam — NOT public API.</b> The mirror of {@link #intoElements()} for {@link
-   * #patchInto}: {@code backward}, and the check and write {@code patchInto} makes of every
-   * property of {@code A} the patch table converts back into, over one element. Null where this
-   * mapper does not write an {@code A} in place, as {@link #intoElements()} says, or a row writes
-   * back through a source path.
-   *
-   * @return the conversion, or null
-   */
-  public final ContainerCopy.Elements patchIntoElements() {
-    var known = patchIntoElements;
-    if (known == UNSET) {
-      known = writesConvertedBack() ? new InPlace(true) : null;
-      patchIntoElements = known;
-    }
-    return (ContainerCopy.Elements) known;
-  }
-
-  /**
-   * One element's conversion, check and write in place, forward or, where {@code back}, backward.
-   */
+  /** One element's conversion, check and write in place. */
   private final class InPlace implements ContainerCopy.Elements {
-
-    private final boolean back;
-
-    InPlace(final boolean back) {
-      this.back = back;
-    }
 
     @Override
     @SuppressWarnings("unchecked")
     public Object convert(final Object sent) {
-      return back ? backward((B) sent) : forward((A) sent);
+      return forward((A) sent);
     }
 
     @Override
     public void check(final Object held, final Object converted, final Object sent) {
-      inPlace(held, converted, sent, back, false);
+      inPlace(held, converted, sent, false);
     }
 
     @Override
     public void write(final Object held, final Object converted, final Object sent) {
-      inPlace(held, converted, sent, back, true);
+      inPlace(held, converted, sent, true);
+    }
+
+    @Override
+    public Object sentValue(final Object sent, final String property) {
+      if (sent == null) return null;
+      for (final var name : sourceRefl.names(sent.getClass()))
+        if (name.equals(property)) return sourceRefl.read(sent, property);
+      return null;
     }
   }
 
   /**
    * Checks, or where {@code write} is true writes, {@code produced}, one converted element, into
-   * {@code target}, the held element it matched, as {@link #into} does, or {@link #patchInto} for
-   * every property the patch table converts back into where {@code back}. {@code from} is the
-   * element {@code produced} was converted from, or null. An element with no container property is
-   * read property by property as it is written; one with a container is read whole first, as {@code
+   * {@code target}, the held element it matched, as {@link #into} does. {@code from} is the element
+   * {@code produced} was converted from, or null. An element with no container property is read
+   * property by property as it is written; one with a container is read whole first, as {@code
    * into} reads.
    */
-  private void inPlace(
-    final Object target,
-    final Object produced,
-    final Object from,
-    final boolean back,
-    final boolean write
-  ) {
+  private void inPlace(final Object target, final Object produced, final Object from, final boolean write) {
     final var writeClass = Beans.persistentClassOf(target);
     final var readClass = Beans.persistentClassOf(produced);
-    final var slots = back ? backSlots(readClass, writeClass) : intoSlots(readClass, writeClass);
+    final var slots = intoSlots(readClass, writeClass);
     if (!write) {
       for (final var slot : slots) {
         if (slot.held() == null) continue;
         ContainerCopy.refuseUnwritable(
+          "into",
           slot.held().apply(target),
           slot.read().apply(produced),
           slot.write() != null,
@@ -1359,29 +1396,7 @@ public class Mapper<A, B> {
     }
     final var staged = new Object[slots.length];
     for (var i = 0; i < slots.length; i++) staged[i] = slots[i].read().apply(produced);
-    writeSlots(target, writeClass, slots, staged, from);
-  }
-
-  /**
-   * The bound slots {@link #patchIntoElements()} writes an {@code A} through: one per property of
-   * {@code A} the patch table converts back into, memoised for one pair of classes as {@link
-   * #intoSlots} memoises its own.
-   */
-  private IntoSlot[] backSlots(final Class<?> readClass, final Class<?> writeClass) {
-    final var cached = backPlan;
-    if (cached != null && cached.readClass() == readClass && cached.writeClass() == writeClass) return cached.slots();
-    final var names = new ArrayList<String>(patchByTargetField.size());
-    for (final var entry : patchByTargetField.values())
-      if (entry.sourceField() != null && !names.contains(entry.sourceField())) names.add(entry.sourceField());
-    final var built = new IntoSlot[names.size()];
-    var i = 0;
-    for (final var name : names)
-      built[i++] = intoSlot(Beans.capturedReader(readClass, name), writeClass, name, true).copying(
-        readClass,
-        writeClass
-      );
-    backPlan = new IntoPlan(readClass, writeClass, built);
-    return built;
+    writeSlots("into", target, writeClass, slots, staged, from);
   }
 
   /**
@@ -1392,7 +1407,8 @@ public class Mapper<A, B> {
    */
   private boolean writesConverted() {
     if (patchByTargetField == null || cases != null || targetClass.isRecord()) return false;
-    if (addsThroughAdders(targetClass, false)) return false;
+    if (edits != null && !edits.paths().isEmpty()) return false;
+    if (addsThroughAdders(targetClass)) return false;
     try {
       intoSlots(targetClass, targetClass);
       return true;
@@ -1402,56 +1418,32 @@ public class Mapper<A, B> {
   }
 
   /**
-   * Whether an {@code A} is written in place as {@link #patchInto} writes it: the conditions {@link
-   * #writesConverted} names, on the source side, and no entry writes back through a source path.
+   * Whether {@link #into} fills a collection of a {@code writeClass} target through its adder, so
+   * the value it reads from is built with none of that class's adders run on it.
    */
-  private boolean writesConvertedBack() {
-    if (patchByTargetField == null || cases != null || sourceClass.isRecord()) return false;
-    if (addsThroughAdders(sourceClass, true)) return false;
-    for (final var entry : patchByTargetField.values()) if (entry.overlay() != null) return false;
-    try {
-      backSlots(sourceClass, sourceClass);
-      return true;
-    } catch (final IllegalArgumentException unwritable) {
-      return false;
-    }
-  }
-
-  /**
-   * Whether {@link #into}, or where {@code patchInto} is true {@link #patchInto}, fills a
-   * collection of a {@code writeClass} target through its adder, so the value it reads from is
-   * built with none of that class's adders run on it.
-   */
-  private boolean addsThroughAdders(final Class<?> writeClass, final boolean patchInto) {
+  private boolean addsThroughAdders(final Class<?> writeClass) {
     if (patchByTargetField == null) return false;
-    final var known = patchInto ? patchIntoAdds : intoAdds;
-    final var cached = known.get(writeClass);
+    final var cached = intoAdds.get(writeClass);
     if (cached != null) return cached;
     var adds = false;
     for (final var entry : patchByTargetField.entrySet()) {
-      final var name = patchInto ? entry.getValue().sourceField() : entry.getKey();
-      if (name == null || (!patchInto && entry.getValue().read() != null)) continue;
-      final var tie = patchInto ? entry.getValue().patchIntoTie() : entry.getValue().intoTie();
+      final var name = entry.getKey();
+      if (entry.getValue().read() != null) continue;
+      final var tie = entry.getValue().intoTie();
       if ((tie == null || tie.throughMembers()) && Beans.collectionMembers(writeClass, name).adder() != null) adds =
         true;
     }
-    known.put(writeClass, adds);
+    intoAdds.put(writeClass, adds);
     return adds;
   }
 
   /**
-   * The {@link Tie} of collection property {@code name}: of the target, which {@link #into} writes,
-   * or, where {@code patchInto} is true, of the source, which {@link #patchInto} writes.
+   * The {@link Tie} of collection property {@code name} of the target, which {@link #into} writes.
    */
-  private Tie tieOf(final String name, final boolean patchInto) {
+  private Tie tieOf(final String name) {
     if (patchByTargetField == null) return null;
-    if (!patchInto) {
-      final var entry = patchByTargetField.get(name);
-      return entry == null ? null : entry.intoTie();
-    }
-    for (final var entry : patchByTargetField.values())
-      if (name.equals(entry.sourceField()) && entry.patchIntoTie() != null) return entry.patchIntoTie();
-    return null;
+    final var entry = patchByTargetField.get(name);
+    return entry == null ? null : entry.intoTie();
   }
 
   /**
@@ -1460,9 +1452,9 @@ public class Mapper<A, B> {
    * refused by name where the class's methods leave it undecided, and the back-reference the mapper
    * decided. Null for a property that is no collection, and where nothing ties its elements.
    */
-  private ContainerCopy.Links linksOf(final Class<?> writeClass, final String name, final boolean patchInto) {
+  private ContainerCopy.Links linksOf(final Class<?> writeClass, final String name) {
     if (Beans.collectionElement(writeClass, name) == null) return null;
-    final var tie = tieOf(name, patchInto);
+    final var tie = tieOf(name);
     final var members =
       tie == null || tie.throughMembers() ? Beans.collectionMembers(writeClass, name) : Beans.Members.NONE;
     if (members.refusal() != null) throw new IllegalArgumentException(members.refusal());
@@ -1477,27 +1469,27 @@ public class Mapper<A, B> {
    * The accessors {@link #into} writes property {@code name} of a {@code writeClass} target with:
    * for a container it refills in place, its getter, how its elements are tied to the target, and
    * its setter where the class has one; for any other property its setter, which it has to have. A
-   * property with no setter is refused in {@link #patchInto}'s words where {@code patchInto} is
-   * true.
+   * property with no setter is refused in an edit mapper's {@code patchInto}'s words where {@code
+   * patchWording} is true.
    */
   private IntoSlot intoSlot(
     final Function<Object, Object> read,
     final Class<?> writeClass,
     final String name,
-    final boolean patchInto
+    final boolean patchWording
   ) {
-    final var links = linksOf(writeClass, name, patchInto);
+    final var links = linksOf(writeClass, name);
     if ((links != null && links.throughAdder()) || Beans.refilledInPlace(writeClass, name)) return new IntoSlot(
       name,
       read,
       Beans.capturedWriter(writeClass, name),
       Beans.capturedReader(writeClass, name),
       links,
-      elementsOf(name, patchInto),
-      sentReaderOf(name, patchInto),
+      elementsOf(name),
+      sentReaderOf(name),
       null
     );
-    return new IntoSlot(name, read, intoWriter(writeClass, name, patchInto), null, null, null, null, null);
+    return new IntoSlot(name, read, intoWriter(writeClass, name, patchWording), null, null, null, null, null);
   }
 
   /** The case entry {@code value}, a value of the sealed source, belongs to. */
@@ -1560,7 +1552,7 @@ public class Mapper<A, B> {
     }
   }
 
-  /** The target class {@link #patchInto}'s bound slots are valid for. */
+  /** The target class an edit mapper's {@code patchInto}'s bound slots are valid for. */
   private record PatchIntoPlan(Class<?> writeClass, ConcurrentHashMap<String, IntoSlot> slots) {}
 
   /** The class pair a bound slot array is valid for, alongside the array. */
@@ -1619,10 +1611,14 @@ public class Mapper<A, B> {
    * place. Every writer is bound before the first write, so a refused call leaves the target as it
    * was.
    */
-  private BiConsumer<Object, Object> intoWriter(final Class<?> writeClass, final String name, final boolean patchInto) {
+  private BiConsumer<Object, Object> intoWriter(
+    final Class<?> writeClass,
+    final String name,
+    final boolean patchWording
+  ) {
     final var writer = Beans.capturedWriter(writeClass, name);
     if (writer == null) throw new IllegalArgumentException(
-      patchInto
+      patchWording
         ? PairingMessages.patchIntoPropertyUnwritable(
             sourceClass.getSimpleName(),
             targetClass.getSimpleName(),
@@ -1684,7 +1680,8 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      beanRefl
+      beanRefl,
+      null
     );
   }
 
@@ -1741,7 +1738,8 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      beanRefl
+      beanRefl,
+      null
     );
   }
 
@@ -1774,7 +1772,8 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      beanRefl
+      beanRefl,
+      null
     );
   }
 
@@ -1821,7 +1820,8 @@ public class Mapper<A, B> {
       explainTrail,
       cases,
       patcher,
-      beanRefl
+      beanRefl,
+      null
     );
   }
 

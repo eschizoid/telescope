@@ -131,6 +131,9 @@ public final class MappingTraces {
     return switch (reason) {
       case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
+      case KEPT -> "kept, never written by an edit";
+      case GENERATED -> "generated, never written by an edit";
+      case BACK_REFERENCE -> "back-reference, set by the collection write";
     };
   }
 

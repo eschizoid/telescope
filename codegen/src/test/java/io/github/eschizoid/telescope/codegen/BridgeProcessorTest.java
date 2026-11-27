@@ -210,10 +210,9 @@ class BridgeProcessorTest {
       assertNotNull(bridge, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
       assertEquals(1, occurrences(bridge, "s.getStatus()"), bridge);
       assertEquals(1, occurrences(bridge, "t.getStatus()"), bridge);
-      // patch and the overlay patchInto reads from each read the partial once per call.
+      // patch reads the partial once per call.
       assertEquals(1, occurrences(methodNamed(bridge, " patch(final "), "partial.getStatus()"), bridge);
-      assertEquals(1, occurrences(methodNamed(bridge, " __overlaid(final "), "partial.getStatus()"), bridge);
-      assertEquals(2, occurrences(bridge, "partial.getStatus()"), bridge);
+      assertEquals(1, occurrences(bridge, "partial.getStatus()"), bridge);
     }
 
     @Test

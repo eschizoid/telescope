@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ContainerCopy;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.Match;
@@ -29,6 +30,7 @@ import io.github.eschizoid.telescope.internal.pairing.Paired;
 import io.github.eschizoid.telescope.internal.pairing.PairedTypes;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.internal.pairing.SourceWrites;
 import io.github.eschizoid.telescope.internal.pairing.Unpaired;
@@ -42,6 +44,7 @@ import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
+import io.github.eschizoid.telescope.mapping.Keep;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.MergeStep;
@@ -141,7 +144,7 @@ public final class DeepMap {
   // ---------- Package-private entries (called from Telescope.map / Telescope.mapper) ----------
 
   static <A, B> Iso<A, B> resolve(final Class<A> source, final Class<B> target, final MapStep[] steps) {
-    return resolution(source, target, steps, false).iso;
+    return resolution(source, target, steps, false, false).iso;
   }
 
   /**
@@ -150,7 +153,7 @@ public final class DeepMap {
    * rows it resolved.
    */
   static <A, B> Telescope<A, B> resolveMapped(final Class<A> source, final Class<B> target, final MapStep[] steps) {
-    final var r = resolution(source, target, steps, false);
+    final var r = resolution(source, target, steps, false, false);
     return Telescope.mapped(r.iso, r.trail);
   }
 
@@ -394,6 +397,57 @@ public final class DeepMap {
     return (ForwardMapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }
 
+  /** As {@link #declaredMapper}, for an edit mapper. */
+  @SuppressWarnings("unchecked")
+  static <A, B> EditMapper<A, B> declaredEditMapper(
+    final Declaration declaration,
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps,
+    final Class<?> caller
+  ) {
+    final var fn = (BridgeFn<A, B>) Telescope.bridgeFnOf(declaration.provider().bridge());
+    final var trail = new ArrayList<OpticNode>();
+    trail.add(declaration.node());
+    trail.addAll(fn.collectionWrites());
+    final var built = EditMapper.ofGenerated(
+      fn,
+      source,
+      target,
+      () -> resolveEditMapper(source, target, steps, null, caller),
+      trail
+    );
+    return (EditMapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
+  }
+
+  /**
+   * The edit mapper of {@code steps} on the runtime path, with {@code note}, when there is one,
+   * last in the trail {@code explain()} reports. Strict on both sides, as a mapper that converts
+   * both ways is, with the properties no edit writes counted as accounted for; it converts forward
+   * alone.
+   */
+  static <A, B> EditMapper<A, B> resolveEditMapper(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps,
+    final OpticNode note,
+    final Class<?> caller
+  ) {
+    final var r = resolution(source, target, steps, false, true, caller);
+    final var trail = noted(r.trail, note);
+    final var engine = Mapper.ofEdits(
+      r.iso,
+      source,
+      target,
+      r.patchTable,
+      trail,
+      r.beanRefl,
+      r.cases,
+      r.editWrites == null || r.cases != null ? new Mapper.EditWrites(Map.of(), List.of()) : r.editWrites
+    );
+    return EditMapper.ofRuntime(engine, trail);
+  }
+
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     return resolveMapper(source, target, steps, null);
   }
@@ -410,7 +464,7 @@ public final class DeepMap {
   ) {
     // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.
-    final var r = resolution(source, target, steps, false);
+    final var r = resolution(source, target, steps, false, false);
     final var trail = noted(r.trail, note);
     // Pass the leaf Iso straight through (Mapper.ofIso) rather than re-wrapping it in a second
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
@@ -434,7 +488,7 @@ public final class DeepMap {
    * small-DTO ↔ large-entity migration shape.
    */
   static <A, B> Iso<A, B> resolveForward(final Class<A> source, final Class<B> target, final MapStep[] steps) {
-    return resolution(source, target, steps, true).iso;
+    return resolution(source, target, steps, true, false).iso;
   }
 
   /**
@@ -460,7 +514,7 @@ public final class DeepMap {
     final MapStep[] steps,
     final OpticNode note
   ) {
-    final var r = resolution(source, target, steps, true);
+    final var r = resolution(source, target, steps, true, false);
     return ForwardMapper.create(r.iso::to, source, target, noted(r.trail, note));
   }
 
@@ -471,8 +525,30 @@ public final class DeepMap {
     final Class<A> source,
     final Class<B> target,
     final MapStep[] steps,
-    final boolean lenient
+    final boolean lenient,
+    final boolean edit
   ) {
+    return resolution(source, target, steps, lenient, edit, null);
+  }
+
+  /**
+   * As {@link #resolution(Class, Class, MapStep[], boolean, boolean)}, for an edit mapper a static
+   * initialiser of {@code caller} builds: a pair it writes by name converts through the edit mapper
+   * {@code caller} declares for that pair, where it declares one.
+   */
+  @SuppressWarnings("unchecked")
+  private static <A, B> Resolution<A, B> resolution(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps,
+    final boolean lenient,
+    final boolean edit,
+    final Class<?> caller
+  ) {
+    // An edit mapper converts forward alone and is strict on both sides; every other factory
+    // refuses the rows only an edit mapper takes.
+    if (!edit) refuseEditRows(source, target, steps, lenient);
+    final var forwardOnly = lenient || edit;
     final var overrides = new ArrayList<Mapping<?, ?>>();
     final var hints = new ArrayList<WriteHint<?>>();
     final var nullHints = new ArrayList<NullHint>();
@@ -503,7 +579,8 @@ public final class DeepMap {
             defaultWriterFactory
           );
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
-    final var cache = new PairCache(beanRefl, BackReferenceRows.of(backReferences, source, target));
+    final var cache = new PairCache(beanRefl, BackReferenceRows.of(backReferences, source, target), edit);
+    if (edit) cache.elementMappers(caller, source, target);
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
@@ -525,12 +602,18 @@ public final class DeepMap {
     // reaches is refused once the build has refused nothing of its own, so a property the build
     // cannot convert, or a field with no counterpart, is the refusal named.
     final var walked = keyedBelow(overrideTable, source, target)
-      ? PAIR_WALK.walk(source, target, keyedRows(overrideTable), lenient, new Walking(ownBridges, sealedCases, lenient))
+      ? PAIR_WALK.walk(
+          source,
+          target,
+          keyedRows(overrideTable),
+          forwardOnly,
+          new Walking(ownBridges, sealedCases, forwardOnly)
+        )
       : null;
     // A mapper between two sealed interfaces dispatches on the case, and each case's own mapper is
     // what patch and into reach; any other pair is walked by property.
     final var rootCases =
-      PAIRING.decidePair(source, target, "", lenient) instanceof PairDecision.DispatchCases
+      PAIRING.decidePair(source, target, "", forwardOnly) instanceof PairDecision.DispatchCases
         ? new ArrayList<Mapper.CaseEntry>()
         : null;
     if (rootCases != null) populateSealed(
@@ -545,7 +628,7 @@ public final class DeepMap {
       ownBridges,
       sealedCases,
       lenient,
-      lenient,
+      forwardOnly,
       rootCases,
       trail
     );
@@ -562,12 +645,12 @@ public final class DeepMap {
       ownBridges,
       sealedCases,
       lenient,
-      lenient,
+      forwardOnly,
       trail
     );
     validateAllHintsConsumed(hintMap, cache, overrides, source, target);
     cache.backReferences.refuseUntaken();
-    refuseUnwrittenPathObjects(beanRefl, hints, defaultStrategy, overrides, source, target, lenient);
+    refuseUnwrittenPathObjects(beanRefl, hints, defaultStrategy, overrides, source, target, forwardOnly);
     if (walked != null) {
       // Every pair that leaves the runtime walk open is one the build refuses, so a build that
       // finished was walked to the end.
@@ -588,7 +671,48 @@ public final class DeepMap {
     final var writers = new HashMap<Class<?>, Beans.BeanWriter<?>>();
     if (topTies.forwardWriter() != null) writers.put(target, topTies.forwardWriter());
     if (topTies.backwardWriter() != null) writers.put(source, topTies.backwardWriter());
-    return new Resolution<>(guarded, patchTable, rootCases, List.copyOf(trail), beanRefl.withWriters(writers));
+    trail.addAll(cache.through);
+    return new Resolution<>(
+      guarded,
+      patchTable,
+      rootCases,
+      List.copyOf(trail),
+      beanRefl.withWriters(writers),
+      cache.editWrites
+    );
+  }
+
+  /**
+   * Refuses by name the rows only {@code Telescope.edits} takes, a {@code keep} and a {@code via}
+   * naming an edit mapper, on a mapper of another factory: {@code mapperForward} where {@code
+   * lenient}, and otherwise {@code mapper}.
+   */
+  private static void refuseEditRows(
+    final Class<?> source,
+    final Class<?> target,
+    final MapStep[] steps,
+    final boolean lenient
+  ) {
+    final var factory = lenient ? "Telescope.mapperForward" : "Telescope.mapper";
+    for (final var step : steps) {
+      final MapStep row = step instanceof Conditional<?, ?> c ? c.inner() : step;
+      if (row instanceof Keep<?, ?, ?> keep) throw new IllegalArgumentException(
+        PairingMessages.keepOutsideEdits(
+          factory,
+          source.getSimpleName(),
+          target.getSimpleName(),
+          PropertyNames.property(keep.targetField())
+        )
+      );
+      if (row instanceof Via<?, ?> via && via.edits()) throw new IllegalArgumentException(
+        PairingMessages.viaEditsOutsideEdits(
+          factory,
+          source.getSimpleName(),
+          target.getSimpleName(),
+          PropertyNames.property(via.sourceField())
+        )
+      );
+    }
   }
 
   /**
@@ -622,8 +746,11 @@ public final class DeepMap {
       })
     );
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
+    final var unedited =
+      cache instanceof PairCache walked ? walked.unedited.getOrDefault(pair, Set.of()) : Set.<String>of();
     for (final var entry : entries) {
       final var step = entry.getValue();
+      if (unedited.contains(entry.getKey())) continue;
       final var paired = step.elements == null || !(cache instanceof PairCache walked) ? null : walked;
       patchTable.put(
         entry.getKey(),
@@ -633,9 +760,7 @@ public final class DeepMap {
           step.overlay,
           step.read,
           paired == null ? null : paired.intoWrite(step.elements),
-          paired == null ? null : paired.patchIntoWrite(step.elements),
-          ties.forward().get(entry.getKey()),
-          step.sourceName == null ? null : ties.backward().get(step.sourceName)
+          ties.forward().get(entry.getKey())
         )
       );
     }
@@ -1010,6 +1135,7 @@ public final class DeepMap {
       case ViaClass<?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case ViaMethods<?, ?> __ -> PairWalk.RowKind.CONVERTING;
       case Drop<?, ?, ?> __ -> PairWalk.RowKind.DROP;
+      case Keep<?, ?, ?> __ -> PairWalk.RowKind.KEEP;
       case TelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case FromTelescopeTo<?, ?, ?> __ -> PairWalk.RowKind.PATH;
       case TelescopeToTelescope<?, ?, ?> __ -> PairWalk.RowKind.PATH;
@@ -1672,6 +1798,8 @@ public final class DeepMap {
       final var sourceWrites = new SourceWrites(source.getSimpleName(), target.getSimpleName(), !forwardOnly);
       // Target paths that name no property are told apart by the order they come in.
       var unnamedPaths = 0;
+      // The target properties keep rows name, which no edit writes.
+      final var keptTgt = new LinkedHashSet<String>();
 
       for (final var rawRow : rowsAt(overrides, key)) {
         // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
@@ -1860,6 +1988,16 @@ public final class DeepMap {
             if (trailOut != null) trailOut.add(new OpticNode.Skipped(srcField, OpticNode.Reason.DROPPED));
             yield false;
           }
+          // A kept target property is written by no row and pairs with no source property; an
+          // edit
+          // mapper counts it as accounted for, and every other factory refused the row above.
+          case Keep<?, ?, ?> __ -> {
+            final var kept = tgtRefl.normalize(row.targetField());
+            if (!keptTgt.add(kept) || claimedTgt.contains(kept)) throw new IllegalArgumentException(
+              PairingMessages.keepBesideWrite(source.getSimpleName(), target.getSimpleName(), kept)
+            );
+            yield false;
+          }
           // Peeled above; Conditional cannot nest (rejected at construction) — unreachable.
           case Conditional<?, ?> __ -> throw new IllegalStateException(
             "Conditional row survived peeling — routing regression in populateIso"
@@ -1958,6 +2096,55 @@ public final class DeepMap {
       // before any property the rows leave unpaired.
       final var fannedOut = sourceWrites.fanOutRefusal();
       if (fannedOut != null) throw new IllegalArgumentException(fannedOut);
+      // The properties no edit writes, which count as accounted for. At an edit mapper's own pair a
+      // kept one is written by no row and pairs with no source property, and the back-reference a
+      // collection write sets pairs by name where the source has a property of its name. At every
+      // pair an edit mapper writes, its own or one below it, a property the persistence mapping
+      // generates is written by no conversion, whatever the source sends under its name; that
+      // namesake is read by nothing here, being the key a merge by identifier matches by.
+      final var walking = cache instanceof PairCache walkedPairs ? walkedPairs : null;
+      final var editPair = walking != null && walking.edit;
+      final var editTop = topStepsOut != null && editPair;
+      final var unedited = new LinkedHashMap<String, OpticNode.Reason>();
+      if (editTop) {
+        for (final var kept : keptTgt) {
+          if (claimedTgt.contains(kept) || telescopeWritesTgt.contains(kept)) throw new IllegalArgumentException(
+            PairingMessages.keepBesideWrite(source.getSimpleName(), target.getSimpleName(), kept)
+          );
+          unedited.put(kept, OpticNode.Reason.KEPT);
+        }
+      }
+      if (editPair) {
+        final var sourceNames = List.of(srcRefl.names(source));
+        for (final var name : EditTargets.unwritten(target, tgtRefl, claimedTgt, telescopeWritesTgt)) {
+          unedited.putIfAbsent(name, OpticNode.Reason.GENERATED);
+          if (sourceNames.contains(name)) claimedSrc.add(name);
+        }
+        if (editTop) {
+          for (final var name : EditTargets.backReferences(target, tgtRefl, walking.backReferences))
+            unedited.putIfAbsent(name, OpticNode.Reason.BACK_REFERENCE);
+        }
+        for (final var entry : unedited.entrySet()) {
+          final var name = entry.getKey();
+          final var paired =
+            entry.getValue() == OpticNode.Reason.BACK_REFERENCE &&
+            sourceNames.contains(name) &&
+            !claimedSrc.contains(name) &&
+            !telescopeReadsSrc.contains(name);
+          if (paired || claimedTgt.contains(name) || telescopeWritesTgt.contains(name)) continue;
+          claimedTgt.add(name);
+          byTargetName.put(
+            name,
+            new FieldStep(
+              null,
+              name,
+              Placeholders.placeholderIsoFor(rawClassOf(tgtRefl.genericType(target, name)), false)
+            )
+          );
+          if (trailOut != null) trailOut.add(new OpticNode.Skipped(name, entry.getValue()));
+        }
+        walking.unedited.put(key, Set.copyOf(unedited.keySet()));
+      }
 
       final var srcNames = srcRefl.names(source);
       final var srcNameSet = new HashSet<>(List.of(srcNames));
@@ -2002,7 +2189,23 @@ public final class DeepMap {
       final var tgtNames = tgtRefl.names(target);
       final var readSrc = new HashSet<>(claimedSrc);
       readSrc.addAll(pathReadsSrc);
-      final var match = PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, claimedTgt);
+      // In an edit mapper, a target property a constant or compute row writes takes no source
+      // property of its name, so that value is the row's on every operation and the source's
+      // property of the name is read by nothing unless a row reads it.
+      final var pairedTargets = new HashSet<>(claimedTgt);
+      if (editTop) for (final var raw : telescopeFixups) {
+        final Mapping<?, ?> fixup = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
+        final Telescope<?, ?> written = switch (fixup) {
+          case Constant<?, ?, ?> c -> c.targetTelescope();
+          case Compute<?, ?, ?> c -> c.targetTelescope();
+          case ComputeFromSource<?, ?, ?> c -> c.targetTelescope();
+          default -> null;
+        };
+        if (written != null && written.hops.size() == 1 && written.firstHopName() != null) pairedTargets.add(
+          tgtRefl.normalize(written.firstHopName())
+        );
+      }
+      final var match = PairingRules.matchFields(List.of(srcNames), List.of(tgtNames), readSrc, pairedTargets);
       final var byName = new HashSet<>(match.matched());
       // Where a strict mapper decides a pair's fields, it refuses a field nothing pairs with
       // whatever other rows the pair has: a target field no row fills and no source field of its
@@ -2028,6 +2231,28 @@ public final class DeepMap {
         );
         if (!unpaired.isEmpty()) throw new IllegalStateException(unpaired.getFirst());
       }
+      // An edit mapper is strict at its own pair on both sides, as a mapper that converts both ways
+      // is, with the properties no edit writes counted as filled.
+      if (editTop) {
+        Set<String> filled = null;
+        if (!unknownTgtWrite) {
+          filled = new HashSet<>(telescopeWritesTgt);
+          filled.addAll(unedited.keySet());
+          for (final var name : match.unmatchedTargets()) {
+            if (writtenThroughPath(overrides, target, name)) filled.add(name);
+          }
+        }
+        final var unpaired = Unpaired.editRefusals(
+          new Unpaired.Sides(source.getSimpleName(), target.getSimpleName(), slot(srcRefl), slot(tgtRefl)),
+          List.of(srcNames),
+          match,
+          filled,
+          unknownSrcRead ? null : telescopeReadsSrc,
+          name -> Beans.noWriteMember(target, name),
+          name -> Beans.noWriteMember(source, name)
+        );
+        if (!unpaired.isEmpty()) throw new IllegalStateException(unpaired.getFirst());
+      }
       for (final var name : tgtNames) {
         if (claimedTgt.contains(name)) continue;
         // A target field nothing pairs with by name gets a placeholder, which a row writing through
@@ -2040,8 +2265,7 @@ public final class DeepMap {
           // strict mapper leaves it out where no row writes it: nothing fills it and nothing could,
           // so it takes no step, and into, which writes the steps' properties, leaves it alone too.
           if (
-            !lenient &&
-            !forwardOnly &&
+            (editTop || (!lenient && !forwardOnly)) &&
             !telescopeWritesTgt.contains(name) &&
             !unknownTgtWrite &&
             !writtenThroughPath(overrides, target, name) &&
@@ -2285,11 +2509,127 @@ public final class DeepMap {
             )
           );
         }
+        if (editTop) editWritesOf(
+          (PairCache) cache,
+          byTargetName,
+          telescopeFixups,
+          source,
+          target,
+          srcRefl,
+          tgtRefl,
+          beanRefl
+        );
         topStepsOut.putAll(byTargetName);
       }
     } finally {
       inProgress.pop();
     }
+  }
+
+  /**
+   * Decides, for the pair an edit mapper is built for, what its sparse writes read of a partial:
+   * for each target property its table writes, the reader of the partial whose null value means the
+   * partial did not send it, or none where it is always sent; and for each row writing the target
+   * through a path, how the value {@code forward} wrote at the path's end is written into the
+   * objects a target holds, or into a copy. A property only paths write is left out of the table,
+   * so it is written along the path rather than replaced whole.
+   */
+  @SuppressWarnings("unchecked")
+  private static void editWritesOf(
+    final PairCache cache,
+    final Map<String, FieldStep> byTargetName,
+    final List<Mapping<?, ?>> fixups,
+    final Class<?> source,
+    final Class<?> target,
+    final Reflective srcRefl,
+    final Reflective tgtRefl,
+    final Reflective beanRefl
+  ) {
+    final var sentBy = new LinkedHashMap<String, Function<Object, Object>>();
+    for (final var entry : byTargetName.entrySet()) {
+      final var step = entry.getValue();
+      if (step.sourceName == null || step.read != null) continue;
+      final var name = step.sourceName;
+      sentBy.put(entry.getKey(), partial -> srcRefl.read(partial, name));
+    }
+    final var paths = new ArrayList<Mapper.PathEdit>();
+    final var pathOnly = new HashSet<String>();
+    for (final var raw : fixups) {
+      final Predicate<Object> gate = raw instanceof Conditional<?, ?> c ? (Predicate<Object>) c.predicate() : null;
+      final Mapping<?, ?> row = raw instanceof Conditional<?, ?> c ? c.inner() : raw;
+      final Telescope<?, ?> written;
+      final Function<Object, Object> read;
+      switch (row) {
+        case TelescopeTo<?, ?, ?> t -> {
+          written = t.targetTelescope();
+          final var name = srcRefl.normalize(t.sourceField());
+          read = partial -> srcRefl.read(partial, name);
+        }
+        case TelescopeToTelescope<?, ?, ?> t -> {
+          written = t.targetTelescope();
+          read = pathReader(t.sourceTelescope(), source);
+        }
+        case Constant<?, ?, ?> c -> {
+          written = c.targetTelescope();
+          read = null;
+        }
+        case Compute<?, ?, ?> c -> {
+          written = c.targetTelescope();
+          read = null;
+        }
+        case ComputeFromSource<?, ?, ?> c -> {
+          written = c.targetTelescope();
+          read = null;
+        }
+        case FromTelescopeTo<?, ?, ?> f -> {
+          sentBy.put(tgtRefl.normalize(f.targetField()), pathReader(f.sourceTelescope(), source));
+          continue;
+        }
+        default -> {
+          continue;
+        }
+      }
+      final var plan = PathWrites.plan(written, target);
+      if (plan != null && plan.names().length == 1) {
+        // A row written through one property writes that property, as a row naming its accessor.
+        sentBy.put(plan.names()[0], read);
+        continue;
+      }
+      final var first = written.firstHopName() == null ? null : tgtRefl.normalize(written.firstHopName());
+      final var step = first == null ? null : byTargetName.get(first);
+      if (step != null && step.sourceName == null) pathOnly.add(first);
+      final var path = (Telescope<Object, Object>) written;
+      final String sourceName = source.getSimpleName();
+      final String targetName = target.getSimpleName();
+      paths.add(
+        new Mapper.PathEdit(
+          read,
+          gate,
+          plan != null ? produced -> PathWrites.read(plan, produced) : produced -> path.find(produced).orElse(null),
+          plan != null
+            ? (held, value) -> PathWrites.writeInPlace(plan, held, value, beanRefl, sourceName, targetName)
+            : (held, value) -> {
+                throw new UnsupportedOperationException(PairingMessages.editPathNotProperties(sourceName, targetName));
+              },
+          plan != null ? (base, value) -> PathWrites.write(plan, base, value, tgtRefl, beanRefl) : path::set
+        )
+      );
+    }
+    sentBy.keySet().removeAll(pathOnly);
+    final var key = new TypePair(source, target);
+    final var unedited = new HashSet<>(cache.unedited.getOrDefault(key, Set.of()));
+    unedited.addAll(pathOnly);
+    cache.unedited.put(key, Set.copyOf(unedited));
+    cache.editWrites = new Mapper.EditWrites(sentBy, paths);
+  }
+
+  /** A null-safe reader of {@code path} started at {@code root}: null where any step is null. */
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> pathReader(final Telescope<?, ?> path, final Class<?> root) {
+    final var plan = PathWrites.plan(path, root);
+    if (plan != null) return value -> PathWrites.read(plan, value);
+    final var telescope = (Telescope<Object, Object>) path;
+    return value -> telescope.find(value).orElse(null);
   }
 
   /**
@@ -2847,6 +3187,12 @@ public final class DeepMap {
       final var srcCls = rawClassOf(srcType);
       final var tgtCls = rawClassOf(tgtType);
       final var subKey = new TypePair(srcCls, tgtCls);
+      // An edit mapper converts a pair it writes by name through the edit mapper its class
+      // declares for the pair, where it declares one, found when a value of the pair converts.
+      if (cache instanceof PairCache walked && walked.edit) {
+        final var through = walked.throughEditMapper(subKey, componentName, inProgress.peek());
+        if (through != null) return through;
+      }
       // A bridge is decided where the pair is met, from the pairs being converted around it, and is
       // never stored in the cache: a walked pair on a cycle reads the cache when it runs, so a
       // bridge stored there would stand in for the walk on the cycle too.
@@ -3089,6 +3435,7 @@ public final class DeepMap {
       // targets — these can only fire when a routing change in populateIso introduces a
       // regression, at which point the test failure is in populateIso, not here.
       case Drop<?, ?, ?> __ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
+      case Keep<?, ?, ?> __ -> throw new IllegalStateException("Keep row should not reach fieldIsoOf");
       case TelescopeTo<?, ?, ?> __ -> throw new IllegalStateException("TelescopeTo row should not reach fieldIsoOf");
       case FromTelescopeTo<?, ?, ?> __ -> throw new IllegalStateException(
         "FromTelescopeTo row should not reach fieldIsoOf"
@@ -4453,6 +4800,18 @@ public final class DeepMap {
       taken.add(element);
     }
 
+    /**
+     * The property the row for {@code element} names, taken as the back-reference of an edit mapper
+     * whose target is {@code element} itself, which the write of whatever collection holds it sets;
+     * null where there is no such row.
+     */
+    String ownedBy(final Class<?> element) {
+      final var row = rows.get(element);
+      if (row == null) return null;
+      taken.add(element);
+      return row.property();
+    }
+
     /** Refuses each row no collection the mapper writes took. */
     void refuseUntaken() {
       for (final var entry : rows.entrySet()) {
@@ -4556,10 +4915,77 @@ public final class DeepMap {
     private final transient Map<TypePair, Mapper<Object, Object>> mappers = new ConcurrentHashMap<>();
     private final transient Map<TypePair, PairTies> ties = new ConcurrentHashMap<>();
     final transient BackReferenceRows backReferences;
+    // Whether the resolution builds an edit mapper, which is strict at its own pair and converts
+    // forward alone.
+    final boolean edit;
+    // The target properties of an edit mapper's own pair that no operation writes into a target it
+    // is handed, and what its sparse writes need, both decided when that pair is walked.
+    final transient Map<TypePair, Set<String>> unedited = new ConcurrentHashMap<>();
+    transient Mapper.EditWrites editWrites;
 
-    PairCache(final Reflective beanRefl, final BackReferenceRows backReferences) {
+    // The class whose static initialiser builds the edit mapper, the pair it converts, the field
+    // each pair converts through, the mapper each field holds once a value of its pair converts,
+    // and the explain() line of each property that converts through one.
+    private transient Class<?> caller;
+    private transient TypePair own;
+    private final transient Map<TypePair, EditRegistry.Declared> throughFields = new ConcurrentHashMap<>();
+    private final transient Map<TypePair, EditMapper<?, ?>> throughMappers = new ConcurrentHashMap<>();
+    final transient List<OpticNode> through = new ArrayList<>();
+
+    PairCache(final Reflective beanRefl, final BackReferenceRows backReferences, final boolean edit) {
       this.beanRefl = beanRefl;
       this.backReferences = backReferences;
+      this.edit = edit;
+    }
+
+    /**
+     * Records {@code caller}, whose static initialiser builds the edit mapper of the pair of {@code
+     * source} and {@code target}, for the pairs below it to find their own edit mappers by.
+     */
+    void elementMappers(final Class<?> caller, final Class<?> source, final Class<?> target) {
+      EditRegistry.refuseUnlistedFields(caller);
+      this.caller = caller;
+      this.own = new TypePair(source, target);
+    }
+
+    /**
+     * The conversion of the pair {@code key}, met at {@code component} of the pair {@code around},
+     * through the edit mapper of its own that a static field declares in the class building this
+     * mapper or in the pair's source or target class, or null where none does. The mapper is read
+     * the first time a value converts, so the field may be declared after the one being built.
+     *
+     * @throws IllegalArgumentException naming the fields when more than one declares one
+     */
+    @SuppressWarnings("unchecked")
+    Iso<?, ?> throughEditMapper(final TypePair key, final String component, final TypePair around) {
+      if (key.equals(own)) return null;
+      final var fields = EditRegistry.forPair(caller, key.source(), key.target());
+      if (fields.isEmpty()) return null;
+      final var owner = around == null ? key.target() : around.target();
+      final var property = component.replaceFirst("^.*→", "").replaceFirst("\\[.*$", "");
+      if (fields.size() > 1) throw new IllegalArgumentException(
+        PairingMessages.editElementMappersAmbiguous(
+          around == null ? key.source().getSimpleName() : around.source().getSimpleName(),
+          owner.getSimpleName(),
+          property,
+          fields.stream().map(EditRegistry.Declared::name).toList()
+        )
+      );
+      final var field = fields.getFirst();
+      if (throughFields.putIfAbsent(key, field) == null) {
+        through.add(new OpticNode.ElementsThrough(owner, property, field.name()));
+      }
+      return Iso.of(
+        value -> value == null ? null : ((EditMapper<Object, Object>) resolved(key)).forward(value),
+        value -> {
+          throw new UnsupportedOperationException(PairingMessages.editHasNoBackward(field.name()));
+        }
+      );
+    }
+
+    /** The edit mapper the pair {@code key} converts through, read once. */
+    EditMapper<?, ?> resolved(final TypePair key) {
+      return throughMappers.computeIfAbsent(key, pair -> EditRegistry.of(throughFields.get(pair)));
     }
 
     /** Records how the collections of a walked pair are tied to their owners. */
@@ -4586,19 +5012,13 @@ public final class DeepMap {
 
     Supplier<ContainerCopy.Elements> intoWrite(final ElementPair elements) {
       return new Memo<>(() -> {
+        if (elements.via() == null && throughFields.containsKey(elements.pair())) {
+          return resolved(elements.pair()).intoElements();
+        }
         final var bridged = bridgeOf(elements);
         if (bridged != null) return bridged.targetWrite();
         final var mapper = mapperOf(elements);
         return mapper == null ? null : mapper.intoElements();
-      });
-    }
-
-    Supplier<ContainerCopy.Elements> patchIntoWrite(final ElementPair elements) {
-      return new Memo<>(() -> {
-        final var bridged = bridgeOf(elements);
-        if (bridged != null) return bridged.sourceWrite();
-        final var mapper = mapperOf(elements);
-        return mapper == null ? null : mapper.patchIntoElements();
       });
     }
 
@@ -4737,7 +5157,8 @@ public final class DeepMap {
     Map<String, Mapper.PatchEntry> patchTable,
     List<Mapper.CaseEntry> cases,
     List<OpticNode> trail,
-    Reflective beanRefl
+    Reflective beanRefl,
+    Mapper.EditWrites editWrites
   ) {}
 
   /**

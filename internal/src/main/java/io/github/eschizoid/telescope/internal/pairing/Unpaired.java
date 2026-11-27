@@ -52,12 +52,47 @@ public final class Unpaired {
     final Predicate<String> targetUnwritable,
     final Predicate<String> sourceUnwritable
   ) {
+    return refusals(sides, sourceNames, match, filled, read, targetUnwritable, sourceUnwritable, false);
+  }
+
+  /**
+   * The refusals of an edit mapper, which is strict on both sides as a mapper that converts both
+   * ways is: as {@link #refusals}, with {@code filled} also holding the target properties no edit
+   * writes, those a {@code keep} names, those whose persistence mapping generates them and the
+   * back-reference a collection write sets, and each target property refused in words that offer
+   * {@code keep}.
+   */
+  public static List<String> editRefusals(
+    final Sides sides,
+    final List<String> sourceNames,
+    final PairingRules.MatchResult match,
+    final Set<String> filled,
+    final Set<String> read,
+    final Predicate<String> targetUnwritable,
+    final Predicate<String> sourceUnwritable
+  ) {
+    return refusals(sides, sourceNames, match, filled, read, targetUnwritable, sourceUnwritable, true);
+  }
+
+  private static List<String> refusals(
+    final Sides sides,
+    final List<String> sourceNames,
+    final PairingRules.MatchResult match,
+    final Set<String> filled,
+    final Set<String> read,
+    final Predicate<String> targetUnwritable,
+    final Predicate<String> sourceUnwritable,
+    final boolean edits
+  ) {
     final var refusals = new ArrayList<String>();
     final var namesakes = new HashSet<>(sourceNames);
     if (filled != null) {
       for (final var name : match.unmatchedTargets()) {
         if (filled.contains(name) || targetUnwritable.test(name)) continue;
-        refusals.add(
+        if (edits) refusals.add(
+          PairingMessages.editUnfilled(sides.source(), sides.target(), sides.tgtSlot(), name, namesakes.contains(name))
+        );
+        else refusals.add(
           namesakes.contains(name)
             ? PairingMessages.sameNameSourceRead(sides.source(), sides.target(), sides.tgtSlot(), sides.srcSlot(), name)
             : PairingMessages.noSameNameSource(sides.source(), sides.target(), sides.tgtSlot(), sides.srcSlot(), name)

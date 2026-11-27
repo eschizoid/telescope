@@ -13,6 +13,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
 import jakarta.persistence.IdClass;
 import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Version;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -115,6 +116,41 @@ class IdentifiersTest {
 
     public void setId(final long id) {
       this.id = id;
+    }
+  }
+
+  @Test
+  @DisplayName("an edit never writes a generated id or a version, and writes an assigned id")
+  void generatedPropertiesAreNeverEdited() {
+    assertTrue(Identifiers.generated(OnGetter.class, "id"), "a @GeneratedValue on the getter");
+    assertTrue(Identifiers.generated(Uuid.class, "id"), "a Hibernate generator annotation");
+    assertTrue(Identifiers.generated(Versioned.class, "version"), "a @Version");
+    assertFalse(Identifiers.generated(Versioned.class, "id"), "an assigned id");
+    assertFalse(Identifiers.generated(Versioned.class, "name"));
+    assertFalse(Identifiers.generated(Embedded.class, "key"), "an embedded id with no generator");
+  }
+
+  @Entity
+  public static class Versioned {
+
+    @Id
+    private Long id;
+
+    @Version
+    private long version;
+
+    private String name;
+
+    public Long getId() {
+      return id;
+    }
+
+    public long getVersion() {
+      return version;
+    }
+
+    public String getName() {
+      return name;
     }
   }
 

@@ -38,6 +38,11 @@ public final class Shop implements AutoCloseable {
       .addAnnotatedClass(Sack.class)
       .addAnnotatedClass(UOrder.class)
       .addAnnotatedClass(ULine.class)
+      .addAnnotatedClass(Cart.class)
+      .addAnnotatedClass(CartLine.class)
+      .addAnnotatedClass(Barrel.class)
+      .addAnnotatedClass(Flask.class)
+      .addAnnotatedClass(Ledger.class)
       .buildMetadata()
       .buildSessionFactory();
     return new Shop(sessions);

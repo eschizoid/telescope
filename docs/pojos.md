@@ -125,9 +125,9 @@ assert managed.getLines() == lines; // the same list, now holding dto's lines
 ```
 
 **Adders, removers and back-references.** No row says how a collection is written. A mapper writing a collection
-property of a bean, through `forward`, `backward`, `into` or `patchInto`, ties each converted element to the owner by
-the rule below, read from what the classes declare, and `patch` builds its result through the same adders. A property's
-type alone decides nothing. The same rule runs on the runtime and the generated path.
+property of a bean, through `forward`, `backward`, `into` or an edit mapper's `patchInto`, ties each converted element
+to the owner by the rule below, read from what the classes declare, and `patch` builds its result through the same
+adders. A property's type alone decides nothing. The same rule runs on the runtime and the generated path.
 
 | Step                                    | What decides it                                                                                                                                                                                                                                                                                                                                                               | What the write does                                                                                                                                                                                                                |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -246,15 +246,18 @@ Telescope.of(Page.class)                  // Page is a record holding List<Legac
 **`Telescope.mapper(...)` — the `Mapper<A, B>` sibling.** Same deep recursion, but the return is a `Mapper<A, B>`
 exposing `forward` / `backward` / `read` / `patch` / `asTelescope` / `liftList` / `liftSet` / `liftOptional` /
 `liftMapValues`. `patch(base, partial)` overlays non-null fields of `partial` onto `base` — useful for sparse JSON /
-form updates. It always returns a new object, even when `partial` changes nothing, and never changes `base`.
-`patchInto(target, partial)` is the same overlay written in place: it writes into `target` exactly the properties
-`patch` would overlay, and only those, the way `into` writes, so a field the partial leaves null keeps its value and a
-`Collection` or `Map` the target holds is refilled in place. It returns `target`, and is the PATCH of a managed entity.
-`asTelescope()` returns the mapper as a `Telescope<A, B>` for `.then(...)` composition into a longer typed path
-(bridging record-side navigation into entity-side leaves, or vice versa). The `lift*` methods promote an element-level
-mapper to a container-level mapper without going through a `via(...)` row — useful when the lifted mapper is the
-call-site root (e.g., a bulk handler that converts a `List<Order>` payload to `List<OrderEntity>`). A lifted mapper's
-root is a container with no fields to overlay, so its `patch` and `into` throw `UnsupportedOperationException`.
+form updates. It always returns a new object, even when `partial` changes nothing, and never changes `base`. The PATCH
+of a managed entity is an edit mapper's: `Telescope.edits(Changes.class, Entity.class, rows...)` builds an `EditMapper`,
+whose rows run from the partial into the entity and whose `patchInto(target, partial)` writes into `target` only what
+the partial sends, the way `into` writes, so a field the partial leaves null keeps its value and a `Collection` or `Map`
+the target holds is refilled in place. It returns `target`. A `compute` or `constant` row runs on the way in, and
+`keep(Entity::getX)` names a property no edit writes. [type-conversion.md](type-conversion.md#which-factory) says which
+factory each job takes. `asTelescope()` returns the mapper as a `Telescope<A, B>` for `.then(...)` composition into a
+longer typed path (bridging record-side navigation into entity-side leaves, or vice versa). The `lift*` methods promote
+an element-level mapper to a container-level mapper without going through a `via(...)` row — useful when the lifted
+mapper is the call-site root (e.g., a bulk handler that converts a `List<Order>` payload to `List<OrderEntity>`). A
+lifted mapper's root is a container with no fields to overlay, so its `patch` and `into` throw
+`UnsupportedOperationException`.
 
 ```java
 final Mapper<UserBean, UserView> mapper = Telescope.mapper(UserBean.class, UserView.class);

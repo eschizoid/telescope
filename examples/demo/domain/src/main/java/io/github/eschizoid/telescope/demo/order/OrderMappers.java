@@ -1,16 +1,16 @@
 package io.github.eschizoid.telescope.demo.order;
 
-import static io.github.eschizoid.telescope.Telescope.mapper;
+import static io.github.eschizoid.telescope.Telescope.edits;
 import static io.github.eschizoid.telescope.Telescope.mapperForward;
 import static io.github.eschizoid.telescope.Telescope.path;
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
+import static io.github.eschizoid.telescope.mapping.Mapping.keep;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.toFormatted;
 import static io.github.eschizoid.telescope.mapping.Mapping.toFormattedNumber;
 import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
 import static io.github.eschizoid.telescope.mapping.Mapping.toOrElse;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.Mapping.when;
 import static io.github.eschizoid.telescope.mapping.MergeStep.auto;
 import static io.github.eschizoid.telescope.mapping.MergeStep.from;
@@ -18,11 +18,13 @@ import static io.github.eschizoid.telescope.mapping.MergeStep.from;
 import io.github.eschizoid.telescope.Sources;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.api.BankTransferDto;
 import io.github.eschizoid.telescope.demo.api.CardDto;
 import io.github.eschizoid.telescope.demo.api.InvoiceDto;
+import io.github.eschizoid.telescope.demo.api.NewLine;
 import io.github.eschizoid.telescope.demo.api.OrderChanges;
 import io.github.eschizoid.telescope.demo.api.OrderDto;
 import io.github.eschizoid.telescope.demo.api.OrderDtoTelescope;
@@ -138,39 +140,59 @@ public final class OrderMappers {
   );
 
   /**
-   * A new order, built from the request that places it. The lines are priced from the catalog by
-   * {@link CatalogLines} and added through {@link Order#addLine(OrderLine)}, which points each line
-   * back at its order. The service looks the customer up by email itself.
+   * A new order, built from the request that places it. The lines are priced through {@link
+   * #NEW_LINE}, the edit mapper of their pair, which needs no row here, and added through {@link
+   * Order#addLine(OrderLine)}, which points each line back at its order. The service looks the
+   * customer up by email itself and fills what only it knows.
    */
   @Bridge
-  public static final ForwardMapper<PlaceOrder, Order> PLACE = mapperForward(
+  public static final EditMapper<PlaceOrder, Order> PLACE = edits(
     PlaceOrder.class,
     Order.class,
-    via(PlaceOrder::lines, Order::getLines, CatalogLines.class),
-    drop(PlaceOrder::customerEmail)
+    drop(PlaceOrder::customerEmail),
+    keep(Order::getNumber), // the service fills these
+    keep(Order::getCustomer),
+    keep(Order::getStatus),
+    keep(Order::getPlacedOn),
+    keep(Order::getTrackingNumber),
+    keep(Order::getInternalNotes)
   );
 
   /**
    * The body of a PATCH against the order. {@code EDITS.patchInto(order, changes)} writes into the
    * entity the persistence context manages every field the client sent and nothing else, and
    * refills the lists the entity already holds through {@link Order#addLine(OrderLine)} and {@link
-   * Order#addTag(String)} instead of replacing them. Each line the client names is priced from the
-   * catalog. The fields a client may never change are dropped by name, so a field added to the
-   * order later fails the build until someone decides whether a PATCH may change it.
+   * Order#addTag(String)} instead of replacing them. Each line the client names is priced through
+   * {@link #NEW_LINE}, found by its pair. The fields a PATCH may never change are kept by name, so
+   * a field added to the order later fails the build until someone decides whether a PATCH may
+   * change it.
    */
   @Bridge
-  public static final Mapper<Order, OrderChanges> EDITS = mapper(
-    Order.class,
+  public static final EditMapper<OrderChanges, Order> EDITS = edits(
     OrderChanges.class,
-    via(Order::getLines, OrderChanges::lines, LineEdits.class),
-    drop(Order::getId),
-    drop(Order::getNumber),
-    drop(Order::getCustomer),
-    drop(Order::getStatus),
-    drop(Order::getPlacedOn),
-    drop(Order::getTrackingNumber),
-    drop(Order::getInternalNotes),
-    drop(Order::getPayment)
+    Order.class,
+    keep(Order::getNumber),
+    keep(Order::getCustomer),
+    keep(Order::getStatus),
+    keep(Order::getPlacedOn),
+    keep(Order::getTrackingNumber),
+    keep(Order::getInternalNotes),
+    keep(Order::getPayment)
+  );
+
+  /**
+   * A line as a client sends it, in a new order or a PATCH. The client names a SKU and a quantity;
+   * the name, the price and the cost come from the catalog on the way in, on every write, so a line
+   * sent again is priced again. The line's identifier is generated and its order is the
+   * back-reference {@code mappedBy} names, so neither needs a row.
+   */
+  @Bridge
+  public static final EditMapper<NewLine, OrderLine> NEW_LINE = edits(
+    NewLine.class,
+    OrderLine.class,
+    compute(OrderLine::getName, Catalog::name),
+    compute(OrderLine::getUnitPrice, Catalog::price),
+    compute(OrderLine::getCostPrice, Catalog::cost)
   );
 
   /**

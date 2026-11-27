@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.CollectionLinks;
 import io.github.eschizoid.telescope.internal.pairing.CollectionWrites;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -298,6 +299,110 @@ final class MirrorLinks {
       }
     }
     return false;
+  }
+
+  private static final String ID = "jakarta.persistence.Id";
+  private static final String EMBEDDED_ID = "jakarta.persistence.EmbeddedId";
+  private static final String GENERATED_VALUE = "jakarta.persistence.GeneratedValue";
+  private static final String VERSION = "jakarta.persistence.Version";
+  private static final String ID_GENERATOR_TYPE = "org.hibernate.annotations.IdGeneratorType";
+  // The container policy telescope-jpa registers, which answers the same question at run time.
+  private static final String JPA_POLICY = "io.github.eschizoid.telescope.jpa.LoadedContainers";
+
+  /**
+   * The properties of {@code owner} whose value its persistence mapping generates, as {@code
+   * telescope-jpa} answers at run time: an identifier, {@code @Id} or {@code @EmbeddedId}, that
+   * carries {@code @GeneratedValue} or an annotation Hibernate's {@code IdGeneratorType} marks, and
+   * a {@code @Version}, each read from the field of the property's name or its getter by the
+   * annotations' names. Empty where {@code telescope-jpa} is not on the class path.
+   */
+  List<String> generated(final TypeElement owner) {
+    if (elements.getTypeElement(JPA_POLICY) == null) return List.of();
+    final var names = new ArrayList<String>();
+    for (final var property : props.properties(owner.asType())) {
+      final var annotated = annotationsOf(owner, property.name());
+      final var identifier = annotated.contains(ID) || annotated.contains(EMBEDDED_ID);
+      if (annotated.contains(VERSION) || (identifier && generatorNamed(owner, property.name()))) names.add(
+        property.name()
+      );
+    }
+    return names;
+  }
+
+  /** The qualified names of the annotations on property {@code name}'s field and getter. */
+  private Set<String> annotationsOf(final TypeElement owner, final String name) {
+    final var names = new HashSet<String>();
+    for (final var annotated : annotatedMembers(owner, name))
+      for (final AnnotationMirror annotation : annotated.getAnnotationMirrors())
+        names.add(((TypeElement) annotation.getAnnotationType().asElement()).getQualifiedName().toString());
+    return names;
+  }
+
+  /** Whether property {@code name}'s field or getter carries a generator annotation. */
+  private boolean generatorNamed(final TypeElement owner, final String name) {
+    for (final var annotated : annotatedMembers(owner, name)) {
+      for (final AnnotationMirror annotation : annotated.getAnnotationMirrors()) {
+        final var type = (TypeElement) annotation.getAnnotationType().asElement();
+        if (type.getQualifiedName().contentEquals(GENERATED_VALUE)) return true;
+        for (final AnnotationMirror meta : type.getAnnotationMirrors())
+          if (
+            ((TypeElement) meta.getAnnotationType().asElement()).getQualifiedName().contentEquals(ID_GENERATOR_TYPE)
+          ) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The field of name {@code name} on {@code owner} or a superclass, and its getter, where found.
+   */
+  private List<Element> annotatedMembers(final TypeElement owner, final String name) {
+    final var found = new ArrayList<Element>();
+    for (var type = owner; type != null; type = superclassOf(type)) {
+      for (final var field : ElementFilter.fieldsIn(type.getEnclosedElements()))
+        if (field.getSimpleName().contentEquals(name) && !field.getModifiers().contains(Modifier.STATIC)) found.add(
+          field
+        );
+    }
+    final var getterNames = List.of(
+      "get" + AbstractTelescopeProcessor.capitalize(name),
+      "is" + AbstractTelescopeProcessor.capitalize(name)
+    );
+    for (final var m : ElementFilter.methodsIn(elements.getAllMembers(owner))) {
+      if (m.getParameters().isEmpty() && getterNames.contains(m.getSimpleName().toString())) found.add(m);
+    }
+    return found;
+  }
+
+  /**
+   * The properties of {@code element} that point back at an owner holding a collection of it, as
+   * {@code @OneToMany(mappedBy)} on that owner's collection names them: what the write of the
+   * collection sets, so an edit mapper of {@code element} counts them as accounted for. Empty where
+   * {@code telescope-jpa} is not on the class path, since at run time {@code mappedBy} is answered
+   * by its policy, as {@link #generated} is.
+   */
+  List<String> backReferences(final TypeElement element) {
+    final var names = new ArrayList<String>();
+    if (elements.getTypeElement(JPA_POLICY) == null) return names;
+    for (final var property : props.properties(element.asType())) {
+      final var owner = classOf(property.member());
+      if (owner == null || owner.getKind() != ElementKind.CLASS) continue;
+      if (owner.getQualifiedName().toString().startsWith("java.")) continue;
+      for (final var collection : props.properties(owner.asType())) {
+        final var held = writes.elementOf(collection.member());
+        final var heldClass = held == null ? null : classOf(held);
+        if (
+          heldClass == null || !types.isAssignable(types.erasure(element.asType()), types.erasure(heldClass.asType()))
+        ) {
+          continue;
+        }
+        if (property.name().equals(mappedBy(owner, collection.name()))) {
+          names.add(property.name());
+          break;
+        }
+      }
+    }
+    return names;
   }
 
   /**

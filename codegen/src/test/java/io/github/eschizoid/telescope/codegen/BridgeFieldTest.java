@@ -2942,7 +2942,8 @@ class BridgeFieldTest {
     return List.of(
       new String[] {
         "  @Bridge static final Telescope<User, UserDto> USER = Telescope.map(User.class, UserDto.class);",
-        "must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...) or Telescope.merge(...)",
+        "must be initialised by a Telescope.mapper(...), Telescope.mapperForward(...), Telescope.edits(...) or" +
+        " Telescope.merge(...)",
       },
       new String[] {
         "  @Bridge(UserDto.class) static final ForwardMapper<User, UserDto> USER =" +
@@ -3289,5 +3290,184 @@ class BridgeFieldTest {
       final var thrown = assertThrows(ExceptionInInitializerError.class, () -> field(loader, "fb.Mappers", "M"));
       assertEquals(refusal, thrown.getCause().getMessage());
     }
+  }
+
+  /**
+   * {@code rows} of a {@code @Bridge} field over an item and its line, compiled by the bridge
+   * processor alone.
+   */
+  private static ProcessorHarness.Compilation editRows(final String field) {
+    return ProcessorHarness.compileFully(
+      List.<Processor>of(new BridgeProcessor()),
+      List.of(),
+      sources(
+        "fb.EdItem",
+        "package fb; public class EdItem { private String sku; private int price;" +
+          " public EdItem() {} public String getSku() { return sku; } public void setSku(final String v) { sku = v; }" +
+          " public int getPrice() { return price; } public void setPrice(final int v) { price = v; } }",
+        "fb.EdChanges",
+        "package fb; public record EdChanges(String sku, java.util.List<EdPart> parts) {}",
+        "fb.EdPart",
+        "package fb; public record EdPart(String sku) {}",
+        "fb.EdPrice",
+        "package fb; public record EdPrice(String sku, int price) {}",
+        "fb.EdBox",
+        "package fb; public record EdBox(java.util.List<EdItem> parts) {}",
+        "fb.EdPrices",
+        "package fb; public final class EdPrices { public static Integer of(final EdChanges c) { return 1; }" +
+          " public static Integer part(final EdPart p) { return 2; } }",
+        "fb.EdMappers",
+        HEADER + "public final class EdMappers {\n" + field + "}\n"
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("the processor refuses keep outside edits, a keep beside a write and a keep given twice, by name")
+  void refusesMisplacedKeeps() {
+    final var outside = editRows(
+      "  @Bridge public static final Mapper<EdChanges, EdItem> M = Telescope.mapper(EdChanges.class, EdItem.class," +
+        " drop(EdChanges::parts), keep(EdItem::getPrice));\n"
+    );
+    assertFalse(outside.success());
+    assertTrue(
+      outside.hasError(PairingMessages.keepOutsideEdits("Telescope.mapper", "EdChanges", "EdItem", "price")),
+      outside::errorMessages
+    );
+    final var beside = editRows(
+      "  @Bridge public static final EditMapper<EdChanges, EdItem> M = Telescope.edits(EdChanges.class, EdItem.class," +
+        " drop(EdChanges::parts), compute(EdItem::getPrice, EdPrices::of), keep(EdItem::getPrice));\n"
+    );
+    assertFalse(beside.success());
+    assertTrue(beside.hasError(PairingMessages.keepBesideWrite("EdChanges", "EdItem", "price")), beside::errorMessages);
+    final var twice = editRows(
+      "  @Bridge public static final EditMapper<EdChanges, EdItem> M = Telescope.edits(EdChanges.class, EdItem.class," +
+        " drop(EdChanges::parts), keep(EdItem::getPrice), keep(EdItem::getPrice));\n"
+    );
+    assertFalse(twice.success());
+    assertTrue(twice.hasError(PairingMessages.keepBesideWrite("EdChanges", "EdItem", "price")), twice::errorMessages);
+  }
+
+  @Test
+  @DisplayName("an edit mapper's bridge over a partial holding a primitive sends the primitive on every patch")
+  void aPrimitiveOfThePartialIsAlwaysSent() {
+    final var c = editRows(
+      "  @Bridge public static final EditMapper<EdPrice, EdItem> M = Telescope.edits(EdPrice.class, EdItem.class);\n"
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var bridge = c.generated().get("fb.EdPriceToEdItemBridge");
+    assertTrue(bridge != null && bridge.contains("editPatchInto"), () -> String.valueOf(c.generated().keySet()));
+  }
+
+  @Test
+  @DisplayName("the processor refuses a via row naming an edit mapper outside edits, by name")
+  void refusesAViaOfAnEditMapperOutsideEdits() {
+    final var c = editRows(
+      "  @Bridge public static final EditMapper<EdPart, EdItem> PART = Telescope.edits(EdPart.class, EdItem.class," +
+        " compute(EdItem::getPrice, EdPrices::part));\n" +
+        "  @Bridge public static final ForwardMapper<EdChanges, EdBox> M = Telescope.mapperForward(" +
+        "EdChanges.class, EdBox.class, via(EdChanges::parts, EdBox::parts, PART));\n"
+    );
+    assertFalse(c.success());
+    assertTrue(
+      c.hasError(PairingMessages.viaEditsOutsideEdits("Telescope.mapperForward", "EdChanges", "EdBox", "parts")),
+      c::errorMessages
+    );
+  }
+
+  @Test
+  @DisplayName(
+    "the processor refuses an element edit mapper declared outside the owner's class and the pair's classes," +
+      " naming both fields, and takes one named in a via row"
+  )
+  void refusesAnElementMapperTheRuntimeWouldNotFind() {
+    final var model = new String[] {
+      "fb.ElLine",
+      "package fb; public class ElLine { private String sku; private int price; public ElLine() {}" +
+      " public String getSku() { return sku; } public void setSku(final String v) { sku = v; }" +
+      " public int getPrice() { return price; } public void setPrice(final int v) { price = v; } }",
+      "fb.ElOrder",
+      "package fb; public class ElOrder { private final java.util.List<ElLine> lines = new java.util.ArrayList<>();" +
+      " public ElOrder() {} public java.util.List<ElLine> getLines() { return lines; }" +
+      " public void addLine(final ElLine l) { lines.add(l); } }",
+      "fb.ElLineSent",
+      "package fb; public record ElLineSent(String sku) {}",
+      "fb.ElOrderSent",
+      "package fb; public record ElOrderSent(java.util.List<ElLineSent> lines) {}",
+      "fb.ElPricing",
+      HEADER +
+      "public final class ElPricing {\n" +
+      "  public static Integer of(final ElLineSent l) { return 5; }\n" +
+      "  @Bridge public static final EditMapper<ElLineSent, ElLine> LINE =" +
+      " Telescope.edits(ElLineSent.class, ElLine.class, compute(ElLine::getPrice, ElPricing::of));\n}\n",
+    };
+    final var unreached = new ArrayList<>(Arrays.asList(model));
+    unreached.add("fb.ElMappers");
+    unreached.add(
+      HEADER +
+        "public final class ElMappers {\n" +
+        "  @Bridge public static final EditMapper<ElOrderSent, ElOrder> EDITS =" +
+        " Telescope.edits(ElOrderSent.class, ElOrder.class);\n}\n"
+    );
+    final var refused = ProcessorHarness.compileFully(
+      List.<Processor>of(new BridgeProcessor()),
+      List.of(),
+      sources(unreached.toArray(String[]::new))
+    );
+    assertFalse(refused.success());
+    assertTrue(
+      refused.hasError(
+        PairingMessages.editElementMapperUnreached(
+          "ElOrderSent",
+          "ElOrder",
+          "lines",
+          "ElMappers.EDITS",
+          "ElPricing.LINE"
+        )
+      ),
+      refused::errorMessages
+    );
+    final var named = new ArrayList<>(Arrays.asList(model));
+    named.add("fb.ElMappers");
+    named.add(
+      HEADER +
+        "public final class ElMappers {\n" +
+        "  @Bridge public static final EditMapper<ElOrderSent, ElOrder> EDITS =" +
+        " Telescope.edits(ElOrderSent.class, ElOrder.class, via(ElOrderSent::lines, ElOrder::getLines, ElPricing.LINE));\n}\n"
+    );
+    final var compiled = ProcessorHarness.compileFully(
+      List.<Processor>of(new BridgeProcessor()),
+      List.of(),
+      sources(named.toArray(String[]::new))
+    );
+    assertTrue(compiled.success(), compiled::errorMessages);
+  }
+
+  @Test
+  @DisplayName("an edit mapper's bridge reads no generated identifier the source sends into its target")
+  void aGeneratedIdentifierIsNeverWritten() {
+    final var c = ProcessorHarness.compileFully(
+      List.<Processor>of(new BridgeProcessor()),
+      List.of(),
+      sources(
+        "fb.GenItem",
+        "package fb; @jakarta.persistence.Entity public class GenItem {" +
+          " @jakarta.persistence.Id @jakarta.persistence.GeneratedValue private Long id; private String sku;" +
+          " public GenItem() {} public Long getId() { return id; } public void setId(final Long v) { id = v; }" +
+          " public String getSku() { return sku; } public void setSku(final String v) { sku = v; } }",
+        "fb.GenSent",
+        "package fb; public record GenSent(Long id, String sku) {}",
+        "fb.GenMappers",
+        HEADER +
+          "public final class GenMappers {\n" +
+          "  @Bridge public static final EditMapper<GenSent, GenItem> ITEM =" +
+          " Telescope.edits(GenSent.class, GenItem.class);\n}\n"
+      )
+    );
+    assertTrue(c.success(), c::errorMessages);
+    final var bridge = c.generated().get("fb.GenSentToGenItemBridge");
+    assertTrue(bridge != null && !bridge.contains("__fs_id") && bridge.contains("__s.id()"), () ->
+      String.valueOf(bridge)
+    );
   }
 }

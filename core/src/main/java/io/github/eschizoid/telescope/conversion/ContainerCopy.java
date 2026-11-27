@@ -144,6 +144,23 @@ public final class ContainerCopy {
     }
 
     /**
+     * Whether property {@code property} of {@code owner} holds a value its persistence mapping
+     * generates, such as an identifier the database assigns or a version the provider increments.
+     * An edit mapper counts such a property as accounted for, and none of its operations writes it
+     * into a target it is handed; a new target it builds still carries the value its source sends
+     * under the property's name, so a policy can match it against a held one. A persistence module
+     * answers for an identifier with a generator and for a version. The standard behavior answers
+     * false.
+     *
+     * @param owner the class holding the property
+     * @param property the name of the property
+     * @return whether no edit writes it
+     */
+    default boolean generated(final Class<?> owner, final String property) {
+      return false;
+    }
+
+    /**
      * Whether this policy applies in this runtime, such as whether the persistence API it consults
      * is on the class path. A policy that answers false is passed over as if it were not
      * registered, so a module carrying one costs nothing where what it knows about is absent.
@@ -199,6 +216,20 @@ public final class ContainerCopy {
      *     not known
      */
     void write(Object held, Object converted, Object sent);
+
+    /**
+     * The value {@code sent}, an element of the collection the source holds, has for its property
+     * {@code property}, or null where it has no property of that name: what an element is matched
+     * to a held one by where its conversion writes no such property, as an edit mapper writes no
+     * generated identifier.
+     *
+     * @param sent the source's element
+     * @param property the name of the property
+     * @return its value, or null
+     */
+    default Object sentValue(final Object sent, final String property) {
+      return null;
+    }
   }
 
   /**
@@ -210,6 +241,7 @@ public final class ContainerCopy {
    */
   public static final class Refill {
 
+    private final String operation;
     private final String source;
     private final String target;
     private final Object owner;
@@ -230,6 +262,7 @@ public final class ContainerCopy {
       final boolean writes,
       final Object prepared
     ) {
+      this.operation = write.operation;
       this.source = write.source;
       this.target = write.target;
       this.owner = write.owner;
@@ -312,6 +345,19 @@ public final class ContainerCopy {
      */
     public Object convertSent(final Object element) {
       return conversion().convert(element);
+    }
+
+    /**
+     * The value {@code element}, one of {@link #sent()}, has for its property {@code property}, or
+     * null where it has none, as {@link Elements#sentValue} reads it.
+     *
+     * @param element the source's element
+     * @param property the name of the property
+     * @return its value, or null
+     * @throws IllegalStateException if {@link #writesElements()} is false
+     */
+    public Object sentValue(final Object element, final String property) {
+      return conversion().sentValue(element, property);
     }
 
     /**
@@ -398,7 +444,9 @@ public final class ContainerCopy {
      * @return the exception to throw
      */
     public IllegalArgumentException refused(final String reason) {
-      return new Refused(PairingMessages.intoElementsRefused(source, target, beanOf(owner), property, reason));
+      return new Refused(
+        PairingMessages.intoElementsRefused(operation, source, target, beanOf(owner), property, reason)
+      );
     }
 
     /**
@@ -421,6 +469,7 @@ public final class ContainerCopy {
    * conversion of its elements and the source's container.
    */
   private record Write(
+    String operation,
     String source,
     String target,
     Object owner,
@@ -591,6 +640,18 @@ public final class ContainerCopy {
   }
 
   /**
+   * Whether the registered {@link Policy} answers that property {@code property} of {@code owner}
+   * holds a value its persistence mapping generates, which no edit writes into a held target.
+   *
+   * @param owner the class holding the property
+   * @param property the name of the property
+   * @return whether no edit writes it
+   */
+  public static boolean generated(final Class<?> owner, final String property) {
+    return POLICY.generated(owner, property);
+  }
+
+  /**
    * Points the elements of each collection {@code links} reads from {@code owner}, a value just
    * built, back at {@code owner}, for the collections no adder filled: what a conversion does once
    * it has built an owner.
@@ -666,6 +727,8 @@ public final class ContainerCopy {
    * @param incoming the container converted from the source, or null
    * @param setter whether the target class has a setter for {@code property}
    * @param links how the elements of {@code property} are tied to the target, or null
+   * @param operation the mapper operation writing, {@code into} or {@code patchInto}, which a
+   *     refusal names
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
    * @param bean the simple name of the target's class
@@ -681,6 +744,7 @@ public final class ContainerCopy {
    *     the write
    */
   public static Object refuseUnwritable(
+    final String operation,
     final Object held,
     final Object incoming,
     final boolean setter,
@@ -695,9 +759,17 @@ public final class ContainerCopy {
   ) {
     final var adder = links != null && links.adder != null;
     final var write = CollectionWrites.intoWrite(held != null, changeable(held), incoming != null, setter, adder);
-    if (write == CollectionWrites.IntoWrite.REFUSE) throw unwritable(source, target, bean, property, held, null);
+    if (write == CollectionWrites.IntoWrite.REFUSE) throw unwritable(
+      operation,
+      source,
+      target,
+      bean,
+      property,
+      held,
+      null
+    );
     if (write != CollectionWrites.IntoWrite.REFILL || POLICY == STANDARD) return null;
-    final var named = new Write(source, target, owner, property, held, links, elements, sent);
+    final var named = new Write(operation, source, target, owner, property, held, links, elements, sent);
     return POLICY.check(new Refill(named, incoming, null, false, null));
   }
 
@@ -719,6 +791,8 @@ public final class ContainerCopy {
    * holds is untied, as {@link Links} describes; where the setter is to write {@code incoming},
    * that is done here, before this answers false.
    *
+   * @param operation the mapper operation writing, {@code into} or {@code patchInto}, which a
+   *     refusal names
    * @param source the simple name of the mapper's source class
    * @param target the simple name of the mapper's target class
    * @param owner the target whose property is written
@@ -737,6 +811,7 @@ public final class ContainerCopy {
    *     changed, or the policy refuses the write
    */
   public static boolean refill(
+    final String operation,
     final String source,
     final String target,
     final Object owner,
@@ -749,7 +824,7 @@ public final class ContainerCopy {
     final Object sent,
     final Object prepared
   ) {
-    final var named = new Write(source, target, owner, property, held, links, elements, sent);
+    final var named = new Write(operation, source, target, owner, property, held, links, elements, sent);
     return write(named, incoming, setter, prepared);
   }
 
@@ -762,6 +837,7 @@ public final class ContainerCopy {
     ) {
       case SET -> replaced(write, incoming);
       case REFUSE -> throw unwritable(
+        write.operation(),
         write.source(),
         write.target(),
         beanOf(write.owner()),
@@ -833,6 +909,7 @@ public final class ContainerCopy {
       return switch (CollectionWrites.afterFailedRefill(passedOn, setter)) {
         case SET -> replaced(write, incoming);
         case REFUSE -> throw unwritable(
+          write.operation(),
           write.source(),
           write.target(),
           beanOf(write.owner()),
@@ -929,6 +1006,7 @@ public final class ContainerCopy {
   }
 
   private static IllegalArgumentException unwritable(
+    final String operation,
     final String source,
     final String target,
     final String bean,
@@ -937,7 +1015,14 @@ public final class ContainerCopy {
     final RuntimeException cause
   ) {
     return new IllegalArgumentException(
-      PairingMessages.intoUnwritable(source, target, bean, property, held == null ? null : held.getClass().getName()),
+      PairingMessages.intoUnwritable(
+        operation,
+        source,
+        target,
+        bean,
+        property,
+        held == null ? null : held.getClass().getName()
+      ),
       cause
     );
   }

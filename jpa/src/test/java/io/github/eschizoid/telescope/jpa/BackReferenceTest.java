@@ -5,14 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.jpa.fixtures.Bottle;
 import io.github.eschizoid.telescope.jpa.fixtures.Crate;
 import io.github.eschizoid.telescope.jpa.fixtures.CrateForm;
 import io.github.eschizoid.telescope.jpa.fixtures.ItemForm;
+import io.github.eschizoid.telescope.jpa.fixtures.ItemPatch;
 import io.github.eschizoid.telescope.jpa.fixtures.Jar;
 import io.github.eschizoid.telescope.jpa.fixtures.Pallet;
 import io.github.eschizoid.telescope.jpa.fixtures.PalletForm;
+import io.github.eschizoid.telescope.jpa.fixtures.PalletPatch;
 import io.github.eschizoid.telescope.jpa.fixtures.Rack;
 import io.github.eschizoid.telescope.jpa.fixtures.RackForm;
 import io.github.eschizoid.telescope.jpa.fixtures.Sack;
@@ -50,7 +53,7 @@ class BackReferenceTest {
 
   private static final Mapper<PalletForm, Pallet> PALLET = Telescope.mapper(PalletForm.class, Pallet.class);
 
-  private static final Mapper<Pallet, PalletForm> PALLET_PATCH = Telescope.mapper(Pallet.class, PalletForm.class);
+  private static final EditMapper<PalletPatch, Pallet> PALLET_PATCH = Telescope.edits(PalletPatch.class, Pallet.class);
 
   @BeforeAll
   static void open() {
@@ -60,6 +63,14 @@ class BackReferenceTest {
   @AfterAll
   static void close() {
     shop.close();
+  }
+
+  /** Each path's edit mapper of a pair, by the path's name. */
+  private static <A, B> Map<String, EditMapper<A, B>> editPaths(
+    final EditMapper<A, B> generated,
+    final EditMapper<A, B> runtime
+  ) {
+    return Map.of("generated", generated, "runtime", runtime);
   }
 
   /** Each path's mapper of a pair, by the path's name. */
@@ -316,7 +327,7 @@ class BackReferenceTest {
   @Test
   @DisplayName("a PATCH that drops an element and adds one unlinks the first and links the second")
   void aPatchUnlinksAndLinks() {
-    for (final var path : paths(YardMappers.PALLET_PATCH, PALLET_PATCH).entrySet()) {
+    for (final var path : editPaths(YardMappers.PALLET_PATCH, PALLET_PATCH).entrySet()) {
       final var dropped = "corn-" + path.getKey();
       final var added = "barley-" + path.getKey();
       final var id = seedPallet("rice", dropped);
@@ -325,10 +336,11 @@ class BackReferenceTest {
         id,
         pallet -> pallet.getSacks().size(),
         pallet -> {
-          final var sent = sentSacks(pallet);
+          final var sent = new ArrayList<ItemPatch>();
+          for (final var sack : pallet.getSacks()) sent.add(new ItemPatch(sack.getId(), sack.getLabel()));
           sent.removeLast();
-          sent.add(new ItemForm(null, added));
-          path.getValue().patchInto(pallet, new PalletForm(null, null, sent));
+          sent.add(new ItemPatch(null, added));
+          path.getValue().patchInto(pallet, new PalletPatch(null, null, sent));
           return null;
         }
       );

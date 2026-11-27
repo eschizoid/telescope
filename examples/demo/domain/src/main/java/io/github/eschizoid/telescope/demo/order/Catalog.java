@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.demo.order;
 
+import io.github.eschizoid.telescope.demo.api.NewLine;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,21 @@ public final class Catalog {
     .collect(Collectors.toUnmodifiableMap(Product::sku, Function.identity()));
 
   private Catalog() {}
+
+  /** The name of the product a line orders. */
+  public static String name(final NewLine line) {
+    return product(line.sku()).name();
+  }
+
+  /** The price of the product a line orders. */
+  public static BigDecimal price(final NewLine line) {
+    return product(line.sku()).price();
+  }
+
+  /** What the shop paid for the product a line orders. */
+  public static BigDecimal cost(final NewLine line) {
+    return product(line.sku()).cost();
+  }
 
   /** The product with this SKU, or an {@link IllegalArgumentException} naming it. */
   public static Product product(final String sku) {

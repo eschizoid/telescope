@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.conversion.EditMapper;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,9 +16,9 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 /**
- * {@code Mapper.patchInto} writing a partial that sends two of seven properties, a scalar and a
- * list, into an entity-like bean in place, across the list's size, through the runtime mapper and
- * through the field's generated {@code patchInto}.
+ * An edit mapper's {@code patchInto} writing a partial that sends two of seven properties, a scalar
+ * and a list, into an entity-like bean in place, across the list's size, through the runtime edit
+ * mapper and through the field's generated {@code patchInto}.
  *
  * <p>{@code handWritten} is the control: the setter for the scalar and a clear-and-add of the held
  * list, each behind the null check a hand-written PATCH handler makes, which is the floor of the
@@ -37,7 +37,7 @@ public class PatchIntoBenchmark {
   @Param({ "1", "16", "256" })
   public int size;
 
-  private Mapper<PatchIntoEntity, PatchIntoChanges> runtime;
+  private EditMapper<PatchIntoChanges, PatchIntoEntity> runtime;
   private PatchIntoEntity target;
   private PatchIntoChanges changes;
 
@@ -51,7 +51,7 @@ public class PatchIntoBenchmark {
     target.setStatus("PLACED");
     target.setDelivery("STANDARD");
     target.setQuantity(2);
-    runtime = Telescope.mapper(PatchIntoEntity.class, PatchIntoChanges.class);
+    runtime = Telescope.edits(PatchIntoChanges.class, PatchIntoEntity.class);
     // A generated row measures the generated bridge only while the field's mapper runs it, and a
     // runtime row the runtime mapper only while it runs no bridge.
     final var declared = PatchIntoMappers.CHANGES.explain().declared();
@@ -62,7 +62,7 @@ public class PatchIntoBenchmark {
       throw new IllegalStateException("the runtime mapper runs the generated bridge");
     }
     final var held = target.getTags();
-    for (final Mapper<PatchIntoEntity, PatchIntoChanges> mapper : List.of(runtime, PatchIntoMappers.CHANGES)) {
+    for (final EditMapper<PatchIntoChanges, PatchIntoEntity> mapper : List.of(runtime, PatchIntoMappers.CHANGES)) {
       mapper.patchInto(target, changes);
       if (target.getTags() != held || !held.equals(tags) || !"EXPRESS".equals(target.getDelivery())) {
         throw new IllegalStateException("patchInto wrote " + target.getDelivery() + " " + target.getTags());

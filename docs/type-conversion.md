@@ -6,6 +6,82 @@ Converting between types that represent the same data — hand-written `from/to/
 Two records that represent the same data (`Entity ↔ Dto`) convert through a bidirectional conversion that composes into
 longer paths like any other telescope.
 
+## Which factory
+
+Three factories build a mapper from the same rows. Pick by the job, not by the types:
+
+| The job                                                                   | The factory     |
+| ------------------------------------------------------------------------- | --------------- |
+| what a client sees of an entity or a service value                        | `mapperForward` |
+| two types that convert both ways, where the round trip is the point       | `mapper`        |
+| writing into an entity or another target, new or held: create, PUT, PATCH | `edits`         |
+
+`Telescope.mapperForward(A.class, B.class, rows...)` returns a `ForwardMapper`: it converts one way, and a target
+property nothing fills stays at its default, which is right for a response.
+`Telescope.mapper(A.class, B.class, rows...)` returns a `Mapper`, which converts both ways and refuses, when it is
+built, a property on either side that nothing pairs with, since `backward` would lose it.
+
+`Telescope.edits(P.class, E.class, rows...)` returns an `EditMapper`. `P` is what an edit sends, a partial body, a
+create request or the changes a service works out, and `E` is what it writes into, usually an entity. The rows are
+written in the direction the edit flows, so a `compute` or a `constant` row runs on the way in:
+
+```java
+@Bridge
+public static final EditMapper<OrderChanges, Order> EDITS = edits(
+  OrderChanges.class,
+  Order.class,
+  keep(Order::getNumber), // no edit writes these
+  keep(Order::getCustomer)
+);
+
+// The lines of EDITS go through it, found by its pair.
+@Bridge
+public static final EditMapper<LineDto, OrderLine> LINE = edits(
+  LineDto.class,
+  OrderLine.class,
+  compute(OrderLine::getUnitPrice, Catalog::price), // Catalog.price(LineDto) looks the SKU up
+  drop(LineDto::unitPrice) // a price the client sends is ignored
+);
+```
+
+| Call                         | What it writes                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `forward(source)`            | a new `E`, every property the mapper accounts for, a null included                           |
+| `into(target, source)`       | every property the mapper accounts for into `target`, a null included: a PUT                 |
+| `patchInto(target, partial)` | only what the partial sends into `target`: a PATCH                                           |
+| `patch(base, partial)`       | the same overlay on a copy of `base`, for a record or an `E` that cannot be written in place |
+
+An edit mapper is strict on both sides, as `mapper` is. Every property of `E` that a member can write is filled by a
+row, by the property of its name on `P`, or as the back-reference of an element by the collection write that holds it,
+or `keep(E::x)` says no edit writes it; every property of `P` is read by a row or by the property of its name, or
+`drop(P::x)` leaves it out. A `keep` beside a row writing the same property is refused by name. With `telescope-jpa`, an
+`@Id` with a generator and a `@Version` count as accounted for: no conversion of any pair the mapper writes writes them,
+at any level, into a new `E` or one it is handed, whatever the source sends under their name, so they need no setter. A
+merge by `@Id` matches an element by the identifier the source's element sends under the property's name.
+
+`patch` and `patchInto` never write a null. A property is sent when the value its row reads of the partial is not null,
+a primitive always being sent; a path read from the partial is sent when no object on it is null; `toOrElse` writes no
+default for a property the partial leaves out; `compute` and `constant` run on every call and write a value that is not
+null; `when` tests its predicate on the partial. A container the partial sends is written whole: an empty list empties
+the collection, and a null one leaves it alone. A path written into `E` is written into the objects the target holds
+along it, building an object only where it holds null.
+
+A pair with an edit mapper of its own converts through it wherever an edit mapper writes a value of that pair with no
+row naming its conversion: `EDITS` above names no row for its lines, and each line goes through `LINE`. The rule is the
+same on both paths: an edit mapper converts a pair through the pair's own edit mapper when that mapper is declared in
+the same class as the owner's mapper, or in the pair's source or target class; one declared anywhere else is named in a
+`via(...)` row. The processor refuses an edit `@Bridge` field for the pair declared anywhere else, naming both fields.
+The fields may come in any order, since the mapper is read the first time a value of the pair converts. Two fields for
+one pair where the mapper looks are refused by name, by the mapper, the processor and the verifier, and a `via` row
+naming another mapper wins. The verifier also refuses a plain `edits(...)` call whose element pair has an edit mapper
+elsewhere in the compilation; without the processor and the verifier, the runtime cannot see a mapper declared in
+another class and converts that pair by name. Pairs below an edit mapper's own are checked leniently on all three paths;
+strictness applies at each edit mapper's own pair. `explain()` reports
+`Order.lines: elements through OrderMappers.LINE`. The element's `compute` rows run for every element written, a matched
+one included, and with `telescope-jpa` a managed collection is merged by `@Id`: an element sent as it is held issues
+nothing, and a changed one exactly one UPDATE. Only `edits` accepts `keep` and a `via` row naming an edit mapper;
+`mapper` and `mapperForward` refuse both by name.
+
 ## Hand-written (`from / to / using`)
 
 Write the two conversion functions yourself; this factory maps nothing automatically — every field move is your code.

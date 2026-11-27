@@ -60,27 +60,35 @@ public record OrderDto(String number, String customerName, Delivery delivery,
 public record LineDto(String sku, int quantity, BigDecimal unitPrice) {} // a line on the wire, both ways
 ```
 
-Two mapper fields say how those types relate, and the PATCH handler uses them:
+Three mapper fields say how those types relate, and the PATCH handler uses them:
 
 ```java
-import static io.github.eschizoid.telescope.Telescope.*; // mapper, mapperForward, path
-import static io.github.eschizoid.telescope.mapping.Mapping.*; // to, via, compute, drop
+import static io.github.eschizoid.telescope.Telescope.*; // edits, mapperForward, path
+import static io.github.eschizoid.telescope.mapping.Mapping.*; // every row: to, via, compute, drop, keep
 
 public final class OrderMappers {
 
   // A PATCH: how an OrderChanges is written into an Order.
   @Bridge
-  public static final Mapper<Order, OrderChanges> EDITS = mapper(
-    Order.class,
+  public static final EditMapper<OrderChanges, Order> EDITS = edits(
     OrderChanges.class,
-    via(Order::getLines, OrderChanges::lines, LineEdits.class),
-    drop(Order::getId), // the fields a client may never change
-    drop(Order::getNumber),
-    drop(Order::getCustomer),
-    drop(Order::getInternalNotes)
+    Order.class,
+    keep(Order::getNumber), // the fields a PATCH may never change
+    keep(Order::getCustomer),
+    keep(Order::getInternalNotes)
   );
 
-  // The response: what a client sees of an Order.
+  // A line as a PATCH sends it, which EDITS finds by its pair. The price and the cost come from the catalog.
+  @Bridge
+  public static final EditMapper<LineDto, OrderLine> LINE = edits(
+    LineDto.class,
+    OrderLine.class,
+    compute(OrderLine::getUnitPrice, Catalog::price),
+    compute(OrderLine::getCostPrice, Catalog::cost),
+    drop(LineDto::unitPrice) // a price the client sends is ignored
+  );
+
+  // The response: what a client sees of an Order. @TelescopePatchMapping(to = OrderDto.class) finds it by its pair.
   @Bridge
   public static final ForwardMapper<Order, OrderDto> DTO = mapperForward(
     Order.class,
@@ -90,19 +98,7 @@ public final class OrderMappers {
   );
 }
 
-// Converts each line of a PATCH. A new line is priced from the catalog, and a unitPrice the client sends is ignored.
-final class LineEdits {
-
-  static OrderLine backward(LineDto line) {
-    return Catalog.line(line.sku(), line.quantity());
-  }
-
-  static LineDto forward(OrderLine line) {
-    return new LineDto(line.getSku(), line.getQuantity(), line.getUnitPrice());
-  }
-}
-
-@TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the client receives an OrderDto
+@TelescopePatchMapping(value = "/orders/{number}", to = OrderDto.class) // the response goes through OrderMappers.DTO
 Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
   final var order = orders.findByNumber(number); // the entity JPA manages
   OrderMappers.EDITS.patchInto(order, changes); // writes only the fields the client sent
@@ -110,14 +106,21 @@ Order change(@PathVariable String number, @RequestBody OrderChanges changes) {
 }
 ```
 
-That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name. The delivery and the lines
-change, and a field the client left out keeps its value. The new lines go through `order.addLine(...)`, the method
-`Order` declares to take an `OrderLine`, into the `@OneToMany` list the entity already holds, so Hibernate keeps
-tracking it and each line gets its back-reference. No row says so: the mapper finds the adder by its type. The response
-is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the internal
-notes. Every field is a method reference, so a typo is a compile error, and a field added to `Order` later fails the
-build until someone decides whether a PATCH may change it. The `telescope-codegen` processor compiles both mappers into
-plain Java with no reflection.
+That is the whole PATCH endpoint. Lombok writes the getters and setters the rows name. An edit mapper's rows read from
+what the client sends and write into the entity, so `compute` runs on the way in: `Catalog.price(LineDto)` and
+`Catalog.cost(LineDto)` look the product up by the line's SKU, for every line the client sends. `EDITS` names no row for
+the lines: the pair `LineDto` to `OrderLine` has its own edit mapper, `LINE`, declared in the same class, so each line
+goes through it, before or after `EDITS`. An element pair's own edit mapper is found in the owner's class or in the
+pair's two classes; one declared anywhere else is named in a `via(...)` row, and the processor refuses it otherwise. The
+delivery and the lines change, and a field the client left out keeps its value. The new lines go through
+`order.addLine(...)`, the method `Order` declares to take an `OrderLine`, into the `@OneToMany` list the entity already
+holds, so Hibernate keeps tracking it and each line gets its back-reference. No row says so: the mapper finds the adder
+by its type, and with `telescope-jpa` the generated `@Id`s and the `mappedBy` back-reference need no row either. The
+response is built by `DTO`, so it carries the customer's name and a computed total, and never the cost price or the
+internal notes. The annotation finds `DTO` by its pair, `Order` to `OrderDto`, when the application starts, and startup
+fails if no mapper or two mappers claim it. Every field is a method reference, so a typo is a compile error, and a field
+added to `Order`, `OrderLine`, `OrderChanges` or `LineDto` later fails the build until someone decides what an edit does
+with it. The `telescope-codegen` processor compiles every mapper into plain Java with no reflection.
 
 ## What you stop writing
 
@@ -144,7 +147,7 @@ about that pair of types.
 | From one mapper field                                            | You get                                                                                                                          |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `forward` and `backward`                                         | both directions from the same rows, so there is no second mapper to keep in step                                                 |
-| `patch` and `patchInto`                                          | a partial update that writes only what the client sent                                                                           |
+| an edit mapper's `patchInto` and `patch`                         | a partial update that writes only what the client sent, with computed values run on the way in                                   |
 | `into`                                                           | an update of the entity JPA already manages, with its collections refilled in place or merged by `@Id`                           |
 | `@TelescopeGetMapping(to = ...)`, `@TelescopeResponse(to = ...)` | request and response bodies mapped on Spring MVC and Quarkus REST, and the wire type in the OpenAPI document                     |
 | `TelescopeModule`                                                | Jackson reading and writing the domain type in its wire shape                                                                    |
@@ -215,7 +218,7 @@ JsonMapper json = JsonMapper.builder().addModule(TelescopeModule.of(CustomerCard
 if (changes.delivery() != null) order.setDelivery(changes.delivery());
 if (changes.lines() != null) {
   order.getLines().clear(); // never setLines(...): Hibernate tracks this list
-  for (final var line : changes.lines()) order.addLine(LineEdits.backward(line));
+  for (final var line : changes.lines()) order.addLine(Catalog.line(line)); // priced from the catalog
 }
 // and one more branch for each field anyone adds later, if they remember
 ```
@@ -298,15 +301,23 @@ Each kind of difference between the two types has one row.
 
 `Telescope.mapper(...)` returns a two-way `Mapper`. It runs its rows in reverse on `backward`, and it refuses, when it
 is built, a field on either side that no row and no same-named field accounts for. `Telescope.mapperForward(...)`
-returns a one-way `ForwardMapper`, which leaves a target field it can't fill at its null value. Both take the same rows.
+returns a one-way `ForwardMapper`, which leaves a target field it can't fill at its null value. `Telescope.edits(...)`
+returns an `EditMapper`, whose rows run from what an edit sends into what it writes: it is strict on both sides,
+`keep(...)` names a target field no edit writes, and it has no `backward`. All three take the same rows.
 
-| Call                           | What it does                                                    |
-| ------------------------------ | --------------------------------------------------------------- |
-| `forward(source)`              | builds the target from the source                               |
-| `backward(target)`             | builds the source from the target, the same rows run in reverse |
-| `patch(base, partial)`         | returns a new object with only the fields the partial sets      |
-| `into(existing, source)`       | writes the source into an object you already hold               |
-| `patchInto(existing, partial)` | writes into it only the fields the partial sets                 |
+| The job                                                                   | The factory     |
+| ------------------------------------------------------------------------- | --------------- |
+| what a client sees of an entity or a service value                        | `mapperForward` |
+| two types that convert both ways, where the round trip is the point       | `mapper`        |
+| writing into an entity or another target, new or held: create, PUT, PATCH | `edits`         |
+
+| Call                           | What it does                                                        |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `forward(source)`              | builds the target from the source                                   |
+| `backward(target)`             | builds the source from the target, the same rows run in reverse     |
+| `patch(base, partial)`         | returns a new object with only the fields the partial sets          |
+| `into(existing, source)`       | writes the source into an object you already hold                   |
+| `patchInto(existing, partial)` | on an `EditMapper`, writes into it only the fields the partial sets |
 
 A mapper is a value you can hold, pass around and ask questions of. `explain()` lists the fields it pairs, converts or
 skips, and `trace(input)` shows the same for one input, with its values.
