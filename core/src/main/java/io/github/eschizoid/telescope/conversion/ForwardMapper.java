@@ -162,9 +162,7 @@ public class ForwardMapper<A, B> {
     return services;
   }
 
-  /**
-   * The classes of service this mapper's rows call, as {@link Mapper#services()} lists them.
-   */
+  /** The classes of service this mapper's rows call, as {@link Mapper#services()} lists them. */
   public final List<Class<?>> services() {
     return services == null ? List.of() : services.classes();
   }
@@ -178,7 +176,10 @@ public class ForwardMapper<A, B> {
   @SuppressWarnings("unchecked")
   public final ForwardMapper<A, B> with(final Object... services) {
     if (this.services == null) {
-      ServiceNeeds.refuseAny("ForwardMapper<" + sourceClass.getSimpleName() + ", " + targetClass.getSimpleName() + ">", services);
+      ServiceNeeds.refuseAny(
+        "ForwardMapper<" + sourceClass.getSimpleName() + ", " + targetClass.getSimpleName() + ">",
+        services
+      );
       return this;
     }
     return (ForwardMapper<A, B>) this.services.bind(this, services);

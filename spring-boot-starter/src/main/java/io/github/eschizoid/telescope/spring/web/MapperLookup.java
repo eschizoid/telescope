@@ -111,7 +111,10 @@ final class MapperLookup {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> registeredMapping(final Mapper<?, ?> mapper) {
-    refuseUnbound(mapper, "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">");
+    refuseUnbound(
+      mapper,
+      "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">"
+    );
     final var typed = (Mapper<Object, Object>) mapper;
     return typed::forward;
   }
@@ -143,7 +146,9 @@ final class MapperLookup {
     return forward::forward;
   }
 
-  /** Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to. */
+  /**
+   * Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to.
+   */
   private static void refuseUnbound(final Object mapper, final String name) {
     final var needs = ServiceNeeds.of(mapper);
     if (needs == null || needs.satisfied()) return;

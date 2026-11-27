@@ -68,11 +68,11 @@ public final class ServiceNeeds {
   }
 
   /**
-   * The services of an unbound mapper. {@code needs} lists them, read the first time they are
-   * asked for, since a mapper converting through another one declared after it reads that one
-   * only once its class has initialised. {@code name} names the mapper given it, {@code type} is
-   * its declared type, and {@code binder} builds the copy bound to the values in the order {@link
-   * #classes()} lists them, handed them also by class.
+   * The services of an unbound mapper. {@code needs} lists them, read the first time they are asked
+   * for, since a mapper converting through another one declared after it reads that one only once
+   * its class has initialised. {@code name} names the mapper given it, {@code type} is its declared
+   * type, and {@code binder} builds the copy bound to the values in the order {@link #classes()}
+   * lists them, handed them also by class.
    */
   public static ServiceNeeds unbound(
     final Supplier<List<Need>> needs,
@@ -201,9 +201,7 @@ public final class ServiceNeeds {
         .filter(n -> n.service() == service)
         .findFirst()
         .orElseThrow();
-      throw new IllegalArgumentException(
-        PairingMessages.serviceWithMissing(who, names.get(c), need.row(), need.in())
-      );
+      throw new IllegalArgumentException(PairingMessages.serviceWithMissing(who, names.get(c), need.row(), need.in()));
     }
     return binder.apply(new Binding(bound(ordered), byClass(classes, ordered)));
   }

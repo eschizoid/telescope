@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Pins how a {@code @Bridge} field whose rows call a service compiles: every operation of the
  * generated bridge takes the service after its own arguments and calls it directly, a bridge
- * reaching that bridge by its pair takes the same service and hands it on, and the field's
- * provider registers the field and its services in place of a class of its own.
+ * reaching that bridge by its pair takes the same service and hands it on, and the field's provider
+ * registers the field and its services in place of a class of its own.
  */
 class ServiceBridgeTest {
 
@@ -128,9 +128,7 @@ class ServiceBridgeTest {
           ");\n  }\n}\n"
       )
     );
-    sources.add(
-      ProcessorHarness.source("sv.Clock", "package sv;\npublic class Clock {}\n")
-    );
+    sources.add(ProcessorHarness.source("sv.Clock", "package sv;\npublic class Clock {}\n"));
     return sources;
   }
 
@@ -158,7 +156,9 @@ class ServiceBridgeTest {
   }
 
   @Test
-  @DisplayName("the verifier refuses a with(...) on a @Bridge field missing a service a field it converts through calls")
+  @DisplayName(
+    "the verifier refuses a with(...) on a @Bridge field missing a service a field it converts through calls"
+  )
   void verifierRefusesAMissingNestedService() {
     final var refused = errors(binding("EDITS", ""));
     assertEquals(1, refused.size(), refused::toString);

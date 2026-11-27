@@ -26,8 +26,8 @@ import java.util.function.Supplier;
 /**
  * The rows of a mapper that call a service: which services they call, the rows rebuilt bound to
  * given services, and the name a refusal gives a mapper. A mapper binds by building itself again
- * from the bound rows, so a bound mapper converts through the same composition, and writes
- * through the same writers, as one whose rows call static methods.
+ * from the bound rows, so a bound mapper converts through the same composition, and writes through
+ * the same writers, as one whose rows call static methods.
  */
 final class ServiceRows {
 
@@ -97,7 +97,10 @@ final class ServiceRows {
     for (final var step : steps) {
       if (!(step instanceof Mapping<?, ?> row)) continue;
       if (servedOf(row) != null) return true;
-      if (row instanceof Via<?, ?> via && !ServiceNeeds.joined(List.of(), List.of(via.edits() ? via.editMapper() : via.nested())).isEmpty()) return true;
+      if (
+        row instanceof Via<?, ?> via &&
+        !ServiceNeeds.joined(List.of(), List.of(via.edits() ? via.editMapper() : via.nested())).isEmpty()
+      ) return true;
     }
     return false;
   }
@@ -189,7 +192,9 @@ final class ServiceRows {
     return type;
   }
 
-  /** The declared type of a mapper of {@code kind} between the two classes, as a message names it. */
+  /**
+   * The declared type of a mapper of {@code kind} between the two classes, as a message names it.
+   */
   static String typeOf(final String kind, final Class<?> source, final Class<?> target) {
     return kind + "<" + source.getSimpleName() + ", " + target.getSimpleName() + ">";
   }

@@ -3693,8 +3693,8 @@ public final class PairingMessages {
       ".with(...) was handed null as its service " +
       position +
       (services.isEmpty()
-          ? "; its rows call no service."
-          : "; hand it the " + String.join(", ", services) + " its rows call.")
+        ? "; its rows call no service."
+        : "; hand it the " + String.join(", ", services) + " its rows call.")
     );
   }
 
@@ -3720,7 +3720,12 @@ public final class PairingMessages {
   }
 
   /** {@code with(...)} handed no {@code service}, which {@code row} needs. */
-  public static String serviceWithMissing(final String mapper, final String service, final String row, final String in) {
+  public static String serviceWithMissing(
+    final String mapper,
+    final String service,
+    final String row,
+    final String in
+  ) {
     return (
       mapper + ".with(...) was handed no " + service + ", which " + row + (in == null ? "" : " in " + in) + " calls."
     );
@@ -3761,7 +3766,10 @@ public final class PairingMessages {
     );
   }
 
-  /** The variable name a message gives a service of the simple name {@code service}: {@code catalog}. */
+  /**
+   * The variable name a message gives a service of the simple name {@code service}: {@code
+   * catalog}.
+   */
   public static String variable(final String service) {
     return service.isEmpty() ? service : Character.toLowerCase(service.charAt(0)) + service.substring(1);
   }

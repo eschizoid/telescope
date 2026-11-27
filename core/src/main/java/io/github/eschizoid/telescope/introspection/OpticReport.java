@@ -101,7 +101,11 @@ public record OpticReport(List<OpticNode> nodes) {
    * bound to one.
    */
   public List<OpticNode.ServiceCall> serviceCalls() {
-    return nodes.stream().filter(OpticNode.ServiceCall.class::isInstance).map(OpticNode.ServiceCall.class::cast).toList();
+    return nodes
+      .stream()
+      .filter(OpticNode.ServiceCall.class::isInstance)
+      .map(OpticNode.ServiceCall.class::cast)
+      .toList();
   }
 
   /** The navigation steps of a path, in trail order. */

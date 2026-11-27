@@ -239,12 +239,17 @@ public class TelescopeRestEndpoints {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> registeredMapping(final Mapper<?, ?> mapper) {
-    refuseUnbound(mapper, "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">");
+    refuseUnbound(
+      mapper,
+      "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">"
+    );
     final var typed = (Mapper<Object, Object>) mapper;
     return typed::forward;
   }
 
-  /** Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to. */
+  /**
+   * Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to.
+   */
   private static void refuseUnbound(final Object mapper, final String name) {
     final var needs = ServiceNeeds.of(mapper);
     if (needs == null || needs.satisfied()) return;
@@ -262,14 +267,20 @@ public class TelescopeRestEndpoints {
   private ForwardMapper<Object, Object> fieldBean(final Class<?> source, final Class<?> target) {
     for (final var provider : BridgeRegistry.serviceFields(source.getClassLoader())) {
       if (
-        provider.fieldType() != ForwardMapper.class || provider.sourceType() != source || provider.targetType() != target
+        provider.fieldType() != ForwardMapper.class ||
+        provider.sourceType() != source ||
+        provider.targetType() != target
       ) {
         continue;
       }
       final var candidates = beans.getBeans(BridgeRegistry.beanName(provider));
       if (candidates.isEmpty()) return null;
       final var bean = beans.resolve(candidates);
-      return (ForwardMapper<Object, Object>) beans.getReference(bean, Object.class, beans.createCreationalContext(bean));
+      return (ForwardMapper<Object, Object>) beans.getReference(
+        bean,
+        Object.class,
+        beans.createCreationalContext(bean)
+      );
     }
     return null;
   }

@@ -23321,7 +23321,10 @@ class CrossPathCorpusTest {
           Files.createDirectories(file.getParent());
           Files.writeString(file, e.getValue());
         }
-        loaders.put(path, new URLClassLoader(new URL[] { dir.toUri().toURL() }, CrossPathCorpusTest.class.getClassLoader()));
+        loaders.put(
+          path,
+          new URLClassLoader(new URL[] { dir.toUri().toURL() }, CrossPathCorpusTest.class.getClassLoader())
+        );
       }
       return loaders;
     }
@@ -23498,9 +23501,8 @@ class CrossPathCorpusTest {
           " Catalog, Stamps, Codes, Skus.",
         (l, s) -> edit(field(l, "LINE")).with(s.get("catalog"), s.get("labels"))
       );
-      bothOwe(
-        "refused: Shop.LINE.with(...) was handed two values for its Catalog, a Catalog and a Catalog.",
-        (l, s) -> edit(field(l, "LINE")).with(s.get("catalog"), make(l, "Catalog", 2))
+      bothOwe("refused: Shop.LINE.with(...) was handed two values for its Catalog, a Catalog and a Catalog.", (l, s) ->
+        edit(field(l, "LINE")).with(s.get("catalog"), make(l, "Catalog", 2))
       );
       bothOwe(
         "refused: Shop.LINE.with(...) was handed no Stamps, which compute(Line::getAdded, service(Stamps::now)) calls.",

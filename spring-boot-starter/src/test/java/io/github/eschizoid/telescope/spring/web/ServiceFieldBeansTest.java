@@ -199,7 +199,9 @@ class ServiceFieldBeansTest {
   }
 
   @Test
-  @DisplayName("each field calling a service is a bean of its own type, named after it and bound to the context's beans")
+  @DisplayName(
+    "each field calling a service is a bean of its own type, named after it and bound to the context's beans"
+  )
   @SuppressWarnings("unchecked")
   void fieldBeansAreBound() {
     runner("catalog:Catalog", "labels:Labels").run(context -> {
@@ -214,9 +216,9 @@ class ServiceFieldBeansTest {
       final var tags = context.getBean(TelescopeMapperRegistry.class).get(type("Tag"), type("TagDto"));
       assertEquals(
         "TagDto[name=untagged]",
-        String.valueOf(((Mapper<Object, Object>) tags).forward(
-          type("Tag").getConstructors()[0].newInstance((Object) null)
-        ))
+        String.valueOf(
+          ((Mapper<Object, Object>) tags).forward(type("Tag").getConstructors()[0].newInstance((Object) null))
+        )
       );
     });
   }

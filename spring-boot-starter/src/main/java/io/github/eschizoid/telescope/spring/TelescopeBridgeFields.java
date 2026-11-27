@@ -23,10 +23,10 @@ import org.springframework.core.ResolvableType;
  * ServiceLoader} finds; the field's value is read from its provider, so nothing is scanned or read
  * reflectively.
  *
- * <p>Each bean is named after the field as its class writes it, {@code OrderMappers.EDITS}, which
- * a {@code @Qualifier} takes. A service with no bean, or with two beans and none primary, fails
- * startup naming the field, the row and the service; two fields giving one name fail startup
- * naming both declaring classes.
+ * <p>Each bean is named after the field as its class writes it, {@code OrderMappers.EDITS}, which a
+ * {@code @Qualifier} takes. A service with no bean, or with two beans and none primary, fails
+ * startup naming the field, the row and the service; two fields giving one name fail startup naming
+ * both declaring classes.
  */
 public final class TelescopeBridgeFields implements BeanDefinitionRegistryPostProcessor, BeanClassLoaderAware {
 

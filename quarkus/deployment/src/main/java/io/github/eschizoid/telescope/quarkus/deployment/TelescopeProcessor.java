@@ -153,16 +153,17 @@ class TelescopeProcessor {
       if (taken != null) throw new IllegalStateException(EndpointMappers.fieldBeanNamedTwice(name, taken, declaring));
       final var raw = DotName.createSimple(provider.fieldType());
       final var field = indexed.field(provider.fieldName());
-      final Type type = field != null
-        ? field.type()
-        : ParameterizedType.create(
-            raw,
-            new Type[] {
-              ClassType.create(DotName.createSimple(provider.sourceType())),
-              ClassType.create(DotName.createSimple(provider.targetType())),
-            },
-            null
-          );
+      final Type type =
+        field != null
+          ? field.type()
+          : ParameterizedType.create(
+              raw,
+              new Type[] {
+                ClassType.create(DotName.createSimple(provider.sourceType())),
+                ClassType.create(DotName.createSimple(provider.targetType())),
+              },
+              null
+            );
       for (final var service : provider.services()) {
         unremovable.produce(UnremovableBeanBuildItem.beanTypes(DotName.createSimple(service)));
       }

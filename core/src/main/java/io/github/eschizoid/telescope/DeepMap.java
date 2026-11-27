@@ -394,10 +394,15 @@ public final class DeepMap {
     final var type = ServiceRows.typeOf("ForwardMapper", source, target);
     return ForwardMapper.withServiceNeeds(
       built,
-      ServiceNeeds.unbound(fn::serviceNeeds, held -> type, type, binding -> {
-        final var bound = fn.bind(binding.needs().values());
-        return ForwardMapper.withServiceNeeds(ForwardMapper.create(bound::forward, source, target), binding.needs());
-      })
+      ServiceNeeds.unbound(
+        fn::serviceNeeds,
+        held -> type,
+        type,
+        binding -> {
+          final var bound = fn.bind(binding.needs().values());
+          return ForwardMapper.withServiceNeeds(ForwardMapper.create(bound::forward, source, target), binding.needs());
+        }
+      )
     );
   }
 
@@ -405,7 +410,11 @@ public final class DeepMap {
    * Adds to {@code trail} the node of each row of {@code fn}'s own that calls a service, saying
    * whether {@code fn} is bound, which every bridge but the one the provider holds is.
    */
-  private static void serviceNodes(final List<OpticNode> trail, final BridgeFn<?, ?> fn, final Declaration declaration) {
+  private static void serviceNodes(
+    final List<OpticNode> trail,
+    final BridgeFn<?, ?> fn,
+    final Declaration declaration
+  ) {
     final var bound = fn != Telescope.bridgeFnOf(declaration.provider().bridge());
     for (final var need : fn.serviceNeeds()) if (need.in() == null) trail.add(need.node(bound));
   }
@@ -421,9 +430,8 @@ public final class DeepMap {
     final Function<ServiceNeeds.Binding, Object> binder
   ) {
     final var provider = declaration.provider();
-    final var name = provider.fieldName() == null
-      ? type
-      : provider.declaringType().getSimpleName() + "." + provider.fieldName();
+    final var name =
+      provider.fieldName() == null ? type : provider.declaringType().getSimpleName() + "." + provider.fieldName();
     return ServiceNeeds.unbound(fn::serviceNeeds, held -> name, type, binder);
   }
 
@@ -447,14 +455,7 @@ public final class DeepMap {
     trail.add(new OpticNode.Declared(node.declaredBy(), node.runs(), node.why() + into));
     trail.addAll(fn.collectionWrites());
     serviceNodes(trail, fn, declaration);
-    final var built = Mapper.ofGenerated(
-      fn,
-      source,
-      target,
-      patcher,
-      declaration.provider().targetProperties(),
-      trail
-    );
+    final var built = Mapper.ofGenerated(fn, source, target, patcher, declaration.provider().targetProperties(), trail);
     return (Mapper<A, B>) BridgeRegistry.specialise(declaration.provider(), built);
   }
 
@@ -669,9 +670,10 @@ public final class DeepMap {
     // Pass the leaf Iso straight through (Mapper.ofIso) rather than re-wrapping it in a second
     // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
     // trail rides along so explain() can surface the field decisions this resolution just made.
-    final var mapper = r.cases != null
-      ? Mapper.ofCases(r.iso, source, target, r.cases, trail)
-      : Mapper.ofIso(r.iso, source, target, r.patchTable, trail, r.beanRefl);
+    final var mapper =
+      r.cases != null
+        ? Mapper.ofCases(r.iso, source, target, r.cases, trail)
+        : Mapper.ofIso(r.iso, source, target, r.patchTable, trail, r.beanRefl);
     if (!ServiceRows.any(steps)) return mapper;
     final var type = ServiceRows.typeOf("Mapper", source, target);
     return Mapper.withServiceNeeds(
@@ -745,7 +747,12 @@ public final class DeepMap {
     final Class<?> caller
   ) {
     final var r = resolution(source, target, steps, true, false);
-    final var mapper = ForwardMapper.create(r.iso::to, source, target, ServiceRows.withNodes(noted(r.trail, note), steps));
+    final var mapper = ForwardMapper.create(
+      r.iso::to,
+      source,
+      target,
+      ServiceRows.withNodes(noted(r.trail, note), steps)
+    );
     if (!ServiceRows.any(steps)) return mapper;
     final var type = ServiceRows.typeOf("ForwardMapper", source, target);
     return ForwardMapper.withServiceNeeds(
@@ -5288,7 +5295,9 @@ public final class DeepMap {
       });
     }
 
-    /** The edit mappers the pairs met converting through a field's own convert through, in order. */
+    /**
+     * The edit mappers the pairs met converting through a field's own convert through, in order.
+     */
     List<Object> throughMappers() {
       final var mappers = new ArrayList<Object>(throughOrder.size());
       for (final var pair : throughOrder) mappers.add(EditRegistry.of(throughFields.get(pair)));

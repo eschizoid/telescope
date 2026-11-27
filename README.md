@@ -101,14 +101,22 @@ public final class OrderMappers {
 @Service // @ApplicationScoped on Quarkus
 @RequiredArgsConstructor
 public class Catalog {
+
   private final ProductRepository products;
 
-  public BigDecimal price(LineDto line) { return products.bySku(line.sku()).getPrice(); }
-  public BigDecimal cost(LineDto line) { return products.bySku(line.sku()).getCost(); }
+  public BigDecimal price(LineDto line) {
+    return products.bySku(line.sku()).getPrice();
+  }
+
+  public BigDecimal cost(LineDto line) {
+    return products.bySku(line.sku()).getCost();
+  }
 }
 
-@RestController @RequiredArgsConstructor
+@RestController
+@RequiredArgsConstructor
 class OrderController {
+
   private final OrderRepository orders;
   private final EditMapper<OrderChanges, Order> edits; // OrderMappers.EDITS, bound to the Catalog bean
 

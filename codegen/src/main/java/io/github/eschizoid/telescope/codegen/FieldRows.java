@@ -280,7 +280,10 @@ final class FieldRows {
   /** The qualified name of the type a row's service form takes a value asked of a service as. */
   static final String SERVICE_SUPPLIER_FQN = "io.github.eschizoid.telescope.mapping.ServiceSupplier";
 
-  /** Whether parameter {@code index} of the row factory {@code row} takes a value asked of a service. */
+  /**
+   * Whether parameter {@code index} of the row factory {@code row} takes a value asked of a
+   * service.
+   */
   static boolean takesSupplier(final ExecutableElement row, final int index) {
     return (
       row.getParameters().get(index).asType() instanceof DeclaredType type &&
@@ -1305,7 +1308,13 @@ final class FieldRows {
         final var owner = (TypeElement) held.getEnclosingElement();
         if (!reachable(held, owner)) return new Refused(function, unreachable(owner, held.getSimpleName()));
         return new Served(
-          owner.getQualifiedName() + "." + held.getSimpleName() + ".apply(" + variable + (arity == 1 ? ", " + after : "") + ")",
+          owner.getQualifiedName() +
+            "." +
+            held.getSimpleName() +
+            ".apply(" +
+            variable +
+            (arity == 1 ? ", " + after : "") +
+            ")",
           service,
           gives,
           takes,
@@ -1342,7 +1351,13 @@ final class FieldRows {
       }
       if (method.getModifiers().contains(Modifier.STATIC) && params == arity + 1) {
         return new Served(
-          owner.getQualifiedName() + "." + method.getSimpleName() + "(" + variable + (arity == 1 ? ", " + after : "") + ")",
+          owner.getQualifiedName() +
+            "." +
+            method.getSimpleName() +
+            "(" +
+            variable +
+            (arity == 1 ? ", " + after : "") +
+            ")",
           service,
           gives,
           takes,
@@ -1358,8 +1373,8 @@ final class FieldRows {
     }
 
     /**
-     * How a message names the service function {@code held} holds, as the runtime path names it from
-     * the function: the reference written as the field's initializer in this compilation, "a
+     * How a message names the service function {@code held} holds, as the runtime path names it
+     * from the function: the reference written as the field's initializer in this compilation, "a
      * lambda" for a lambda, and the field otherwise.
      */
     private String heldServiceName(final VariableElement held, final TypeElement service) {
@@ -1395,9 +1410,11 @@ final class FieldRows {
       if (!(arg instanceof MemberReferenceTree reference)) return arg.toString();
       final var qualifier = trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
       final var owner = qualifier == null ? null : env.getTypeUtils().asElement(qualifier);
-      return (owner == null ? reference.getQualifierExpression().toString() : owner.getSimpleName()) +
+      return (
+        (owner == null ? reference.getQualifierExpression().toString() : owner.getSimpleName()) +
         "::" +
-        reference.getName();
+        reference.getName()
+      );
     }
 
     /**
@@ -1429,7 +1446,14 @@ final class FieldRows {
       if (!types.isAssignable(types.erasure(s.gives()), types.erasure(t.type()))) {
         return new Refused(
           args.get(1),
-          args.get(1) + " gives " + s.gives() + ", which the " + shown(t) + " property '" + t.property() + "' does not hold"
+          args.get(1) +
+            " gives " +
+            s.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
         );
       }
       final var value = t.primitive()
@@ -1479,13 +1503,27 @@ final class FieldRows {
       if (!types.isAssignable(types.erasure(s.type()), types.erasure(c.takes()))) {
         return new Refused(
           args.get(2),
-          c.name() + " takes " + c.takes() + ", which the " + shown(s) + " property '" + s.property() + "' does not hold"
+          c.name() +
+            " takes " +
+            c.takes() +
+            ", which the " +
+            shown(s) +
+            " property '" +
+            s.property() +
+            "' does not hold"
         );
       }
       if (!types.isAssignable(types.erasure(c.gives()), types.erasure(t.type()))) {
         return new Refused(
           args.get(2),
-          args.get(2) + " gives " + c.gives() + ", which the " + shown(t) + " property '" + t.property() + "' does not hold"
+          args.get(2) +
+            " gives " +
+            c.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
         );
       }
       final var unnamed = unnameable(s, t);
@@ -1529,7 +1567,14 @@ final class FieldRows {
       if (!types.isAssignable(types.erasure(c.gives()), types.erasure(t.type()))) {
         return new Refused(
           args.get(2),
-          args.get(2) + " gives " + c.gives() + ", which the " + shown(t) + " property '" + t.property() + "' does not hold"
+          args.get(2) +
+            " gives " +
+            c.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
         );
       }
       final var refusal = write(row, s.property(), t.property(), row);
@@ -1548,7 +1593,13 @@ final class FieldRows {
       services.add(
         new ServiceUse(
           c.service(),
-          "toOrElseGet(" + accessorName(args.get(0)) + ", " + accessorName(args.get(1)) + ", service(" + c.name() + "))",
+          "toOrElseGet(" +
+            accessorName(args.get(0)) +
+            ", " +
+            accessorName(args.get(1)) +
+            ", service(" +
+            c.name() +
+            "))",
           simple(target) + "." + t.property() + ": defaulted by " + callOf(c)
         )
       );
@@ -1557,8 +1608,8 @@ final class FieldRows {
 
     /**
      * The class a service row's conversion is written as: a static {@code apply} taking the value
-     * and the service, which the bridge calls, one taking the value alone, which refuses since a row
-     * calling a service needs one, and for a row converting back a static {@code backward}.
+     * and the service, which the bridge calls, one taking the value alone, which refuses since a
+     * row calling a service needs one, and for a row converting back a static {@code backward}.
      */
     private GeneratedClass serviceHelper(
       final String name,
@@ -1760,7 +1811,13 @@ final class FieldRows {
       final var refused = read(inner);
       gating = false;
       if (refused != null) return refused;
-      final var gate = new Gate(((Gate) predicate).predicate(), ((Gate) predicate).held(), kind, sourceField, ((Gate) predicate).served());
+      final var gate = new Gate(
+        ((Gate) predicate).predicate(),
+        ((Gate) predicate).held(),
+        kind,
+        sourceField,
+        ((Gate) predicate).served()
+      );
       if (kind.startsWith("Compute") || kind.equals("Constant")) gatedTargets.put(lastFilled, gate);
       else gatedPaths.put(order, gate);
       // The runtime builds one Conditional row, which names the inner row's flat accessors alone.

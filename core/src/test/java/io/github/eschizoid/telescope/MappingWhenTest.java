@@ -9,8 +9,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.List;
-import java.util.function.Predicate;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

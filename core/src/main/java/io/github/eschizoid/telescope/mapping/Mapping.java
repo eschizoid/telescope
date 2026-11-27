@@ -270,9 +270,9 @@ public sealed interface Mapping<A, B>
   /**
    * The forward-only conversion of {@link #toOneWay(Accessor, Accessor, Function)}, by a function
    * of a service: {@code toOneWay(LineDto::sku, OrderLine::getProduct, service(Products::bySku))}
-   * writes {@code products.bySku(line.sku())}, with {@code products} the {@code Products} the mapper
-   * is bound to. The value read is handed to the function as the plain row hands it. See {@link
-   * #service(WithService)} for how a mapper is bound.
+   * writes {@code products.bySku(line.sku())}, with {@code products} the {@code Products} the
+   * mapper is bound to. The value read is handed to the function as the plain row hands it. See
+   * {@link #service(WithService)} for how a mapper is bound.
    */
   @SuppressWarnings("unchecked")
   static <A, B, S, X, Y> Mapping<A, B> toOneWay(
@@ -293,10 +293,10 @@ public sealed interface Mapping<A, B>
   /**
    * Marks {@code function} as a call on a service, for a row of a mapper that a container, or a
    * call to {@code with(...)}, binds: {@code service(Catalog::price)} is {@code
-   * catalog.price(line)}, with {@code catalog} the {@code Catalog} the mapper is bound to and {@code
-   * line} the value the row hands on. The service is the class the function takes first: the class
-   * an instance method is applied to, as {@code Catalog} for {@code Catalog::price}, or the first
-   * parameter of a static method.
+   * catalog.price(line)}, with {@code catalog} the {@code Catalog} the mapper is bound to and
+   * {@code line} the value the row hands on. The service is the class the function takes first: the
+   * class an instance method is applied to, as {@code Catalog} for {@code Catalog::price}, or the
+   * first parameter of a static method.
    *
    * <pre>{@code
    * compute(OrderLine::getUnitPrice, service(Catalog::price))       // catalog.price(line)
@@ -307,9 +307,9 @@ public sealed interface Mapping<A, B>
    * <p>A mapper holding such a row lists the class in {@code services()}, with those of the mappers
    * it converts through, and runs only once it is bound: in an application on a telescope starter,
    * the container registers each {@code @Bridge} field whose rows name a service as a bean of the
-   * field's own type, bound to the container's bean of each service, and a class takes that bean
-   * by injection; elsewhere {@code with(service)} returns a copy bound to the service given. A
-   * call on a mapper that is not bound is refused before it reads anything, naming the row.
+   * field's own type, bound to the container's bean of each service, and a class takes that bean by
+   * injection; elsewhere {@code with(service)} returns a copy bound to the service given. A call on
+   * a mapper that is not bound is refused before it reads anything, naming the row.
    *
    * <p>A service whose name has a form for each of the two shapes, as {@code Catalog} declaring
    * both {@code price()} and {@code price(LineDto)}, is ambiguous to javac; hold the one meant in a
@@ -1229,7 +1229,10 @@ public sealed interface Mapping<A, B>
    * bound.
    */
   @SuppressWarnings("unchecked")
-  static <A, B, S, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final ServiceCall<S, ? super A, ? extends X> call) {
+  static <A, B, S, X> Mapping<A, B> compute(
+    final Accessor<B, X> tgt,
+    final ServiceCall<S, ? super A, ? extends X> call
+  ) {
     final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
     final FromSource<A, X> function = (FromSource<A, X>) (FromSource<?, ?>) new Served.Value(
       call.function(),
@@ -1395,8 +1398,8 @@ public sealed interface Mapping<A, B>
    * The gate of {@link #when(Predicate, Mapping)}, tested by a service: {@code
    * when(service(Promotions::applies), constant(OrderDto::promoted, true))} applies the inner row
    * where {@code promotions.applies(order)} is true, with {@code promotions} the {@code Promotions}
-   * the mapper is bound to. A function giving null is a failure of the predicate, reported as {@code
-   * when} reports one. See {@link #service(WithService)} for how a mapper is bound.
+   * the mapper is bound to. A function giving null is a failure of the predicate, reported as
+   * {@code when} reports one. See {@link #service(WithService)} for how a mapper is bound.
    */
   @SuppressWarnings("unchecked")
   static <A, B, S> Mapping<A, B> when(final ServiceCall<S, ? super A, Boolean> predicate, final Mapping<A, B> inner) {

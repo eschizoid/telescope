@@ -651,9 +651,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private final Map<String, List<ServiceThreading.Need>> serviceBridgeNeeds = new HashMap<>();
 
   /**
-   * A source file held until the end of the round, when the services each bridge takes are known:
-   * a bridge, with the pair it converts, or a field bridge's provider, with the bridge it
-   * registers and the field.
+   * A source file held until the end of the round, when the services each bridge takes are known: a
+   * bridge, with the pair it converts, or a field bridge's provider, with the bridge it registers
+   * and the field.
    */
   private record PendingWrite(
     String qualifiedName,
@@ -9930,11 +9930,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Writes every class held this round. The services of each bridge are its own rows', then, in
-   * the order its source first names them, those of each bridge it calls, until no bridge gains
-   * one; a bridge taking services is threaded by {@link ServiceThreading}, and the provider of a
-   * field whose bridge takes services registers them and the field, and writes no class of its own
-   * for the field.
+   * Writes every class held this round. The services of each bridge are its own rows', then, in the
+   * order its source first names them, those of each bridge it calls, until no bridge gains one; a
+   * bridge taking services is threaded by {@link ServiceThreading}, and the provider of a field
+   * whose bridge takes services registers them and the field, and writes no class of its own for
+   * the field.
    */
   private void flushWrites() {
     if (pendingWrites.isEmpty()) return;
@@ -9980,7 +9980,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var label = bridgeLabel(called);
           for (final var need : serviceBridgeNeeds.get(called)) {
             needs.add(
-              new ServiceThreading.Need(need.serviceType(), need.row(), need.in() == null ? label : need.in(), need.explain())
+              new ServiceThreading.Need(
+                need.serviceType(),
+                need.row(),
+                need.in() == null ? label : need.in(),
+                need.explain()
+              )
             );
           }
         }
@@ -10049,9 +10054,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The bridges taking services that {@code bridge}'s source calls, other than itself, in the
-   * order the source first names them, by the simple name it calls one in its own package by or by
-   * the qualified name.
+   * The bridges taking services that {@code bridge}'s source calls, other than itself, in the order
+   * the source first names them, by the simple name it calls one in its own package by or by the
+   * qualified name.
    */
   private List<String> calledServiceBridges(final PendingWrite bridge) {
     final var found = new TreeMap<Integer, String>();

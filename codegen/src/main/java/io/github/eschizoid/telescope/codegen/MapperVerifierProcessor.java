@@ -660,7 +660,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     if (uses == null) return;
     final var services = new ArrayList<TypeElement>();
     for (final var use : uses) if (!services.contains(use.service())) services.add(use.service());
-    final var names = services.stream().map(s -> s.getSimpleName().toString()).toList();
+    final var names = services
+      .stream()
+      .map(s -> s.getSimpleName().toString())
+      .toList();
     final var taken = new TypeMirror[services.size()];
     for (var a = 0; a < binding.given().size(); a++) {
       final var type = binding.given().get(a);
@@ -690,8 +693,16 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     for (var i = 0; i < services.size(); i++) {
       if (taken[i] != null) continue;
       final var service = services.get(i);
-      final var use = uses.stream().filter(u -> u.service().equals(service)).findFirst().orElseThrow();
-      reportIn(binding, binding.call(), PairingMessages.serviceWithMissing(binding.who(), names.get(i), use.row(), use.in()));
+      final var use = uses
+        .stream()
+        .filter(u -> u.service().equals(service))
+        .findFirst()
+        .orElseThrow();
+      reportIn(
+        binding,
+        binding.call(),
+        PairingMessages.serviceWithMissing(binding.who(), names.get(i), use.row(), use.in())
+      );
       return;
     }
   }
@@ -732,16 +743,20 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (named instanceof VariableElement nested && FieldRows.annotatedBridge(nested)) {
         final var theirs = fieldServices(rows, nested, seen);
         if (theirs == null) return null;
-        for (final var use : theirs) uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(nested) : use.in()));
+        for (final var use : theirs)
+          uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(nested) : use.in()));
       }
     }
     if (parsed.edits()) for (final var member : field.getEnclosingElement().getEnclosedElements()) {
-      if (!(member instanceof VariableElement other) || other.equals(field) || !FieldRows.annotatedBridge(other)) continue;
+      if (
+        !(member instanceof VariableElement other) || other.equals(field) || !FieldRows.annotatedBridge(other)
+      ) continue;
       if (!(other.asType() instanceof DeclaredType declared) || declared.getTypeArguments().size() != 2) continue;
       if (!elementPairOf(parsed, declared)) continue;
       final var theirs = fieldServices(rows, other, seen);
       if (theirs == null) return null;
-      for (final var use : theirs) uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(other) : use.in()));
+      for (final var use : theirs)
+        uses.add(new ServiceUse(use.service(), use.row(), use.in() == null ? nestedLabel(other) : use.in()));
     }
     return label.isEmpty() ? null : uses;
   }
@@ -751,8 +766,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether the edit mapper {@code declared} names converts the elements of a collection the
-   * source of {@code parsed} holds into those of a collection its target holds.
+   * Whether the edit mapper {@code declared} names converts the elements of a collection the source
+   * of {@code parsed} holds into those of a collection its target holds.
    */
   private boolean elementPairOf(final FieldRows.Parsed parsed, final DeclaredType declared) {
     final var source = types.erasure(declared.getTypeArguments().get(0));
@@ -829,11 +844,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * Checks a {@code with(...)} call on a {@code @Bridge} field whose rows this compilation holds:
      * the static type of each argument against the services the field's rows call, their own and
      * those of the fields they convert through, refusing in the runtime's words an argument no
-     * service accepts, two arguments for one service and a service no argument is. A call met before
-     * the field's class is analysed is checked once it is.
+     * service accepts, two arguments for one service and a service no argument is. A call met
+     * before the field's class is analysed is checked once it is.
      */
     private void verifyServiceBinding(final MethodInvocationTree node) {
-      if (!(node.getMethodSelect() instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("with")) {
+      if (
+        !(node.getMethodSelect() instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("with")
+      ) {
         return;
       }
       if (!(elementAt(node.getMethodSelect()) instanceof ExecutableElement method)) return;
@@ -862,6 +879,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (serviceFields.containsKey(binding.key())) checkBinding(binding);
       else pendingBindings.add(binding);
     }
+
     private void verifyIfTelescopeFactory(final MethodInvocationTree node) {
       final var invoked = elementAt(node.getMethodSelect());
       if (!(invoked instanceof ExecutableElement method)) return;

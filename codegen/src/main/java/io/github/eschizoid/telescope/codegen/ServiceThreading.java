@@ -10,18 +10,17 @@ import java.util.regex.Pattern;
 
 /**
  * Threads the services a generated bridge's rows call through the bridge's source: every static
- * method of the bridge takes them after its own parameters, every call to one of those methods,
- * and to a method of another bridge or service helper that takes services, hands them on by name,
- * each conversion of one element a container policy takes becomes a method building it over the
+ * method of the bridge takes them after its own parameters, every call to one of those methods, and
+ * to a method of another bridge or service helper that takes services, hands them on by name, each
+ * conversion of one element a container policy takes becomes a method building it over the
  * services, and the bridge's {@code BridgeFn} holds them in final fields, with the {@code bind} and
  * {@code serviceNeeds} a mapper over it calls.
  *
  * <p>A service is passed by the same name in every bridge, {@link
- * FieldRows#serviceVariable(javax.lang.model.element.TypeElement,
- * javax.lang.model.util.Elements)}, so a bridge hands a bridge it calls the services that one takes
- * without renaming them. The text the processor writes for a bridge is regular: one member per
- * line at two spaces, each parameter declared {@code final}, and no other construct of the shapes
- * matched here.
+ * FieldRows#serviceVariable(javax.lang.model.element.TypeElement, javax.lang.model.util.Elements)},
+ * so a bridge hands a bridge it calls the services that one takes without renaming them. The text
+ * the processor writes for a bridge is regular: one member per line at two spaces, each parameter
+ * declared {@code final}, and no other construct of the shapes matched here.
  */
 final class ServiceThreading {
 
@@ -256,9 +255,8 @@ final class ServiceThreading {
         handed = methods.contains(member) ? services : null;
       } else {
         final var callee = callees.get(qualifier);
-        handed = callee != null && (callee.methods() == null || callee.methods().contains(member))
-          ? callee.services()
-          : null;
+        handed =
+          callee != null && (callee.methods() == null || callee.methods().contains(member)) ? callee.services() : null;
       }
       if (handed == null) {
         out.append(name);
@@ -285,9 +283,10 @@ final class ServiceThreading {
         continue;
       }
       // An element conversion read as a field: its own, or another bridge's.
-      final var isElements = qualifier == null
-        ? elements.contains(member)
-        : (member.equals("INTO_ELEMENTS") || member.equals("PATCH_INTO_ELEMENTS"));
+      final var isElements =
+        qualifier == null
+          ? elements.contains(member)
+          : (member.equals("INTO_ELEMENTS") || member.equals("PATCH_INTO_ELEMENTS"));
       if (isElements && !isDeclaration(text, i)) {
         out.append(name).append('(').append(arguments(handed)).append(')');
         i = end;
@@ -370,7 +369,9 @@ final class ServiceThreading {
     final var methods = new StringBuilder("\n\n");
     methods
       .append("    @Override\n")
-      .append("    public java.util.List<io.github.eschizoid.telescope.conversion.ServiceNeeds.Need> serviceNeeds() {\n")
+      .append(
+        "    public java.util.List<io.github.eschizoid.telescope.conversion.ServiceNeeds.Need> serviceNeeds() {\n"
+      )
       .append("      return java.util.List.of(");
     for (var i = 0; i < needs.size(); i++) {
       final var need = needs.get(i);
@@ -390,7 +391,11 @@ final class ServiceThreading {
     methods
       .append("    @Override\n")
       .append("    public BridgeFn<")
-      .append(text, header + "  private static final class Fn implements BridgeFn<".length(), text.indexOf("> {", header))
+      .append(
+        text,
+        header + "  private static final class Fn implements BridgeFn<".length(),
+        text.indexOf("> {", header)
+      )
       .append("> bind(final Object[] services) {\n")
       .append("      return new Fn(");
     for (var i = 0; i < services.size(); i++) {
@@ -408,7 +413,11 @@ final class ServiceThreading {
       if (line.startsWith("      return ")) for (final var service : services) {
         guarded = guarded.replaceAll(
           "(?<=[(, ])" + Pattern.quote(service.variable()) + "(?=[),])",
-          "java.util.Objects.requireNonNull(" + service.variable() + ", " + message.replace("\\", "\\\\").replace("$", "\\$") + ")"
+          "java.util.Objects.requireNonNull(" +
+            service.variable() +
+            ", " +
+            message.replace("\\", "\\\\").replace("$", "\\$") +
+            ")"
         );
       }
       if (!body.isEmpty()) body.append('\n');
