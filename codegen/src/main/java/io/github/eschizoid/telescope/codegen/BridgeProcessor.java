@@ -40,7 +40,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -636,6 +638,45 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // package-agnostic registry. Cleared after the write so a reused instance starts clean.
   private final Set<String> bridgeProviders = new LinkedHashSet<>();
 
+  // The rows calling a service of each pair a @Bridge field declares, and the service of each
+  // class a row converts through one, by the class's qualified name.
+  private final Map<String, List<FieldRows.ServiceUse>> fieldServiceUses = new HashMap<>();
+  private final Map<String, String> fieldLabels = new HashMap<>();
+  private final Map<String, String> serviceHelpers = new HashMap<>();
+
+  // The services of each bridge whose rows, or the bridges it calls, call one, by the bridge's
+  // qualified name, with the needs its BridgeFn lists; kept across rounds, since a bridge written
+  // later may call one written earlier.
+  private final Map<String, List<ServiceThreading.Service>> serviceBridges = new HashMap<>();
+  private final Map<String, List<ServiceThreading.Need>> serviceBridgeNeeds = new HashMap<>();
+
+  /**
+   * A source file held until the end of the round, when the services each bridge takes are known: a
+   * bridge, with the pair it converts, or a field bridge's provider, with the bridge it registers
+   * and the field.
+   */
+  private record PendingWrite(
+    String qualifiedName,
+    String simpleName,
+    String text,
+    Element origin,
+    TypePair pair,
+    String providedBridge,
+    String fieldName,
+    String fieldType,
+    String carrier
+  ) {}
+
+  private final List<PendingWrite> pendingWrites = new ArrayList<>();
+
+  /** Where a provider's members for a field whose rows call a service go. */
+  private static final String SERVICES_MARK = "  //@@SERVICES@@";
+
+  /** The lines around the class a provider writes for a field whose rows call no service. */
+  private static final String FIELD_MAPPER_START = "  //@@FIELD_MAPPER_START@@";
+
+  private static final String FIELD_MAPPER_END = "  //@@FIELD_MAPPER_END@@";
+
   /**
    * Which pair claimed each generated bridge FQN. Auto-derived names are built from the two simple
    * names, so two pairs emitting into the same package from same-simple-named types land on one FQN
@@ -994,6 +1035,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       deferredPairs.clear();
       deferredConfigs.clear();
     }
+    flushWrites();
     // Reset accumulated state at the end of processing so a hypothetical second compilation in
     // the same processor instance starts clean. JSR-269 normally creates fresh instances per
     // compilation, but the defensive clear costs nothing.
@@ -1185,6 +1227,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The pair is held under the field's name while its classes are written.
     configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrier, fieldName));
     seen.add(pair);
+    if (!parsed.services().isEmpty()) {
+      // The container bean a starter registers for the field reads it from the field's provider.
+      if (field.getModifiers().contains(Modifier.PRIVATE)) {
+        errorAt(
+          trees,
+          field,
+          call,
+          "@Bridge field " +
+            fieldName +
+            " calls a service, and a telescope starter registers its mapper as a bean read from the field;" +
+            " declare the field package-private or wider"
+        );
+        return;
+      }
+      // Known from the rows already, so a bridge written in this round that calls this field's
+      // bridge, which may be written only in a later one, hands it its services.
+      final var carrierPkg = processingEnv.getElementUtils().getPackageOf(carrier).getQualifiedName().toString();
+      final var bridge =
+        (carrierPkg.isEmpty() ? "" : carrierPkg + ".") + FieldRows.bridgeSimpleName(parsed.source(), parsed.target());
+      fieldServiceUses.put(bridge, parsed.services());
+      fieldLabels.put(bridge, carrier.getSimpleName() + "." + fieldName);
+    }
+    for (final var generated : parsed.classes()) {
+      if (generated.service() != null) serviceHelpers.put(generated.qualifiedName(), generated.service());
+    }
     var waits = false;
     for (final var generated : parsed.classes()) {
       if (processingEnv.getElementUtils().getTypeElement(generated.qualifiedName()) != null) continue;
@@ -8329,11 +8396,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       ".map(" +
       bwdElement +
       ").orElse(null))";
-      case TRANSFORM -> "__tx_" +
-      fieldName +
-      ".backward(" +
-      checkedArgument(backwardArguments.get(fieldName), readExpr) +
-      ")";
+      // A row converting through a class's static method converts back through its static
+      // backward, which only a row converting both ways that way has.
+      case TRANSFORM -> plan.qualifierMethod() != null
+        ? plan.subBridgeName() + ".backward(" + checkedArgument(backwardArguments.get(fieldName), readExpr) + ")"
+        : "__tx_" + fieldName + ".backward(" + checkedArgument(backwardArguments.get(fieldName), readExpr) + ")";
     };
   }
 
@@ -9739,9 +9806,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       addTypeImport(imports, carrier, pkg);
       imports.add("java.util.List");
     }
-    try {
-      final var file = processingEnv.getFiler().createSourceFile(qualifiedProvider, source);
-      try (final var out = new PrintWriter(file.openWriter())) {
+    {
+      final var text = new StringWriter();
+      try (final var out = new PrintWriter(text)) {
         if (!pkg.isEmpty()) {
           out.println("package " + pkg + ";");
           out.println();
@@ -9791,7 +9858,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             out.println("  }");
             out.println();
           }
+          out.println(FIELD_MAPPER_START);
           emitFieldMapper(out, source, target, bridgeName, cfg, writesInto, writesEdits);
+          out.println(FIELD_MAPPER_END);
+          out.println(SERVICES_MARK);
         }
         out.println("  @Override");
         out.println("  public Object bridge() {");
@@ -9799,11 +9869,276 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
         out.println("}");
       }
+      final var fieldType = cfg.edits()
+        ? FieldRows.EDIT_MAPPER_FQN
+        : cfg.lenient()
+          ? "io.github.eschizoid.telescope.conversion.ForwardMapper"
+          : "io.github.eschizoid.telescope.conversion.Mapper";
+      pendingWrites.add(
+        new PendingWrite(
+          qualifiedProvider,
+          providerName,
+          text.toString(),
+          source,
+          null,
+          pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName,
+          cfg.declaringField(),
+          fieldType,
+          carrier == null ? null : carrier.getSimpleName().toString()
+        )
+      );
       bridgeProviders.add(qualifiedProvider);
       if (carrier != null) fieldProviders.put(qualifiedProvider, carrier);
-    } catch (final IOException e) {
-      error(source, "Failed to write " + qualifiedProvider + ": " + e.getMessage());
     }
+  }
+
+  /**
+   * Holds a class this processor writes until the end of the round, as {@link #flushWrites()}
+   * writes it: a bridge whose rows, or the bridges it calls, call a service takes them as
+   * parameters, which only every bridge of the round together decides.
+   */
+  @Override
+  protected void writeClass(
+    final String qualifiedName,
+    final String simpleName,
+    final Set<String> imports,
+    final String javadoc,
+    final Element origin,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    final var text = new StringWriter();
+    try (final var out = new PrintWriter(text)) {
+      if (!pkg.isEmpty()) {
+        out.println("package " + pkg + ";");
+        out.println();
+      }
+      for (final var imp : new TreeSet<>(imports)) out.println("import " + imp + ";");
+      out.println();
+      out.println("/** " + javadoc + " */");
+      out.println("public final class " + simpleName + " {");
+      out.println();
+      out.println("  private " + simpleName + "() {}");
+      out.println();
+      body.accept(out);
+      out.println("}");
+    }
+    pendingWrites.add(
+      new PendingWrite(qualifiedName, simpleName, text.toString(), origin, null, null, null, null, null)
+    );
+  }
+
+  /**
+   * Writes every class held this round. The services of each bridge are its own rows', then, in the
+   * order its source first names them, those of each bridge it calls, until no bridge gains one; a
+   * bridge taking services is threaded by {@link ServiceThreading}, and the provider of a field
+   * whose bridge takes services registers them and the field, and writes no class of its own for
+   * the field.
+   */
+  private void flushWrites() {
+    if (pendingWrites.isEmpty()) return;
+    final var elements = processingEnv.getElementUtils();
+    final var bridges = new LinkedHashMap<String, PendingWrite>();
+    for (final var write : pendingWrites) if (write.providedBridge() == null) bridges.put(write.qualifiedName(), write);
+    // A field's own rows decide its bridge's services first, whether the bridge is written this
+    // round or a later one.
+    final var own = new HashMap<String, List<ServiceThreading.Service>>();
+    final var ownNeeds = new HashMap<String, List<ServiceThreading.Need>>();
+    for (final var entry : fieldServiceUses.entrySet()) {
+      final var services = new ArrayList<ServiceThreading.Service>();
+      final var needs = new ArrayList<ServiceThreading.Need>();
+      for (final var use : entry.getValue()) {
+        final var type = use.service().getQualifiedName().toString();
+        final var service = new ServiceThreading.Service(type, FieldRows.serviceVariable(use.service(), elements));
+        if (!services.contains(service)) services.add(service);
+        needs.add(new ServiceThreading.Need(type, use.row(), null, use.explain()));
+      }
+      own.put(entry.getKey(), List.copyOf(services));
+      ownNeeds.put(entry.getKey(), List.copyOf(needs));
+      if (!bridges.containsKey(entry.getKey())) {
+        serviceBridges.putIfAbsent(entry.getKey(), List.copyOf(services));
+        serviceBridgeNeeds.putIfAbsent(entry.getKey(), List.copyOf(needs));
+      }
+    }
+    for (final var bridge : bridges.keySet()) {
+      own.putIfAbsent(bridge, List.of());
+      ownNeeds.putIfAbsent(bridge, List.of());
+      if (!own.get(bridge).isEmpty()) {
+        serviceBridges.put(bridge, own.get(bridge));
+        serviceBridgeNeeds.put(bridge, ownNeeds.get(bridge));
+      }
+    }
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (final var bridge : bridges.values()) {
+        final var services = new ArrayList<>(own.get(bridge.qualifiedName()));
+        final var needs = new ArrayList<>(ownNeeds.get(bridge.qualifiedName()));
+        for (final var called : calledServiceBridges(bridge)) {
+          for (final var service : serviceBridges.get(called)) if (!services.contains(service)) services.add(service);
+          final var label = bridgeLabel(called);
+          for (final var need : serviceBridgeNeeds.get(called)) {
+            needs.add(
+              new ServiceThreading.Need(
+                need.serviceType(),
+                need.row(),
+                need.in() == null ? label : need.in(),
+                need.explain()
+              )
+            );
+          }
+        }
+        if (services.isEmpty()) continue;
+        if (!services.equals(serviceBridges.get(bridge.qualifiedName()))) {
+          serviceBridges.put(bridge.qualifiedName(), List.copyOf(services));
+          changed = true;
+        }
+        serviceBridgeNeeds.put(bridge.qualifiedName(), List.copyOf(needs));
+      }
+    }
+    final var callees = new HashMap<String, ServiceThreading.Callee>();
+    for (final var entry : serviceBridges.entrySet()) {
+      final var callee = new ServiceThreading.Callee(entry.getValue(), null);
+      callees.put(entry.getKey(), callee);
+      callees.put(entry.getKey().substring(entry.getKey().lastIndexOf('.') + 1), callee);
+    }
+    for (final var helper : serviceHelpers.entrySet()) {
+      final var service = elements.getTypeElement(helper.getValue());
+      if (service == null) continue;
+      callees.put(
+        helper.getKey(),
+        new ServiceThreading.Callee(
+          List.of(new ServiceThreading.Service(helper.getValue(), FieldRows.serviceVariable(service, elements))),
+          Set.of("apply")
+        )
+      );
+    }
+    for (final var write : pendingWrites) {
+      var text = write.text();
+      if (write.providedBridge() != null) {
+        text = providerText(write);
+      } else if (serviceBridges.containsKey(write.qualifiedName())) {
+        final var others = new HashMap<>(callees);
+        others.remove(write.qualifiedName());
+        others.remove(write.simpleName());
+        text = ServiceThreading.thread(
+          text,
+          write.simpleName(),
+          write.qualifiedName(),
+          serviceBridges.get(write.qualifiedName()),
+          others,
+          serviceBridgeNeeds.get(write.qualifiedName())
+        );
+      }
+      try {
+        final var file = processingEnv.getFiler().createSourceFile(write.qualifiedName(), write.origin());
+        try (final var out = new PrintWriter(file.openWriter())) {
+          out.print(text);
+        }
+      } catch (final IOException e) {
+        error(
+          write.origin(),
+          e instanceof FilerException
+            ? "Cannot generate " +
+              write.qualifiedName() +
+              " — that name is already taken in this compilation. Rename the existing type, or rename the source" +
+              " or target so the derived name differs. (" +
+              e.getMessage() +
+              ")"
+            : "Failed to write " + write.qualifiedName() + ": " + e.getMessage()
+        );
+      }
+    }
+    pendingWrites.clear();
+  }
+
+  /**
+   * The bridges taking services that {@code bridge}'s source calls, other than itself, in the order
+   * the source first names them, by the simple name it calls one in its own package by or by the
+   * qualified name.
+   */
+  private List<String> calledServiceBridges(final PendingWrite bridge) {
+    final var found = new TreeMap<Integer, String>();
+    final var text = bridge.text();
+    final var dot = bridge.qualifiedName().lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : bridge.qualifiedName().substring(0, dot);
+    for (final var called : serviceBridges.keySet()) {
+      if (called.equals(bridge.qualifiedName())) continue;
+      final var calledDot = called.lastIndexOf('.');
+      final var simple = called.substring(calledDot + 1);
+      final var samePackage = (calledDot < 0 ? "" : called.substring(0, calledDot)).equals(pkg);
+      var at = text.indexOf(called + ".");
+      if (samePackage) {
+        final var matcher = Pattern.compile("(?<![\\w.])" + Pattern.quote(simple) + "\\.").matcher(text);
+        if (matcher.find() && (at < 0 || matcher.start() < at)) at = matcher.start();
+      }
+      if (at >= 0) found.put(at, called);
+    }
+    return List.copyOf(found.values());
+  }
+
+  /** How a refusal names the mapper of {@code bridge}: its field, as {@code OrderMappers.LINE}. */
+  private String bridgeLabel(final String bridge) {
+    if (fieldLabels.containsKey(bridge)) return fieldLabels.get(bridge);
+    final var pair = fieldBridgePairs.get(bridge);
+    final var config = pair == null ? null : configsByPair.get(pair);
+    if (config == null || config.declaringField() == null || config.carrierFq() == null) return null;
+    final var carrier = config.carrierFq();
+    return carrier.substring(carrier.lastIndexOf('.') + 1) + "." + config.declaringField();
+  }
+
+  /**
+   * The source of a field bridge's provider: for a field whose bridge takes services, the members
+   * naming the field and its services in place of the class the provider writes for the field,
+   * since the field's mapper binds the bridge to its services; for any other field, as written.
+   */
+  private String providerText(final PendingWrite provider) {
+    final var services = serviceBridges.get(provider.providedBridge());
+    final var lines = new ArrayList<String>();
+    var inFieldMapper = false;
+    for (final var line : provider.text().split("\n", -1)) {
+      if (line.equals(FIELD_MAPPER_START)) {
+        inFieldMapper = services != null;
+        continue;
+      }
+      if (line.equals(FIELD_MAPPER_END)) {
+        inFieldMapper = false;
+        continue;
+      }
+      if (inFieldMapper) continue;
+      if (!line.equals(SERVICES_MARK)) {
+        lines.add(line);
+        continue;
+      }
+      if (services == null) continue;
+      final var classes = new StringBuilder();
+      for (final var service : services) {
+        if (!classes.isEmpty()) classes.append(", ");
+        classes.append(service.type()).append(".class");
+      }
+      lines.add("  @Override");
+      lines.add("  public String fieldName() {");
+      lines.add("    return " + ServiceThreading.quoted(provider.fieldName()) + ";");
+      lines.add("  }");
+      lines.add("");
+      lines.add("  @Override");
+      lines.add("  public Class<?> fieldType() {");
+      lines.add("    return " + provider.fieldType() + ".class;");
+      lines.add("  }");
+      lines.add("");
+      lines.add("  @Override");
+      lines.add("  public List<Class<?>> services() {");
+      lines.add("    return List.of(" + classes + ");");
+      lines.add("  }");
+      lines.add("");
+      lines.add("  @Override");
+      lines.add("  public Object field() {");
+      lines.add("    return " + provider.carrier() + "." + provider.fieldName() + ";");
+      lines.add("  }");
+      lines.add("");
+    }
+    return String.join("\n", lines);
   }
 
   /** The capability the class generated for a field passes to the mapper it extends. */

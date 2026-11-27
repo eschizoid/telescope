@@ -1,11 +1,13 @@
 package io.github.eschizoid.telescope.quarkus.deployment;
 
 import io.github.eschizoid.telescope.conversion.BridgeProvider;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ContainerCopy;
 import io.github.eschizoid.telescope.conversion.FromMapProvider;
 import io.github.eschizoid.telescope.conversion.ProxyResolver;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+import io.github.eschizoid.telescope.internal.pairing.EndpointMappers;
 import io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry;
 import io.github.eschizoid.telescope.quarkus.rest.TelescopeResponse;
 import io.github.eschizoid.telescope.quarkus.rest.runtime.MappedEndpoint;
@@ -13,8 +15,10 @@ import io.github.eschizoid.telescope.quarkus.rest.runtime.TelescopeRequestBodyRe
 import io.github.eschizoid.telescope.quarkus.rest.runtime.TelescopeResponseFilter;
 import io.github.eschizoid.telescope.quarkus.rest.runtime.TelescopeRestEndpoints;
 import io.github.eschizoid.telescope.quarkus.rest.runtime.TelescopeRestRecorder;
+import io.github.eschizoid.telescope.quarkus.runtime.TelescopeFieldRecorder;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.deployment.Capabilities;
@@ -33,14 +37,18 @@ import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.deployment.util.JandexUtil;
 import io.quarkus.resteasy.reactive.spi.ContainerResponseFilterBuildItem;
 import io.quarkus.resteasy.reactive.spi.MessageBodyReaderBuildItem;
+import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.RuntimeType;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.jboss.jandex.ClassType;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
+import org.jboss.jandex.ParameterizedType;
 import org.jboss.jandex.Type;
 
 /**
@@ -116,6 +124,61 @@ class TelescopeProcessor {
       for (final var type : index.getIndex().getAllKnownImplementations(name)) types.add(type.name().toString());
     }
     for (final var type : types) lambdas.produce(new LambdaCapturingTypeBuildItem(type));
+  }
+
+  /**
+   * Registers, for every {@code @Bridge} field whose rows call a service, one singleton bean of the
+   * field's declared type, named after the field as its class writes it, built when the application
+   * starts from the field's mapper bound to the container's bean of each service, which are kept
+   * from removal. The fields are read from the providers the {@code @Bridge} processor generated;
+   * reading what they record initialises no declaring class.
+   */
+  @BuildStep
+  @Record(ExecutionTime.RUNTIME_INIT)
+  void fieldBeans(
+    final TelescopeFieldRecorder recorder,
+    final CombinedIndexBuildItem index,
+    final BuildProducer<SyntheticBeanBuildItem> synthetic,
+    final BuildProducer<UnremovableBeanBuildItem> unremovable
+  ) {
+    final var named = new HashMap<String, String>();
+    for (final var provider : BridgeRegistry.serviceFields(Thread.currentThread().getContextClassLoader())) {
+      final var name = BridgeRegistry.beanName(provider);
+      final var declaring = provider.declaringType().getName();
+      // A field of a class outside the application's index belongs to no bean archive the
+      // application builds, so it registers no bean.
+      final var indexed = index.getIndex().getClassByName(DotName.createSimple(declaring));
+      if (indexed == null) continue;
+      final var taken = named.putIfAbsent(name, declaring);
+      if (taken != null) throw new IllegalStateException(EndpointMappers.fieldBeanNamedTwice(name, taken, declaring));
+      final var raw = DotName.createSimple(provider.fieldType());
+      final var field = indexed.field(provider.fieldName());
+      final Type type =
+        field != null
+          ? field.type()
+          : ParameterizedType.create(
+              raw,
+              new Type[] {
+                ClassType.create(DotName.createSimple(provider.sourceType())),
+                ClassType.create(DotName.createSimple(provider.targetType())),
+              },
+              null
+            );
+      for (final var service : provider.services()) {
+        unremovable.produce(UnremovableBeanBuildItem.beanTypes(DotName.createSimple(service)));
+      }
+      synthetic.produce(
+        SyntheticBeanBuildItem.configure(raw)
+          .types(type)
+          .named(name)
+          .scope(Singleton.class)
+          .unremovable()
+          .startup()
+          .setRuntimeInit()
+          .createWith(recorder.field(name))
+          .done()
+      );
+    }
   }
 
   @BuildStep

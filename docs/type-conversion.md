@@ -39,7 +39,7 @@ public static final EditMapper<OrderChanges, Order> EDITS = edits(
 public static final EditMapper<LineDto, OrderLine> LINE = edits(
   LineDto.class,
   OrderLine.class,
-  compute(OrderLine::getUnitPrice, Catalog::price), // Catalog.price(LineDto) looks the SKU up
+  compute(OrderLine::getUnitPrice, service(Catalog::price)), // catalog.price(line) on the Catalog bean
   drop(LineDto::unitPrice) // a price the client sends is ignored
 );
 ```
@@ -81,6 +81,46 @@ strictness applies at each edit mapper's own pair. `explain()` reports
 one included, and with `telescope-jpa` a managed collection is merged by `@Id`: an element sent as it is held issues
 nothing, and a changed one exactly one UPDATE. Only `edits` accepts `keep` and a `via` row naming an edit mapper;
 `mapper` and `mapperForward` refuse both by name.
+
+## Rows that call a service
+
+`service(Catalog::price)` marks a function as a call on a service bean: `catalog.price(line)`, with `catalog` the
+`Catalog` the mapper is bound to. The service is the class the function takes first: the class an instance method is
+applied to, or the first parameter of a static method. The mapper field stays a `static final` declaration of rows.
+
+| Row                                                                       | The function                            |
+| ------------------------------------------------------------------------- | --------------------------------------- |
+| `compute(OrderLine::getUnitPrice, service(Catalog::price))`               | `(Catalog, LineDto) -> BigDecimal`      |
+| `compute(OrderLine::getAddedOn, service(Clock::instant))`                 | `(Clock) -> Instant`                    |
+| `when(service(Promotions::applies), constant(...))`                       | `(Promotions, OrderChanges) -> boolean` |
+| `toOrElseGet(LineDto::sku, OrderLine::getSku, service(Skus::next))`       | `(Skus) -> String`                      |
+| `toOneWay(LineDto::sku, OrderLine::getProduct, service(Products::bySku))` | `(Products, String) -> Product`         |
+
+`constant`, `via`, a two-way `to(src, tgt, fwd, bwd)` and a `via` row naming a hand-written class take none. A mapper a
+`via` row names brings its services to the mapper naming it, and so does the edit mapper an element pair converts
+through: `services()` lists them all, each class once, its own rows' first.
+
+A mapper whose rows call a service runs only once it is bound. On either starter the container registers each `@Bridge`
+field whose rows call a service as a bean of the field's own type, `EditMapper<OrderChanges, Order>`, bound to the
+application's bean of each service once at startup and named after the field, `OrderMappers.EDITS`; a class takes it by
+constructor injection. Elsewhere `with(services...)` returns a bound copy:
+
+```java
+final var edits = OrderMappers.EDITS.with(new Catalog(products)); // in a test
+```
+
+`with` refuses by name a null, a value no service accepts, two values for one service and a service not given. A call on
+a mapper that is not bound is refused before it reads or writes anything, naming the mapper, the row and the mapper that
+row belongs to:
+
+```text
+OrderMappers.EDITS needs a Catalog for compute(OrderLine::getUnitPrice, service(Catalog::price)) in OrderMappers.LINE,
+and none is bound. Inject the EditMapper<OrderChanges, Order> bean, or bind one with OrderMappers.EDITS.with(catalog).
+```
+
+`explain()` names each row that calls a service and whether one is bound:
+`OrderLine.unitPrice: computed by Catalog.price(LineDto), Catalog bound`. `Telescope.map` returns a `Telescope`, which
+has nothing to bind a service to, and refuses such a row.
 
 ## Hand-written (`from / to / using`)
 
@@ -206,6 +246,7 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 | `constant(tgt, value)`        | Forward-only literal at the target slot                                                         | `@Mapping(constant = "...")`                |
 | `compute(tgt, supplier)`      | Forward-only supplier-computed value                                                            | `@Mapping(expression = "java(...)")`        |
 | `compute(tgt, Names::full)`   | Forward-only value computed from the whole source                                               | `@Mapping(expression = "java(...)")`        |
+| `compute(tgt, service(C::m))` | Forward-only value a service bean computes from the source, `c.m(source)`                       | a `@Context` parameter or a `uses` mapper   |
 | `drop(src)`                   | Skip the source field; backward fills it with null (references) or the JLS default (primitives) | `@Mapping(ignore = true)`                   |
 
 Example — three of those rows together:

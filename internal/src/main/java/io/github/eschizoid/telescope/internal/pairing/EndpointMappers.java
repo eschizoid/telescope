@@ -86,6 +86,94 @@ public final class EndpointMappers {
   }
 
   /**
+   * The refusal of the bean of the {@code @Bridge} field {@code field}, whose {@code row}, in the
+   * mapper {@code in} where that is not the field's own, calls the service {@code service}, a
+   * binary name, of which the application declares no bean. {@code quarkus} adds that a bean only
+   * something built at run time looks up is one Quarkus removes unless it is marked unremovable.
+   */
+  public static String serviceBeanMissing(
+    final String field,
+    final String service,
+    final String row,
+    final String in,
+    final boolean quarkus
+  ) {
+    return (
+      "The bean of the @Bridge field " +
+      field +
+      " needs a bean of " +
+      service +
+      rowOf(row, in) +
+      ", and the application declares none. Declare one" +
+      (quarkus ? ", or, if only a mapper built at run time looks it up, mark it @Unremovable." : ".")
+    );
+  }
+
+  /**
+   * The refusal of the bean of the {@code @Bridge} field {@code field}, whose {@code row} calls the
+   * service {@code service}, of which the application declares the beans {@code names} and none is
+   * primary.
+   */
+  public static String serviceBeansAmbiguous(
+    final String field,
+    final String service,
+    final String row,
+    final String in,
+    final List<String> names
+  ) {
+    return (
+      "The bean of the @Bridge field " +
+      field +
+      " needs one bean of " +
+      service +
+      rowOf(row, in) +
+      ", and the application declares " +
+      names.size() +
+      ", " +
+      String.join(" and ", names) +
+      ", with none primary. Mark one primary, or keep one bean of that type."
+    );
+  }
+
+  /** Two {@code @Bridge} fields of classes {@code first} and {@code second} naming one bean. */
+  public static String fieldBeanNamedTwice(final String name, final String first, final String second) {
+    return (
+      "Two @Bridge fields give the bean name " +
+      name +
+      ", one in " +
+      first +
+      " and one in " +
+      second +
+      ". Rename one of the fields or of their classes."
+    );
+  }
+
+  /**
+   * The refusal of an endpoint whose mapper, {@code mapper}, calls {@code service} for {@code row}
+   * and is bound to none.
+   */
+  public static String endpointMapperUnbound(
+    final String mapper,
+    final String service,
+    final String row,
+    final String in
+  ) {
+    return (
+      mapper +
+      " needs a " +
+      service +
+      rowOf(row, in) +
+      ", and is not bound. Inject the @Bridge field's bean, or bind the mapper with with(...) before declaring" +
+      " it as a bean."
+    );
+  }
+
+  private static String rowOf(final String row, final String in) {
+    if (row == null) return "";
+    return " for " + row + (in == null ? "" : " in " + in);
+  }
+
+  /**
    * Checks that {@code Telescope.mapperForward}, on a pair with no projection or {@code Mapper}
    * bean, fills some property of {@code target}. A generated bridge for the pair, held beside the
    * source or registered by a provider, maps it as its rows say and is not checked; neither is a

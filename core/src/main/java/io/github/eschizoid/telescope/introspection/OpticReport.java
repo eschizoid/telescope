@@ -96,6 +96,18 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(CollectionWrite.class::isInstance).map(CollectionWrite.class::cast).toList();
   }
 
+  /**
+   * The rows of the mapper that call a service, in trail order, each saying whether the mapper is
+   * bound to one.
+   */
+  public List<OpticNode.ServiceCall> serviceCalls() {
+    return nodes
+      .stream()
+      .filter(OpticNode.ServiceCall.class::isInstance)
+      .map(OpticNode.ServiceCall.class::cast)
+      .toList();
+  }
+
   /** The navigation steps of a path, in trail order. */
   public List<Hop> hops() {
     return nodes.stream().filter(Hop.class::isInstance).map(Hop.class::cast).toList();
@@ -156,6 +168,7 @@ public record OpticReport(List<OpticNode> nodes) {
       nodes.stream().filter(OpticNode.ElementsThrough.class::isInstance).toList(),
       e -> "  • " + e
     );
+    section(blocks, "Services", serviceCalls(), s -> "  • " + s);
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
     final var hops = hops();
     if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));

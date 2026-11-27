@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.conversion.ServiceNeeds;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.internal.pairing.EndpointMappers;
 import io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry;
@@ -238,8 +239,50 @@ public class TelescopeRestEndpoints {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> registeredMapping(final Mapper<?, ?> mapper) {
+    refuseUnbound(
+      mapper,
+      "Mapper<" + mapper.sourceClass().getSimpleName() + ", " + mapper.targetClass().getSimpleName() + ">"
+    );
     final var typed = (Mapper<Object, Object>) mapper;
     return typed::forward;
+  }
+
+  /**
+   * Refuses {@code mapper}, named {@code name}, where its rows call a service it is not bound to.
+   */
+  private static void refuseUnbound(final Object mapper, final String name) {
+    final var needs = ServiceNeeds.of(mapper);
+    if (needs == null || needs.satisfied()) return;
+    final var first = needs.needs().getFirst();
+    throw new IllegalArgumentException(
+      EndpointMappers.endpointMapperUnbound(name, first.service().getSimpleName(), first.row(), first.in())
+    );
+  }
+
+  /**
+   * The bean the extension registers for the {@code @Bridge} field declaring {@code source ->
+   * target} as a {@code ForwardMapper}, where its rows call a service, or null.
+   */
+  @SuppressWarnings("unchecked")
+  private ForwardMapper<Object, Object> fieldBean(final Class<?> source, final Class<?> target) {
+    for (final var provider : BridgeRegistry.serviceFields(source.getClassLoader())) {
+      if (
+        provider.fieldType() != ForwardMapper.class ||
+        provider.sourceType() != source ||
+        provider.targetType() != target
+      ) {
+        continue;
+      }
+      final var candidates = beans.getBeans(BridgeRegistry.beanName(provider));
+      if (candidates.isEmpty()) return null;
+      final var bean = beans.resolve(candidates);
+      return (ForwardMapper<Object, Object>) beans.getReference(
+        bean,
+        Object.class,
+        beans.createCreationalContext(bean)
+      );
+    }
+    return null;
   }
 
   // Telescope.mapperForward, as the Spring starter maps a pair with no projection or mapper bean:
@@ -247,14 +290,13 @@ public class TelescopeRestEndpoints {
   // the same-name runtime mapping, refused when it pairs no property. Whether ServiceLoader finds a
   // provider for the pair is logged at DEBUG, so a native image that holds none says so.
   @SuppressWarnings("unchecked")
-  private static Function<Object, Object> forwardMapping(
-    final Class<?> source,
-    final Class<?> target,
-    final String where
-  ) {
+  private Function<Object, Object> forwardMapping(final Class<?> source, final Class<?> target, final String where) {
+    final var bound = fieldBean(source, target);
+    if (bound != null) return bound::forward;
     final var provided = BridgeRegistry.find(source, target, source.getClassLoader()).isPresent();
     EndpointMappers.checkForwardPairs(source, target, provided);
     final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
+    refuseUnbound(forward, "ForwardMapper<" + source.getSimpleName() + ", " + target.getSimpleName() + ">");
     LOGGER.log(
       Level.DEBUG,
       () ->

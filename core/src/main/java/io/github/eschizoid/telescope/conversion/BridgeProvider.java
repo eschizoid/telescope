@@ -56,6 +56,43 @@ public interface BridgeProvider {
   }
 
   /**
+   * For a bridge a field declared, the field's name, as {@code EDITS}; null for a bridge a class
+   * declared. With {@link #declaringType()} it names the field in a refusal, and it names the
+   * container bean a starter registers for a field whose rows call a service.
+   */
+  default String fieldName() {
+    return null;
+  }
+
+  /**
+   * For a bridge a field declared, the field's raw type, {@code Mapper}, {@code ForwardMapper} or
+   * {@code EditMapper}, whose type arguments are {@link #sourceType()} and {@link #targetType()};
+   * null for a bridge a class declared.
+   */
+  default Class<?> fieldType() {
+    return null;
+  }
+
+  /**
+   * For a bridge a field declared, the classes of service its rows call, their own and those of the
+   * mappers they convert through, each once, in the order the field's mapper lists them in {@code
+   * services()}. Read without initialising the declaring class, so a container integration can
+   * decide at build time which fields it binds. Empty where the rows call none.
+   */
+  default List<Class<?>> services() {
+    return List.of();
+  }
+
+  /**
+   * For a bridge a field declared, the mapper the field holds, read from the field directly, which
+   * initialises the declaring class; null for a bridge a class declared. A container integration
+   * binds it to the container's beans.
+   */
+  default Object field() {
+    return null;
+  }
+
+  /**
    * For a bridge a field declared, the accessor methods each row of its mapper call names, as
    * {@code source>target} with an empty side where a row names none, in order. Empty for a bridge a
    * class declared.

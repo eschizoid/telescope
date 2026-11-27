@@ -48,6 +48,7 @@ import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
 
 /**
  * Reads the rows of a {@code @Bridge} field's {@code Telescope.mapper(...)} or {@code
@@ -180,7 +181,8 @@ final class FieldRows {
     // rows
     // name, which no edit writes.
     boolean edits,
-    Set<String> keeps
+    Set<String> keeps,
+    List<ServiceUse> services
   ) implements Result {
     /** Every target property a {@code compute} row fills, from a supplier or from the source. */
     Set<String> computedTargets() {
@@ -240,13 +242,61 @@ final class FieldRows {
    * property is the key of {@link Parsed#gatedTargets}, and a gated path's place among the rows the
    * key of {@link Parsed#gatedPaths}.
    */
-  record Gate(String predicate, boolean held, String inner, String sourceField) {
+  record Gate(String predicate, boolean held, String inner, String sourceField, boolean served) {
+    Gate(final String predicate, final boolean held, final String inner, final String sourceField) {
+      this(predicate, held, inner, sourceField, false);
+    }
+
     /** The Java expression testing {@code value}, of type {@code type}. */
     String test(final String type, final String value) {
+      if (served) return "((java.lang.Boolean) " + predicate.replace(SERVED_VALUE, value) + ")";
       return held
         ? predicate + ".test(" + value + ")"
         : "((java.util.function.Predicate<? super " + type + ">) " + predicate + ").test(" + value + ")";
     }
+  }
+
+  /** Where the value a service predicate tests stands in its expression. */
+  private static final String SERVED_VALUE = "$value$";
+
+  /**
+   * A row calling a service: the service's class and the row as it is written, as {@code
+   * compute(OrderLine::getUnitPrice, service(Catalog::price))}, in the words the runtime path names
+   * it by.
+   */
+  record ServiceUse(TypeElement service, String row, String explain) {}
+
+  /**
+   * The name of the parameter the methods of a generated bridge take {@code service} by, the same
+   * in every bridge, so a bridge hands a bridge it calls the services that one takes by name.
+   */
+  static String serviceVariable(final TypeElement service, final Elements elements) {
+    return "__svc_" + elements.getBinaryName(service).toString().replace('.', '_').replace('$', '_');
+  }
+
+  /** The qualified name of the type a row's service form takes a function of a value as. */
+  static final String SERVICE_CALL_FQN = "io.github.eschizoid.telescope.mapping.ServiceCall";
+
+  /** The qualified name of the type a row's service form takes a value asked of a service as. */
+  static final String SERVICE_SUPPLIER_FQN = "io.github.eschizoid.telescope.mapping.ServiceSupplier";
+
+  /**
+   * Whether parameter {@code index} of the row factory {@code row} takes a value asked of a
+   * service.
+   */
+  static boolean takesSupplier(final ExecutableElement row, final int index) {
+    return (
+      row.getParameters().get(index).asType() instanceof DeclaredType type &&
+      ((TypeElement) type.asElement()).getQualifiedName().contentEquals(SERVICE_SUPPLIER_FQN)
+    );
+  }
+
+  /** Whether parameter {@code index} of the row factory {@code row} takes a service form. */
+  static boolean takesService(final ExecutableElement row, final int index) {
+    if (row.getParameters().size() <= index) return false;
+    if (!(row.getParameters().get(index).asType() instanceof DeclaredType type)) return false;
+    final var name = ((TypeElement) type.asElement()).getQualifiedName();
+    return name.contentEquals(SERVICE_CALL_FQN) || name.contentEquals(SERVICE_SUPPLIER_FQN);
   }
 
   /** The rows a {@code when(...)} row gates, by the class the runtime builds for each. */
@@ -260,7 +310,11 @@ final class FieldRows {
   );
 
   /** A class the reader writes beside the bridge, by qualified name, with its source. */
-  record GeneratedClass(String qualifiedName, String source) {}
+  record GeneratedClass(String qualifiedName, String source, String service) {
+    GeneratedClass(final String qualifiedName, final String source) {
+      this(qualifiedName, source, null);
+    }
+  }
 
   /**
    * A row, or the field, the reader refuses, with the tree to report it on (null for the field). A
@@ -908,6 +962,7 @@ final class FieldRows {
     private final List<SourcePath> sourcePaths = new ArrayList<>();
     private final List<TargetPath> targetPaths = new ArrayList<>();
     private final List<PathToPath> pathsToPaths = new ArrayList<>();
+    private final List<ServiceUse> services = new ArrayList<>();
 
     /** How many rows have been read, which is the place of the row being read. */
     private int order;
@@ -999,7 +1054,8 @@ final class FieldRows {
         backReferences,
         backReferenceTypes,
         edits,
-        keeps
+        keeps,
+        List.copyOf(services)
       );
     }
 
@@ -1154,6 +1210,9 @@ final class FieldRows {
           );
         }
       }
+      if (kind.equals("compute") && takesService(rowExec, 1)) return servedCompute(row, takesSupplier(rowExec, 1));
+      if (kind.equals("toOneWay") && takesService(rowExec, 2)) return servedOneWay(row);
+      if (kind.equals("toOrElseGet") && takesService(rowExec, 2)) return servedOrElse(row);
       return switch (kind) {
         case "to" -> switch (rowArgs.size()) {
           case 2 -> pathParameter(rowExec, 0)
@@ -1182,6 +1241,427 @@ final class FieldRows {
             " without @Bridge to run it on the runtime path"
         );
       };
+    }
+
+    /**
+     * What a {@code service(...)} argument calls, as the generated bridge writes it: the Java
+     * expression, on the service's parameter and on {@code argument} where the function takes a
+     * value after the service, the service's class, what the function gives, what it takes after
+     * the service, and how a message names it, as the runtime path names the function.
+     */
+    private record Served(String expression, TypeElement service, TypeMirror gives, TypeMirror takes, String name) {}
+
+    /**
+     * The call {@code arg}, a {@code service(...)} argument, makes, taking {@code arity} values
+     * after the service, or the refusal: an argument written otherwise, an inline lambda, and a
+     * function the generated bridge cannot call directly.
+     */
+    private Object served(final ExpressionTree arg, final String argument, final int arity) {
+      if (
+        !(arg instanceof MethodInvocationTree call) ||
+        !(elementAt(unit, call.getMethodSelect()) instanceof ExecutableElement factory) ||
+        !factory.getSimpleName().contentEquals("service") ||
+        !((TypeElement) factory.getEnclosingElement()).getQualifiedName().contentEquals(MAPPING_FQN)
+      ) {
+        return new Refused(
+          arg,
+          "a @Bridge mapper compiles a service row whose function is written in place as service(Catalog::price)," +
+            " which the generated bridge calls on the service it is handed"
+        );
+      }
+      final var typed = trees.getTypeMirror(TreePath.getPath(unit, call));
+      if (!(typed instanceof DeclaredType wrapper) || wrapper.getTypeArguments().isEmpty()) {
+        return Refused.javacReports(call);
+      }
+      final var types = env.getTypeUtils();
+      if (!(types.asElement(types.erasure(wrapper.getTypeArguments().getFirst())) instanceof TypeElement service)) {
+        return new Refused(call, "the service this row calls is not a class the generated bridge can take");
+      }
+      if (!reachable(service, service)) return new Refused(call, unreachable(service, "class"));
+      final var variable = serviceVariable(service, env.getElementUtils());
+      final var gives = wrapper.getTypeArguments().getLast();
+      final var takes = arity == 1 ? wrapper.getTypeArguments().get(1) : null;
+      final var after = arity == 1 ? argument : "";
+      final var function = call.getArguments().getFirst();
+      if (function instanceof LambdaExpressionTree) {
+        return new Refused(
+          function,
+          "an inline lambda can't be compiled into the generated bridge; write the service function as a method" +
+            " reference the bridge calls directly, such as an instance method of the service (Catalog::price), a" +
+            " static method taking the service first, or a static final field holding one"
+        );
+      }
+      if (
+        (function instanceof IdentifierTree || function instanceof MemberSelectTree) &&
+        elementAt(unit, function) instanceof VariableElement held &&
+        held.getKind() == ElementKind.FIELD
+      ) {
+        if (!held.getModifiers().contains(Modifier.STATIC) || !held.getModifiers().contains(Modifier.FINAL)) {
+          return new Refused(
+            function,
+            "a @Bridge mapper calls a service function the generated bridge can name: a method reference" +
+              " (Catalog::price), or a static final field holding one; " +
+              held.getSimpleName() +
+              " is not static and final"
+          );
+        }
+        final var owner = (TypeElement) held.getEnclosingElement();
+        if (!reachable(held, owner)) return new Refused(function, unreachable(owner, held.getSimpleName()));
+        return new Served(
+          owner.getQualifiedName() +
+            "." +
+            held.getSimpleName() +
+            ".apply(" +
+            variable +
+            (arity == 1 ? ", " + after : "") +
+            ")",
+          service,
+          gives,
+          takes,
+          heldServiceName(held, service)
+        );
+      }
+      if (!(function instanceof MemberReferenceTree reference)) {
+        return new Refused(
+          function,
+          "a @Bridge mapper compiles a service function written as a method reference (Catalog::price), or a static" +
+            " final field holding one; this argument is neither"
+        );
+      }
+      if (!(trees.getElement(TreePath.getPath(unit, function)) instanceof ExecutableElement method)) {
+        return new Refused(function, "the processor cannot resolve this method reference");
+      }
+      final var owner = (TypeElement) method.getEnclosingElement();
+      if (!reachable(method, owner)) return new Refused(function, unreachable(owner, method.getSimpleName()));
+      final var qualifier = elementAt(unit, reference.getQualifierExpression());
+      final var params = method.getParameters().size();
+      if (
+        reference.getMode() == MemberReferenceTree.ReferenceMode.INVOKE &&
+        !method.getModifiers().contains(Modifier.STATIC) &&
+        qualifier instanceof TypeElement &&
+        params == arity
+      ) {
+        return new Served(
+          variable + "." + method.getSimpleName() + "(" + after + ")",
+          service,
+          gives,
+          takes,
+          service.getSimpleName() + "::" + method.getSimpleName()
+        );
+      }
+      if (method.getModifiers().contains(Modifier.STATIC) && params == arity + 1) {
+        return new Served(
+          owner.getQualifiedName() +
+            "." +
+            method.getSimpleName() +
+            "(" +
+            variable +
+            (arity == 1 ? ", " + after : "") +
+            ")",
+          service,
+          gives,
+          takes,
+          owner.getSimpleName() + "::" + method.getSimpleName()
+        );
+      }
+      return new Refused(
+        function,
+        "a @Bridge mapper calls a service function that is an instance method of the service (Catalog::price), a" +
+          " static method taking the service first, or a static final field holding one; this reference is none" +
+          " of them"
+      );
+    }
+
+    /**
+     * How a message names the service function {@code held} holds, as the runtime path names it
+     * from the function: the reference written as the field's initializer in this compilation, "a
+     * lambda" for a lambda, and the field otherwise.
+     */
+    private String heldServiceName(final VariableElement held, final TypeElement service) {
+      final var path = trees.getPath(held);
+      if (path != null && path.getLeaf() instanceof VariableTree variable) {
+        final var initializer = variable.getInitializer();
+        if (initializer instanceof LambdaExpressionTree) return "a lambda";
+        final var heldUnit = path.getCompilationUnit();
+        if (
+          initializer instanceof MemberReferenceTree reference &&
+          elementAt(heldUnit, reference) instanceof ExecutableElement method
+        ) {
+          return method.getModifiers().contains(Modifier.STATIC)
+            ? method.getEnclosingElement().getSimpleName() + "::" + method.getSimpleName()
+            : service.getSimpleName() + "::" + method.getSimpleName();
+        }
+      }
+      return ((TypeElement) held.getEnclosingElement()).getSimpleName() + "." + held.getSimpleName();
+    }
+
+    /**
+     * The call {@code served} makes as {@code explain()} names it, {@code Catalog.price(LineDto)},
+     * as the runtime path names it from the function.
+     */
+    private String callOf(final Served served) {
+      if (!served.name().contains("::")) return served.name();
+      final var takes = served.takes() == null ? "" : simpleNameOf(env.getTypeUtils().erasure(served.takes()));
+      return served.name().replace("::", ".") + "(" + takes + ")";
+    }
+
+    /** An accessor argument as a message names it, {@code OrderLine::getUnitPrice}. */
+    private String accessorName(final ExpressionTree arg) {
+      if (!(arg instanceof MemberReferenceTree reference)) return arg.toString();
+      final var qualifier = trees.getTypeMirror(TreePath.getPath(unit, reference.getQualifierExpression()));
+      final var owner = qualifier == null ? null : env.getTypeUtils().asElement(qualifier);
+      return (
+        (owner == null ? reference.getQualifierExpression().toString() : owner.getSimpleName()) +
+        "::" +
+        reference.getName()
+      );
+    }
+
+    /**
+     * A {@code compute} row filling a target property with what a service makes of the source, or
+     * asks it for where {@code supplier}: written into the bridge as a direct call on the service
+     * the bridge is handed.
+     */
+    private Refused servedCompute(final MethodInvocationTree row, final boolean supplier) {
+      final var args = row.getArguments();
+      final var tgt = accessor(args.get(0), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var t = (Accessor) tgt;
+      final var called = served(args.get(1), SOURCE, supplier ? 0 : 1);
+      if (called instanceof Refused refused) return refused;
+      final var s = (Served) called;
+      final var types = env.getTypeUtils();
+      if (!supplier && !types.isAssignable(types.erasure(source.asType()), types.erasure(s.takes()))) {
+        return new Refused(
+          args.get(1),
+          PairingMessages.computeFunctionOffSource(
+            simple(source),
+            simple(target),
+            t.property(),
+            s.name(),
+            ComputeForms.shownName(types, types.erasure(s.takes()))
+          )
+        );
+      }
+      if (!types.isAssignable(types.erasure(s.gives()), types.erasure(t.type()))) {
+        return new Refused(
+          args.get(1),
+          args.get(1) +
+            " gives " +
+            s.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
+        );
+      }
+      final var value = t.primitive()
+        ? "java.util.Objects.requireNonNullElse(" + s.expression() + ", " + primitiveDefault(shown(t).getKind()) + ")"
+        : s.expression();
+      if (!targetsWritten.add(t.property()) || computes.containsKey(t.property())) {
+        return new Refused(row, PairingMessages.duplicateTargetRow(simple(source), simple(target), t.property()));
+      }
+      computedFrom.put(t.property(), value);
+      lastFilled = t.property();
+      rowKinds.add(supplier ? "Compute" : "ComputeFromSource");
+      rowAccessors.add(">");
+      services.add(
+        new ServiceUse(
+          s.service(),
+          "compute(" + accessorName(args.get(0)) + ", service(" + s.name() + "))",
+          simple(target) + "." + t.property() + ": computed by " + callOf(s)
+        )
+      );
+      return null;
+    }
+
+    /**
+     * A {@code toOneWay} row converting the source property through a function of a service,
+     * written as a class beside the bridge whose static {@code apply} takes the value and the
+     * service, which the bridge calls with the service it is handed.
+     */
+    private Refused servedOneWay(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      if (strict) {
+        return new Refused(
+          row,
+          "Telescope.mapper(...) cannot accept a Mapping.toOneWay(...) row: it is forward-only and the" +
+            " mapper converts both ways. Use Telescope.mapperForward(...)"
+        );
+      }
+      final var src = accessor(args.get(0), source);
+      if (src instanceof Refused refused) return refused;
+      final var tgt = accessor(args.get(1), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var s = (Accessor) src;
+      final var t = (Accessor) tgt;
+      final var called = served(args.get(2), "v", 1);
+      if (called instanceof Refused refused) return refused;
+      final var c = (Served) called;
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(types.erasure(s.type()), types.erasure(c.takes()))) {
+        return new Refused(
+          args.get(2),
+          c.name() +
+            " takes " +
+            c.takes() +
+            ", which the " +
+            shown(s) +
+            " property '" +
+            s.property() +
+            "' does not hold"
+        );
+      }
+      if (!types.isAssignable(types.erasure(c.gives()), types.erasure(t.type()))) {
+        return new Refused(
+          args.get(2),
+          args.get(2) +
+            " gives " +
+            c.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
+        );
+      }
+      final var unnamed = unnameable(s, t);
+      if (unnamed != null) return unnamed;
+      final var refusal = write(row, s.property(), t.property(), row);
+      if (refusal != null) return refusal;
+      final var name = bridgeName + camel(s.property()) + "Service";
+      transforms.put(s.property(), qualified(name));
+      transformMethods.put(s.property(), "apply");
+      forwardOnly.add(s.property());
+      classes.add(serviceHelper(name, s.type(), t.type(), c.service(), c.expression(), null));
+      rowKinds.add("ForwardOnlyTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
+      services.add(
+        new ServiceUse(
+          c.service(),
+          "toOneWay(" + accessorName(args.get(0)) + ", " + accessorName(args.get(1)) + ", service(" + c.name() + "))",
+          simple(target) + "." + t.property() + ": converted by " + callOf(c)
+        )
+      );
+      return null;
+    }
+
+    /**
+     * A {@code toOrElseGet} row whose fallback a service gives: forward writes the service's value
+     * where the source value is null and the value itself otherwise, and backward writes the target
+     * value back as it is.
+     */
+    private Refused servedOrElse(final MethodInvocationTree row) {
+      final var args = row.getArguments();
+      final var src = accessor(args.get(0), source);
+      if (src instanceof Refused refused) return refused;
+      final var tgt = accessor(args.get(1), target);
+      if (tgt instanceof Refused refused) return refused;
+      final var s = (Accessor) src;
+      final var t = (Accessor) tgt;
+      final var called = served(args.get(2), null, 0);
+      if (called instanceof Refused refused) return refused;
+      final var c = (Served) called;
+      final var types = env.getTypeUtils();
+      if (!types.isAssignable(types.erasure(c.gives()), types.erasure(t.type()))) {
+        return new Refused(
+          args.get(2),
+          args.get(2) +
+            " gives " +
+            c.gives() +
+            ", which the " +
+            shown(t) +
+            " property '" +
+            t.property() +
+            "' does not hold"
+        );
+      }
+      final var refusal = write(row, s.property(), t.property(), row);
+      if (refusal != null) return refusal;
+      if (transforms.containsKey(s.property())) {
+        return new Refused(row, "a @Bridge mapper converts one source property through one row");
+      }
+      final var unnamed = unnameable(s, t);
+      if (unnamed != null) return unnamed;
+      final var name = bridgeName + camel(s.property()) + "Service";
+      transforms.put(s.property(), qualified(name));
+      transformMethods.put(s.property(), "apply");
+      classes.add(serviceHelper(name, s.type(), t.type(), c.service(), "v == null ? " + c.expression() + " : v", "v"));
+      rowKinds.add("TypedTransformTo");
+      rowAccessors.add(s.method() + ">" + t.method());
+      services.add(
+        new ServiceUse(
+          c.service(),
+          "toOrElseGet(" +
+            accessorName(args.get(0)) +
+            ", " +
+            accessorName(args.get(1)) +
+            ", service(" +
+            c.name() +
+            "))",
+          simple(target) + "." + t.property() + ": defaulted by " + callOf(c)
+        )
+      );
+      return null;
+    }
+
+    /**
+     * The class a service row's conversion is written as: a static {@code apply} taking the value
+     * and the service, which the bridge calls, one taking the value alone, which refuses since a
+     * row calling a service needs one, and for a row converting back a static {@code backward}.
+     */
+    private GeneratedClass serviceHelper(
+      final String name,
+      final TypeMirror from,
+      final TypeMirror to,
+      final TypeElement service,
+      final String forward,
+      final String backward
+    ) {
+      final var variable = serviceVariable(service, env.getElementUtils());
+      final var out = new StringBuilder();
+      if (!pkg.isEmpty()) out.append("package ").append(pkg).append(";\n\n");
+      out
+        .append("/** Generated by telescope-codegen: a conversion a row of ")
+        .append(bridgeName)
+        .append(" makes through a service. */\n")
+        .append("public final class ")
+        .append(name)
+        .append(" {\n\n  private ")
+        .append(name)
+        .append("() {}\n\n  /** Refuses: the row converts through a service, which the bridge hands on. */\n")
+        .append("  public static ")
+        .append(to)
+        .append(" apply(final ")
+        .append(from)
+        .append(" v) {\n    throw new IllegalStateException(\"")
+        .append(name)
+        .append(" converts through a ")
+        .append(service.getSimpleName())
+        .append(", and none was handed on\");\n  }\n\n  public static ")
+        .append(to)
+        .append(" apply(final ")
+        .append(from)
+        .append(" v, final ")
+        .append(service.getQualifiedName())
+        .append(" ")
+        .append(variable)
+        .append(") {\n    return ")
+        .append(forward)
+        .append(";\n  }\n");
+      if (backward != null) {
+        out
+          .append("\n  public static ")
+          .append(from)
+          .append(" backward(final ")
+          .append(to)
+          .append(" v) {\n    return ")
+          .append(backward)
+          .append(";\n  }\n");
+      }
+      out.append("}\n");
+      return new GeneratedClass(qualified(name), out.toString(), service.getQualifiedName().toString());
     }
 
     private Refused passThrough(final MethodInvocationTree row) {
@@ -1311,7 +1791,17 @@ final class FieldRows {
           )
         );
       }
-      final var predicate = predicateValue(args.get(0));
+      final var whenExec = (ExecutableElement) elementAt(unit, row.getMethodSelect());
+      final Object predicate;
+      if (takesService(whenExec, 0)) {
+        final var called = served(args.get(0), SERVED_VALUE, 1);
+        if (called instanceof Refused refused) return refused;
+        final var c = (Served) called;
+        predicate = new Gate(c.expression(), false, null, null, true);
+        services.add(new ServiceUse(c.service(), "when(service(" + c.name() + "), ...)", "rows gated by " + callOf(c)));
+      } else {
+        predicate = predicateValue(args.get(0));
+      }
       if (predicate instanceof Refused refused) return refused;
       final var sourceField = kind.equals("TelescopeTo") ? referencedName(innerArgs.get(0)) : null;
       // The inner row takes the place of the when(...) row among the rows.
@@ -1321,7 +1811,13 @@ final class FieldRows {
       final var refused = read(inner);
       gating = false;
       if (refused != null) return refused;
-      final var gate = new Gate(((Gate) predicate).predicate(), ((Gate) predicate).held(), kind, sourceField);
+      final var gate = new Gate(
+        ((Gate) predicate).predicate(),
+        ((Gate) predicate).held(),
+        kind,
+        sourceField,
+        ((Gate) predicate).served()
+      );
       if (kind.startsWith("Compute") || kind.equals("Constant")) gatedTargets.put(lastFilled, gate);
       else gatedPaths.put(order, gate);
       // The runtime builds one Conditional row, which names the inner row's flat accessors alone.
@@ -1354,7 +1850,8 @@ final class FieldRows {
         case "via" -> args.size() == 4 ? "ViaMethods" : classLiteral(unit, args.get(2)) != null ? "ViaClass" : "Via";
         case "drop" -> "Drop";
         case "constant" -> "Constant";
-        case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(ComputeForms.computeForm(exec))
+        case "compute" -> ComputeForms.FROM_SOURCE_FQN.equals(ComputeForms.computeForm(exec)) ||
+        (takesService(exec, 1) && !takesSupplier(exec, 1))
           ? "ComputeFromSource"
           : "Compute";
         case "zip" -> "TelescopeToTelescope";

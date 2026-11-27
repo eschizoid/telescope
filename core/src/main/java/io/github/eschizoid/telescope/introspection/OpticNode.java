@@ -168,6 +168,21 @@ public sealed interface OpticNode {
   record Declared(String declaredBy, Runs runs, String why) implements Row {}
 
   /**
+   * A row of the mapper that calls {@code service}: {@code line} says what it does, as {@code
+   * OrderLine.unitPrice: computed by Catalog.price(LineDto)}, and {@code bound} whether the mapper
+   * is bound to a service. {@link #toString()} is the line {@code explain()} prints for it, as in
+   * {@code OrderLine.unitPrice: computed by Catalog.price(LineDto), Catalog bound}. It says bound,
+   * not injected, since a mapper cannot tell a container's value from a test's.
+   */
+  record ServiceCall(String line, Class<?> service, boolean bound) implements Row {
+    @Override
+    public String toString() {
+      final var name = service.getSimpleName();
+      return line + ", " + (bound ? name + " bound" : "no " + name + " bound");
+    }
+  }
+
+  /**
    * An edit mapper's {@code property} of {@code owner}, written by name, whose values convert
    * through {@code mapper}, the edit mapper its class declares for their pair, as {@code
    * OrderMappers.LINE}. {@link #toString()} is the line {@code explain()} prints for it, as in

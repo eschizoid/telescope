@@ -102,14 +102,14 @@ mapper of their own, declared in the same class as the owner's mapper or in the 
 static final EditMapper<LineForm, OrderLine> LINE = Telescope.edits(
   LineForm.class,
   OrderLine.class,
-  compute(OrderLine::getUnitPrice, Catalog::price)
+  compute(OrderLine::getUnitPrice, service(Catalog::price)) // catalog.price(form), on the Catalog bean
 );
 static final EditMapper<OrderForm, Order> PATCH = Telescope.edits(
   OrderForm.class,
   Order.class // the lines go through LINE, the edit mapper of their pair
 );
 
-PATCH.patchInto(order, form);
+PATCH.with(catalog).patchInto(order, form); // a @Bridge field is injected already bound on either starter
 // A line sent as it is held, priced as the catalog prices it: no statement.
 // A line sent again whose stored price the catalog no longer gives: one UPDATE, priced again.
 ```

@@ -52,6 +52,9 @@ public class ForwardMapper<A, B> {
   // then specialise.
   private final boolean generated;
 
+  // The services the mapper's rows call, or null where they call none.
+  private final ServiceNeeds services;
+
   private static boolean traced(final List<OpticNode> trail) {
     for (final var node : trail) if (!(node instanceof OpticNode.Declared)) return true;
     return false;
@@ -88,6 +91,7 @@ public class ForwardMapper<A, B> {
     final boolean generated
   ) {
     this.generated = generated;
+    this.services = null;
     this.forward = forward;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
@@ -127,6 +131,67 @@ public class ForwardMapper<A, B> {
     this.traced = built.traced;
     this.logger = built.logger;
     this.generated = true;
+    this.services = built.services;
+  }
+
+  /** {@code from}, holding {@code services}. */
+  private ForwardMapper(final ForwardMapper<A, B> from, final ServiceNeeds services) {
+    this.forward = from.forward;
+    this.sourceClass = from.sourceClass;
+    this.targetClass = from.targetClass;
+    this.explainTrail = from.explainTrail;
+    this.traced = from.traced;
+    this.logger = from.logger;
+    this.generated = from.generated;
+    this.services = services;
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> {@code mapper}, holding {@code services}, the
+   * services its rows call.
+   */
+  public static <A, B> ForwardMapper<A, B> withServiceNeeds(
+    final ForwardMapper<A, B> mapper,
+    final ServiceNeeds services
+  ) {
+    return new ForwardMapper<>(mapper, services);
+  }
+
+  /** The services this mapper's rows call, or null where they call none. */
+  final ServiceNeeds serviceNeeds() {
+    return services;
+  }
+
+  /** The classes of service this mapper's rows call, as {@link Mapper#services()} lists them. */
+  public final List<Class<?>> services() {
+    return services == null ? List.of() : services.classes();
+  }
+
+  /**
+   * A copy of this mapper bound to {@code services}, as {@link Mapper#with(Object...)} binds one.
+   *
+   * @throws IllegalArgumentException naming what is wrong, for a null, a value no service accepts,
+   *     two values for one service, or a service not given
+   */
+  @SuppressWarnings("unchecked")
+  public final ForwardMapper<A, B> with(final Object... services) {
+    if (this.services == null) {
+      ServiceNeeds.refuseAny(
+        "ForwardMapper<" + sourceClass.getSimpleName() + ", " + targetClass.getSimpleName() + ">",
+        services
+      );
+      return this;
+    }
+    return (ForwardMapper<A, B>) this.services.bind(this, services);
+  }
+
+  /**
+   * Refuses a call while the mapper's rows call a service and it is bound to none.
+   *
+   * @throws IllegalStateException naming the first row that calls one
+   */
+  private void requireBound() {
+    if (services != null) services.requireBound(this);
   }
 
   /**
@@ -203,6 +268,7 @@ public class ForwardMapper<A, B> {
 
   /** Forward conversion {@code A → B}. */
   public B forward(final A a) {
+    requireBound();
     // Null in, null out — matches Mapper.forward's contract and MapStruct's generated null guard.
     if (a == null) return null;
     final B result = forward.get(a);
@@ -233,6 +299,8 @@ public class ForwardMapper<A, B> {
    * }</pre>
    */
   public final <C> ForwardMapper<A, C> then(final ForwardMapper<B, C> next) {
+    requireBound();
+    next.requireBound();
     // Genuine lattice routing: Getter.then(Getter) composes two read-only optics into one. The
     // composition is one method call on the substrate, not an inline lambda closure.
     final Getter<A, C> composed = forward.then(next.forward);
@@ -251,6 +319,7 @@ public class ForwardMapper<A, B> {
    * {@code Getter<A, A>} and composing it before the existing read. Chains compose left-to-right.
    */
   public final ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+    requireBound();
     final Getter<A, A> pre = hook::apply;
     // A pre-forward value hook doesn't change which field maps to which — keep the field trail so
     // explain() / trace() stay populated after composition.
@@ -265,6 +334,7 @@ public class ForwardMapper<A, B> {
    * <p>Lattice-native: routes through {@code Getter.then(Getter)}.
    */
   public final ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
+    requireBound();
     final Getter<B, B> post = hook::apply;
     // A post-forward value hook doesn't change the field mapping — keep the field trail.
     return new ForwardMapper<>(forward.then(post), sourceClass, targetClass, explainTrail);
@@ -282,6 +352,7 @@ public class ForwardMapper<A, B> {
    * B>}, not a raw {@code Function}.
    */
   public final ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+    requireBound();
     final Getter<A, B> prior = forward;
     final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
     // A source-aware post hook still doesn't change the field mapping — keep the field trail.
@@ -300,18 +371,21 @@ public class ForwardMapper<A, B> {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final ForwardMapper<List<A>, List<B>> liftList() {
+    requireBound();
     return new ForwardMapper<>(Getter.liftList(forward), (Class) List.class, (Class) List.class);
   }
 
   /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Set<A>, Set<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final ForwardMapper<Set<A>, Set<B>> liftSet() {
+    requireBound();
     return new ForwardMapper<>(Getter.liftSet(forward), (Class) Set.class, (Class) Set.class);
   }
 
   /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Optional<A>, Optional<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final ForwardMapper<Optional<A>, Optional<B>> liftOptional() {
+    requireBound();
     return new ForwardMapper<>(Getter.liftOptional(forward), (Class) Optional.class, (Class) Optional.class);
   }
 
@@ -321,6 +395,7 @@ public class ForwardMapper<A, B> {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final <K> ForwardMapper<Map<K, A>, Map<K, B>> liftMapValues() {
+    requireBound();
     return new ForwardMapper<>(Getter.liftMapValues(forward), (Class) Map.class, (Class) Map.class);
   }
 

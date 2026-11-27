@@ -109,6 +109,41 @@ public final class BridgeRegistry {
   }
 
   /**
+   * Codegen-support seam: the providers {@code loader} lists for the {@code @Bridge} fields whose
+   * rows call a service, which a container integration registers as beans. A registration that
+   * cannot be loaded says nothing of these fields and is passed over. Reading them initialises no
+   * declaring class.
+   */
+  public static List<BridgeProvider> serviceFields(final ClassLoader loader) {
+    final var found = new ArrayList<BridgeProvider>();
+    final var providers = ServiceLoader.load(
+      BridgeProvider.class,
+      loader != null ? loader : BridgeRegistry.class.getClassLoader()
+    ).iterator();
+    while (true) {
+      final BridgeProvider provider;
+      try {
+        if (!providers.hasNext()) break;
+        provider = providers.next();
+      } catch (final ServiceConfigurationError broken) {
+        continue;
+      }
+      if (provider.fieldName() != null && provider.fieldType() != null && !provider.services().isEmpty()) {
+        found.add(provider);
+      }
+    }
+    return List.copyOf(found);
+  }
+
+  /**
+   * The name a container gives the bean of the field {@code provider} records: the field as its
+   * class writes it, {@code OrderMappers.EDITS}.
+   */
+  public static String beanName(final BridgeProvider provider) {
+    return provider.declaringType().getSimpleName() + "." + provider.fieldName();
+  }
+
+  /**
    * The {@code bridge()} value of the unique {@link BridgeProvider} registered for {@code (source,
    * target)} on {@code loader}, or {@link Optional#empty()} when none is registered.
    *
@@ -123,7 +158,17 @@ public final class BridgeRegistry {
     // cheap.)
     final var effective = loader != null ? loader : BridgeRegistry.class.getClassLoader();
     Object match = null;
-    for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, effective)) {
+    final var providers = ServiceLoader.load(BridgeProvider.class, effective).iterator();
+    while (true) {
+      final BridgeProvider provider;
+      try {
+        if (!providers.hasNext()) break;
+        provider = providers.next();
+      } catch (final ServiceConfigurationError broken) {
+        // An entry naming a class this loader cannot load says nothing of this pair, as for the
+        // bridges a class declares.
+        continue;
+      }
       if (provider.sourceType() != source || provider.targetType() != target) continue;
       if (match != null) {
         throw new IllegalStateException(

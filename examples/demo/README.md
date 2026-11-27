@@ -279,10 +279,10 @@ public static final Mapper<Sources, InvoiceDto> INVOICE = Telescope.merge(
 
 **Each line points back at its order, and only `addLine` sets that pointer.** `Order` has no setter for its lines. The
 mapper fills them one element at a time through `addLine`, the method `Order` declares to take an `OrderLine`, with no
-row naming it. Each line converts through `NEW_LINE`, an edit mapper whose `compute` rows price it from the catalog on
-the way in, so a client never sends a price. `PLACE` names no row for the lines: `NEW_LINE` is the edit mapper of the
-pair `NewLine` to `OrderLine`, so the lines go through it, though it is declared after `PLACE`. The line's generated
-`@Id` and its `order` back-reference, which `mappedBy` names, need no row:
+row naming it. Each line converts through `NEW_LINE`, an edit mapper whose `compute` rows price it from the `Catalog`
+bean on the way in, so a client never sends a price. `PLACE` names no row for the lines: `NEW_LINE` is the edit mapper
+of the pair `NewLine` to `OrderLine`, so the lines go through it, though it is declared after `PLACE`. The line's
+generated `@Id` and its `order` back-reference, which `mappedBy` names, need no row:
 
 ```java
 @Bridge
@@ -302,14 +302,19 @@ public static final EditMapper<PlaceOrder, Order> PLACE = edits(
 public static final EditMapper<NewLine, OrderLine> NEW_LINE = edits(
   NewLine.class,
   OrderLine.class,
-  compute(OrderLine::getName, Catalog::name),
-  compute(OrderLine::getUnitPrice, Catalog::price),
-  compute(OrderLine::getCostPrice, Catalog::cost)
+  compute(OrderLine::getName, service(Catalog::name)),
+  compute(OrderLine::getUnitPrice, service(Catalog::price)),
+  compute(OrderLine::getCostPrice, service(Catalog::cost))
 );
 ```
 
+`Catalog` is a bean each app declares over the products it stocks, a `@Bean` method on Spring and a `@Produces` method
+on Quarkus. Each starter registers `PLACE` and `EDITS`, whose lines call it, as beans of their own types bound to that
+catalog, and each app hands them to the framework-free `OrderDesk` by injection. The native run has no container, so it
+binds them itself, with `OrderMappers.EDITS.with(catalog)`.
+
 **A PATCH changes only what the client sent, on the entity the persistence context manages, and keeps its list of
-lines.** `EDITS.patchInto(order, changes)` writes into the entity in place each field the client sent and nothing else,
+lines.** `edits.patchInto(order, changes)` writes into the entity in place each field the client sent and nothing else,
 so a field left out keeps its value. A list the client sends is cleared and refilled in the list the entity already
 holds, through `addLine`, so Hibernate's orphan removal deletes the old rows and the new lines get their foreign key.
 Each line is priced through `NEW_LINE`, found by its pair as for the create request. The fields a PATCH may never change
@@ -331,7 +336,7 @@ public static final EditMapper<OrderChanges, Order> EDITS = edits(
 ```
 
 ```java
-OrderMappers.EDITS.patchInto(order, changes);
+edits.patchInto(order, changes); // the bean of OrderMappers.EDITS, bound to the Catalog bean
 ```
 
 **An order's customer is loaded only when something reads it.** On Spring the association is lazy, so the order holds a

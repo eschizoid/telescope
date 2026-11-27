@@ -1,6 +1,6 @@
 # ADR-0027: Rows that call an injected service
 
-**Status:** Proposed · **Date:** 2026-11-26
+**Status:** Accepted · **Date:** 2026-11-26
 
 ## Context
 
@@ -21,37 +21,51 @@ handler stays one call.
 
 ## Decision
 
-1. **A row names the service's class and a method of it.**
+1. **A row marks its function as a call on a service.**
 
    ```java
-   compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price) // catalog.price(line)
+   compute(OrderLine::getUnitPrice, service(Catalog::price)) // catalog.price(line)
    ```
 
-   `Catalog::price` is an unbound reference to an instance method, typed as
-   `Mapping.WithService<Catalog, LineDto, BigDecimal>`, a `Serializable` `BiFunction`. One rule covers every row that
-   takes a service: its service form takes the service's class just before the function, and the function takes the
-   service before whatever the plain row's function takes. The class literal earns its place three ways. It says at the
-   row that the mapper cannot run alone, which a row reading exactly like the static form would hide. It fixes the
-   service type for inference. And it gives the mapper its services as values, without decoding the reference, which a
-   native image does not do. `services()` on a mapper lists them: those of its own rows, then those of each mapper its
-   `via` rows name and each pair bridge it reaches, each class once.
+   `service(Catalog::price)` wraps an unbound reference to an instance method, typed as
+   `Mapping.WithService<Catalog, LineDto, BigDecimal>`, a `Serializable` `BiFunction`, into a `ServiceCall`;
+   `service(Clock::instant)`, a function of the service alone, `Mapping.FromService<Clock, Instant>`, into a
+   `ServiceSupplier`. One rule covers every row that takes a service: its service form takes a `service(...)` in place
+   of the plain row's function, and the function takes the service before whatever the plain row's function takes. The
+   service is the class the function takes first: the class an instance method is applied to, or the first parameter of
+   a static method. The wrapper says at the row that the mapper cannot run alone, which a row reading exactly like the
+   static form would hide, and neither repeats the service's class nor changes how any row written today resolves.
+   `services()` on a mapper lists the services: those of its own rows, then those of each mapper its `via` rows name and
+   each edit mapper its element pairs convert through, each class once.
+
+   Two forms were compiled against javac 25 before this one. A class literal before the function,
+   `compute(tgt, Catalog.class, Catalog::price)`, compiles and resolves, but repeats the class the reference names. A
+   `compute(tgt, WithService)` overload with no literal and no wrapper resolves every reference to a method with one
+   form of its name, but makes rows that compile today ambiguous: any name with forms of both arities,
+   `compute(tgt, HashMap::new)` (`HashMap(int, float)`), `compute(tgt, List::of)` and
+   `toOneWay(src, tgt, Integer::parseInt)` among them, and the supplier-shaped form has the arity of a function of the
+   source, so nothing could tell the two apart. The wrapper compiles every existing row unchanged: a method reference is
+   never compatible with the wrapper's class, and inside the wrapper the two shapes differ by arity. Only a service
+   whose method name has a form of each arity, as `Catalog` declaring both `price()` and `price(LineDto)`, is ambiguous,
+   as it is for a plain row; hold the one meant in a `static final` field. A bare `null` handed to `when` is ambiguous
+   between its two forms; a cast names the one meant.
 
 2. **Rows whose function runs forward only, once per call, take a service.**
 
-   | Row                   | Service form                                                                     | The function                            |
-   | --------------------- | -------------------------------------------------------------------------------- | --------------------------------------- |
-   | `compute`, a value    | `compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price)`                | `(Catalog, LineDto) -> BigDecimal`      |
-   | `compute`, a supplier | `compute(OrderLine::getAddedOn, Clock.class, Clock::instant)`                    | `(Clock) -> Instant`                    |
-   | `when`'s predicate    | `when(Promotions.class, Promotions::applies, inner)`                             | `(Promotions, OrderChanges) -> boolean` |
-   | `toOrElseGet`         | `toOrElseGet(LineDto::sku, OrderLine::getSku, Skus.class, Skus::next)`           | `(Skus) -> String`                      |
-   | `toOneWay`            | `toOneWay(LineDto::sku, OrderLine::getProduct, Products.class, Products::bySku)` | `(Products, String) -> Product`         |
+   | Row                   | Service form                                                              | The function                            |
+   | --------------------- | ------------------------------------------------------------------------- | --------------------------------------- |
+   | `compute`, a value    | `compute(OrderLine::getUnitPrice, service(Catalog::price))`               | `(Catalog, LineDto) -> BigDecimal`      |
+   | `compute`, a supplier | `compute(OrderLine::getAddedOn, service(Clock::instant))`                 | `(Clock) -> Instant`                    |
+   | `when`'s predicate    | `when(service(Promotions::applies), inner)`                               | `(Promotions, OrderChanges) -> boolean` |
+   | `toOrElseGet`         | `toOrElseGet(LineDto::sku, OrderLine::getSku, service(Skus::next))`       | `(Skus) -> String`                      |
+   | `toOneWay`            | `toOneWay(LineDto::sku, OrderLine::getProduct, service(Products::bySku))` | `(Products, String) -> Product`         |
 
    `constant` takes none: its value is captured once, and a value a service gives is worked out per call, which is
    `compute`'s job. `via` takes none of its own: a conversion that needs a service is a mapper with a service row, which
    a `via` row names, and its services become the outer mapper's. The two-way `to(src, tgt, forward, backward)` and a
    `via` row naming a hand-written class take none, since both directions would need the service and no case calls for
-   it. A method name with one form for each overload, as `Catalog` declaring both `price()` and `price(LineDto)`, is
-   ambiguous to javac, as it is for a plain row; hold the one meant in a `static final` field.
+   it. `toOrElseGet`'s service form converts back as the plain row does, as the value. `Telescope.map` returns a
+   `Telescope`, which has nothing to bind a service to, and refuses a service row by name.
 
 3. **A bound mapper carries its services.** `with(services...)` on a `Mapper`, a `ForwardMapper` or an `EditMapper`
    returns a copy bound to the services given, of the same type; the mapper it is called on is unchanged. It refuses by
@@ -62,19 +76,24 @@ handler stays one call.
    (decision 4) and user code never calls `with`; `with` is for code with no container and for tests.
 
    A call on a mapper that needs a service and has none bound, such as `OrderMappers.EDITS.patchInto(order, changes)` on
-   the field itself, is refused before anything is read or written, never run with null:
+   the field itself, is refused before anything is read or written, never run with null. The refusal names the mapper by
+   the static field that holds it, as its class writes it, and by its declared type where no field holds it, in the same
+   words on both paths:
 
    ```
-   IllegalStateException: OrderMappers.EDITS needs a Catalog for compute(OrderLine::getUnitPrice, Catalog::price)
-   in OrderMappers.LINE, and none is bound. Inject the EditMapper<OrderChanges, Order> bean, or bind one with
-   OrderMappers.EDITS.with(catalog).
+   IllegalStateException: OrderMappers.EDITS needs a Catalog for compute(OrderLine::getUnitPrice,
+   service(Catalog::price)) in OrderMappers.LINE, and none is bound. Inject the EditMapper<OrderChanges, Order> bean, or
+   bind one with OrderMappers.EDITS.with(catalog).
    ```
 
-   On the runtime path `with` builds the mapper's conversion once more, with each service function closed over its
-   service (`line -> catalog.price(line)`), so a bound mapper converts through the same composition, and writes through
-   the same `ContainerCopy` and bean writers, as a mapper with a static `compute` row, and a call costs what that one
-   costs. A conversion holding a service row belongs to its mapper and is never put in `DeepMap`'s per-pair cache.
-   Binding costs one mapper build.
+   On the runtime path `with` builds the mapper's conversion once more from rows whose service functions are bound to
+   their services, so a bound mapper converts through the same composition, and writes through the same `ContainerCopy`
+   and bean writers, as a mapper with a static `compute` row, and a call costs what that one costs; the edit mappers its
+   element pairs convert through are bound with it as they are read. A conversion holding a service row belongs to its
+   mapper and is never put in `DeepMap`'s per-pair cache. Binding costs one mapper build. A runtime mapper whose rows
+   reach a pair converting through a generated bridge whose rows call a service, other than through a `via` row or an
+   element pair's edit mapper, is refused naming the row, since it has nothing to hand the bridge; the pair's mapper is
+   named in a `via` row instead.
 
 4. **Both starters register each such field as a bean of its own type, already bound.** For every `@Bridge` field whose
    rows name a service, its own or through a mapper it nests, the Spring and Quarkus starters register one bean whose
@@ -89,9 +108,10 @@ handler stays one call.
    - **Found from what the processor recorded.** The field's generated provider records the declaring class, the field's
      name, its declared type and its service classes, and hands over the field's value, so neither starter scans classes
      or reads the field reflectively. Spring's auto-configuration registers a bean definition per field, typed by that
-     generic type, from the providers `ServiceLoader` finds; the Quarkus deployment reads the providers from the index
-     and produces a synthetic bean per field with the same type. A field the processor never saw has no provider and no
-     bean, and is bound with `with`.
+     generic type, from the providers `ServiceLoader` finds; the Quarkus deployment reads the providers and produces a
+     synthetic bean per field of a class in the application's index, typed by the field's declared type. A field the
+     processor never saw has no provider and no bean, and is bound with `with`. A field whose rows call a service is
+     declared package-private or wider, since its provider reads it.
    - **Resolved once, at startup.** Each bean is a singleton built at startup: Spring builds it with the other
      singletons, and the Quarkus extension creates each one when the application starts rather than on first use. No
      bean of a service type, or two with none primary, fails startup with the field, the row and the service named, and
@@ -107,38 +127,43 @@ handler stays one call.
      `TelescopeMapperRegistry` collects it under its pair like any other, and the registry's refusal of two `Mapper`
      beans for one pair applies. `EditMapper` and `ForwardMapper` beans are not `Mapper`s and stay out of the registry,
      which stays keyed by pair and holds `Mapper`s only. A mapped endpoint whose lookup reaches a field with services,
-     through the registry or through the generated bridge the forward fallback finds, uses that field's bean, and a
-     generated `@TelescopeMapper` bean whose bridge has service rows injects it, so each container binds each field
-     once. A `Mapper` bean the application declares itself is the application's to bind, and one still unbound fails
-     startup with the method and the row named.
+     through the registry or through the generated bridge the forward fallback finds, uses that field's bean. A `Mapper`
+     bean the application declares itself is the application's to bind, and one still unbound fails startup with the
+     method and the row named.
 
    Nothing is bound process-wide: the binding lives in the container's bean, and two application contexts in one JVM
    each hold their own.
 
-5. **The generated path.** `FieldRows` reads a service form when its class argument is a class literal and its function
-   is a reference to an instance method of that class or a type it extends, a reference to a static method taking the
-   service first, or a `static final` field holding the function; an inline lambda is refused by name on the row, as on
-   every row. Each operation of the generated bridge takes the services after its own arguments, in the order
-   `services()` lists them, as `forward(LineDto source, Catalog catalog)`, and calls `catalog.price(source)` directly.
-   The class the processor writes for the field holds the bound services in final fields and passes them on, `with`
-   returns another instance of it through the same `BridgeGrant` constructor, and an unbound instance refuses before
-   calling the bridge. A bridge hands a nested bridge the services it needs, and `BridgeFn` gains a form taking them, so
-   a runtime mapper that reaches the pair hands over its own. The generated provider records the field's service classes
-   with its row kinds, so a call naming other services runs the runtime mapper, as for any rows that differ.
-   `CrossPathCorpusTest` gains each service form under each operation, bound; the unbound refusal in the same words on
-   both paths with nothing written; each refusal `with` makes; a service reached through a mapper a `via` row names; and
-   one service shared by two rows. No difference between the paths is introduced, so nothing joins ADR-0019's registers.
+5. **The generated path.** `FieldRows` reads a service form when its `service(...)` argument is written in place and its
+   function is a reference to an instance method of the service, a reference to a static method taking the service
+   first, or a `static final` field holding the function; an inline lambda is refused by name on the row, as on every
+   row. Each operation of the generated bridge takes the services after its own arguments, each by one name in every
+   bridge derived from its class, and calls `catalog.price(source)` directly. A bridge calling a bridge that takes
+   services, the edit mapper of an element pair or a field a `via` row names, takes them too and hands them on, so the
+   processor settles each bridge's services over every bridge of the round before it writes any. Each public operation
+   keeps its form without the services, which refuses naming the row, so code calling the bridge directly still
+   compiles. The bridge's `BridgeFn` holds the services in final fields: `BridgeFn` gains `serviceNeeds()` and
+   `bind(services)`, which returns a copy over the services given, and a mapper over the bridge binds through it, a
+   runtime mapper reaching the pair through a `via` row or an element pair handing over its own. The provider of a field
+   whose bridge takes services writes no class of its own for the field, since the bound `BridgeFn` is what carries
+   them; it records the field's name, type and service classes. The provider records the rows' kinds as for any field,
+   so a call naming other rows runs the runtime mapper. `CrossPathCorpusTest` gains each service form under each
+   operation, bound; the unbound refusal in the same words on both paths with nothing written; each refusal `with`
+   makes; a service reached through a mapper a `via` row names and through an element pair's edit mapper; and one
+   service shared by two rows. No difference between the paths is introduced, so nothing joins ADR-0019's registers.
 
 6. **Native images, the verifier and `explain()`.** Nothing is looked up reflectively beyond the container's own bean
    lookup by type. A service is a value handed to `with`, the generated bridge calls its method directly, and the
-   service classes come from class literals, so the runtime path decodes a service function only to check the class it
-   takes after the service, which it skips inside a native image as it does for a `compute` row reading the source.
-   Quarkus removes a bean no injection point names, so the deployment reads the service classes the processor recorded
-   from the index and keeps those beans; a service only a mapper built at run time needs is the application's to keep,
-   and the startup refusal names `@Unremovable`. `MapperVerifierProcessor` holds a service function to the rule its
-   plain row's function follows, and checks a `with` call on a `@Bridge` field it can resolve, the static type of each
-   argument against the field's services, refusing a missing, extra or repeated service at compile time; every other
-   binding is checked when `with` runs. `explain()` names the service and whether one is bound:
+   provider records the service classes as class literals, so a mapper running the generated bridge decodes nothing for
+   a service row. The runtime path reads the class a service function takes from its `SerializedLambda`, as it reads
+   every row's accessors, so a mapper built from rows at run time inside an image needs the capturing class registered
+   for lambda serialization, as any runtime row does. Quarkus removes a bean no injection point names, so the deployment
+   keeps the service beans the processor recorded; a service only a mapper built at run time needs is the application's
+   to keep, and the startup refusal names `@Unremovable`. `MapperVerifierProcessor` holds a service function to the rule
+   its plain row's function follows, and checks a `with` call on a `@Bridge` field it can resolve, the static type of
+   each argument against the field's services, refusing a missing, extra or repeated service at compile time in the
+   runtime's words; every other binding is checked when `with` runs. `explain()` names the service and whether one is
+   bound:
 
    ```
    OrderLine.unitPrice: computed by Catalog.price(LineDto), Catalog bound
@@ -182,30 +207,30 @@ handler stays one call.
    ```java
    public final class OrderMappers {
 
-     // A line as a PATCH sends it. The price and the cost come from the catalog bean.
-     @Bridge
-     public static final EditMapper<LineDto, OrderLine> LINE = edits(
-       LineDto.class,
-       OrderLine.class,
-       compute(OrderLine::getUnitPrice, Catalog.class, Catalog::price),
-       compute(OrderLine::getCostPrice, Catalog.class, Catalog::cost),
-       drop(LineDto::unitPrice), // a price the client sends is ignored
-       keep(OrderLine::getId)
-     );
-
      // A PATCH: how an OrderChanges is written into an Order. It needs a Catalog, through LINE.
      @Bridge
      public static final EditMapper<OrderChanges, Order> EDITS = edits(
        OrderChanges.class,
        Order.class,
-       via(OrderChanges::lines, Order::getLines, LINE),
-       keep(Order::getId), // the fields a PATCH may never change
-       keep(Order::getNumber),
+       keep(Order::getNumber), // the fields a PATCH may never change
        keep(Order::getCustomer),
        keep(Order::getInternalNotes)
      );
+
+     // A line as a PATCH sends it, which EDITS finds by its pair. The price and the cost come from the catalog bean.
+     @Bridge
+     public static final EditMapper<LineDto, OrderLine> LINE = edits(
+       LineDto.class,
+       OrderLine.class,
+       compute(OrderLine::getUnitPrice, service(Catalog::price)),
+       compute(OrderLine::getCostPrice, service(Catalog::cost)),
+       drop(LineDto::unitPrice) // a price the client sends is ignored
+     );
    }
    ```
+
+   `EDITS` names no row for its lines, since ADR-0026 finds the edit mapper of the element pair by its pair, and the
+   services of that mapper are `EDITS`'s as a `via` row's would be.
 
    On Spring, the controller takes `EDITS` the way it takes its repository, and the handler stays one call:
 
@@ -307,10 +332,11 @@ handler stays one call.
 
 ## Alternatives considered
 
-- **The service inferred from the reference, `compute(tgt, Catalog::price)`, with no class literal.** javac can infer it
-  from an exact reference. Rejected: the row then reads exactly like a static call, so nothing at the row says the
-  mapper needs a service, the services could be known only by decoding the reference, which a native image does not do,
-  and a class with a static and an instance form of the name would bind to whichever the overloads pick.
+- **The service inferred from the reference, `compute(tgt, Catalog::price)`, with no wrapper.** javac infers it from a
+  reference to a method with one form of its name. Rejected: the row then reads exactly like a static call, so nothing
+  at the row says the mapper needs a service, and the overload breaks rows that compile today (decision 1).
+- **The service's class before the function, `compute(tgt, Catalog.class, Catalog::price)`.** Rejected for the wrapper:
+  it repeats the class the reference names, and says no more at the row than `service(...)` does.
 - **A context parameter type**, `edits(LineDto.class, OrderLine.class, PricingContext.class, ...)` with
   `patchInto(order, changes, context)`. Rejected: every call site carries the context, and the context is a class that
   exists only to carry services to the mapper.

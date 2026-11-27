@@ -168,6 +168,19 @@ such as `String::trim`, or to a constructor; a constant or default is a literal 
 compile error on the row, naming what to write instead. `explain()` on the mapper says which path runs it and, when it
 is the runtime path although a field declares it, why.
 
+A row's service form, `compute(OrderLine::getUnitPrice, service(Catalog::price))`, and likewise for `compute`'s
+supplier, `when`'s predicate, `toOrElseGet` and `toOneWay`, compiles when the function is a reference to an instance
+method of the service, to a static method taking the service first, or a `static final` field holding one; an inline
+lambda is refused on the row. The generated bridge then takes the services after each operation's own arguments, by one
+name in every bridge, derived from the service's class, as `forward(LineDto s, shop.Catalog __svc_shop_Catalog)`, and
+calls `__svc_shop_Catalog.price(s)` directly. A bridge calling one that takes services, the bridge of an element pair or
+of a field a `via` row names, takes them too and hands them on. Each public operation keeps a form without the services,
+which refuses, so code calling the bridge directly still compiles and fails naming the row. The bridge's `BridgeFn`
+holds the services in final fields and answers `bind(services)` with a copy over the ones given, which `with(...)` on
+the field's mapper calls; the provider records the field's name, its type and its services, so a starter registers the
+field's bean without reading the field reflectively. A service field is declared package-private or wider, since the
+provider reads it.
+
 A field's bridge is its pair's own bridge, so a pair is declared once in a compilation, a navigator of the source hops
 through it, and a Spring `@TelescopeMapper` for the pair calls it. The factory finds the bridge by the static
 initialiser that calls it, so the class that declares the field builds every other mapper as a static field initialised

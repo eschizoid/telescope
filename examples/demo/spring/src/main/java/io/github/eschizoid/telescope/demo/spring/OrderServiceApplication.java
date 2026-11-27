@@ -1,5 +1,9 @@
 package io.github.eschizoid.telescope.demo.spring;
 
+import io.github.eschizoid.telescope.conversion.EditMapper;
+import io.github.eschizoid.telescope.demo.api.OrderChanges;
+import io.github.eschizoid.telescope.demo.api.PlaceOrder;
+import io.github.eschizoid.telescope.demo.order.Catalog;
 import io.github.eschizoid.telescope.demo.order.Order;
 import io.github.eschizoid.telescope.demo.order.OrderDesk;
 import io.github.eschizoid.telescope.demo.order.Orders;
@@ -43,9 +47,25 @@ public class OrderServiceApplication {
     return module -> module.add(CustomerCards.CARDS);
   }
 
+  /** The products the shop sells, which prices each line an order is placed or changed with. */
   @Bean
-  OrderDesk orderDesk(final Orders orders, final Seller seller, final Clock clock) {
-    return new OrderDesk(orders, seller, clock);
+  Catalog catalog() {
+    return new Catalog(Catalog.stock());
+  }
+
+  /**
+   * The desk, handed the beans the starter registers for {@code OrderMappers.PLACE} and {@code
+   * OrderMappers.EDITS}, each bound to the catalog bean their line rows call.
+   */
+  @Bean
+  OrderDesk orderDesk(
+    final Orders orders,
+    final Seller seller,
+    final Clock clock,
+    final EditMapper<PlaceOrder, Order> place,
+    final EditMapper<OrderChanges, Order> edits
+  ) {
+    return new OrderDesk(orders, seller, clock, place, edits);
   }
 
   @Bean

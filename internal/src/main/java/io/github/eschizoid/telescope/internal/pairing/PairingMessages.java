@@ -3651,6 +3651,129 @@ public final class PairingMessages {
     );
   }
 
+  /** A row's service function called on a copy bound to no service. */
+  public static String serviceRowUnbound(final String row) {
+    return row + " calls a service, and none is bound. Inject the mapper's bean, or bind one with with(...).";
+  }
+
+  /**
+   * The refusal of a call on {@code mapper}, which needs {@code service} for {@code row} and is
+   * bound to none. {@code in} names the mapper the row belongs to where it is not {@code mapper}
+   * itself, and {@code type} is the mapper's declared type, which the container's bean has. Both
+   * paths refuse with these words.
+   */
+  public static String serviceUnbound(
+    final String mapper,
+    final String type,
+    final String service,
+    final String row,
+    final String in
+  ) {
+    return (
+      mapper +
+      " needs a " +
+      service +
+      " for " +
+      row +
+      (in == null ? "" : " in " + in) +
+      ", and none is bound. Inject the " +
+      type +
+      " bean, or bind one with " +
+      (mapper.equals(type) ? "" : mapper + ".") +
+      "with(" +
+      variable(service) +
+      ")."
+    );
+  }
+
+  /** {@code with(...)} handed null as its {@code position}th service, counted from one. */
+  public static String serviceWithNull(final String mapper, final int position, final List<String> services) {
+    return (
+      mapper +
+      ".with(...) was handed null as its service " +
+      position +
+      (services.isEmpty()
+        ? "; its rows call no service."
+        : "; hand it the " + String.join(", ", services) + " its rows call.")
+    );
+  }
+
+  /** {@code with(...)} handed a value of {@code given}, which no service of the mapper accepts. */
+  public static String serviceWithUnneeded(final String mapper, final String given, final List<String> services) {
+    return (
+      mapper +
+      ".with(...) was handed a " +
+      given +
+      ", which no row it converts through calls" +
+      (services.isEmpty() ? "; it calls no service." : "; it calls " + String.join(", ", services) + ".")
+    );
+  }
+
+  /** {@code with(...)} handed two values that are each a {@code service}. */
+  public static String serviceWithRepeated(
+    final String mapper,
+    final String service,
+    final String first,
+    final String second
+  ) {
+    return mapper + ".with(...) was handed two values for its " + service + ", a " + first + " and a " + second + ".";
+  }
+
+  /** {@code with(...)} handed no {@code service}, which {@code row} needs. */
+  public static String serviceWithMissing(
+    final String mapper,
+    final String service,
+    final String row,
+    final String in
+  ) {
+    return (
+      mapper + ".with(...) was handed no " + service + ", which " + row + (in == null ? "" : " in " + in) + " calls."
+    );
+  }
+
+  /**
+   * A mapper built from rows reaching the pair {@code source -> target}, whose generated bridge
+   * calls {@code service} for {@code row}: the mapper reaching it has no service of its own to hand
+   * on, so the pair's mapper is named in a {@code via} row, whose services the mapper then binds.
+   */
+  public static String serviceBridgeReached(
+    final String source,
+    final String target,
+    final String service,
+    final String row
+  ) {
+    return (
+      "The pair " +
+      source +
+      " -> " +
+      target +
+      " converts through a generated bridge whose rows call a " +
+      service +
+      ", for " +
+      row +
+      ". Name the pair's mapper in a via(...) row, so the mapper reaching the pair takes that service and" +
+      " hands it on."
+    );
+  }
+
+  /** A factory returning a value with nothing to bind a service to, handed a row calling one. */
+  public static String serviceOnUnbindable(final String factory, final String row) {
+    return (
+      factory +
+      " returns a Telescope, which has nothing to bind a service to, and " +
+      row +
+      " calls one. Build a Mapper, a ForwardMapper or an EditMapper and bind it with with(...)."
+    );
+  }
+
+  /**
+   * The variable name a message gives a service of the simple name {@code service}: {@code
+   * catalog}.
+   */
+  public static String variable(final String service) {
+    return service.isEmpty() ? service : Character.toLowerCase(service.charAt(0)) + service.substring(1);
+  }
+
   private static String typeName(final Class<?> type) {
     return type == null ? "an unresolved type" : type.getSimpleName();
   }
