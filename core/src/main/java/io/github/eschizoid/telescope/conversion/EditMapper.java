@@ -49,6 +49,9 @@ public class EditMapper<P, E> {
   private final Supplier<EditMapper<P, E>> runtime;
   private volatile EditMapper<P, E> built;
   private final List<OpticNode> explainTrail;
+  // The services the mapper's rows call, its own and those of the mappers it converts through, or
+  // null where it calls none.
+  private final ServiceNeeds services;
 
   private EditMapper(
     final Mapper<P, E> engine,
@@ -60,6 +63,7 @@ public class EditMapper<P, E> {
     this.generated = generated;
     this.runtime = runtime;
     this.explainTrail = List.copyOf(explainTrail);
+    this.services = null;
   }
 
   /**
@@ -83,6 +87,79 @@ public class EditMapper<P, E> {
     this.generated = built.generated;
     this.runtime = built.runtime;
     this.explainTrail = built.explainTrail;
+    this.services = built.services;
+  }
+
+  /** {@code from}, holding {@code services}. */
+  private EditMapper(final EditMapper<P, E> from, final ServiceNeeds services) {
+    this.engine = from.engine;
+    this.generated = from.generated;
+    this.runtime = from.runtime;
+    this.explainTrail = from.explainTrail;
+    this.services = services;
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> {@code mapper}, holding {@code services}, the
+   * services its rows call.
+   */
+  public static <P, E> EditMapper<P, E> withServiceNeeds(final EditMapper<P, E> mapper, final ServiceNeeds services) {
+    return new EditMapper<>(mapper, services);
+  }
+
+  /** The services this mapper's rows call, or null where they call none. */
+  final ServiceNeeds serviceNeeds() {
+    return services;
+  }
+
+  /** The generated bridge this mapper runs, or null on the runtime path. */
+  final BridgeFn<P, E> generated() {
+    return generated;
+  }
+
+  /**
+   * The classes of service this mapper's rows call, through {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#service service(...)}: those of its own rows,
+   * then those of each edit mapper it converts through, each class once. Empty for a mapper calling
+   * none.
+   */
+  public final List<Class<?>> services() {
+    return services == null ? List.of() : services.classes();
+  }
+
+  /**
+   * A copy of this mapper bound to {@code services}, one value for each class {@link #services()}
+   * lists, matched by {@code isInstance}, so a container's proxy binds as the bean it stands for.
+   * This mapper is left as it was. In an application on a telescope starter, the container injects
+   * the {@code @Bridge} field's mapper already bound; {@code with} is for code with no container
+   * and for tests.
+   *
+   * <pre>{@code
+   * final var edits = OrderMappers.EDITS.with(new Catalog(products)); // in a test
+   * }</pre>
+   *
+   * @throws IllegalArgumentException naming what is wrong, for a null, a value no service accepts,
+   *     two values for one service, or a service not given
+   */
+  @SuppressWarnings("unchecked")
+  public final EditMapper<P, E> with(final Object... services) {
+    if (this.services == null) {
+      ServiceNeeds.refuseAny(
+        "EditMapper<" + sourceClass().getSimpleName() + ", " + targetClass().getSimpleName() + ">",
+        services
+      );
+      return this;
+    }
+    return (EditMapper<P, E>) this.services.bind(this, services);
+  }
+
+  /**
+   * Refuses a call while the mapper's rows call a service and it is bound to none.
+   *
+   * @throws IllegalStateException naming the first row that calls one
+   */
+  private void requireBound() {
+    if (services != null) services.requireBound(this);
   }
 
   /**
@@ -151,6 +228,7 @@ public class EditMapper<P, E> {
    * every level, whatever the source sends under its name. Null for a null source.
    */
   public E forward(final P source) {
+    requireBound();
     return generated != null ? generated.forward(source) : engine.forward(source);
   }
 
@@ -169,6 +247,7 @@ public class EditMapper<P, E> {
    *     mapper writes other than a container, or nothing can write a container property
    */
   public E into(final E target, final P source) {
+    requireBound();
     if (generated == null) return engine.into(target, source);
     return writesItself(target, BridgeFn.EDIT_INTO)
       ? generated.editInto(target, source)
@@ -195,6 +274,7 @@ public class EditMapper<P, E> {
    * @throws IllegalArgumentException as {@link #into} throws, for a property the partial sends
    */
   public E patchInto(final E target, final P partial) {
+    requireBound();
     if (generated == null) return engine.editPatchInto(target, partial);
     return writesItself(target, BridgeFn.EDIT_PATCH_INTO)
       ? generated.editPatchInto(target, partial)
@@ -211,6 +291,7 @@ public class EditMapper<P, E> {
    *     build
    */
   public E patch(final E base, final P partial) {
+    requireBound();
     if (generated == null) return engine.editPatch(base, partial);
     return (generated.writesEdits() & BridgeFn.EDIT_PATCH) != 0
       ? generated.editPatch(base, partial)
@@ -256,6 +337,7 @@ public class EditMapper<P, E> {
    * @return the conversion, or null
    */
   public final ContainerCopy.Elements intoElements() {
+    requireBound();
     if (generated == null) return engine.intoElements();
     return (generated.writesEdits() & BridgeFn.EDIT_INTO) != 0 ? generated.targetWrite() : runtime().intoElements();
   }

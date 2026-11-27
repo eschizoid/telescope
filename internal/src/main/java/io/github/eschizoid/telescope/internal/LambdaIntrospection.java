@@ -190,6 +190,56 @@ public final class LambdaIntrospection {
     return new Argument(taken, owner + "::" + (kind == MethodHandleInfo.REF_newInvokeSpecial ? "new" : method));
   }
 
+  /**
+   * What a function a row calls on a service takes, as {@link #serviceOf} reads it.
+   *
+   * @param service the class the function takes first, the service
+   * @param takes the class it takes after the service, or null where it takes the service alone or
+   *     the second argument is primitive
+   * @param name {@code Owner::method}, naming an unbound instance method by the service it is
+   *     applied to and a static method by the class declaring it; null for a lambda
+   */
+  public record Service(Class<?> service, Class<?> takes, String name) {}
+
+  /**
+   * What a function written as a lambda or method reference taking a service first takes, read from
+   * its {@code SerializedLambda}: the service, the class after it, and how a message names the
+   * function. The classes are loaded by name through the function's class loader, so inside a
+   * native image the function's capturing class has to be registered for lambda serialization.
+   *
+   * @throws IllegalArgumentException if the function is neither a lambda nor a method reference, or
+   *     its first argument is primitive
+   * @throws IllegalStateException if a class cannot be loaded
+   */
+  public static Service serviceOf(final Serializable function) {
+    final SerializedLambda serialized;
+    try {
+      serialized = serializedOf(function);
+    } catch (final ReflectiveOperationException e) {
+      throw new IllegalArgumentException(unreadable(function), e);
+    }
+    final var parameters = MethodType.fromMethodDescriptorString(
+      serialized.getInstantiatedMethodType(),
+      function.getClass().getClassLoader()
+    ).parameterArray();
+    if (parameters.length == 0 || parameters[0].isPrimitive()) throw new IllegalArgumentException(
+      "A function called on a service takes the service first; got one taking " +
+        (parameters.length == 0 ? "nothing" : parameters[0].getName())
+    );
+    final var takes = parameters.length > 1 && !parameters[1].isPrimitive() ? parameters[1] : null;
+    final var method = serialized.getImplMethodName();
+    if (method.startsWith("lambda$")) return new Service(parameters[0], takes, null);
+    final var kind = serialized.getImplMethodKind();
+    final var unbound =
+      (kind == MethodHandleInfo.REF_invokeVirtual || kind == MethodHandleInfo.REF_invokeInterface) &&
+      serialized.getCapturedArgCount() == 0;
+    final var implClass = serialized.getImplClass();
+    final var owner = unbound
+      ? parameters[0].getSimpleName()
+      : implClass.substring(Math.max(implClass.lastIndexOf('/'), implClass.lastIndexOf('$')) + 1);
+    return new Service(parameters[0], takes, owner + "::" + method);
+  }
+
   // The binary name of the first parameter in a method descriptor, or null when it is not a class.
   // For an unbound method reference that parameter is the receiver, typed as the functional
   // interface's instantiation erases it at the call site.

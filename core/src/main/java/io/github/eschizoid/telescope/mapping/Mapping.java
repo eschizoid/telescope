@@ -16,6 +16,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAccessor;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -265,6 +266,92 @@ public sealed interface Mapping<A, B>
   ) {
     return new ForwardOnlyTransformTo<>(src, tgt, fn);
   }
+
+  /**
+   * The forward-only conversion of {@link #toOneWay(Accessor, Accessor, Function)}, by a function
+   * of a service: {@code toOneWay(LineDto::sku, OrderLine::getProduct, service(Products::bySku))}
+   * writes {@code products.bySku(line.sku())}, with {@code products} the {@code Products} the mapper
+   * is bound to. The value read is handed to the function as the plain row hands it. See {@link
+   * #service(WithService)} for how a mapper is bound.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B, S, X, Y> Mapping<A, B> toOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final ServiceCall<S, ? super X, ? extends Y> call
+  ) {
+    final Function<X, Y> forward = (Function<X, Y>) (Function<?, ?>) new Served.Value(
+      call.function(),
+      null,
+      "toOneWay",
+      src,
+      tgt
+    );
+    return new ForwardOnlyTransformTo<>(src, tgt, forward);
+  }
+
+  /**
+   * Marks {@code function} as a call on a service, for a row of a mapper that a container, or a
+   * call to {@code with(...)}, binds: {@code service(Catalog::price)} is {@code
+   * catalog.price(line)}, with {@code catalog} the {@code Catalog} the mapper is bound to and {@code
+   * line} the value the row hands on. The service is the class the function takes first: the class
+   * an instance method is applied to, as {@code Catalog} for {@code Catalog::price}, or the first
+   * parameter of a static method.
+   *
+   * <pre>{@code
+   * compute(OrderLine::getUnitPrice, service(Catalog::price))       // catalog.price(line)
+   * toOneWay(LineDto::sku, OrderLine::getProduct, service(Products::bySku))
+   * when(service(Promotions::applies), constant(OrderDto::promoted, true))
+   * }</pre>
+   *
+   * <p>A mapper holding such a row lists the class in {@code services()}, with those of the mappers
+   * it converts through, and runs only once it is bound: in an application on a telescope starter,
+   * the container registers each {@code @Bridge} field whose rows name a service as a bean of the
+   * field's own type, bound to the container's bean of each service, and a class takes that bean
+   * by injection; elsewhere {@code with(service)} returns a copy bound to the service given. A
+   * call on a mapper that is not bound is refused before it reads anything, naming the row.
+   *
+   * <p>A service whose name has a form for each of the two shapes, as {@code Catalog} declaring
+   * both {@code price()} and {@code price(LineDto)}, is ambiguous to javac; hold the one meant in a
+   * {@code static final} field. In a {@code @Bridge} mapper the function must be a reference to an
+   * instance method of the service, to a static method taking the service first, or a {@code static
+   * final} field holding one; the generated bridge takes the service as a parameter and calls it
+   * directly.
+   */
+  static <S, A, X> ServiceCall<S, A, X> service(final WithService<S, A, X> function) {
+    return new ServiceCall<>(function);
+  }
+
+  /**
+   * Marks {@code function} as a value asked of a service, for {@link #compute(Accessor,
+   * ServiceSupplier) compute} and {@link #toOrElseGet(Accessor, Accessor, ServiceSupplier)
+   * toOrElseGet}: {@code service(Clock::instant)} is {@code clock.instant()}. Bound as {@link
+   * #service(WithService)} describes.
+   */
+  static <S, X> ServiceSupplier<S, X> service(final FromService<S, X> function) {
+    return new ServiceSupplier<>(function);
+  }
+
+  /**
+   * A function of a service and the value a row hands on, written as a method reference: {@code
+   * Catalog::price} for {@code BigDecimal price(LineDto)} on {@code Catalog}. It is {@code
+   * Serializable} so that building the mapper can read the class of service it takes.
+   *
+   * @param <S> the service
+   * @param <A> the value handed on
+   * @param <X> what the function gives
+   */
+  @FunctionalInterface
+  interface WithService<S, A, X> extends BiFunction<S, A, X>, Serializable {}
+
+  /**
+   * A function of a service alone, written as a method reference: {@code Clock::instant}.
+   *
+   * @param <S> the service
+   * @param <X> what the function gives
+   */
+  @FunctionalInterface
+  interface FromService<S, X> extends Function<S, X>, Serializable {}
 
   /**
    * Writes a date or a time into a {@code String} property as text in {@code pattern}, a {@link
@@ -594,6 +681,27 @@ public sealed interface Mapping<A, B>
     final Supplier<? extends X> supplier
   ) {
     return new TypedTransformTo<>(src, tgt, x -> x == null ? supplier.get() : x, y -> y);
+  }
+
+  /**
+   * The lazy default of {@link #toOrElseGet(Accessor, Accessor, Supplier)}, asked of a service:
+   * {@code toOrElseGet(LineDto::sku, OrderLine::getSku, service(Skus::next))} writes {@code
+   * skus.next()} where the source holds null, with {@code skus} the {@code Skus} the mapper is
+   * bound to. See {@link #service(WithService)} for how a mapper is bound.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B, S, X> Mapping<A, B> toOrElseGet(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final ServiceSupplier<S, ? extends X> supplier
+  ) {
+    final Function<X, X> forward = (Function<X, X>) (Function<?, ?>) new Served.OrElse(
+      supplier.function(),
+      null,
+      src,
+      tgt
+    );
+    return new TypedTransformTo<>(src, tgt, forward, y -> y);
   }
 
   /**
@@ -1112,6 +1220,40 @@ public sealed interface Mapping<A, B>
   }
 
   /**
+   * Fill a target property, on every forward call, with what a service makes of the source: {@code
+   * compute(OrderLine::getUnitPrice, service(Catalog::price))} writes {@code catalog.price(line)},
+   * with {@code catalog} the {@code Catalog} the mapper is bound to and {@code line} the source the
+   * mapper converts. Otherwise the row is {@link #compute(Accessor, FromSource)}: it reads the
+   * whole source, is forward-only, and the class the function takes after the service must be the
+   * mapper's source or a type it extends. See {@link #service(WithService)} for how a mapper is
+   * bound.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B, S, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final ServiceCall<S, ? super A, ? extends X> call) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    final FromSource<A, X> function = (FromSource<A, X>) (FromSource<?, ?>) new Served.Value(
+      call.function(),
+      null,
+      "compute",
+      tgt
+    );
+    return new ComputeFromSource<>(Telescope.of(tgtClass).field(tgt), function);
+  }
+
+  /**
+   * Fill a target property, on every forward call, with a value asked of a service: {@code
+   * compute(OrderLine::getAddedOn, service(Clock::instant))} writes {@code clock.instant()}.
+   * Otherwise the row is {@link #compute(Accessor, Supplier)}. See {@link #service(WithService)}
+   * for how a mapper is bound.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B, S, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final ServiceSupplier<S, ? extends X> supplier) {
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
+    final Supplier<X> asked = (Supplier<X>) (Supplier<?>) new Served.Supply(supplier.function(), null, "compute", tgt);
+    return new Compute<>(Telescope.of(tgtClass).field(tgt), asked);
+  }
+
+  /**
    * A function of the source a {@link #compute(Accessor, FromSource) compute} row fills its target
    * property with, written as a method reference or a lambda: {@code Names::full}, {@code
    * User::initials}, {@code (User user) -> ...}. It is {@code Serializable} so that building the
@@ -1247,5 +1389,18 @@ public sealed interface Mapping<A, B>
    */
   static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
     return new Conditional<>(predicate, inner);
+  }
+
+  /**
+   * The gate of {@link #when(Predicate, Mapping)}, tested by a service: {@code
+   * when(service(Promotions::applies), constant(OrderDto::promoted, true))} applies the inner row
+   * where {@code promotions.applies(order)} is true, with {@code promotions} the {@code Promotions}
+   * the mapper is bound to. A function giving null is a failure of the predicate, reported as {@code
+   * when} reports one. See {@link #service(WithService)} for how a mapper is bound.
+   */
+  @SuppressWarnings("unchecked")
+  static <A, B, S> Mapping<A, B> when(final ServiceCall<S, ? super A, Boolean> predicate, final Mapping<A, B> inner) {
+    final Predicate<A> tested = (Predicate<A>) (Predicate<?>) new Served.Test(predicate.function(), null);
+    return new Conditional<>(tested, inner);
   }
 }

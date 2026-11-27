@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.List;
+import java.util.function.Predicate;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -463,7 +464,7 @@ class MappingWhenTest {
     @DisplayName("null predicate rejected")
     void rejectsNullPredicate() {
       final var emailTel = Telescope.of(Dst.class).field(Dst::name);
-      assertThrows(NullPointerException.class, () -> when(null, to(Src::name, emailTel)));
+      assertThrows(NullPointerException.class, () -> when((Predicate<Src>) null, to(Src::name, emailTel)));
     }
 
     @Test

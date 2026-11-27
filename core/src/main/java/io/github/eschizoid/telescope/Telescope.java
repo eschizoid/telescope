@@ -1165,6 +1165,7 @@ public sealed class Telescope<
     // returned Telescope's backward leg (set/update through a path whose constituent Iso has a
     // throwing inverse). Catching it at the factory boundary keeps the diagnostic at the call site.
     rejectForwardOnlyRows(source, target, steps, "Telescope.map");
+    ServiceRows.refuseUnbindable(steps, "Telescope.map");
     return DeepMap.resolveMapped(source, target, steps);
   }
 
@@ -1180,9 +1181,10 @@ public sealed class Telescope<
     rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
     // A @Bridge field of the calling class declares this mapper when the processor generated a
     // bridge from its rows; the caller is read here, in the factory the field's initializer calls.
-    final var declaration = DeepMap.declaration(initialisingCaller(), source, target, steps);
-    if (declaration.provider() != null) return DeepMap.declaredMapper(declaration, source, target);
-    return DeepMap.resolveMapper(source, target, steps, declaration.node());
+    final var caller = initialisingCaller();
+    final var declaration = DeepMap.declaration(caller, source, target, steps);
+    if (declaration.provider() != null) return DeepMap.declaredMapper(declaration, source, target, steps);
+    return DeepMap.resolveMapper(source, target, steps, declaration.node(), caller);
   }
 
   /**
@@ -1319,8 +1321,9 @@ public sealed class Telescope<
     // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
     // the caller has opted into explicit configuration; skip the probe and run the rows
     // through DeepMap as usual.
-    final var declaration = DeepMap.declaration(initialisingCaller(), source, target, steps);
-    if (declaration.provider() != null) return DeepMap.declaredForwardMapper(declaration, source, target);
+    final var caller = initialisingCaller();
+    final var declaration = DeepMap.declaration(caller, source, target, steps);
+    if (declaration.provider() != null) return DeepMap.declaredForwardMapper(declaration, source, target, steps);
     if (steps.length == 0 && declaration.node() == null) {
       // The lookup a nested pair uses, reading a long-form holder whether or not its bridge
       // declares the pair: the holder beside the source, then a carrier registered by (source,
@@ -1332,7 +1335,7 @@ public sealed class Telescope<
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
-    return DeepMap.resolveForwardMapper(source, target, steps, declaration.node());
+    return DeepMap.resolveForwardMapper(source, target, steps, declaration.node(), caller);
   }
 
   /**

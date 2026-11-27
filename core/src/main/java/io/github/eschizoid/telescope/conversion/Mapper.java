@@ -227,6 +227,10 @@ public class Mapper<A, B> {
   // Non-null for the mapper an EditMapper runs: what its sparse writes need beyond the table.
   private final EditWrites edits;
 
+  // The services the mapper's rows call, its own and those of the mappers it converts through, or
+  // null where it calls none.
+  private final ServiceNeeds services;
+
   /** A generated bridge's two directions as an {@link Iso}, each one call into the bridge. */
   private static final class GeneratedIso<A, B> implements Iso<A, B> {
 
@@ -298,6 +302,7 @@ public class Mapper<A, B> {
   ) {
     this.iso = iso;
     this.edits = edits;
+    this.services = null;
     this.cases = cases == null ? null : List.copyOf(cases);
     this.patcher = patcher;
     this.sourceClass = sourceClass;
@@ -373,6 +378,90 @@ public class Mapper<A, B> {
     this.generated = built.generated;
     this.logger = built.logger;
     this.edits = built.edits;
+    this.services = built.services;
+  }
+
+  /** {@code from}, holding {@code services}. */
+  private Mapper(final Mapper<A, B> from, final ServiceNeeds services) {
+    this.iso = from.iso;
+    this.sourceClass = from.sourceClass;
+    this.targetClass = from.targetClass;
+    this.beanRefl = from.beanRefl;
+    this.sourceRefl = from.sourceRefl;
+    this.targetRefl = from.targetRefl;
+    this.patchByTargetField = from.patchByTargetField;
+    this.cases = from.cases;
+    this.patcher = from.patcher;
+    this.preForward = from.preForward;
+    this.postForward = from.postForward;
+    this.preBackward = from.preBackward;
+    this.postBackward = from.postBackward;
+    this.explainTrail = from.explainTrail;
+    this.traced = from.traced;
+    this.generated = from.generated;
+    this.logger = from.logger;
+    this.edits = from.edits;
+    this.services = services;
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> {@code mapper}, holding {@code services}, the
+   * services its rows call.
+   */
+  public static <A, B> Mapper<A, B> withServiceNeeds(final Mapper<A, B> mapper, final ServiceNeeds services) {
+    return new Mapper<>(mapper, services);
+  }
+
+  /** The services this mapper's rows call, or null where they call none. */
+  final ServiceNeeds serviceNeeds() {
+    return services;
+  }
+
+  /**
+   * The classes of service this mapper's rows call, through {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#service service(...)}: those of its own rows,
+   * then those of each mapper it converts through, each class once. Empty for a mapper calling
+   * none.
+   */
+  public final List<Class<?>> services() {
+    return services == null ? List.of() : services.classes();
+  }
+
+  /**
+   * A copy of this mapper bound to {@code services}, one value for each class {@link #services()}
+   * lists, matched by {@code isInstance}, so a container's proxy binds as the bean it stands for.
+   * This mapper is left as it was. In an application on a telescope starter, the container injects
+   * the {@code @Bridge} field's mapper already bound; {@code with} is for code with no container
+   * and for tests.
+   *
+   * <pre>{@code
+   * final var bound = OrderMappers.ORDERS.with(new Catalog(products));
+   * }</pre>
+   *
+   * @throws IllegalArgumentException naming what is wrong, for a null, a value no service accepts,
+   *     two values for one service, or a service not given
+   */
+  @SuppressWarnings("unchecked")
+  public final Mapper<A, B> with(final Object... services) {
+    if (this.services == null) {
+      ServiceNeeds.refuseAny(typeName(), services);
+      return this;
+    }
+    return (Mapper<A, B>) this.services.bind(this, services);
+  }
+
+  /** The type a message names this mapper by, as {@code Mapper<Order, OrderDto>}. */
+  private String typeName() {
+    return "Mapper<" + sourceClass.getSimpleName() + ", " + targetClass.getSimpleName() + ">";
+  }
+
+  /**
+   * Refuses a call while the mapper's rows call a service and it is bound to none.
+   *
+   * @throws IllegalStateException naming the first row that calls one
+   */
+  private void requireBound() {
+    if (services != null) services.requireBound(this);
   }
 
   /**
@@ -654,6 +743,7 @@ public class Mapper<A, B> {
    * }</pre>
    */
   public final Telescope<A, B> asTelescope() {
+    requireBound();
     // Route through this::forward / this::backward (NOT iso::to / iso::from) so the four hook
     // fields (beforeForward / afterForward / beforeBackward / afterBackward) compose into the
     // returned Telescope. Calling iso::to directly bypasses the hook chain — a configured mapper
@@ -740,6 +830,7 @@ public class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
+    requireBound();
     // A null table means the producing factory does not support patching at all; an EMPTY table
     // means a legitimate mapper with no patchable rows, whose patch is a rebuild of base.
     if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("patch()"));
@@ -833,6 +924,7 @@ public class Mapper<A, B> {
    * source's container across instead.
    */
   public B forward(final A a) {
+    requireBound();
     // Null in, null out — matches MapStruct's generated `if (source == null) return null;` and the
     // JPA "no row" idiom adopters rely on. The hook chain is skipped on null since neither
     // pre/postForward has a sensible meaning when no value flowed through.
@@ -950,6 +1042,7 @@ public class Mapper<A, B> {
    *     target}'s
    */
   public B into(final B target, final A source) {
+    requireBound();
     if (target == null) throw new NullPointerException("target");
     if (source == null) throw new NullPointerException("source");
     if (cases == null) refuseRecordTarget(targetClass);
@@ -993,6 +1086,7 @@ public class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   B editPatchInto(final B target, final A partial) {
+    requireBound();
     if (target == null) throw new NullPointerException("target");
     if (cases != null) {
       // Between two sealed interfaces the target is written by the mapper of its own case, and a
@@ -1078,6 +1172,7 @@ public class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   B editPatch(final B base, final A partial) {
+    requireBound();
     if (base == null) return null;
     if (cases != null) {
       final var entry = caseOfTarget(base);
@@ -1318,6 +1413,7 @@ public class Mapper<A, B> {
    * @return the conversion, or null
    */
   public final ContainerCopy.Elements intoElements() {
+    requireBound();
     var known = intoElements;
     if (known == UNSET) {
       known = writesConverted() ? new InPlace() : null;
@@ -1637,6 +1733,7 @@ public class Mapper<A, B> {
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
+    requireBound();
     // Null in, null out — symmetric with forward(). See the rationale on forward(Object) above.
     if (b == null) return null;
     final B b1 = preBackward == null ? b : preBackward.apply(b);
@@ -1666,6 +1763,7 @@ public class Mapper<A, B> {
    *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
    */
   public final Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+    requireBound();
     final Function<A, A> prev = this.preForward;
     final Function<A, A> next = prev == null ? hook::apply : a -> hook.apply(prev.apply(a));
     return new Mapper<>(
@@ -1724,6 +1822,7 @@ public class Mapper<A, B> {
    * }</pre>
    */
   public final Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+    requireBound();
     final BiFunction<A, B, B> prev = this.postForward;
     final BiFunction<A, B, B> next = prev == null ? hook::apply : (a, b) -> hook.apply(a, prev.apply(a, b));
     return new Mapper<>(
@@ -1758,6 +1857,7 @@ public class Mapper<A, B> {
    * }</pre>
    */
   public final Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
+    requireBound();
     final Function<B, B> prev = this.preBackward;
     final Function<B, B> next = prev == null ? hook::apply : b -> hook.apply(prev.apply(b));
     return new Mapper<>(
@@ -1806,6 +1906,7 @@ public class Mapper<A, B> {
    * }</pre>
    */
   public final Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
+    requireBound();
     final BiFunction<B, A, A> prev = this.postBackward;
     final BiFunction<B, A, A> next = prev == null ? hook::apply : (b, a) -> hook.apply(b, prev.apply(b, a));
     return new Mapper<>(
@@ -1840,6 +1941,7 @@ public class Mapper<A, B> {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final Mapper<List<A>, List<B>> liftList() {
+    requireBound();
     final var lifted = Iso.liftList(iso);
     return new Mapper<>(lifted, (Class) List.class, (Class) List.class, null);
   }
@@ -1847,6 +1949,7 @@ public class Mapper<A, B> {
   /** Same as {@link #liftList()} but produces a {@code Mapper<Set<A>, Set<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final Mapper<Set<A>, Set<B>> liftSet() {
+    requireBound();
     final var lifted = Iso.liftSet(iso);
     return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, null);
   }
@@ -1854,6 +1957,7 @@ public class Mapper<A, B> {
   /** Same as {@link #liftList()} but produces a {@code Mapper<Optional<A>, Optional<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final Mapper<Optional<A>, Optional<B>> liftOptional() {
+    requireBound();
     final var lifted = Iso.liftOptional(iso);
     return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, null);
   }
@@ -1864,6 +1968,7 @@ public class Mapper<A, B> {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public final <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
+    requireBound();
     final var lifted = Iso.<K, A, B>liftMapValues(iso);
     return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, null);
   }

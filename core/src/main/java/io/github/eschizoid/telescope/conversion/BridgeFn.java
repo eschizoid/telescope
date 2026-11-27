@@ -233,6 +233,28 @@ public interface BridgeFn<A, B> {
   }
 
   /**
+   * Codegen-support seam: the services the rows this bridge was generated from call, their own and
+   * those of the bridges they convert through, in the order the field's mapper lists them in
+   * {@code services()}, one need per row calling one. A bridge whose rows call none answers an
+   * empty list, which it does by default.
+   */
+  default List<ServiceNeeds.Need> serviceNeeds() {
+    return List.of();
+  }
+
+  /**
+   * Codegen-support seam: this bridge bound to {@code services}, one value for each class of
+   * service {@link #serviceNeeds()} names, in the order it first names them. Every operation of
+   * the bridge returned calls the generated methods with those services; the bridge this is called
+   * on calls none and refuses each operation.
+   *
+   * @throws UnsupportedOperationException by default, for a bridge whose rows call no service
+   */
+  default BridgeFn<A, B> bind(final Object[] services) {
+    throw new UnsupportedOperationException(getClass().getName() + " calls no service, so there is nothing to bind");
+  }
+
+  /**
    * Codegen-support seam: how the bridge writes each collection of its pair, and for an edit
    * mapper's bridge each property that converts through the edit mapper of its own pair, as the
    * nodes {@code explain()} reports for a mapper over the same rows. Empty by default.
